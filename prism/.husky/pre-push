@@ -1,0 +1,8 @@
+# pre-commit only lints the staged files. This is the gate that runs the checks
+# which are cheap enough to wait on but too slow per-commit, so a push that
+# would go red in CI fails here instead — about 40s on a warm cache.
+#
+# Deliberately not running the build: it roughly triples the wait and, unlike
+# these two, has never failed on a tree where both of them passed. CI covers it.
+npm run typecheck
+npm test

@@ -1,0 +1,1052 @@
+{
+  "_comment": "期望输出 JSON 示例（特价机票活动，成单率 is_paid 口径）。由 state_full.json 裁剪，省略 agent_raw_stats/adaptive_thresholds/case_pool 等大块过程数据。",
+  "campaign_id": "campaign_1781702310",
+  "campaign_meta": {
+    "campaign_name": "特价机票业务总览",
+    "target_products": [
+      "机票"
+    ],
+    "target_channels": [
+      "活动"
+    ]
+  },
+  "_cvr_col": "is_paid",
+  "_split_col": "is_converted",
+  "high_severity_count": 3,
+  "data_overview": {
+    "diagnostic_rules_summary": [
+      {
+        "rule_id": 1,
+        "category": "触达质量",
+        "name": "无效营销触达",
+        "display_name": "无主流程用户成单不低",
+        "status": "triggered",
+        "trigger_rate": 0.1704,
+        "trigger_cnt": 8522.0,
+        "cvr_triggered": 0.0374,
+        "cvr_not_triggered": 0.0181,
+        "cvr_gap": 0.0193,
+        "create_triggered": 0.1008,
+        "create_not_triggered": 0.063,
+        "cvr_gap_significant": true,
+        "_signal_type": "positive",
+        "effective_signal": true,
+        "is_positive_signal": true
+      },
+      {
+        "rule_id": 5,
+        "category": "触达质量",
+        "name": "僵尸用户浪费营销",
+        "display_name": "低活跃沉默用户成单较高",
+        "status": "triggered",
+        "trigger_rate": 0.1699,
+        "trigger_cnt": 8493.0,
+        "cvr_triggered": 0.0376,
+        "cvr_not_triggered": 0.0181,
+        "cvr_gap": 0.0195,
+        "create_triggered": 0.1011,
+        "create_not_triggered": 0.063,
+        "cvr_gap_significant": true,
+        "_signal_type": "positive",
+        "effective_signal": true,
+        "is_positive_signal": true
+      },
+      {
+        "rule_id": 6,
+        "category": "时机匹配",
+        "name": "营销时机不当",
+        "display_name": "营销时机不当",
+        "status": "triggered",
+        "trigger_rate": 0.0844,
+        "trigger_cnt": 4219.0,
+        "cvr_triggered": 0.0206,
+        "cvr_not_triggered": 0.0214,
+        "cvr_gap": -0.0008,
+        "create_triggered": 0.0623,
+        "create_not_triggered": 0.0701,
+        "cvr_gap_significant": false,
+        "_signal_type": "causal",
+        "effective_signal": false,
+        "is_positive_signal": false
+      },
+      {
+        "rule_id": 7,
+        "category": "时机匹配",
+        "name": "营销时机滞后",
+        "display_name": "营销时机滞后",
+        "status": "triggered",
+        "trigger_rate": 0.0244,
+        "trigger_cnt": 1221.0,
+        "cvr_triggered": 0.0254,
+        "cvr_not_triggered": 0.0213,
+        "cvr_gap": 0.0041,
+        "create_triggered": 0.0434,
+        "create_not_triggered": 0.0701,
+        "cvr_gap_significant": false,
+        "_signal_type": "causal",
+        "effective_signal": false,
+        "is_positive_signal": false
+      },
+      {
+        "rule_id": 8,
+        "category": "时机匹配",
+        "name": "成单后推送过急",
+        "display_name": "成单后推送过急",
+        "status": "triggered",
+        "trigger_rate": 0.0244,
+        "trigger_cnt": 1221.0,
+        "cvr_triggered": 0.0254,
+        "cvr_not_triggered": 0.0213,
+        "cvr_gap": 0.0041,
+        "create_triggered": 0.0434,
+        "create_not_triggered": 0.0701,
+        "cvr_gap_significant": false,
+        "_signal_type": "causal",
+        "effective_signal": false,
+        "is_positive_signal": false
+      },
+      {
+        "rule_id": 11,
+        "category": "内容匹配",
+        "name": "跨品类推送错配",
+        "display_name": "跨品类推送错配",
+        "status": "triggered",
+        "trigger_rate": 0.3978,
+        "trigger_cnt": 19891.0,
+        "cvr_triggered": 0.0056,
+        "cvr_not_triggered": 0.0318,
+        "cvr_gap": -0.0262,
+        "create_triggered": 0.0212,
+        "create_not_triggered": 0.1013,
+        "cvr_gap_significant": true,
+        "_signal_type": "causal",
+        "effective_signal": true,
+        "is_positive_signal": false
+      },
+      {
+        "rule_id": 15,
+        "category": "关键打断",
+        "name": "详情页营销打断",
+        "display_name": "详情页后即时触达高成单",
+        "status": "triggered",
+        "trigger_rate": 0.0103,
+        "trigger_cnt": 513.0,
+        "cvr_triggered": 0.0663,
+        "cvr_not_triggered": 0.0209,
+        "cvr_gap": 0.0454,
+        "create_triggered": 0.1754,
+        "create_not_triggered": 0.0683,
+        "cvr_gap_significant": true,
+        "_signal_type": "positive",
+        "effective_signal": true,
+        "is_positive_signal": true
+      },
+      {
+        "rule_id": 17,
+        "category": "关键打断",
+        "name": "填写页营销打断",
+        "display_name": "填写页营销打断",
+        "status": "triggered",
+        "trigger_rate": 0.0014,
+        "trigger_cnt": 69.0,
+        "cvr_triggered": 0.1304,
+        "cvr_not_triggered": 0.0212,
+        "cvr_gap": 0.1092,
+        "create_triggered": 0.2899,
+        "create_not_triggered": 0.0691,
+        "cvr_gap_significant": true,
+        "_signal_type": "definitional",
+        "effective_signal": false,
+        "is_positive_signal": false
+      },
+      {
+        "rule_id": 18,
+        "category": "关键打断",
+        "name": "营销干扰支付",
+        "display_name": "营销干扰支付",
+        "status": "triggered",
+        "trigger_rate": 0.0006,
+        "trigger_cnt": 28.0,
+        "cvr_triggered": 0.0,
+        "cvr_not_triggered": 0.0214,
+        "cvr_gap": -0.0214,
+        "create_triggered": 0.0,
+        "create_not_triggered": 0.0695,
+        "cvr_gap_significant": false,
+        "_signal_type": "definitional",
+        "effective_signal": false,
+        "is_positive_signal": false
+      },
+      {
+        "rule_id": 19,
+        "category": "转化效率",
+        "name": "自然转化营销多余",
+        "display_name": "自然高意向成单人群",
+        "status": "triggered",
+        "trigger_rate": 0.0114,
+        "trigger_cnt": 571.0,
+        "cvr_triggered": 0.3818,
+        "cvr_not_triggered": 0.0172,
+        "cvr_gap": 0.3646,
+        "create_triggered": 1.0,
+        "create_not_triggered": 0.0587,
+        "cvr_gap_significant": true,
+        "_signal_type": "positive",
+        "effective_signal": true,
+        "is_positive_signal": true
+      },
+      {
+        "rule_id": 20,
+        "category": "转化效率",
+        "name": "过度营销浪费",
+        "display_name": "过度营销浪费",
+        "status": "triggered",
+        "trigger_rate": 0.7432,
+        "trigger_cnt": 37161.0,
+        "cvr_triggered": 0.0,
+        "cvr_not_triggered": 0.0833,
+        "cvr_gap": -0.0833,
+        "create_triggered": 0.0,
+        "create_not_triggered": 0.2704,
+        "cvr_gap_significant": true,
+        "_signal_type": "definitional",
+        "effective_signal": false,
+        "is_positive_signal": false
+      },
+      {
+        "rule_id": 21,
+        "category": "转化效率",
+        "name": "缺少临门一脚优惠",
+        "display_name": "缺少临门一脚优惠",
+        "status": "triggered",
+        "trigger_rate": 0.0011,
+        "trigger_cnt": 54.0,
+        "cvr_triggered": 0.0,
+        "cvr_not_triggered": 0.0214,
+        "cvr_gap": -0.0214,
+        "create_triggered": 0.0,
+        "create_not_triggered": 0.0695,
+        "cvr_gap_significant": false,
+        "_signal_type": "definitional",
+        "effective_signal": false,
+        "is_positive_signal": false
+      }
+    ]
+  },
+  "model_analysis": {
+    "backend": "xgboost",
+    "auc": 0.8068,
+    "n_samples": 50000,
+    "overall_cvr": 0.0214,
+    "_note": "建模目标 = is_paid（成单）；overall_cvr 即整体成单率",
+    "top_features": [
+      {
+        "rank": 1,
+        "feature": "pre_mkt_product_browse_match",
+        "importance": 0.1283,
+        "direction": "positive",
+        "description": ""
+      },
+      {
+        "rank": 2,
+        "feature": "pre_top_interest_product",
+        "importance": 0.1065,
+        "direction": "positive",
+        "description": ""
+      },
+      {
+        "rank": 3,
+        "feature": "pre_train_depth",
+        "importance": 0.0722,
+        "direction": "negative",
+        "description": ""
+      },
+      {
+        "rank": 4,
+        "feature": "pre_browse_train",
+        "importance": 0.029,
+        "direction": "negative",
+        "description": ""
+      },
+      {
+        "rank": 5,
+        "feature": "pre_target_product_funnel_depth",
+        "importance": 0.0235,
+        "direction": "positive",
+        "description": ""
+      }
+    ],
+    "decision_rules": [
+      {
+        "rule": "pre_has_target_product_create>=1 AND pre_target_product_funnel_depth<4 AND pre_rp_scenic>=1 AND pre_train_visit_cnt<2",
+        "predicted_cvr": 0.5187,
+        "lift": 24.26,
+        "sample_count": 16,
+        "precision": 0.5625,
+        "recall": 0.0084,
+        "n_converted": 9
+      },
+      {
+        "rule": "pre_target_product_funnel_depth<3 AND pre_browse_train<1 AND pre_pending_pay_viewed>=1 AND pre_app_event_cnt>=34",
+        "predicted_cvr": 0.5186,
+        "lift": 24.26,
+        "sample_count": 42,
+        "precision": 0.1905,
+        "recall": 0.0075,
+        "n_converted": 8
+      },
+      {
+        "rule": "pre_has_target_product_create>=1 AND pre_evening_cnt<66 AND pre_max_funnel_depth<3 AND pre_push_touch_cnt<2",
+        "predicted_cvr": 0.5182,
+        "lift": 24.24,
+        "sample_count": 28,
+        "precision": 0.2857,
+        "recall": 0.0075,
+        "n_converted": 8
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "fnd_r41",
+      "agent": "diagnostic_rules",
+      "rule_id": 41,
+      "signal_name": "",
+      "signal": "活动促成创单的 2,403 名用户（占触达 4.8%）成单率 0.00%，对照 2.25%，差 2.25pp——订单已创建却全部止步支付。",
+      "severity": "high",
+      "detail": "营销已把用户推到下单环节，付款承接缺位。对创单未付用户即时推送专属优惠券与到期提醒，建立创单未付自动催付流程，把到手创单尽快转为成单。（执行难度：中等）",
+      "metric_refs": [
+        {
+          "name": "cvr_triggered",
+          "value": 0.0,
+          "n_event": 2403,
+          "ci_low": 0.0,
+          "ci_high": 0.0016
+        },
+        {
+          "name": "cvr_not_triggered",
+          "value": 0.0225
+        },
+        {
+          "name": "cvr_gap",
+          "value": -0.0225
+        },
+        {
+          "name": "trigger_rate",
+          "value": 0.0481
+        },
+        {
+          "name": "n_event",
+          "value": 2403.0
+        }
+      ],
+      "confidence": 0.85,
+      "_signal_type": "leakage",
+      "affected_users": 2403,
+      "cvr_gap_significant": true,
+      "cvr_gap_p_value": 0.0,
+      "direction_ambiguous": false,
+      "_rule_condition": "(is_converted == 1) & (is_paid == 0)"
+    },
+    {
+      "id": "fnd_r37",
+      "agent": "diagnostic_rules",
+      "rule_id": 37,
+      "signal_name": "",
+      "signal": "49,477 名用户（99.0%）被多个站内渠道叠加触达，成单率 2.12% vs 单一渠道干净人群 4.02%，差 1.90pp。",
+      "severity": "high",
+      "detail": "同日多渠道叠加触达越过收益拐点后成单持续下滑。建立单用户跨渠道每日触达上限（合计不超过收益拐点对应渠道数），设渠道互斥规则，当日达上限后暂停其余渠道。（执行难度：中等）",
+      "metric_refs": [
+        {
+          "name": "cvr_triggered",
+          "value": 0.0212,
+          "n_event": 49477,
+          "ci_low": 0.02,
+          "ci_high": 0.0225
+        },
+        {
+          "name": "cvr_not_triggered",
+          "value": 0.0402
+        },
+        {
+          "name": "cvr_gap",
+          "value": -0.019
+        },
+        {
+          "name": "trigger_rate",
+          "value": 0.9895
+        },
+        {
+          "name": "n_event",
+          "value": 49477.0
+        }
+      ],
+      "confidence": 0.85,
+      "_signal_type": "causal",
+      "affected_users": 49477,
+      "cvr_gap_significant": true,
+      "cvr_gap_p_value": 0.004694,
+      "direction_ambiguous": false,
+      "_rule_condition": "insite_channel_cnt >= 1.0"
+    },
+    {
+      "id": "fnd_r11",
+      "agent": "diagnostic_rules",
+      "rule_id": 11,
+      "signal_name": "",
+      "signal": "19,891 名用户（39.8%）触达前最深浏览品类并非机票，成单率 0.56% vs 品类匹配人群 3.18%，差 2.62pp。",
+      "severity": "high",
+      "detail": "推送品类与用户真实兴趣脱节是最大可控成单损失。依据实时浏览行为动态调整推送品类，建立兴趣标签实时更新机制；对机票零浏览人群改投其真实兴趣品类。（执行难度：中等）",
+      "metric_refs": [
+        {
+          "name": "cvr_triggered",
+          "value": 0.0056,
+          "n_event": 19891,
+          "ci_low": 0.0047,
+          "ci_high": 0.0067
+        },
+        {
+          "name": "cvr_not_triggered",
+          "value": 0.0318
+        },
+        {
+          "name": "cvr_gap",
+          "value": -0.0262
+        },
+        {
+          "name": "trigger_rate",
+          "value": 0.3978
+        },
+        {
+          "name": "n_event",
+          "value": 19891.0
+        }
+      ],
+      "confidence": 0.85,
+      "_signal_type": "causal",
+      "affected_users": 19891,
+      "cvr_gap_significant": true,
+      "cvr_gap_p_value": 0.0,
+      "direction_ambiguous": false,
+      "_rule_condition": "pre_mkt_product_browse_match == 0"
+    },
+    {
+      "id": "fnd_r19",
+      "agent": "diagnostic_rules",
+      "rule_id": 19,
+      "signal_name": "自然高意向成单人群",
+      "signal": "571 名用户无营销首触、未领券即自然创单，成单率 38.18% 远高于对照 1.72%（+36.46pp）——这批人会自主成单。",
+      "severity": "mid",
+      "detail": "对会自然成单的高意向人群追加触达与发券属重复投入。缩小投放、剔除自然成单用户，把触达频次与优惠预算集中到对优惠真正敏感的低转化人群。（执行难度：中等）",
+      "metric_refs": [
+        {
+          "name": "cvr_triggered",
+          "value": 0.3818,
+          "n_event": 571,
+          "ci_low": 0.3429,
+          "ci_high": 0.4223
+        },
+        {
+          "name": "cvr_not_triggered",
+          "value": 0.0172
+        },
+        {
+          "name": "cvr_gap",
+          "value": 0.3646
+        },
+        {
+          "name": "trigger_rate",
+          "value": 0.0114
+        },
+        {
+          "name": "n_event",
+          "value": 571.0
+        }
+      ],
+      "confidence": 0.85,
+      "_signal_type": "positive",
+      "affected_users": 571,
+      "cvr_gap_significant": true,
+      "cvr_gap_p_value": 0.0,
+      "direction_ambiguous": false,
+      "_rule_condition": "(pre_is_marketing_first == 0) & (is_converted == 1) & (pre_has_coupon == 0)"
+    },
+    {
+      "id": "fnd_r5",
+      "agent": "diagnostic_rules",
+      "rule_id": 5,
+      "signal_name": "低活跃沉默用户成单较高",
+      "signal": "历史沉默/低活跃且无主流程行为的 8,493 名用户（17.0%）成单率 3.76%，高于其余人群 1.81%（+1.95pp）。",
+      "severity": "mid",
+      "detail": "正向机会：这批沉默用户经本次活动唤醒后成单反而更高。作为优质唤醒人群保护并扩展相似种子，而非削减触达。（执行难度：容易）",
+      "metric_refs": [
+        {
+          "name": "cvr_triggered",
+          "value": 0.0376,
+          "n_event": 8493,
+          "ci_low": 0.0338,
+          "ci_high": 0.0419
+        },
+        {
+          "name": "cvr_not_triggered",
+          "value": 0.0181
+        },
+        {
+          "name": "cvr_gap",
+          "value": 0.0195
+        },
+        {
+          "name": "trigger_rate",
+          "value": 0.1699
+        },
+        {
+          "name": "n_event",
+          "value": 8493.0
+        }
+      ],
+      "confidence": 0.85,
+      "_signal_type": "positive",
+      "affected_users": 8493,
+      "cvr_gap_significant": true,
+      "cvr_gap_p_value": 0.0,
+      "direction_ambiguous": false,
+      "_rule_condition": "(pre_mainflow_event_cnt == 0) & ((pre_is_dormant_user == 1) | (pre_total_event_cnt <= 86.0))"
+    },
+    {
+      "id": "fnd_r15",
+      "agent": "diagnostic_rules",
+      "rule_id": 15,
+      "signal_name": "详情页后即时触达高成单",
+      "signal": "正向机会：513 名用户刚浏览机票详情页即被活动触达，成单率 6.63% vs 2.09%（+4.54pp）——详情页后的即时触达正中决策窗口。",
+      "severity": "mid",
+      "detail": "详情页后的即时触达是高价值时机而非打断。把『刚看完机票详情页』作为优先触达时机定向扩展，承接其购买决策。（执行难度：中等）",
+      "metric_refs": [
+        {
+          "name": "cvr_triggered",
+          "value": 0.0663,
+          "n_event": 513,
+          "ci_low": 0.0478,
+          "ci_high": 0.0912
+        },
+        {
+          "name": "cvr_not_triggered",
+          "value": 0.0209
+        },
+        {
+          "name": "cvr_gap",
+          "value": 0.0454
+        },
+        {
+          "name": "trigger_rate",
+          "value": 0.0103
+        },
+        {
+          "name": "n_event",
+          "value": 513.0
+        }
+      ],
+      "confidence": 0.85,
+      "_signal_type": "positive",
+      "affected_users": 513,
+      "cvr_gap_significant": true,
+      "cvr_gap_p_value": 0.0,
+      "direction_ambiguous": false,
+      "_rule_condition": "(pre_last_mainflow_detail.str.contains('详情', na=False)) & (pre_last_mainflow_to_touch_min <= 3.0)"
+    },
+    {
+      "id": "fnd_pos_pre_target_product_funnel_depth",
+      "agent": "diagnostic_rules",
+      "rule_id": null,
+      "signal": "触达前进入机票主流程达深度≥2 的 3,152 名用户，成单率 7.33%，是其余人群 1.79% 的 4 倍（+5.54pp）。",
+      "signal_name": "目标品类漏斗深度",
+      "severity": "mid",
+      "detail": "机票主流程深度是本次活动成单的最强驱动，与成单预测模型识别出的最重要正向特征一致。把这批深逛机票的高潜用户作为核心保护与相似人群扩展种子，优先承接其支付与优惠。（执行难度：容易）",
+      "metric_refs": [
+        {
+          "name": "cvr_triggered",
+          "value": 0.0733,
+          "n_event": 3152
+        },
+        {
+          "name": "cvr_not_triggered",
+          "value": 0.0179
+        },
+        {
+          "name": "cvr_gap",
+          "value": 0.055400000000000005
+        },
+        {
+          "name": "trigger_rate",
+          "value": 0.06304
+        },
+        {
+          "name": "n_event",
+          "value": 3152
+        }
+      ],
+      "confidence": 0.8,
+      "_signal_type": "positive",
+      "affected_users": 3152
+    },
+    {
+      "id": "fnd_model_stratified_auc",
+      "agent": "model_analysis",
+      "signal": "成单预测模型在 1 个子人群上的区分能力明显弱于整体，该子群定向需谨慎。",
+      "severity": "mid",
+      "detail": "模型在个别子人群上识别力下降，对该子群的定向结果置信度较低，建议结合规则诊断交叉验证后再投放。（执行难度：中等）",
+      "evidence_field": "model.stratified_auc",
+      "metric_refs": [
+        {
+          "name": "weak_subgroup_cnt",
+          "value": 1,
+          "n_total": 50000
+        }
+      ],
+      "source": "model_interpreter",
+      "auc_quality": "elevated",
+      "rule_id": null,
+      "model_priority_boost": true
+    }
+  ],
+  "audience_segments": [
+    {
+      "name": "目标品类深漏斗·多次创单·火车票浏览高潜人群",
+      "filter_conditions": "pre_train_depth<1 and pre_target_product_funnel_depth>=2 and pre_create_order_cnt>=1 and pre_flight_visit_cnt>=4",
+      "rationale": "决策树规则 lift=24.2× (predicted_cvr=51.71%, baseline=2.14%), 命中 368 用户",
+      "action": "下一周期对该群体做优先级投放或预算倾斜",
+      "estimated_size": 368,
+      "baseline_cvr": 0.0214,
+      "expected_cvr_mid": 0.5171,
+      "estimated_incremental_orders": 182,
+      "supporting_findings": [
+        "fnd_model_decision_rule"
+      ],
+      "source": "model_interpreter",
+      "needs_polish": true
+    },
+    {
+      "name": "目标品类深漏斗·火车票浏览高潜人群",
+      "filter_conditions": "pre_train_depth<1 and pre_target_product_funnel_depth>=2 and pre_first_expose_to_touch_min>=8 and pre_product_category_cnt<17",
+      "rationale": "决策树规则 lift=24.1× (predicted_cvr=51.56%, baseline=2.14%), 命中 480 用户",
+      "action": "下一周期对该群体做优先级投放或预算倾斜",
+      "estimated_size": 480,
+      "baseline_cvr": 0.0214,
+      "expected_cvr_mid": 0.5156,
+      "estimated_incremental_orders": 237,
+      "supporting_findings": [
+        "fnd_model_decision_rule"
+      ],
+      "source": "model_interpreter",
+      "needs_polish": true
+    },
+    {
+      "name": "目标品类深漏斗·火车票浏览高潜人群·变体2",
+      "filter_conditions": "pre_train_depth<1 and insite_channel_cnt>=3 and pre_target_product_funnel_depth>=3 and pre_unique_touchpoints<40",
+      "rationale": "决策树规则 lift=24.1× (predicted_cvr=51.52%, baseline=2.14%), 命中 653 用户",
+      "action": "下一周期对该群体做优先级投放或预算倾斜",
+      "estimated_size": 653,
+      "baseline_cvr": 0.0214,
+      "expected_cvr_mid": 0.5152,
+      "estimated_incremental_orders": 322,
+      "supporting_findings": [
+        "fnd_model_decision_rule"
+      ],
+      "source": "model_interpreter",
+      "needs_polish": true
+    },
+    {
+      "name": "目标品类深漏斗·品类匹配高潜人群",
+      "filter_conditions": "pre_mkt_product_browse_match>=1 and pre_target_product_funnel_depth>=3 and pre_first_expose_to_touch_min>=8 and pre_unique_touchpoints<16",
+      "rationale": "决策树规则 lift=24.0× (predicted_cvr=51.35%, baseline=2.14%), 命中 176 用户",
+      "action": "下一周期对该群体做优先级投放或预算倾斜",
+      "estimated_size": 176,
+      "baseline_cvr": 0.0214,
+      "expected_cvr_mid": 0.5135,
+      "estimated_incremental_orders": 86,
+      "supporting_findings": [
+        "fnd_model_decision_rule"
+      ],
+      "source": "model_interpreter",
+      "needs_polish": true
+    },
+    {
+      "name": "创单未付待促付人群",
+      "filter_conditions": "(is_converted == 1) & (is_paid == 0)",
+      "rationale": "已创单但未支付的 2,403 名用户，营销已促成下单、仅差付款；定向发券加催付可直接挽回成单（当前成单率 0%）。",
+      "action": "即时发券促付 + 创单未付自动催付提醒",
+      "estimated_size": 2403,
+      "baseline_cvr": 0.0,
+      "confidence": 0.7,
+      "matched": true
+    },
+    {
+      "name": "跨渠道高频疲劳人群",
+      "filter_conditions": "insite_channel_cnt >= 1.0",
+      "rationale": "当日被多个站内渠道叠加触达的 49,477 名用户，成单率 2.12% 随叠加种数下滑；应设每日触达上限并加入冷却。",
+      "action": "设跨渠道每日触达上限 + 冷却名单",
+      "estimated_size": 49477,
+      "baseline_cvr": 0.0212,
+      "confidence": 0.7,
+      "matched": true
+    },
+    {
+      "name": "品类错配人群",
+      "filter_conditions": "pre_mkt_product_browse_match == 0",
+      "rationale": "触达前最深浏览品类非机票的 19,891 名用户，成单率仅 0.56%、约为品类匹配人群 3.18% 的 1/6；应改投其真实兴趣品类。",
+      "action": "按实时浏览品类改投 / 机票零浏览者排除投放",
+      "estimated_size": 19891,
+      "baseline_cvr": 0.0056,
+      "confidence": 0.7,
+      "matched": true
+    },
+    {
+      "name": "高潜·自然高意向成单人群（正向机会）人群",
+      "filter_conditions": "(pre_is_marketing_first == 0) & (is_converted == 1) & (pre_has_coupon == 0)",
+      "rationale": "无营销首触、未领券即自然成单的 571 名高意向用户，成单率 38.18%，追加投放无增量；应从投放中剔除。",
+      "action": "从投放人群中剔除，释放预算转投价敏人群",
+      "estimated_size": 571,
+      "baseline_cvr": 0.3818,
+      "confidence": 0.7,
+      "matched": true
+    }
+  ],
+  "narratives": {
+    "headline": "特价机票活动成单率仅 2.14%，39.8% 触达错配给非机票兴趣人群，是成单跑不动的首因",
+    "problems": [
+      {
+        "agent": "diagnostic_rules",
+        "rule_name": "",
+        "title": "活动促成 2,403 单全部止步支付，成单率 0%",
+        "narrative": "活动触达后成功创单的 2,403 名用户（占触达 4.8%）无一完成支付，成单率 0.00%，对照 2.25%。整体 5 万用户创单率 6.94%（3,470 单）、成单率仅 2.14%（1,070 单），近七成订单止步支付。营销把人推到了下单页，却没承接好付款临门一脚。（数据：is_paid=0, n=2,403）",
+        "impact": "创单是营销已拿到的成果，支付流失等于把到手成单白白浪费，直接压低活动成单量与 ROI。",
+        "evidence_finding_ids": [
+          "fnd_r41"
+        ],
+        "typical_case": {
+          "user_id": "U687460***",
+          "badge_text": "创单未付",
+          "badge_type": "pending",
+          "profile_text": "活动当日完成创单、历史漏斗已达深度 4 的高意向用户，却始终未到达支付页（到达支付页=0）。",
+          "metrics": [
+            {
+              "val": "4",
+              "label": "历史漏斗深度"
+            },
+            {
+              "val": "10",
+              "label": "主流程行为次数"
+            },
+            {
+              "val": "0",
+              "label": "到达支付页"
+            }
+          ],
+          "timeline": [
+            {
+              "time": "21:00",
+              "action": "用户行为路径：营销:push:260505-国际机票-早鸟大促 → ⋯ → 红包领取:酒店:民宿专享红包 → ⋯ → 主流程:列表页:机票×7 → ⋯ → 公共页面:大首页:机票 → **主流程:详情页:机票** → ⋯ → 公共页面:大首页:机票 → ⋯ → 营销:活动:特价机票业务总览",
+              "type": "normal"
+            },
+            {
+              "time": "21:30",
+              "action": "触达前领券 7 次，覆盖 4 个品类：机票、酒店、景区、汽车票；首张「国际机票」→ 最近「酒店」；含活动目标「机票」券",
+              "type": "normal"
+            },
+            {
+              "time": "22:00",
+              "action": "触达本次营销活动",
+              "type": "normal"
+            },
+            {
+              "time": "22:03",
+              "action": "创单后停留待支付，全程未进入支付页 —— 成单流失",
+              "type": "issue"
+            }
+          ],
+          "root_cause": "该用户触达前主流程行为 10 次、漏斗深度 4，创单意愿充分，触达当日即创单；但全程未进入支付页，订单停在待支付。卡点在支付承接而非意向——缺少及时促付提醒与优惠兜底，临门一脚流失。"
+        },
+        "problem_rank": 1
+      },
+      {
+        "agent": "diagnostic_rules",
+        "rule_name": "",
+        "title": "99% 用户跨渠道叠加触达，成单率 2.12% vs 4.02%",
+        "narrative": "49,477 名用户（占触达 99.0%）当日被多个站内渠道叠加触达，成单率 2.12%，而仅经单一渠道的少数干净人群成单率 4.02%，差 1.90pp。渠道叠加种数越过收益拐点后成单持续下滑，叠加成疲劳。（数据：insite_channel_cnt≥1, n=49,477）",
+        "impact": "几乎全量用户处于多渠道叠加触达状态，叠加越多成单越低，持续消耗预算并压低人群对营销的整体响应。",
+        "evidence_finding_ids": [
+          "fnd_r37"
+        ],
+        "typical_case": {
+          "user_id": "U532901***",
+          "badge_text": "营销疲劳",
+          "badge_type": "immune",
+          "profile_text": "历史累计被营销触达 25 次、其中 20 次触达后疲劳离开的高频打扰用户。",
+          "metrics": [
+            {
+              "val": "25",
+              "label": "历史营销触达次数"
+            },
+            {
+              "val": "1",
+              "label": "营销后直接退出次数"
+            },
+            {
+              "val": "20",
+              "label": "营销疲劳离开次数"
+            }
+          ],
+          "timeline": [
+            {
+              "time": "08:00",
+              "action": "用户行为路径：营销:广告投放:小米市场×2 → ⋯ → 营销:广告投放:历史版本APP → ⋯ → 营销:广告投放:历史版本APP → ⋯ → 营销:广告投放:历史版本APP → ⋯ → **营销:广告投放:历史版本APP×3** → ⋯ → 营销:广告投放:历史版本APP → ⋯ → 营销:活动:特价机票业务总览",
+              "type": "normal"
+            },
+            {
+              "time": "08:30",
+              "action": "触达前领券 28 次，覆盖 6 个品类：机票、酒店、景区、用车、汽车票、度假；首张「国际机票」→ 最近「酒店」；含活动目标「机票」券",
+              "type": "normal"
+            },
+            {
+              "time": "09:00",
+              "action": "触达本次营销活动",
+              "type": "normal"
+            },
+            {
+              "time": "09:01",
+              "action": "历史累计营销触达 25 次，直接退出 1 次",
+              "type": "issue"
+            }
+          ],
+          "root_cause": "该用户触达前已累计 25 次营销触达，20 次在触达后疲劳离开，明显处于过度营销状态；本次活动又叠加触达，仍未成单。对高频人群应设跨渠道每日触达上限并加入冷却，而非继续加码。"
+        },
+        "problem_rank": 2
+      },
+      {
+        "agent": "diagnostic_rules",
+        "rule_name": "",
+        "title": "近四成触达品类错配，成单率 0.56% vs 3.18%",
+        "narrative": "活动主推机票，但 19,891 名用户（占触达 39.8%）触达前最深浏览品类并非机票，成单率仅 0.56%，品类匹配人群 3.18%，差 2.62pp。火车票兴趣用户尤为典型，创单率 1.87%、不足机票兴趣者 9.81% 的 1/5。推送品类与用户真实兴趣脱节。（数据：pre_mkt_product_browse_match=0, n=19,891）",
+        "impact": "近四成触达打在无机票兴趣的人群上，成单率被压到匹配人群的 1/6，是拉低整体成单、浪费触达预算的最大单一因素。",
+        "evidence_finding_ids": [
+          "fnd_r11"
+        ],
+        "typical_case": {
+          "user_id": "U730138***",
+          "badge_text": "品类错配",
+          "badge_type": "unmatched",
+          "profile_text": "触达前主流程最深浏览火车票 7 次、机票主流程零浏览的火车票兴趣用户。",
+          "metrics": [
+            {
+              "val": "火车票",
+              "label": "主流程浏览最多品类"
+            },
+            {
+              "val": "7",
+              "label": "该品类主流程浏览次数"
+            },
+            {
+              "val": "从未浏览",
+              "label": "目标「机票」主流程浏览",
+              "alert": true
+            }
+          ],
+          "timeline": [
+            {
+              "time": "20:00",
+              "action": "用户行为路径：营销:push:260505-国际机票-早鸟大促 → ⋯ → 公共页面:大首页:国内酒店新客专享 → ⋯ → 红包领取:机票:指定景区新客节日9折红包 → ⋯ → 红包领取:汽车票:民宿专享红包 → ⋯ → **主流程:列表页:火车票×6** → ⋯ → 公共页面:活动:火车票 → 营销:项目首页:特价机票业务总览",
+              "type": "normal"
+            },
+            {
+              "time": "20:30",
+              "action": "触达前领券 7 次，覆盖 5 个品类：机票、酒店、景区、用车、汽车票；首张「景区」→ 最近「酒店」；含活动目标「机票」券",
+              "type": "normal"
+            },
+            {
+              "time": "21:00",
+              "action": "触达本次营销活动",
+              "type": "normal"
+            },
+            {
+              "time": "21:01",
+              "action": "主流程浏览最多「火车票」7 次 vs 目标「机票」从未进入主流程 —— 推送品类与用户兴趣错配",
+              "type": "issue"
+            }
+          ],
+          "root_cause": "该用户触达前主流程集中在火车票（浏览 7 次），从未进入机票主流程；活动却推送特价机票，品类完全错配。即便领过机票券，兴趣与推送不一致，触达当日未成单。对这类用户应改推其真实兴趣品类，而非机票。"
+        },
+        "problem_rank": 3
+      },
+      {
+        "agent": "diagnostic_rules",
+        "rule_name": "自然高意向成单人群",
+        "title": "571 名自然成单用户被重复投放，成单率 38.18%",
+        "narrative": "571 名用户在无营销引导首触、且未领券的情况下自然创单，其中 38.18% 完成支付，远高于对照 1.72%（差 36.46pp）。这批用户本就高意向、会自主成单，活动对其追加触达与发券属重复投入，并未带来增量成单。营销预算应让位给真正需要推动的人群。（数据：pre_is_marketing_first=0 且 is_converted=1, n=571）",
+        "impact": "对自然成单人群的冗余投放不产生增量成单，等于浪费触达频次与优惠成本，摊薄整体活动 ROI。",
+        "evidence_finding_ids": [
+          "fnd_r19"
+        ],
+        "typical_case": {
+          "user_id": "U428926***",
+          "badge_text": "自然成单",
+          "badge_type": "converted",
+          "profile_text": "主流程行为高达 53 次、自主深逛国际机票的高意向自然成单用户。",
+          "metrics": [
+            {
+              "val": "4",
+              "label": "历史漏斗深度"
+            },
+            {
+              "val": "53",
+              "label": "主流程行为次数"
+            },
+            {
+              "val": "1",
+              "label": "领券数量"
+            }
+          ],
+          "timeline": [
+            {
+              "time": "12:00",
+              "action": "用户行为路径：主流程:项目首页:国际机票×9 → ⋯ → 红包领取:酒店:会员专享特惠 → ⋯ → 主流程:项目首页:国际机票×9 → ⋯ → **主流程:项目首页:国际机票×33** → ⋯ → 公共页面:项目首页:机票 → 主流程:活动:国际机票 → 营销:项目首页:特价机票业务总览",
+              "type": "normal"
+            },
+            {
+              "time": "12:30",
+              "action": "触达前领券 1 次，覆盖 1 个品类：酒店；最近一次「酒店」；缺活动目标「机票」券",
+              "type": "normal"
+            },
+            {
+              "time": "13:00",
+              "action": "触达本次营销活动",
+              "type": "normal"
+            },
+            {
+              "time": "13:01",
+              "action": "无营销引导下自然创单（漏斗深度 4）",
+              "type": "normal"
+            }
+          ],
+          "root_cause": "该用户触达前主流程行为 53 次、反复深逛国际机票，漏斗深度 4，成单意愿极强，无需营销即可成单；本次活动对其追加触达属多余投入。这类自然成单人群应从投放中剔除，把预算释放给低转化高潜人群。"
+        },
+        "problem_rank": 4
+      }
+    ]
+  },
+  "action_plan": {
+    "priority_actions": [
+      {
+        "rank": 1,
+        "problem_rank": 1,
+        "dimension": "人群策略",
+        "title": "发券促付创单未付人群，成单率 0%→2.2%",
+        "description": "对当日创单未付用户即时推送专属优惠券与到期提醒，建立创单未付自动催付流程，把营销已促成的订单尽快转为支付。",
+        "evidence": "活动促成 2,403 单创单全部未支付，成单率 0.00% vs 对照 2.25%（差 2.25pp）。",
+        "target_audiences": [
+          "创单未付待促付人群"
+        ],
+        "expected_impact": "创单未付人群成单率从 0% 回升至 2%+，挽回到手订单",
+        "execution_difficulty": "medium"
+      },
+      {
+        "rank": 2,
+        "problem_rank": 2,
+        "dimension": "人群策略",
+        "title": "设跨渠道每日触达上限，高频人群成单率 2.12%→4.02%",
+        "description": "建立单用户跨渠道每日触达上限并加入冷却名单，对当日已叠加多渠道的人群暂停加投，把叠加种数压回收益拐点以内。",
+        "evidence": "49,477 名用户（99.0%）跨渠道叠加触达，成单率 2.12% vs 干净人群 4.02%（差 1.90pp）。",
+        "target_audiences": [
+          "跨渠道高频疲劳人群"
+        ],
+        "expected_impact": "高频人群成单率向 4.02% 回升，成单率改善约 1.9pp 并节省触达预算",
+        "execution_difficulty": "medium"
+      },
+      {
+        "rank": 3,
+        "problem_rank": 3,
+        "dimension": "人群策略",
+        "title": "推送品类对齐实时浏览，成单率 0.56%→3.18%",
+        "description": "依据用户触达前真实浏览品类动态选投，机票零浏览人群改投其兴趣品类，并建立兴趣标签实时更新机制保持品类一致。",
+        "evidence": "19,891 名用户（39.8%）品类错配，成单率 0.56% vs 匹配人群 3.18%（差 2.62pp）；品类匹配是成单预测模型识别的最重要因素。",
+        "target_audiences": [
+          "品类错配人群"
+        ],
+        "expected_impact": "错配人群成单率向匹配人群 3.18% 靠拢，整体成单率改善约 2.6pp",
+        "execution_difficulty": "medium"
+      },
+      {
+        "rank": 4,
+        "problem_rank": 4,
+        "dimension": "人群策略",
+        "title": "剔除自然成单人群，省下 571 人冗余投放",
+        "description": "把无营销首触、未领券即自然成单的人群从投放中排除，将释放的触达频次与优惠预算集中到低转化高潜人群。",
+        "evidence": "571 名自然成单用户成单率 38.18% 远高于对照 1.72%（+36.46pp），追加投放无增量。",
+        "target_audiences": [
+          "高潜·自然高意向成单人群（正向机会）人群"
+        ],
+        "expected_impact": "削减约 571 人冗余触达，把节省的优惠与频次预算转投价敏低转化人群，提升整体 ROI",
+        "execution_difficulty": "medium"
+      }
+    ],
+    "cross_validation": [
+      {
+        "finding": "机票主流程深度≥2 的用户成单率 7.33%，是其余 1.79% 的 4 倍",
+        "validated_by": "成单预测模型把『品类匹配』『机票主流程深度/访问次数』列为最重要的正向特征",
+        "conclusion": "机票主流程参与度是本次活动成单的第一驱动，扩量与定向都应围绕它，而非泛投"
+      },
+      {
+        "finding": "39.8% 触达品类错配、成单率仅 0.56%",
+        "validated_by": "火车票兴趣人群创单率 1.87%、不足机票兴趣者 9.81% 的 1/5，且模型把『火车票浏览深度』识别为最强负向特征",
+        "conclusion": "品类匹配是最大可控成单杠杆，火车票等非机票兴趣人群应改投其真实兴趣品类"
+      }
+    ],
+    "data_caveats": []
+  },
+  "data_caveats": [
+    {
+      "field": "model.calibration",
+      "issue": "模型校准偏差较大（max_gap=0.614），高分段预测CVR高于实际",
+      "impact": "圈人时勿直接按预测分位数划线，建议下调10-15%；决策树规则的lift数值仅供参考"
+    },
+    {
+      "field": "model_analysis.dropped_zero_var",
+      "issue": "零方差列已自动剔除",
+      "fallback": "activity_channel_std, activity_touch_cnt, activity_click_cnt, is_activity_clicked, activity_over_touch_flag, pre_last_mkt_to_touch_min, pre_touched_activity, pre_touched_private_domain…(共 32 列)",
+      "impact": "这些字段对模型零贡献；如业务上认为有意义请补充更细颗粒"
+    },
+    {
+      "field": "model.score_buckets",
+      "issue": "分桶Top10%实际CVR与预测偏差61.4%，actual=0.097, predicted=0.711",
+      "impact": "模型在该分桶高估转化率，圈人时应结合实际CVR校验，不宜单纯按预测分位数圈选"
+    },
+    {
+      "field": "model_analysis.stratified_score_buckets",
+      "issue": "同分桶在子群上 CVR 差异显著（4 处）",
+      "impact": "全量圈人规则在子人群可能失真。示例：pre_primary_platform@(0.471, 0.578]: 微信=7.41% vs 同程APP=2.55%; pre_has_mkt_click@(0.0348, 0.0989]: 0=0.04% vs 1=0.00%; pre_has_mkt_click@(0.0989, 0.305]: 0=0.25% vs 1=0.00%"
+    },
+    {
+      "field": "structural_zero_variance_fields",
+      "issue": "9 个字段在当前活动数据中零方差（渠道特性）: activity_touch_cnt, activity_click_cnt, pre_last_mkt_to_touch_min, pre_scenic_depth, pre_scenic_visit_cnt, pre_car_visit_cnt, pre_bus_visit_cnt, pre_homepage_event_cnt…",
+      "impact": "这些字段对该活动类型的所有用户值相同，阈值无意义；相关规则若依赖这些字段，请检查 channel_filter 设置"
+    },
+    {
+      "field": "pre_last_order_to_touch_min",
+      "issue": "极端异常值：p99=66449949 >> IQR=288（p25=6.0, p75=294.0），建议排查数据上报是否存在异常大值",
+      "impact": "该字段的 CVR 最优切分点可能受异常值影响，依赖此字段的诊断规则置信度降低；建议排查原始数据上报逻辑"
+    },
+    {
+      "field": "pre_mainflow_event_cnt",
+      "issue": "极端异常值：p99=82 >> IQR=1（p25=1.0, p75=2.0），建议排查数据上报是否存在异常大值",
+      "impact": "该字段的 CVR 最优切分点可能受异常值影响，依赖此字段的诊断规则置信度降低；建议排查原始数据上报逻辑"
+    }
+  ],
+  "confidence": {
+    "data_coverage": 0.87,
+    "domain_coverage": 1.0,
+    "rule_coverage": 0.74,
+    "model_quality": 0.7,
+    "finding_richness": 1.0,
+    "evidence_depth": 1.0,
+    "overall": 0.87,
+    "level": "高"
+  }
+}

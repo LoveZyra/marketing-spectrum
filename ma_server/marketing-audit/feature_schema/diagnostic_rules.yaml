@@ -1,0 +1,501 @@
+rules:
+- id: 1
+  category: 触达质量
+  name: 无效营销触达
+  channel_filter: all
+  required_fields:
+  - pre_mainflow_event_cnt
+  - activity_touch_cnt
+  condition_template: (pre_mainflow_event_cnt == 0) & (activity_touch_cnt > 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: mid
+  description: 用户未进入主流程，却有营销触达。说明触达人群与主流程行为完全脱节，无实际转化潜力。
+  execution_difficulty: medium
+  positive_alias: 无主流程用户成单不低
+- id: 2
+  category: 触达质量
+  name: 过度营销骚扰
+  channel_filter: activity_channel_std in ('push', 'popup', 'sms', 'outbound', 'insite_msg')
+  required_fields:
+  - activity_touch_cnt
+  condition_template: activity_touch_cnt >= threshold('activity_touch_cnt', 'optimal')
+  threshold_fields:
+  - field: activity_touch_cnt
+    stat: optimal
+  handling: row_level
+  severity_base: mid
+  description: 当日触达次数过高，超过阈值后 CVR 不再提升甚至下降，属于骚扰性触达。
+  execution_difficulty: easy
+- id: 3
+  category: 触达质量
+  name: 弹屏打扰
+  channel_filter: activity_channel_std == 'popup'
+  required_fields:
+  - activity_channel_std
+  - pre_popup_reject_cnt
+  condition_template: (activity_channel_std == 'popup') & (pre_popup_reject_cnt > 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: mid
+  description: 弹屏渠道触达且用户历史上有快速拒绝弹屏的记录（10秒内离开），说明该用户对弹屏高度抵触。
+  execution_difficulty: medium
+- id: 4
+  category: 触达质量
+  name: 人群质量过低
+  channel_filter: all
+  required_fields:
+  - risk_type
+  - finance_revenue_after
+  - timediff
+  condition_template: (risk_type == '风险用户') | (finance_revenue_after < 0) | (timediff < 10)
+  threshold_fields: []
+  handling: row_level
+  severity_base: high
+  description: 触达人群中风控风险用户、近1年净营收为负、或当天停留极短（疑似误触/低质量）占比过高，营销资源投在低质量人群上。基于 V2.1 新增用户画像字段（risk_type 风控 / finance_revenue_after 营收 / timediff 停留时长）评估；字段取值（'风险用户' / 营收负值 / 停留秒数）以实际数据为准。久未消费信号（距上次消费>360天）需补充 days_since_last_order 派生字段后再叠加。
+  execution_difficulty: easy
+- id: 5
+  category: 触达质量
+  name: 僵尸用户浪费营销
+  channel_filter: all
+  required_fields:
+  - pre_mainflow_event_cnt
+  - pre_is_dormant_user
+  - pre_total_event_cnt
+  condition_template: (pre_mainflow_event_cnt == 0) & ((pre_is_dormant_user == 1) | (pre_total_event_cnt <= threshold('pre_total_event_cnt', 'optimal')))
+  threshold_fields:
+  - field: pre_total_event_cnt
+    stat: optimal
+  handling: row_level
+  severity_base: mid
+  description: 用户无主流程行为且总行为极少（低于CVR拐点），属于沉默用户，营销资源浪费。
+  execution_difficulty: easy
+  positive_alias: 低活跃沉默用户成单较高
+- id: 6
+  category: 时机匹配
+  name: 营销时机不当
+  channel_filter: all
+  required_fields:
+  - period_mismatch_flag
+  condition_template: period_mismatch_flag == 1
+  threshold_fields: []
+  handling: row_level
+  severity_base: mid
+  description: 触达时段与用户历史行为主时段不一致，说明营销在用户非活跃时间推送，效果折扣大。
+  execution_difficulty: easy
+  positive_alias: 非常规时段触达成单较高
+- id: 7
+  category: 时机匹配
+  name: 营销时机滞后
+  channel_filter: all
+  required_fields:
+  - pre_has_complete_order
+  - pre_last_order_to_touch_min
+  condition_template: (pre_has_complete_order == 1) & (pre_last_order_to_touch_min <= threshold('pre_last_order_to_touch_min', 'optimal'))
+  threshold_fields:
+  - field: pre_last_order_to_touch_min
+    stat: optimal
+  handling: row_level
+  severity_base: high
+  description: 营销触达时间晚于用户成单时间（时序反转），说明实时标签存在延迟或配置错误，营销在转化完成后才触发。与Rule 8（成单后间隔过短）的区别：本条是时序倒置问题，应先排查标签配置。
+  execution_difficulty: easy
+  positive_alias: 近期成单复购人群成单较高
+- id: 11
+  category: 内容匹配
+  name: 跨品类推送错配
+  channel_filter: activity_channel_std in ('activity', 'push', 'popup', 'sms', 'outbound', 'insite_msg')
+  required_fields:
+  - pre_mkt_product_browse_match
+  condition_template: pre_mkt_product_browse_match == 0
+  threshold_fields: []
+  handling: row_level
+  severity_base: mid
+  description: 活动目标品类与用户历史兴趣最深品类不一致，属于跨品类推送错配，转化潜力低。
+  execution_difficulty: medium
+  positive_alias: 跨品类兴趣用户成单不低
+- id: 12
+  category: 站内外衔接
+  name: 站内多渠道品类不一致
+  channel_filter: all
+  required_fields:
+  - insite_multi_channel_match_flag
+  condition_template: insite_multi_channel_match_flag == 0
+  threshold_fields: []
+  handling: row_level
+  severity_base: high
+  description: 同一用户当日被站内多种渠道触达但推送品类不一致，多渠道间信息矛盾，用户困惑导致转化下降。
+  execution_difficulty: medium
+- id: 13
+  category: 站内外衔接
+  name: 站内外项目不一致
+  channel_filter: activity_channel_std == 'ads'
+  required_fields:
+  - has_ads_touch
+  - ads_insite_match_flag
+  condition_template: (has_ads_touch == 1) & (ads_insite_match_flag == 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: high
+  description: 站外广告推品类与站内承接营销品类不一致，用户进站后看到不同产品，转化中断。
+  is_positive_signal: true
+  positive_signal_reason: 站内外品类一致的广告投放带来更高CVR，说明品类一致性有正向价值
+  execution_difficulty: easy
+  positive_alias: 站外引流自主进站成单较高
+- id: 14
+  category: 站内外衔接
+  name: 站外无站内承接
+  channel_filter: activity_channel_std == 'ads'
+  required_fields:
+  - ads_no_insite_flag
+  condition_template: ads_no_insite_flag == 1
+  threshold_fields: []
+  handling: row_level
+  severity_base: high
+  description: 有站外广告触达但广告之后无任何站内营销跟进，广告引流后无承接，转化漏斗断裂。
+  is_positive_signal: true
+  positive_signal_reason: 仅有站外无站内承接的用户CVR反而更高，说明自主意向更强
+  execution_difficulty: medium
+  positive_alias: 仅站外触达自主意向强成单较高
+- id: 15
+  category: 关键打断
+  name: 详情页营销打断
+  channel_filter: all
+  required_fields:
+  - pre_last_mainflow_detail
+  - pre_last_mainflow_to_touch_min
+  condition_template: (pre_last_mainflow_detail.str.contains('详情', na=False)) & (pre_last_mainflow_to_touch_min <= threshold('pre_last_mainflow_to_touch_min', 'optimal'))
+  threshold_fields:
+  - field: pre_last_mainflow_to_touch_min
+    stat: optimal
+  handling: row_level
+  severity_base: mid
+  description: 用户刚浏览完详情页即被营销触达打断（触达间隔极短），干扰了自然决策流程。
+  execution_difficulty: medium
+  positive_alias: 详情页后即时触达高成单
+- id: 16
+  category: 关键打断
+  name: 弹屏打断支付
+  channel_filter: activity_channel_std == 'popup'
+  required_fields:
+  - activity_channel_std
+  - pre_reached_booking
+  - pre_create_not_complete
+  - pre_popup_reject_cnt
+  - is_converted
+  condition_template: (activity_channel_std == 'popup') & (pre_reached_booking == 1) & (pre_create_not_complete == 1) & (pre_popup_reject_cnt > 0) & (is_converted == 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: high
+  description: 有未付创单的用户被弹屏触达，且历史上弹屏后易快速离开，说明弹屏正在干扰支付流程。
+  execution_difficulty: medium
+- id: 17
+  category: 关键打断
+  name: 填写页营销打断
+  channel_filter: all
+  required_fields:
+  - pre_last_mainflow_detail
+  - pre_last_mainflow_to_touch_min
+  condition_template: (pre_last_mainflow_detail.str.contains('填写', na=False)) & (pre_last_mainflow_to_touch_min <= threshold('pre_last_mainflow_to_touch_min', 'optimal'))
+  threshold_fields:
+  - field: pre_last_mainflow_to_touch_min
+    stat: optimal
+  handling: row_level
+  severity_base: high
+  description: 用户刚填写订单即被营销触达打断，填写页是高意图阶段，打断代价最高。
+  is_definitional: true
+  execution_difficulty: medium
+- id: 18
+  category: 关键打断
+  name: 营销干扰支付
+  channel_filter: all
+  required_fields:
+  - pre_funnel_regression_after_mkt
+  - pre_create_not_complete
+  - is_converted
+  condition_template: (pre_funnel_regression_after_mkt > 0) & (pre_create_not_complete == 1) & (is_converted == 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: high
+  description: 有未付创单且历史上营销后漏斗曾倒退，说明营销正在干扰而非促进支付。
+  is_definitional: true
+  execution_difficulty: medium
+- id: 19
+  category: 转化效率
+  name: 自然转化营销多余
+  channel_filter: all
+  required_fields:
+  - pre_is_marketing_first
+  - pre_has_coupon
+  - pre_has_mkt_click
+  - pre_skip_detail_flag
+  - pre_back_to_list_cnt
+  - pre_is_cross_category
+  - pre_funnel_pages_cnt
+  condition_template: (pre_is_marketing_first == 0) & (pre_has_coupon == 0) & (pre_has_mkt_click == 0) & ((pre_skip_detail_flag == 1) | ((pre_back_to_list_cnt == 0) & (pre_is_cross_category == 0) & (pre_funnel_pages_cnt <= 3)))
+  threshold_fields: []
+  handling: row_level
+  severity_base: mid
+  description: 多信号交叉验证锁定自然转化型用户：首触点非营销、历史无领券、从未点击营销，且路径直达（跳过详情页 或 不返回列表+不跨品类比价+聚焦≤3个主流程页）。这类用户本就自主成交，营销投入属冗余成本。
+  is_positive_signal: true
+  positive_signal_reason: 自然转化型用户（自主直达、不依赖营销与优惠）CVR显著高于其余，是应剔除的冗余投放对象
+  execution_difficulty: medium
+  positive_alias: 自然高意向成单人群
+- id: 20
+  category: 转化效率
+  name: 过度营销浪费
+  channel_filter: all
+  required_fields:
+  - activity_touch_cnt
+  - is_converted
+  - pre_mkt_trigger_mainflow_cnt
+  condition_template: (activity_touch_cnt >= threshold('activity_touch_cnt', 'optimal')) & (is_converted == 0) & (pre_mkt_trigger_mainflow_cnt == 0)
+  threshold_fields:
+  - field: activity_touch_cnt
+    stat: optimal
+  handling: row_level
+  severity_base: high
+  description: 营销频次超过CVR拐点仍无转化，且历史上营销从未触发主流程，属于高频低效的营销浪费。
+  is_definitional: true
+  execution_difficulty: easy
+- id: 21
+  category: 转化效率
+  name: 缺少临门一脚优惠
+  channel_filter: all
+  required_fields:
+  - pre_create_not_complete
+  - pre_has_coupon
+  - pre_rp_target_product
+  - is_converted
+  condition_template: (pre_create_not_complete == 1) & (pre_has_coupon == 0) & (pre_rp_target_product == 0) & (is_converted == 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: high
+  description: 用户有未付创单但无任何历史领券记录，说明价格激励可能是促成支付的缺失临门一脚。
+  is_definitional: true
+  execution_difficulty: medium
+- id: 23
+  category: 流程体验
+  name: 跨品类比价未决策
+  channel_filter: all
+  required_fields:
+  - pre_is_cross_category
+  - pre_reached_detail
+  - is_converted
+  condition_template: (pre_is_cross_category == 1) & (pre_reached_detail == 1) & (is_converted == 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: low
+  description: 有跨品类浏览意向但未转化，可能正在货比三家，决策尚未完成。
+  is_definitional: true
+  execution_difficulty: hard
+- id: 24
+  category: 流程体验
+  name: 漏斗严重倒退
+  channel_filter: all
+  required_fields:
+  - pre_back_to_list_cnt
+  - pre_back_to_booking_cnt
+  condition_template: (pre_back_to_list_cnt + pre_back_to_booking_cnt) >= threshold('pre_back_to_list_cnt', 'optimal')
+  threshold_fields:
+  - field: pre_back_to_list_cnt
+    stat: optimal
+  handling: row_level
+  severity_base: mid
+  description: 历史上从详情页/填写页返回上级页面的次数过多，CVR显著偏低，属于决策犹豫信号。
+  execution_difficulty: medium
+  positive_alias: 历史多次回退用户成单较高
+- id: 25
+  category: 流程体验
+  name: 多次创单未付
+  channel_filter: all
+  required_fields:
+  - pre_create_order_cnt
+  - pre_create_not_complete
+  - is_converted
+  condition_template: (pre_create_order_cnt >= 2) & (pre_create_not_complete == 1) & (is_converted == 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: high
+  description: 历史多次创单但均未付款，属于遗单习惯用户，需针对性的支付促进策略。
+  is_definitional: true
+  execution_difficulty: medium
+- id: 27
+  category: 流程体验
+  name: 低意向仅营销
+  channel_filter: all
+  required_fields:
+  - pre_max_funnel_depth
+  - pre_mkt_touch_cnt
+  - activity_touch_cnt
+  condition_template: (pre_max_funnel_depth <= 1) & (pre_mkt_touch_cnt > 0) & (activity_touch_cnt > 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: mid
+  description: 历史漏斗深度仅为1（首页），购买意向极低，却被营销大量覆盖，属于低效人群选择。
+  is_positive_signal: true
+  positive_signal_reason: 低意向仅依赖营销的用户转化并不差，营销有托底作用
+  execution_difficulty: medium
+  positive_alias: 轻度参与用户成单不低
+- id: 33
+  category: 创单前营销
+  name: 创单前营销过多
+  channel_filter: activity_channel_std != 'activity'
+  required_fields:
+  - activity_touch_cnt
+  condition_template: activity_touch_cnt >= threshold('activity_touch_cnt', 'optimal')
+  threshold_fields:
+  - field: activity_touch_cnt
+    stat: optimal
+  handling: row_level
+  severity_base: mid
+  description: 本次活动对该用户当日触达次数超过CVR最优切分点，频次过多导致用户疲劳或反感。
+  execution_difficulty: medium
+- id: 34
+  category: 创单前营销
+  name: 创单前多渠道冲突
+  channel_filter: all
+  required_fields:
+  - pre_mkt_channel_cnt
+  condition_template: pre_mkt_channel_cnt >= threshold('pre_mkt_channel_cnt', 'optimal')
+  threshold_fields:
+  - field: pre_mkt_channel_cnt
+    stat: optimal
+  handling: row_level
+  severity_base: mid
+  description: 触达前已被多种不同营销渠道覆盖，渠道数超过CVR最优切分点后CVR反而下降。
+  is_positive_signal: true
+  positive_signal_reason: 多渠道冲突用户CVR略高，多渠道覆盖有正向叠加效应
+  execution_difficulty: hard
+  positive_alias: 多渠道覆盖用户成单较高
+- id: 35
+  category: 创单前营销
+  name: 创单前弹屏过多
+  channel_filter: activity_channel_std == 'popup'
+  required_fields:
+  - pre_popup_touch_cnt
+  condition_template: pre_popup_touch_cnt >= threshold('pre_popup_touch_cnt', 'optimal')
+  threshold_fields:
+  - field: pre_popup_touch_cnt
+    stat: optimal
+  handling: row_level
+  severity_base: mid
+  description: 历史弹屏触达次数超过CVR拐点，过多弹屏已导致用户疲劳，CVR随弹屏次数增加而下降。
+  execution_difficulty: medium
+- id: 37
+  category: 触达质量
+  name: 跨渠道频次叠加疲劳
+  channel_filter: all
+  required_fields:
+  - insite_channel_cnt
+  condition_template: insite_channel_cnt >= threshold('insite_channel_cnt', 'optimal')
+  threshold_fields:
+  - field: insite_channel_cnt
+    stat: optimal
+  handling: row_level
+  severity_base: mid
+  description: 当日被多种站内渠道叠加触达（渠道种数超过 CVR 拐点），多渠道同日重复触达对成单率有负面影响；与按触达次数管控的过度触达类（Rule 2/20/33）同属频次管控组，从渠道种数维度补充。
+  execution_difficulty: medium
+  positive_alias: 多渠道可达用户成单较高
+- id: 38
+  category: 创单前营销
+  name: 活动堆叠冲突
+  channel_filter: all
+  required_fields:
+  - pre_unique_activity_cnt
+  condition_template: pre_unique_activity_cnt >= threshold('pre_unique_activity_cnt', 'optimal')
+  threshold_fields:
+  - field: pre_unique_activity_cnt
+    stat: optimal
+  handling: row_level
+  severity_base: low
+  description: 触达前被多个不同活动触达，活动数超过CVR拐点后CVR下降，活动间产生堆叠冲突。
+  is_positive_signal: true
+  positive_signal_reason: 活动堆叠用户CVR略高，活动叠加有轻微正向效果
+  execution_difficulty: hard
+  positive_alias: 多活动叠加用户成单较高
+- id: 39
+  category: 关键打断
+  name: 弹屏打扰填写
+  channel_filter: activity_channel_std == 'popup'
+  required_fields:
+  - pre_reached_booking
+  - pre_popup_reject_cnt
+  - is_converted
+  condition_template: (pre_reached_booking == 1) & (pre_popup_reject_cnt > 0) & (is_converted == 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: mid
+  description: 到达填写页后流失，且历史上弹屏常被快速拒绝，弹屏在填写阶段造成了干扰性打断。
+  is_definitional: true
+  execution_difficulty: medium
+- id: 40
+  category: 用户价值
+  name: 高频下单
+  channel_filter: activity_channel_std != 'activity'
+  required_fields:
+  - pre_complete_order_cnt
+  condition_template: pre_complete_order_cnt >= threshold('pre_complete_order_cnt', 'optimal')
+  threshold_fields:
+  - field: pre_complete_order_cnt
+    stat: optimal
+  handling: row_level
+  severity_base: low
+  description: 触达前已有多次历史成单，属于高频购买用户，营销价值不同于普通用户，需差异化策略。
+  execution_difficulty: hard
+  positive_alias: 高频复购成单人群
+- id: 41
+  category: 转化效率
+  name: 营销触发下单未成单
+  channel_filter: all
+  required_fields:
+  - is_converted
+  - is_paid
+  condition_template: (is_converted == 1) & (is_paid == 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: mid
+  description: 触达后当日有创单但未完成付款，营销成功引导到创单阶段但最终支付漏出。
+  execution_difficulty: medium
+- id: 42
+  category: 优惠机制
+  name: 红包与下单平台不符
+  channel_filter: all
+  required_fields:
+  - pre_last_coupon_platform
+  - pre_primary_platform
+  condition_template: (pre_last_coupon_platform.notna()) & (pre_last_coupon_platform != pre_primary_platform)
+  threshold_fields: []
+  handling: row_level
+  severity_base: low
+  description: 历史领券平台与主要使用平台不一致，可能存在跨平台券使用障碍，影响转化体验。
+  is_positive_signal: true
+  positive_signal_reason: 红包与下单平台不符用户CVR略高，跨平台用户购买意愿强
+  execution_difficulty: easy
+  positive_alias: 跨平台领券成单不低
+- id: 43
+  category: 内容匹配
+  name: 推送零浏览品类
+  channel_filter: activity_channel_std in ('activity', 'push', 'popup', 'sms', 'outbound', 'insite_msg')
+  required_fields:
+  - pre_target_product_visit_cnt
+  - pre_mainflow_event_cnt
+  condition_template: (pre_target_product_visit_cnt == 0) & (pre_mainflow_event_cnt > 0)
+  threshold_fields: []
+  handling: row_level
+  severity_base: mid
+  description: 用户有主流程浏览行为，却从未进入活动目标品类的主流程，仍被推送该品类，属"推从没看过的品类"硬错配，比单纯兴趣不一致更强。
+  execution_difficulty: medium
+  positive_alias: 目标品类零浏览仍成单较高
+- id: 44
+  category: 时机匹配
+  name: 伪实时场景配置
+  channel_filter: all
+  required_fields:
+  - is_today
+  - scene_has_offline_node
+  condition_template: (is_today == 1) & (scene_has_offline_node == 1)
+  threshold_fields: []
+  handling: row_level
+  severity_base: mid
+  description: 活动先知场景标记为实时场景，却同时存在离线节点（伪实时配置），导致人群量级缺失或推送时间错配、营销时机失准。基于 V2.1 新增先知场景字段（is_today 实时标记 / scene_has_offline_node 离线节点）评估；取值（1=实时/存在离线节点）以实际数据为准。
+  execution_difficulty: easy

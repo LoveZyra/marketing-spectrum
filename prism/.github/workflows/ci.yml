@@ -1,0 +1,108 @@
+name: CI
+
+# Runs the same four checks the local pre-commit and pre-push hooks run, in the
+# same order, so a green hook and a green CI mean the same thing. The hooks are
+# skippable with --no-verify and do not exist at all in a fresh clone, which is
+# what this is here to cover.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  # Lets a maintainer re-run the suite without pushing an empty commit.
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first: the older run's verdict is
+# about code nobody will merge. Not applied to the default branch, where every
+# commit's result is worth keeping.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Single source of truth with the Dockerfile and local development.
+          node-version-file: .nvmrc
+          cache: npm
+
+      # `npm ci` compiles better-sqlite3, node-pty and bcrypt from source. The
+      # ubuntu-latest image already carries build-essential and python3, so no
+      # extra toolchain step is needed — but that is why this job cannot move to
+      # a slimmer container without one.
+      - name: Install dependencies
+        run: npm ci
+        env:
+          # Husky's `prepare` script has nothing to install into on a CI
+          # checkout and fails the install if it tries.
+          HUSKY: 0
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The image compiles the same native modules against a different base
+    # (Debian bookworm, not the runner's Ubuntu), so it can break while the job
+    # above stays green. Not gated on `verify` — a Dockerfile-only regression
+    # should surface in the same run, not the one after.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Not pushed anywhere — this job exists to prove the multi-stage build
+          # still completes, including `npm prune --omit=dev` leaving a runnable
+          # node_modules behind.
+          push: false
+          load: true
+          tags: prism:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Container starts and reports ready
+        run: |
+          docker run -d --name prism-ci -p 3001:3001 \
+            -e JWT_SECRET=ci-only-not-a-real-secret \
+            prism:ci
+          # Poll the same endpoint the image's HEALTHCHECK uses. First boot
+          # creates the SQLite schema, so allow generous time before failing.
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3001/api/ready > /dev/null 2>&1; then
+              echo "ready after ${i}s"
+              curl -sS http://127.0.0.1:3001/api/ready
+              docker rm -f prism-ci > /dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::container never became ready"
+          docker logs prism-ci
+          docker rm -f prism-ci > /dev/null
+          exit 1

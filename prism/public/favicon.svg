@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="prismTile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7c3aed"/>
+      <stop offset="55%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="url(#prismTile)"/>
+  <line x1="6" y1="34" x2="23" y2="34" stroke="white" stroke-opacity="0.95" stroke-width="4" stroke-linecap="round"/>
+  <polygon points="32,13 50.5,49 13.5,49" stroke="white" stroke-width="4.5" stroke-linejoin="round" fill="rgba(255,255,255,0.14)"/>
+  <line x1="41" y1="35.5" x2="58" y2="26" stroke="#f0abfc" stroke-width="3.6" stroke-linecap="round"/>
+  <line x1="42.5" y1="39.5" x2="58" y2="36" stroke="#67e8f9" stroke-width="3.6" stroke-linecap="round"/>
+  <line x1="43.5" y1="43.5" x2="58" y2="46" stroke="#6ee7b7" stroke-width="3.6" stroke-linecap="round"/>
+</svg>

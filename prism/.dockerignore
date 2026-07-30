@@ -1,0 +1,31 @@
+# Build artifacts & deps (rebuilt inside the image)
+node_modules
+dist
+dist-server
+.desktop-build
+release
+
+# VCS / CI / editor
+.git
+.gitignore
+.github
+.husky
+
+# Local env & secrets
+.env
+.env.*
+!.env.example
+!.env.docker.example
+
+# Docs & misc that don't belong in the image
+docker
+electron
+*.md
+!README.md
+LICENSE
+NOTICE
+
+# OS / logs / tarballs
+.DS_Store
+*.log
+*.tar.gz

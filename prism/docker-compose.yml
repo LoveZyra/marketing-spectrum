@@ -1,0 +1,44 @@
+services:
+  prism:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: prism:latest
+    container_name: prism
+    restart: unless-stopped
+    ports:
+      # HARDENING: prefix with 127.0.0.1: to publish on the loopback interface
+      # only. That closes the port to your LAN, so phones and other machines
+      # can no longer reach the UI — only do it if you front Prism with a
+      # reverse proxy on the same host, or genuinely only use it locally.
+      - "3001:3001"
+
+    # Everything tunable comes from `.env` next to this file — see
+    # .env.docker.example for the full list with defaults. Variables absent
+    # from `.env` are simply not set in the container, so the code's own
+    # defaults apply; `required: false` lets `docker compose up` work before
+    # you have written one (needs Compose v2.24+).
+    env_file:
+      - path: .env
+        required: false
+
+    # Pinned here rather than in `.env`, because each has to agree with
+    # something else in this file: the published port above, the interface the
+    # published port forwards to, and the workspace bind mount below. Entries
+    # here override `.env`, so setting them there has no effect.
+    environment:
+      SERVER_PORT: "3001"
+      HOST: "0.0.0.0"
+      WORKSPACES_ROOT: /workspace
+
+    volumes:
+      # App data: auth.db, checkpoints, sessions, plugins (persists login +
+      # history). The image sets HOME=/data, so Prism's default data dir
+      # ~/.prism already resolves onto this volume.
+      - prism-data:/data
+      # Your code projects the agent works on. Point this at your real code dir
+      # if you prefer, e.g.  /home/me/code:/workspace
+      - ./projects:/workspace
+
+volumes:
+  prism-data:

@@ -1,0 +1,70 @@
+import { lazy, Suspense } from 'react';
+import type { CSSProperties } from 'react';
+
+import { useTheme } from '../../contexts/ThemeContext';
+
+/**
+ * Syntax-highlighted code block, with the highlighter loaded on demand.
+ *
+ * The fallback is not a spinner: it is the same block rendered as plain
+ * monospace text with the caller's own `customStyle` applied. So the code is
+ * readable and correctly laid out from the first frame, and when the chunk
+ * lands the only visible change is that tokens gain colour — no reflow, no
+ * flash of empty space. That matters because a chat transcript can contain
+ * dozens of these and they all resolve from one shared chunk.
+ */
+
+const SyntaxHighlighterImpl = lazy(() => import('./SyntaxHighlighterImpl'));
+
+type CodeHighlighterProps = {
+  language: string;
+  customStyle?: CSSProperties;
+  codeTagProps?: { style?: CSSProperties };
+  children: string;
+};
+
+const MONO_FONT =
+  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+// Matches the resting colours of the oneDark / oneLight prism themes, so the
+// placeholder and the real thing sit on the same background.
+const DARK_FALLBACK: CSSProperties = { background: '#282c34', color: '#abb2bf' };
+const LIGHT_FALLBACK: CSSProperties = { background: 'hsl(var(--muted))', color: '#383a42' };
+
+function PlainCodeBlock({ customStyle, codeTagProps, children }: Omit<CodeHighlighterProps, 'language'>) {
+  const { isDarkMode } = useTheme();
+
+  return (
+    <pre
+      style={{
+        ...(isDarkMode ? DARK_FALLBACK : LIGHT_FALLBACK),
+        fontSize: '0.875rem',
+        overflow: 'auto',
+        ...customStyle,
+      }}
+    >
+      <code style={{ fontFamily: MONO_FONT, ...codeTagProps?.style }}>{children}</code>
+    </pre>
+  );
+}
+
+export default function CodeHighlighter({
+  language,
+  customStyle,
+  codeTagProps,
+  children,
+}: CodeHighlighterProps) {
+  return (
+    <Suspense
+      fallback={
+        <PlainCodeBlock customStyle={customStyle} codeTagProps={codeTagProps}>
+          {children}
+        </PlainCodeBlock>
+      }
+    >
+      <SyntaxHighlighterImpl language={language} customStyle={customStyle} codeTagProps={codeTagProps}>
+        {children}
+      </SyntaxHighlighterImpl>
+    </Suspense>
+  );
+}

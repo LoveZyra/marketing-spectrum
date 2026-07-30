@@ -1,0 +1,31 @@
+# --- 运行时产物:每次跑单生成,不进版本库 ---
+jobs/
+runs/
+*.log
+nohup.out
+
+# --- 依赖与缓存:npm install / python 自己会生成 ---
+node_modules/
+__pycache__/
+*.pyc
+dist-server/
+dist/
+
+# --- 备份与部署包:install.sh 会生成 .bak_*,fix 包由源码打出 ---
+*.bak_*
+_bak_*/
+_to_delete/
+_deploy/
+ma-*.tar.gz
+*.tgz
+
+# --- 密钥:永远不进库。ma-env.local.sh 是 restart_prism.sh 读的口令文件 ---
+ma-env.local.sh
+.env
+.env.*
+!.env.example
+!.env.docker.example
+
+# --- 系统垃圾 ---
+.DS_Store
+Thumbs.db
