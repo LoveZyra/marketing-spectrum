@@ -1,0 +1,29 @@
+ma_server/营销诊断/api模式测试/接口调用说明.md
+  s_5a8450a6c60a82::t_b163450e425055 136-147
+  s_5a8450a6c60a82::t_b01734ca0d4112 1-77,79-112,130-132,196,255-331
+  s_5a8450a6c60a82::t_eecc359494b278 117-129,134-135,148-170,173-174,176,178,182-184,191-195,198-199,213-252
+  s_5a8450a6c60a82::t_684ea3a7936f55 172,175,177,179-181,185-190
+  s_5a8450a6c60a82::t_6a7531e2f0504a 200-212,253
+  s_5a8450a6c60a82::t_24c257dbb5bcc7 78
+  s_5a8450a6c60a82::t_2240ae67abc6e8 113-116
+  s_5a8450a6c60a82::t_fe93b5fc7f8941 133
+  s_5a8450a6c60a82::t_7151f8077fa5fa 171
+  s_5a8450a6c60a82::t_cb051380a75ff8 197
+  s_5a8450a6c60a82::t_9fe8d5d955ea77 254
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "45b65397a28213660281bb46b9bf4ee32745ee10",
+  "prompts": {},
+  "sessions": {
+    "s_5a8450a6c60a82": {
+      "agent_id": {
+        "tool": "windsurf",
+        "id": "ce40df7e-669b-441e-91dd-28883e1a6951",
+        "model": "GLM-5.2 High"
+      },
+      "human_author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
