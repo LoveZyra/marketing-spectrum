@@ -1,0 +1,44 @@
+CHANGELOG.md
+  h_4e3a4dcdcf415f 6-53
+README.md
+  h_4e3a4dcdcf415f 14-15
+ma_server/hdfs-data/scripts/hdfs_get.py
+  h_4e3a4dcdcf415f 492,494,500-504,510-511,522-527,533-539
+ma_server/marketing-audit/cli.py
+  h_4e3a4dcdcf415f 53-62,65-78
+ma_server/marketing-audit/营销诊断介绍.html
+  h_4e3a4dcdcf415f 1-215
+ma_server/营销诊断/ma-api-mode/install.sh
+  h_4e3a4dcdcf415f 3-41,86-94,134-153
+ma_server/营销诊断/ma-api-mode/ma_api_c.py
+  h_4e3a4dcdcf415f 61-69,79-80,82,88,183
+ma_server/营销诊断/ma-api-mode/ma_core.py
+  h_4e3a4dcdcf415f 52,251-256,259-264,266-288,673-682,828-852,855-862
+ma_server/营销诊断/ma-api-mode/ma_pipeline.py
+  h_4e3a4dcdcf415f 55-59,110-128,140-143,158-162,410-411,430-437,465-473,475-476,510-513,553,579-587,590-594,616-620,630-632,3074,3579,3594-3597,3623-3629,3771-3778,3792-3793,3851-3856,3861,3863-3876
+ma_server/营销诊断/ma-api-mode/regress_agent.py
+  h_4e3a4dcdcf415f 164-165
+ma_server/营销诊断/ma-api-mode/regress_env.py
+  h_4e3a4dcdcf415f 294-316
+ma_server/营销诊断/ma-api-mode/restart_prism.sh
+  h_4e3a4dcdcf415f 43-49
+ma_server/营销诊断/ma-api-mode/优化方案_20260803_prepare_OOM.md
+  h_4e3a4dcdcf415f 1-72
+ma_server/营销诊断/ma-api-mode/处置_20260803_activity1000344.md
+  h_4e3a4dcdcf415f 1-81
+ma_server/营销诊断/ma-api-mode/诊断_20260803_activity1000344.md
+  h_4e3a4dcdcf415f 1-119
+ma_server/营销诊断/ma-api-mode/运行说明.md
+  h_4e3a4dcdcf415f 71,75,77-79,209-210,300
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "b1c54c3bb89a46a29c6ddb05190423dfaa58cd8b",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
