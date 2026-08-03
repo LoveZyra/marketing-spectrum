@@ -58,6 +58,15 @@ def _make_cli(job_id, cli):
 
     def _call(prompt, timeout, argv_extra=None, cwd=None):
         agent = bool(argv_extra)
+        # 子进程一律在固定目录里跑:Claude Code 按 cwd 建"项目",per-job 的 rundir
+        # 当 cwd 会让 Prism 侧边栏每单多一个「run」项目。cwd 参数保留作任务上下文
+        # (回归的假 CLI 靠它定位 rundir),真实进程的工作目录固定为 LLM_HOME。
+        workdir = ma_pipeline.LLM_HOME
+        try:
+            os.makedirs(workdir, exist_ok=True)
+        except OSError:
+            workdir = cwd    # 建不出来就退回旧行为,别让整单死在这
+
         # 分模型:agent 全量活走强模型,润色/修复这类轻量文本调用走快模型。
         # 在这里注入而不是在流水线各处拼,是因为这儿本来就是"哪类调用"的分叉口。
         model = ma_pipeline.AGENT_MODEL if agent else ma_pipeline.POLISH_MODEL
@@ -67,15 +76,16 @@ def _make_cli(job_id, cli):
         STORE.update(job_id, phase="report_agent_cli" if agent else "polish_cli")
         if agent:
             cli["agent_calls"] = cli.get("agent_calls", 0) + 1
-            STORE.append_log(job_id, "claude -p 报告产出(带工具 {},model={}),提示词 {} 字,超时 {}s,cwd={}"
+            STORE.append_log(job_id, "claude -p 报告产出(带工具 {},model={}),提示词 {} 字,超时 {}s,"
+                             "cwd={}(固定目录,会话统一归 llm_sessions 项目)"
                              .format(" ".join(argv_extra), model or "网关默认",
-                                     len(prompt), timeout, cwd))
+                                     len(prompt), timeout, workdir))
         else:
             STORE.append_log(job_id, "claude -p 润色(model={}),提示词 {} 字,超时 {}s".format(
                 model or "网关默认", len(prompt), timeout))
 
         call = call_claude([CLAUDE_BIN, "-p", prompt] + model_argv + list(argv_extra or []),
-                           timeout, cwd=cwd)
+                           timeout, cwd=workdir)
         cli["exit_code"] = call.get("exit_code")
         cli["timed_out"] = bool(call.get("timed_out"))
         if call.get("timed_out"):
@@ -170,6 +180,7 @@ def extra_health():
         "push_source": ma_core.PUSH_SOURCE,   # 已从入参挪到服务端,healthz 里亮出来好核对
         "models": {"agent": ma_pipeline.AGENT_MODEL or "(网关默认)",
                    "polish": ma_pipeline.POLISH_MODEL or "(网关默认)"},
+        "llm_home": ma_pipeline.LLM_HOME,   # claude 子进程固定工作目录(Prism 单项目)
         "backend": {"data": data, "steps": skill},
         "pop_table": ma_pipeline.POP_TABLE,
         "public_dir": ma_pipeline.PUBLIC_DIR,

@@ -40,6 +40,13 @@ if [ -n "${API_KEY:-}" ] && [ "$MA_API_KEY" = "$API_KEY" ]; then
   echo "  让每个调接口的人都拿到模型密钥。换一个再来。"
   exit 2
 fi
+case "$MA_API_KEY" in
+  *[![:ascii:]]*)
+    echo "✗ MA_API_KEY 含非 ASCII 字符 —— 是不是把『你的口令』这类占位符原样抄进了"
+    echo "  ma-env.local.sh?这种口令客户端带不上来,每个带鉴权的请求都会变 ECONNRESET"
+    echo "  (2026-07-30 线上踩过)。生成真口令:openssl rand -hex 24,替换后再跑。"
+    exit 2;;
+esac
 
 MA_PORT="${PRISM_MA_API_TARGET##*:}"
 

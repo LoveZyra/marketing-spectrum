@@ -1,7 +1,44 @@
 #!/usr/bin/env bash
 # 营销诊断 API 服务安装脚本。先备份、再覆盖、最后自检。
-# 累积包:装这一个就够了,不用再装之前的 fix / fix2 / … / fix7 / fix8。
-# 用法:tar xzf ma-fix9.tar.gz -C ~/demo/ma-api-mode/ && bash ~/demo/ma-api-mode/install.sh
+# 累积包:装这一个就够了,不用再装之前的 fix / fix2 / … / fix9 / fix10。
+# fix16(2026-08-03):合流版 —— 当天两条并行开发线在此合一(此前两条线各自发过"fix14"):
+#   A) 健壮性线(另一会话的 fix14):ma_core 超时改杀整个进程组(孙进程拖不死 worker)、
+#      启动扫描残留任务判 E_INTERRUPTED、降级报告发布页压警示横幅、MA_JOB_DEADLINE
+#      总闸(默认 3600s,0=关,步骤边界拦"叠加超时")。
+#   B) 表口径与取数线(本包 fix14/15 原有):两表统一 sample_hebo、MA_POP_FILTER 活动
+#      过滤、hdfs_get.py repartition 并行写出。
+#   C) fix16-a2:cli.py 装载削峰(arrow 直读 + self_destruct + system 内存池),治
+#      千万行单 prepare 被 OOM SIGKILL(128G 容器峰值 116G→~65G)。
+#   ⚠ 两个配套 skill 文件随包解在当前目录,需分别拷入 skill 目录才生效(先备份原件):
+#      cp hdfs_get.py ~/.claude/skills/hdfs-data/scripts/hdfs_get.py
+#      cp cli.py      ~/.claude/skills/marketing-audit/cli.py
+# fix15(2026-08-03):分区表取数优化(特征表已按 activity_id 改建分区表)——
+#   ① ma_pipeline.py:两表合一(POP_TABLE==FEAT_TABLE)时,quantile / count_rules /
+#      count_push_total 与出参 push_sql 统一前置 {MA_FILTER_COL}='{activity_id}':
+#      吃到分区剪裁不再全表扫,口径上人数只算本活动的特征行。MA_POP_FILTER=auto/1/0。
+#   ⚠ ② 配套 hdfs_get.py(已随包带在解包目录,需再拷到 skill 目录才生效):
+#      写出 coalesce(nparts) 改 repartition(nparts)。
+#      coalesce 是窄依赖,nparts=1 时把上游扫描塌进 1 个 task 单核串行 —— 未分区表实测
+#      23GB 扫 30min 0 产出,被 1800s 超时杀掉(job_20260803_171733)。repartition 扫描
+#      并行、仅写出 nparts 个 task,输出文件数不变。装法(先备份原件):
+#      cp hdfs_get.py ~/.claude/skills/hdfs-data/scripts/hdfs_get.py
+# fix14(2026-08-03):特征表与人群池表默认值统一改为 app_dm.tmp_ctj_marketing_audit_sample_hebo。
+#   背景:fix10 落定的人群池 app_dm.long_ctj_marketing_audit_sample 在 metastore 一直没建出来 ——
+#   1000344 单 prepare 被 SIGKILL(疑似 OOM)降级后,骨架查这张表取列名,AnalysisException
+#   无人接,整单以 E_INTERNAL 收场(详见 诊断_20260803_activity1000344.md)。
+#   现按新口径两表同源;要换表 export MA_FEAT_TABLE / MA_POP_TABLE,代码不用动。
+#   ⚠ 换表必查 MA_FILTER_COL:过滤列配错不报错,只捞回 0 行然后产出一份空报告。
+# fix13(2026-08-03):claude 会话归拢:子进程固定 cwd=MA_LLM_HOME(默认 llm_sessions),
+#   Prism 不再每单新建「run」项目,所有会话在同一项目下。
+# fix12(2026-08-03):pull 失败时从全量输出抠出 Caused by 异常行进 detail.exceptions
+#   与任务日志(Spark 栈帧再长也不丢根因);配套 hdfs_get.py 修复(rebase/void列,单独拷)。
+# fix11(2026-08-03):鉴权比较改 bytes;口令含非 ASCII(如误抄「你的口令」占位符)
+#   在服务启动与 restart_prism.sh 里直接拒启 —— 修线上 ECONNRESET 事故。
+# fix10(2026-08-03):两张固定表落定 ——
+#   特征表默认 app_dm.tmp_ctj_marketing_audit_features_hebo,过滤列默认 activity_id
+#   (MA_FILTER_COL 可调,老表是 task_id;配错不报错只捞 0 行,换表必查);
+#   人群池默认 app_dm.long_ctj_marketing_audit_sample(圈人计数与 push_sql 的 FROM)。
+# 用法:tar xzf ma-fix16.tar.gz -C ~/prism/ma-api-mode/ && bash ~/prism/ma-api-mode/install.sh
 #      (ma_server 上按实际部署路径,如 ~/prism/ma-api-mode/)
 # ⚠ fix9 还配套改了 skill 的渲染器(业务影响排版碎裂修复),那个文件不在本包里:
 #   把 report_renderer.py 拷到 ~/.claude/skills/marketing-audit/snippets/ 里(先备份原件)。
@@ -46,6 +83,15 @@ if [ -d _new/fixtures ]; then
       && echo "  更新 fixtures/$(basename "$f")  ($(wc -c < "$f") 字节)"
   done
 fi
+# restart_prism.sh 的家在上一级(Prism 根目录):它按自身所在位置推 PRISM_DIR 和
+# ma-api-mode 路径,放错层级会把 ma-api-mode/ma-api-mode 当成服务目录。
+# 所以它不走上面的白名单,单独拷到 ../ 去。
+if [ -f "_new/restart_prism.sh" ]; then
+  [ -f "../restart_prism.sh" ] && cp -p "../restart_prism.sh" "../restart_prism.sh.bak_$TS" \
+    && echo "  备份 ../restart_prism.sh -> ../restart_prism.sh.bak_$TS"
+  cp -p "_new/restart_prism.sh" "../restart_prism.sh" && chmod +x "../restart_prism.sh" \
+    && echo "  更新 ../restart_prism.sh  (Prism 根目录,重启入口)"
+fi
 rm -rf _new
 
 echo "=== 3. 语法自检 ==="
@@ -84,6 +130,26 @@ if [ "$FAIL" -ne 0 ]; then
 fi
 
 echo "=== 装完了,回归全过。 ==="
+echo
+echo "fix16:合流版(健壮性线 fix14 + 表口径线 fix15 + cli.py 削峰),新增必读:"
+echo "  - MA_JOB_DEADLINE 总闸默认 3600s(0=关):步骤边界检查任务总耗时,超支判 E_JOB_DEADLINE。"
+echo "  - 降级稿不裸发:润色未完成且无 agent 成品时,发布页顶部自动压橙色警示横幅(原件不动)。"
+echo "  - ⚠ 两个配套 skill 文件都要拷(先备份原件):"
+echo "      cp hdfs_get.py ~/.claude/skills/hdfs-data/scripts/hdfs_get.py"
+echo "      cp cli.py      ~/.claude/skills/marketing-audit/cli.py"
+echo
+echo "fix15:分区表取数优化 ——"
+echo "  - 两表合一时人群池查询与 push_sql 自动限定本活动(MA_POP_FILTER=auto,设 0 回到全表口径)。"
+echo "  - ⚠ 配套 hdfs_get.py 已随包解在当前目录,再拷到 skill 目录才生效(先备份原件):"
+echo "      cp hdfs_get.py ~/.claude/skills/hdfs-data/scripts/hdfs_get.py"
+echo "  - 验证分区剪裁:spark-sql EXPLAIN SELECT * FROM <表> WHERE activity_id='<id>',"
+echo "    物理计划里 PartitionFilters 非空才是真剪裁;重跑一单看 pull 是否降到秒级~分钟级。"
+echo
+echo "fix14:特征表与人群池默认值已统一为 app_dm.tmp_ctj_marketing_audit_sample_hebo(两表同源)。"
+echo "  - 若起服务的 shell 里已 export 过 MA_FEAT_TABLE / MA_POP_TABLE,以环境变量为准 —— 确认没指着旧表。"
+echo "  - 换表必查过滤列:新表的活动 ID 列若不叫 activity_id,export MA_FILTER_COL=<实际列名>(配错不报错,只出空报告)。"
+echo "  - 主键列若不叫 mapid/unionid:export MA_ID_COL / MA_UNION_COL 配平。"
+echo "  - 顺手建议:export PYTHONUNBUFFERED=1,子进程再被杀时日志能留下死前最后一行。"
 echo
 echo "fix9(2026-07-30)在 fix8 之上追加两件事(356352 报告格式问题的修复):"
 echo

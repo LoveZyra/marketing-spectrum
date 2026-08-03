@@ -49,6 +49,7 @@ import hmac
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -247,31 +248,44 @@ def call_claude(argv, timeout, cwd=None):
     但这是一台有数据访问能力的机器,给模型无限制工具权限的代价太高。
     需要工具权限时用 --allowedTools 精确点名,而不是一把全开。
 
-    cwd 给方案 B 用:让模型的工作目录就是这一单的 rundir,产物落在里面,
-    相对路径天然不会跑到别处去。方案 C 不传,继承服务进程的目录即可。
+    用 Popen + start_new_session 而不是 subprocess.run,超时杀**整个进程组**:
+    agent 带 Bash 工具,可能拉起继承了 stdout/stderr 管道的孙进程。subprocess.run
+    超时只杀 claude 本身,然后在 communicate() 里等管道 EOF —— 孙进程不退,
+    worker 线程就永远卡死,全局并发额度和该活动的在飞锁一起漏,后续同活动请求
+    全部 409 直到重启(356352 复盘挂账的隐患)。killpg 全组之后收尾最多再等 10s,
+    收不齐宁可丢部分输出也不卡线程。
     """
     started = time.time()
+
+    def _done(exit_code, out, err, timed_out):
+        return {"argv": argv, "exit_code": exit_code,
+                "stdout": (out or "")[-20000:], "stderr": (err or "")[-4000:],
+                "elapsed_sec": round(time.time() - started, 2), "timed_out": timed_out}
+
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, cwd=cwd,
-                              timeout=timeout, env=os.environ.copy())
-        return {"argv": argv, "exit_code": proc.returncode,
-                "stdout": (proc.stdout or "")[-20000:],
-                "stderr": (proc.stderr or "")[-4000:],
-                "elapsed_sec": round(time.time() - started, 2), "timed_out": False}
-    except subprocess.TimeoutExpired as exc:
-        # 被杀前已经写出来的 stdout/stderr 不能丢。356352 那单三轮润色全是
-        # exit=None + stdout=0 字,这里原样返回空串,复盘时根本分不清是
-        # "模型一个字没吐"还是"吐了一半被这行丢了" —— subprocess.run 在超时
-        # 分支会把 kill 后收到的部分输出挂在异常对象上,捡回来。
-        def _txt(v):
-            if isinstance(v, bytes):
-                return v.decode("utf-8", "replace")
-            return v or ""
-        return {"argv": argv, "exit_code": None,
-                "stdout": _txt(exc.stdout)[-20000:],
-                "stderr": (_txt(exc.stderr)[-3500:] +
-                           "\ntimeout after {}s".format(timeout)).strip(),
-                "elapsed_sec": round(time.time() - started, 2), "timed_out": True}
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, cwd=cwd, env=os.environ.copy(),
+                                start_new_session=True)
+    except (OSError, ValueError) as exc:
+        return _done(None, "", "{}: {}".format(type(exc).__name__, exc), False)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return _done(proc.returncode, out, err, False)
+    except subprocess.TimeoutExpired:
+        # 杀进程组;万一组没建起来(极端环境),退回只杀直接子进程
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            proc.kill()
+        try:
+            out, err = proc.communicate(timeout=10)
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            out, err = "", ""          # 管道还被谁占着 —— 不等了,线程比输出金贵
+        # 被杀前已经写出来的部分输出不能丢(356352 教训:三轮润色全是 stdout=0 字,
+        # 分不清"没吐"还是"吐了被丢")
+        return _done(None, out,
+                     ((err or "")[-3500:] + "\ntimeout after {}s".format(timeout)).strip(),
+                     True)
     except (OSError, ValueError) as exc:
         return {"argv": argv, "exit_code": None, "stdout": "",
                 "stderr": "{}: {}".format(type(exc).__name__, exc),
@@ -656,7 +670,16 @@ def make_handler(mode, runner, extra_health=None):
         def _authed(self):
             if not API_KEY:
                 return True
-            return hmac.compare_digest(self.headers.get(AUTH_HEADER) or "", API_KEY)
+            # 必须用 bytes 比较:str 版 compare_digest 撞上任何非 ASCII 字符会直接抛
+            # TypeError,把连接炸成 ECONNRESET(2026-07-30 线上事故:口令文件里被抄进了
+            # 中文占位符「你的口令」,每个带鉴权的请求全灭,healthz 却是好的,极具迷惑性)。
+            # bytes 比较永不抛 —— 口令或请求头再奇怪,顶多不相等,干净地 401 收场。
+            got = self.headers.get(AUTH_HEADER) or ""
+            try:
+                return hmac.compare_digest(got.encode("utf-8", "surrogateescape"),
+                                           API_KEY.encode("utf-8", "surrogateescape"))
+            except Exception:                                      # noqa: BLE001
+                return False
 
         def _read_json(self):
             try:
@@ -802,8 +825,41 @@ def make_handler(mode, runner, extra_health=None):
     return Handler
 
 
+def sweep_stale_jobs():
+    """启动时把上一个进程留下的 queued/running 任务判成明确终态。
+
+    worker 是内存线程,进程一死它们就永远停在 running —— 按文档轮询的调用方
+    会无限收到 409 E_NOT_READY,悬案比失败难受得多。这里统一判 E_INTERRUPTED,
+    让调用方拿到明确失败、重新下单。
+    注意:B/C 两个服务若共用同一个 MA_JOBS_DIR 同时跑,互相重启会误伤对方
+    在飞的任务 —— 那种部署要给两边配不同的任务目录。
+    """
+    n = 0
+    for jid in STORE.list_ids(limit=1000):
+        m = STORE.get(jid)
+        if m and m.get("state") in ("queued", "running"):
+            STORE.update(jid, state="error", finished_at=now_iso(),
+                         error={"code": "E_INTERRUPTED",
+                                "message": "服务重启,任务在「{}」阶段被中断;请重新下单".format(
+                                    m.get("phase") or m.get("state"))})
+            STORE.append_log(jid, "服务重启扫描:任务仍处 {} 态,判为 E_INTERRUPTED".format(
+                m.get("state")))
+            n += 1
+    if n:
+        log("重启扫描:{} 个残留任务已判 E_INTERRUPTED(轮询方将收到明确失败,不再无限等)".format(n))
+    return n
+
+
 def serve(mode, runner, extra_health=None, banner=None):
     os.makedirs(JOBS_DIR, exist_ok=True)
+    sweep_stale_jobs()
+    # 非 ASCII 口令 = 客户端根本带不上来的口令(HTTP 头按 latin-1 解),等于起一个
+    # 谁都调不通的服务 —— 按环境闸门的老规矩,这种错拦在启动时,不留到线上变成
+    # 每个请求 ECONNRESET 的悬案(2026-07-30:占位符「你的口令」被原样抄进口令文件)。
+    if API_KEY and not API_KEY.isascii():
+        log("✗ MA_API_KEY 含非 ASCII 字符 —— 是不是把『你的口令』这类占位符原样抄进了口令文件?")
+        log("  生成真口令:openssl rand -hex 24,写进 ma-env.local.sh 再起。拒绝启动。")
+        raise SystemExit(2)
     log("方案 {} 服务启动,监听 http://{}:{}".format(mode, HOST, PORT))
     log("鉴权: {}".format("开(需 {} 头)".format(AUTH_HEADER) if API_KEY else "关(未设 MA_API_KEY)"))
     log("claude 可执行文件: {} / 单次超时 {}s".format(CLAUDE_BIN, CLAUDE_TIMEOUT))

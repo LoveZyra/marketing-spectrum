@@ -161,7 +161,8 @@ check("ma_api_c.py 的 call_cli 收 argv_extra / cwd",
       "def _call(prompt, timeout, argv_extra=None, cwd=None):" in _csrc)
 check("argv_extra 真的拼进 argv(2026-07-30 分模型后,--model 在工具参数之前)",
       "[CLAUDE_BIN, \"-p\", prompt] + model_argv + list(argv_extra or [])" in _csrc)
-check("cwd 真的传给 call_claude", "timeout, cwd=cwd)" in _csrc)
+check("真实子进程用固定工作目录(Prism 不再每单建「run」项目)",
+      "timeout, cwd=workdir)" in _csrc and "LLM_HOME" in _csrc)
 
 
 # ------------------------------------------------------- 2) 调用参数

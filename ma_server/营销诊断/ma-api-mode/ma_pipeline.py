@@ -52,8 +52,11 @@ MA_RUNTIME 只是这两轴的预设名:
   MA_HDFS_GET         hdfs_get.py 路径,默认 ~/.claude/skills/hdfs-data/scripts/hdfs_get.py
   MA_SKILL_STRICT     1=skill 任一步失败即整单失败;默认 0(该步降级为本地骨架并告警)
   MA_SKILL_PY         调 cli.py 用的解释器,默认 python3
-  MA_FEAT_TABLE       特征表,默认 tmp_dm.tmp_ctj_mktv2_feature_day_v2_sy
-  MA_POP_TABLE        人群池表,默认 tmp_dm.tmp_ctj_mktv2_sy_sample
+  MA_FEAT_TABLE       特征表,默认 app_dm.tmp_ctj_marketing_audit_sample_hebo(固定表、无分区)
+  MA_FILTER_COL       特征表里活动 ID 的过滤列,默认 activity_id(老表是 task_id)
+  MA_POP_TABLE        人群池表,默认 app_dm.tmp_ctj_marketing_audit_sample_hebo(与特征表同表)
+                      (圈人 dry-run/计数/push_sql 的 FROM 都用它;主键列不叫
+                       mapid/unionid 的话用 MA_ID_COL / MA_UNION_COL 调)
   MA_PUBLIC_DIR       HTML 发布目录,默认按 runtime 取(real=/home/jovyan/prism/public)
   MA_URL_BASE         报告 URL 前缀
   MA_STEP_TIMEOUT     单个子命令超时秒数,默认 1800
@@ -104,8 +107,25 @@ def _env_int(name, default):
 RUNTIME = (_env("MA_RUNTIME", "stub")).strip().lower()
 SKILL_DIR = _env("MA_SKILL_DIR", os.path.expanduser("~/.claude/skills/marketing-audit"))
 HDFS_GET = _env("MA_HDFS_GET", os.path.expanduser("~/.claude/skills/hdfs-data/scripts/hdfs_get.py"))
-FEAT_TABLE = _env("MA_FEAT_TABLE", "tmp_dm.tmp_ctj_mktv2_feature_day_v2_sy")
-POP_TABLE = _env("MA_POP_TABLE", "tmp_dm.tmp_ctj_mktv2_sy_sample")
+FEAT_TABLE = _env("MA_FEAT_TABLE", "app_dm.tmp_ctj_marketing_audit_sample_hebo")
+# 固定特征表(fix14 起与人群池统一为 sample_hebo 表)里活动 ID 的过滤列叫 activity_id;老表叫 task_id。
+# 换表时列名对不上,pull 不报错、只捞回 0 行,然后一路"顺利"产出一份空报告 ——
+# 所以列名必须跟表一起配,MA_FILTER_COL 就是那个口子。
+FILTER_COL = _env("MA_FILTER_COL", "activity_id").strip() or "activity_id"
+# 人群池表:圈人 dry-run/计数/push_sql 的 FROM 都用它。
+# fix14(2026-08-03):与特征表统一改为 app_dm.tmp_ctj_marketing_audit_sample_hebo。
+# 背景:fix10 落定的 app_dm.long_ctj_marketing_audit_sample 在 metastore 里一直没建出来 ——
+# 1000344 单 prepare 被杀降级后,骨架查它取列名,AnalysisException 无人接,整单崩
+# (详见 诊断_20260803_activity1000344.md)。换表用 MA_FEAT_TABLE/MA_POP_TABLE,代码不用动;
+# 换表必查 MA_FILTER_COL(过滤列配错不报错,只捞 0 行出空报告)。
+# 老表是 tmp_dm.tmp_ctj_mktv2_sy_sample;主键/联合列若与老表不同,用 MA_ID_COL/MA_UNION_COL 调。
+POP_TABLE = _env("MA_POP_TABLE", "app_dm.tmp_ctj_marketing_audit_sample_hebo")
+# fix15:两表合一(POP_TABLE == FEAT_TABLE)时,人群池侧查询默认限定在本活动 ——
+# quantile / count_rules / count_push_total 与出参 push_sql 统一前置 {FILTER_COL}='{activity_id}'。
+# 好处:表按 activity_id 分区后,这些查询吃到分区剪裁,不再全表扫;
+# 口径上人数只算本活动的特征行(两表合一后不过滤,会把所有活动的行混进计数)。
+# MA_POP_FILTER: auto(默认,仅两表同名时启用)/ 1(强制启用)/ 0(关闭,回到全表口径)。
+POP_FILTER = (_env("MA_POP_FILTER", "auto")).strip().lower()
 STEP_TIMEOUT = _env_int("MA_STEP_TIMEOUT", 1800)
 # 2026-07-30 按 356352 单 transcript 实测重定超时:线上后端(glm-5.2)是思考型,
 # 单次静默思考实测最长 358.8s —— 300s 的润色超时天然低于它的思考时长,三杀全是
@@ -117,6 +137,10 @@ POLISH_ROUNDS = _env_int("MA_POLISH_ROUNDS", 3)
 # 小题的思考在几十秒量级。首轮同样分批(见 polish_state)。
 POLISH_BATCH = _env_int("MA_POLISH_BATCH", 8)
 POLISH_BUDGET = _env_int("MA_POLISH_BUDGET", 1800)
+# 单任务总耗时上限(秒),0=不限。在每个步骤开跑前检查:超了就判 E_JOB_DEADLINE,
+# 别让调用方陪着熬(agent 2400 + 润色 1800 + 修复若干,理论最坏能叠到小时级)。
+# 它拦的是"步骤叠加超时";单步内部卡死由 call_claude 的进程组 kill 兜。
+JOB_DEADLINE = _env_int("MA_JOB_DEADLINE", 3600)
 STUB_ROWS = _env_int("MA_STUB_ROWS", 2000)
 # 报告产出这一段交给带工具权限的 claude,让它自己去读 SKILL.md、自己跑 skill。
 # 0 = 退回「驱动代跑 skill + 无工具模型只润色」的老链路。
@@ -131,6 +155,11 @@ AGENT_TIMEOUT = _env_int("MA_AGENT_TIMEOUT", 2400)
 # 设成空串 = 不传 --model,回到网关默认,行为与旧版完全一致。
 AGENT_MODEL = _env("MA_AGENT_MODEL", "sonnet").strip()
 POLISH_MODEL = _env("MA_POLISH_MODEL", "haiku").strip()
+# 所有 claude 子进程的固定工作目录。Claude Code 按 cwd 建"项目",以前 agent 每单
+# 用 jobs/<job_id>/run 当 cwd,Prism 侧边栏每调一次接口就多一个叫「run」的新项目
+# (2026-08-03 用户截图实证)。固定成一个目录后,所有单的会话都归到同一个项目
+# (项目名即目录名 llm_sessions)下;产物路径不受影响 —— 提示词里全是绝对路径。
+LLM_HOME = _env("MA_LLM_HOME", os.path.join(BASE_DIR, "llm_sessions"))
 AGENT_MAX_TURNS = _env("MA_AGENT_MAX_TURNS", "")
 AGENT_PROMPT_FILE = _env("MA_AGENT_PROMPT", "")
 SKILL_STRICT = (_env("MA_SKILL_STRICT", "0")).strip() in ("1", "true", "yes")
@@ -378,6 +407,8 @@ class Ctx(object):
         self.products_given = None     # 入参/环境变量显式给的品类
         self.products_inferred = None  # --auto-meta 实际从数据里取到的品类
         self.report_agent = None       # 报告产出交给带工具的 claude 之后的结论
+        self.report_banner = None      # 发布时要压在报告顶部的降级横幅(None=不加)
+        self.started_at = time.time()  # 任务起点,MA_JOB_DEADLINE 按它算总耗时
         os.makedirs(rundir, exist_ok=True)
 
     def log(self, msg):
@@ -396,6 +427,14 @@ class Ctx(object):
 
     def step(self, name, fn):
         """跑一步并记录耗时。异常原样抛出,由 run_pipeline 统一转成 error。"""
+        if JOB_DEADLINE > 0:
+            spent = time.time() - self.started_at
+            if spent > JOB_DEADLINE:
+                # 总闸在步骤边界拦:已经超支就别再进下一步了。单步内部的卡死
+                # 由 call_claude 的进程组 kill 兜,这里只管"步骤叠加超时"。
+                raise StepError("E_JOB_DEADLINE",
+                                "任务总耗时 {:.0f}s 已超上限 {}s,不再进入步骤 {}"
+                                "(MA_JOB_DEADLINE,设 0 可关)".format(spent, JOB_DEADLINE, name))
         self.phase(name)
         t0 = time.time()
         try:
@@ -423,8 +462,18 @@ def run_cmd(ctx, cmd, timeout=None, code="E_STEP_FAILED"):
     for line in tail.splitlines()[-30:]:
         ctx.log("  | " + line[:300])
     if proc.returncode != 0:
+        # Spark/Java 报错动辄几百行栈帧,detail 只留尾巴 2000 字时,真正的
+        # "Caused by: XxxException: 人话原因"那一行经常在更上面被截丢
+        # (2026-08-03 hebo 表 pull 失败,出参里只剩 ParquetWriteSupport 栈帧,
+        # 根因一行都没有)。这里从**全量**输出里单独抠出异常行,进 detail 也进任务日志。
+        exc_lines = [ln.strip()[:300] for ln in tail.splitlines()
+                     if re.search(r"Caused by:|Exception(?::| in )|^\s*[A-Za-z.]+Error:",
+                                  ln)][:8]
+        for ln in exc_lines:
+            ctx.log("  !! " + ln)
         raise StepError(code, "子命令失败 exit={}: {}".format(proc.returncode, " ".join(cmd[:4])),
-                        detail={"exit_code": proc.returncode, "tail": tail[-2000:]})
+                        detail={"exit_code": proc.returncode, "tail": tail[-2000:],
+                                "exceptions": exc_lines})
     return proc.stdout or ""
 
 
@@ -456,6 +505,10 @@ class BaseSource(object):
         return []
 
     def quantile(self, ctx, col, q):
+        return None
+
+    def base_where(self, ctx):
+        """人群池查询与出参 SQL 的公共前置谓词(如活动过滤)。默认无。"""
         return None
 
     def row_count(self, ctx):
@@ -497,7 +550,7 @@ class HiveSource(BaseSource):
         # 正式表名定下来后 export MA_FEAT_TABLE=<那张表> 即可,代码不用动。
         # 另:整条链路对这张表只有读 —— 圈人计数也全是 SELECT,没有任何写入。
         cmd = [SKILL_PY, HDFS_GET, "--table", FEAT_TABLE,
-               "--where", "{}='{}'".format(ctx.params.get("filter_col") or "task_id", ctx.activity_id),
+               "--where", "{}='{}'".format(ctx.params.get("filter_col") or FILTER_COL, ctx.activity_id),
                "--output", data_path]
         run_cmd(ctx, cmd, code="E_PULL_FAILED")
         return data_path
@@ -523,9 +576,22 @@ class HiveSource(BaseSource):
                                                        "double", "float", "decimal", "long")})
         return out
 
+    def base_where(self, ctx):
+        """两表合一时,人群池查询限定本活动:{FILTER_COL}='{activity_id}'(见 MA_POP_FILTER)。"""
+        if POP_FILTER in ("0", "false", "no", "off"):
+            return None
+        if POP_FILTER in ("1", "true", "yes", "on") or POP_TABLE == FEAT_TABLE:
+            col = (ctx.params or {}).get("filter_col") or FILTER_COL
+            return "{}='{}'".format(col, ctx.activity_id)
+        return None
+
     def quantile(self, ctx, col, q):
         spark = self._get_spark()
-        row = spark.sql("SELECT percentile_approx({}, {}) AS v FROM {}".format(col, q, POP_TABLE)).collect()[0]
+        sql = "SELECT percentile_approx({}, {}) AS v FROM {}".format(col, q, POP_TABLE)
+        bw = self.base_where(ctx)
+        if bw:
+            sql += " WHERE {}".format(bw)
+        row = spark.sql(sql).collect()[0]
         return row["v"]
 
     def validate_rules(self, ctx, rules):
@@ -547,7 +613,11 @@ class HiveSource(BaseSource):
         spark = self._get_spark()
         agg = ", ".join("SUM(CASE WHEN ({}) THEN 1 ELSE 0 END) AS c{}".format(r["sql_filter"], i)
                         for i, r in enumerate(rules))
-        row = spark.sql("SELECT {} FROM {}".format(agg, POP_TABLE)).collect()[0]
+        sql = "SELECT {} FROM {}".format(agg, POP_TABLE)
+        bw = self.base_where(ctx)
+        if bw:
+            sql += " WHERE {}".format(bw)
+        row = spark.sql(sql).collect()[0]
         for i, r in enumerate(rules):
             r["population_size"] = int(row["c{}".format(i)] or 0)
 
@@ -557,6 +627,9 @@ class HiveSource(BaseSource):
             return 0
         spark = self._get_spark()
         pred = " OR ".join("({})".format(r["sql_filter"]) for r in rules)
+        bw = self.base_where(ctx)
+        if bw:
+            pred = "{} AND ({})".format(bw, pred)
         row = spark.sql("SELECT COUNT(DISTINCT {}) AS n FROM {} WHERE {}".format(
             self.id_col, POP_TABLE, pred)).collect()[0]
         return int(row["n"] or 0)
@@ -2998,6 +3071,7 @@ self_critique 和 render 后面的流程还会替你复核;不要花时间写批
   所以人群相关的结论要按「推送谁」来写,不要写成「排除谁」。
 
 硬约束(违反的话这一步的产出会被丢弃):
+- 你的工作目录**不是** {rundir},所有读写一律用上面给出的绝对路径,不要用相对路径。
 - 只能在 {rundir} 里面写文件。不要改 {skill_dir} 下面的任何东西 —— skill 是只读的。
 - 不要改 audience_segments 里的 name / sql_filter / estimated_size / direction /
   finding_id。这些字段下游已经拿去圈人了,改一个字报告和人群包就对不上。
@@ -3502,7 +3576,7 @@ def pick_push_rules(all_rules, push_source):
     return segs, picked, excluded, fixes
 
 
-def build_push_sql(rules, table=None, id_col="mapid", union_col="unionid"):
+def build_push_sql(rules, table=None, id_col="mapid", union_col="unionid", base_where=None):
     """出参里那条可直接拿去跑的取数 SQL。
 
     去重用 GROUP BY <主键> + MIN(<unionid>):原流程用的是 Spark dropDuplicates(["mapid"]),
@@ -3517,6 +3591,10 @@ def build_push_sql(rules, table=None, id_col="mapid", union_col="unionid"):
         return None, None
     t = table or POP_TABLE
     pred = "\n     OR ".join("({})".format(r["sql_filter"]) for r in rules)
+    if base_where:
+        # fix15:两表合一的活动过滤 —— 与 count_push_total 口径一致,
+        # 且业务直接拿去跑时也吃到分区剪裁。
+        pred = "({})\n   AND (\n       {}\n   )".format(base_where, pred)
     if union_col and union_col != id_col:
         proj = "SELECT {i},\n       MIN({u}) AS {u}\n".format(i=id_col, u=union_col)
     else:
@@ -3542,6 +3620,13 @@ def build_notes(ctx, backend, dropped, degraded_polish, has_rules, excluded=None
         "只有 source=audience_segment 且 direction=push 的规则参与圈人;"
         "排除规则既不圈人,也不用于对推送人群做反向过滤",
     ]
+    # getattr 防御:回归脚本里的 FakeSrc 只带用到的字段,不继承 BaseSource,
+    # 不能要求它有 base_where(fix15 首装时 regress_agent §7 就是这么炸的)。
+    _bw = getattr(src, "base_where", None)
+    _bw = _bw(ctx) if callable(_bw) else None
+    if _bw:
+        notes.insert(0, "人群池口径(fix15):两表合一,计数与 push_sql 已限定 {} —— "
+                        "人数=该活动特征行内命中,不含其他活动".format(_bw))
     if src.name == "synth":
         notes.insert(0, "⚠ 人群池是本地合成的假数据,人数与 SQL 结果不可用于生产决策")
     elif src.name == "csv":
@@ -3683,6 +3768,14 @@ def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extrac
                                            and (lambda p: steps.validate(ctx, p))))
         polish_info["report_agent"] = agent_info
 
+        # 半成品别裸发(356352 教训:骨架句报告一路发到公网,读报告的人毫无提示)。
+        # 润色没救完、又没有 agent 成品兜底时,发布出去的页面顶部压一条醒目横幅,
+        # report_url 照给、规则照出 —— 但"这是待人工复核的降级稿"必须钉在读者眼前。
+        if polish_info.get("degraded") and not agent_info.get("used"):
+            ctx.report_banner = ("⚠ 数据诊断已完成,但文案润色未完成"
+                                 "(剩余待润色 {} 处):正文可能残留草稿骨架句,"
+                                 "发给业务方前请先人工复核".format(polish_info.get("remaining", 0)))
+
         # skill 推荐流程的第 8 步:润色完先跑它自带的质检,再 render。
         # 以前这里直接跳到 render —— 等于把 skill 自己那套质量裁决完全绕过去了。
         ctx.step("self_critique",
@@ -3696,7 +3789,8 @@ def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extrac
 
         def _assemble():
             push_sql, count_sql = build_push_sql(
-                push_ok, table=src.sql_table, id_col=src.id_col, union_col=src.union_col)
+                push_ok, table=src.sql_table, id_col=src.id_col, union_col=src.union_col,
+                base_where=src.base_where(ctx) if hasattr(src, "base_where") else None)
             cols = [src.id_col] if src.union_col == src.id_col else [src.id_col, src.union_col]
             spec = {
                 "version": "1.0",
@@ -3754,13 +3848,32 @@ def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extrac
 
 
 def publish_html(ctx, html_path):
-    """把报告拷到公开目录并给出 URL。目录不存在时不让整单失败,降级返回本地路径。"""
+    """把报告拷到公开目录并给出 URL。目录不存在时不让整单失败,降级返回本地路径。
+
+    ctx.report_banner 非空时,发布副本的 <body> 顶部注入一条置顶横幅(rundir 里的
+    原件不动)。这是"降级稿不裸发"的最后一道闸:出参里的 degraded 标志读者看不见,
+    压在页面上的字才看得见。
+    """
     name = "diagnosis-report-{}.html".format(ctx.activity_id)
     if not os.path.isdir(PUBLIC_DIR):
         ctx.warn("发布目录不存在:{},报告只留在运行目录".format(PUBLIC_DIR))
         return None
+    banner = getattr(ctx, "report_banner", None)
     try:
-        shutil.copyfile(html_path, os.path.join(PUBLIC_DIR, name))
+        if banner:
+            with open(html_path, encoding="utf-8") as f:
+                doc = f.read()
+            ins = ('<div style="position:sticky;top:0;z-index:9999;background:#b45309;'
+                   'color:#fff;padding:10px 16px;font:13px/1.7 -apple-system,'
+                   "'PingFang SC',sans-serif;text-align:center\">{}</div>").format(
+                       _html_escape(banner))
+            m = re.search(r"<body[^>]*>", doc)
+            doc = (doc[:m.end()] + ins + doc[m.end():]) if m else (ins + doc)
+            with open(os.path.join(PUBLIC_DIR, name), "w", encoding="utf-8") as f:
+                f.write(doc)
+            ctx.log("发布带降级横幅的报告(半成品不裸发,原件在 rundir 未动)")
+        else:
+            shutil.copyfile(html_path, os.path.join(PUBLIC_DIR, name))
     except (IOError, OSError) as exc:
         ctx.warn("发布失败({}),报告只留在运行目录".format(exc))
         return None

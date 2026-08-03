@@ -50,9 +50,32 @@ from typing import Any
 
 
 def _load_dataframe(path: Path) -> "Any":
-    """支持 .csv / .parquet，自动尝试 GBK/UTF-8。"""
+    """支持 .csv / .parquet，自动尝试 GBK/UTF-8。
+
+    fix16-a(2026-08-03)：parquet 改走 pyarrow 直读 + to_pandas(self_destruct)。
+    老读法 pd.read_parquet 在转换期会同时持有 Arrow 表和 pandas 帧两份内存 ——
+    千万行×250 列实测稳态 ~60G、转换峰值 ~116G，在 128G 容器里被 OOM killer
+    SIGKILL（job_20260803_214025，activity 1000344，两次均死于装载阶段）。
+    self_destruct=True 让转换逐列释放 Arrow 缓冲，峰值 ≈ 稳态；split_blocks=True
+    避免同 dtype 大块合并的额外拷贝。返回的仍是普通 numpy dtype 的 DataFrame，
+    下游 snippets 无感。任何异常回退老读法，行为不会比现状更坏。
+    """
     import pandas as pd
     if path.suffix.lower() in (".parquet", ".pq"):
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+            # fix16-a2:换系统分配器。arrow 默认 jemalloc 池会把 self_destruct 已释放的
+            # 页攥在池里不还内核,RSS 不降、cgroup 照样记账 —— 22:33 单实测新读法仍以
+            # 同样的 ~126s 撞顶被杀。system pool 的大块内存 free 即归还 OS,削峰才真生效。
+            try:
+                pa.set_memory_pool(pa.system_memory_pool())
+            except Exception:  # noqa: BLE001 —— 老版本没有该 API 时保持默认池
+                pass
+            tbl = pq.read_table(str(path))
+            return tbl.to_pandas(self_destruct=True, split_blocks=True)
+        except Exception as e:  # noqa: BLE001 —— 削峰读取失败,退回老读法(顶多回到现状)
+            print(f"[load] arrow 削峰读取失败,回退 pandas 默认: {e}", flush=True)
         return pd.read_parquet(path)
     try:
         return pd.read_csv(path, low_memory=False)

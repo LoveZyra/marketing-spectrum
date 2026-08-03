@@ -489,18 +489,26 @@ def spark_sql_extract(spark, table, where, partitions, want_cols, output, fmt, u
     df = spark.sql(q)
     # decimal → double（--float32 时连同 double 一起降 float），与流式模式 dtype 约定一致
     from pyspark.sql import functions as F
-    from pyspark.sql.types import DecimalType, DoubleType
+    from pyspark.sql.types import DecimalType, DoubleType, NullType
     casts = {}
+    null_cols = []
     for f in df.schema.fields:
         if isinstance(f.dataType, DecimalType):
             casts[f.name] = 'float' if use_float32 else 'double'
         elif use_float32 and isinstance(f.dataType, DoubleType):
             casts[f.name] = 'float'
+        elif isinstance(f.dataType, NullType):
+            # 建表时 SELECT NULL AS xxx 会留下 void 类型列：读/count 都正常，
+            # 写 parquet 直接炸（Unsupported data type）。统一转 string 落 null。
+            casts[f.name] = 'string'
+            null_cols.append(f.name)
     if casts:
         df = df.select([F.col(c).cast(casts[c]).alias(c) if c in casts else F.col(c)
                         for c in df.columns])
         print("[where] 类型统一: {} 列 decimal/double → {}".format(
             len(casts), 'float32' if use_float32 else 'double'))
+    if null_cols:
+        print("[where] void(全NULL)列已转 string: {}".format(", ".join(null_cols[:8])))
     n = df.count()
     print("[where] 命中行数: {:,}  列数: {}".format(n, len(df.columns)))
     if n == 0:
@@ -511,12 +519,24 @@ def spark_sql_extract(spark, table, where, partitions, want_cols, output, fmt, u
     if "://" not in out:
         out = "file://" + os.path.abspath(out)
     print("[where] 写出: {}".format(out))
+    # 老 Hive 数据常见 0001-01-01 / 0000-00-00 这类哨兵日期，Spark3 默认
+    # datetimeRebaseModeInWrite=EXCEPTION：读和 count 都好好的，一写 parquet 就
+    # 逐行抛错，栈全在 ParquetWriteSupport（2026-08-03 hebo 表 pull 实证）。
+    # LEGACY = 按旧历法重写，行为与老 Hive 一致；int96 同理。
+    spark.conf.set("spark.sql.parquet.datetimeRebaseModeInWrite", "LEGACY")
+    spark.conf.set("spark.sql.parquet.int96RebaseModeInWrite", "LEGACY")
     # 按命中行数自适应写出文件数:小结果单文件方便;大结果多文件避免单 task 写出慢/压垮
     # executor(输出是目录,pd.read_parquet 目录读取不受文件数影响)
     nparts = 1 if n <= 2_000_000 else min(16, (n - 1) // 2_000_000 + 1)
     if nparts > 1:
         print("[where] 命中行数较大,分 {} 个文件写出".format(nparts))
-    w = df.coalesce(nparts).write.mode("overwrite")
+    # fix15(2026-08-03):repartition 而非 coalesce。coalesce 是窄依赖,nparts=1 时会把
+    # 上游扫描整个塌缩进 1 个 task 单核串行 —— 未分区大表实测 23GB 全列扫 30 分钟
+    # 0 产出,被 1800s 超时杀掉(job_20260803_171733,activity 1000177)。repartition
+    # 带 shuffle:扫描按源文件 split 并行(分区表下配合谓词剪裁只扫本活动分区),
+    # 只有写出是 nparts 个 task;输出文件数与原来完全一致,消费侧无感。
+    # count() 保留不动:它还承担"0 行命中不写空文件"的保护,且列裁剪+分区剪裁下秒级。
+    w = df.repartition(nparts).write.mode("overwrite")
     if fmt == "parquet":
         w.option("compression", "zstd").parquet(out)
     else:

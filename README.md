@@ -11,7 +11,8 @@
 
 **`ma_server/`** —— 营销诊断侧全部代码:
 
-- `营销诊断/api模式测试/` —— **API 服务本体**(方案 C:`ma_core.py` 服务底座 +
+- `营销诊断/ma-api-mode/` —— **API 服务本体**,目录名与服务器部署目录
+  `~/prism/ma-api-mode` 一致(方案 C:`ma_core.py` 服务底座 +
   `ma_pipeline.py` 业务流水线 + `ma_api_c.py` 入口;`ma_api_b.py` 为备选的全模型编排方案)、
   五套回归(534 条断言,`fixtures/` 是其中 5 条真实回放断言的依赖,**别删**)、
   `install.sh` 打包安装、`run_ma_server.sh` 整轮联调、`restart_prism.sh` 一键重启、

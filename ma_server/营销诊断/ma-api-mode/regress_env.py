@@ -291,6 +291,29 @@ check("202→409→200(同活动并发被拦,连接不受影响)",
       (a, d) == (202, 200) and b in (202, 409), "{} {} {}".format(a, b, d))
 c.close()
 
+# 口令或请求头里带非 ASCII:必须干净地 401 收场,绝不能把连接炸成 RESET。
+# 2026-07-30 线上事故:ma-env.local.sh 里被抄进了中文占位符「你的口令」,str 版
+# compare_digest 撞非 ASCII 直接抛 TypeError,每个带鉴权的请求都成了 ECONNRESET,
+# 而 healthz(免鉴权)一直是好的 —— 网关侧只看得到 E_MA_UNREACHABLE,极难定位。
+_old_key = ma_core.API_KEY
+ma_core.API_KEY = "中文口令-绝不该这么配"
+c = Conn()
+c.send("POST", "/api/ma/diagnose", body=BODY, key=KEY)
+st_badkey, _ = c.recv()
+c.send("GET", "/healthz")
+st_after = c.recv()[0]
+check("服务端口令含非 ASCII → 干净 401,不是连接重置", st_badkey == 401, str(st_badkey))
+check("同一条连接后续请求照常(handler 没被炸死)", st_after == 200, str(st_after))
+c.close()
+ma_core.API_KEY = _old_key
+
+c = Conn()
+c.send("POST", "/api/ma/diagnose",
+       body=json.dumps({"activity_id": "NONASCII_HDR"}), key="ké¥-带高位字节的头")
+st_badhdr, _ = c.recv()
+check("客户端请求头里带非 ASCII → 也是干净 401", st_badhdr == 401, str(st_badhdr))
+c.close()
+
 SRV.shutdown()
 shutil.rmtree(JOBS, ignore_errors=True)
 
