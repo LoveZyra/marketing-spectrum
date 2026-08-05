@@ -83,6 +83,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -127,6 +128,10 @@ POP_TABLE = _env("MA_POP_TABLE", "app_dm.tmp_ctj_marketing_audit_sample_hebo")
 # MA_POP_FILTER: auto(默认,仅两表同名时启用)/ 1(强制启用)/ 0(关闭,回到全表口径)。
 POP_FILTER = (_env("MA_POP_FILTER", "auto")).strip().lower()
 STEP_TIMEOUT = _env_int("MA_STEP_TIMEOUT", 1800)
+# fix17:降级骨架构建的硬上限(秒,0=不限)。骨架要摸 Hive 取真列名+分位数(十几个查询,
+# 全程无日志)——1011270 单(2026-08-04)prepare 超时降级后就冻死在这里,任务停在
+# phase=prepare 再无进展。超过上限就放弃取真列,改用无列骨架,流水线继续走。
+STUB_TIMEOUT = _env_int("MA_STUB_TIMEOUT", 900)
 # 2026-07-30 按 356352 单 transcript 实测重定超时:线上后端(glm-5.2)是思考型,
 # 单次静默思考实测最长 358.8s —— 300s 的润色超时天然低于它的思考时长,三杀全是
 # 这个死法。三个值联动:单次 600 > 实测思考上限;预算 1800 = 3 次满额,只调
@@ -529,6 +534,17 @@ class BaseSource(object):
 
     def close(self):
         pass
+
+
+class _NoSource(BaseSource):
+    """骨架兜底的兜底:不摸任何外部系统。取列返回空,build_stub_state 会造出
+    "无列骨架"(形状完整、规则退化为 id 非空一条)——用于真数据源卡死/失败时,
+    让降级路径本身也有出路,而不是冻死在 phase=prepare(fix17,1011270 单教训)。"""
+
+    name = "none"
+
+    def describe_columns(self, ctx):
+        return []
 
 
 class HiveSource(BaseSource):
@@ -1364,7 +1380,37 @@ class StubSteps(object):
 
     def prepare(self, ctx, source, data_path):
         p = ctx.path("state_partial.json")
-        _dump(p, build_stub_state(ctx, source))
+        # fix17:骨架构建要摸 Hive(取列名+一串分位数),给它硬上限 + 双兜底 ——
+        # 1011270 单(2026-08-04)prepare 超时降级后,任务冻死在这里 25 分钟以上:
+        # updated_at 不动、无日志、无子进程,监测只能判"疑似挂死"。
+        # 超时或异常都退化为无列骨架(_NoSource):形状完整、无真列规则,流水线继续走。
+        # 只有 hive 源进看门狗线程:本地源(synth/csv)瞬时完成,且 sqlite 连接绑创建线程,
+        # 挪进子线程反而必炸(regress_direction 哨兵实测),维持原路径。
+        if not isinstance(source, HiveSource):
+            _dump(p, build_stub_state(ctx, source))
+            return p
+        box = {}
+
+        def _build():
+            try:
+                box["state"] = build_stub_state(ctx, source)
+            except Exception as exc:  # noqa: BLE001 —— 兜底路径不允许任何异常外逸
+                box["err"] = exc
+
+        t = threading.Thread(target=_build, name="stub-prepare", daemon=True)
+        t.start()
+        t.join(STUB_TIMEOUT if STUB_TIMEOUT > 0 else None)
+        if t.is_alive():
+            ctx.warn("本地骨架构建超过 {}s(疑似数据源/Spark 卡住),放弃取真列,"
+                     "改用无列骨架继续 —— 本单无圈人规则(MA_STUB_TIMEOUT 可调)".format(STUB_TIMEOUT))
+            box.pop("state", None)
+        elif box.get("err") is not None:
+            ctx.warn("本地骨架构建失败({}),改用无列骨架继续".format(
+                str(box["err"]).splitlines()[0][:200]))
+            box.pop("state", None)
+        if "state" not in box:
+            box["state"] = build_stub_state(ctx, _NoSource())
+        _dump(p, box["state"])
         return p
 
     def compute_thresholds(self, ctx, source, data_path, state_partial):
@@ -1516,6 +1562,9 @@ def _seg(name, direction, finding_id, sql_filter, note=None, direction_raw=None)
 
 def _pick_numeric(ctx, source, want=3, scan=40):
     """挑几列有区分度的数值列。全是同一个值的列做不出规则,直接跳过。"""
+    # fix17:这段会对数据源发一串分位数查询(hive 下是 Spark 作业),以前全程无日志,
+    # 外面看就是"任务冻住"。逐列打点,让 log_tail 能看到它活着、走到哪一列。
+    ctx.log("骨架取列:开始探测数值列(最多探 {} 列,目标选 {} 列,每列 2 个分位数查询)".format(scan, want))
     out = []
     seen = 0
     for c in source.describe_columns(ctx):
@@ -1529,6 +1578,7 @@ def _pick_numeric(ctx, source, want=3, scan=40):
         if lo is None or hi is None or lo == hi:
             continue
         out.append(c)
+        ctx.log("骨架取列:选中 {}({}/{})".format(c["name"], len(out), want))
     return out
 
 

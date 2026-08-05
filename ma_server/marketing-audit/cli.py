@@ -296,7 +296,56 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     else:
         t0 = time.time()
         try:
-            ma = model_analyst.run_model_analysis(df)
+            # fix17-a(2026-08-04)：模型训练前下采样。1011270 单实测：5.9M 行全量喂
+            # lightgbm（200 棵、depth4）单步 1058s、占 prepare 59%，直接顶穿 1800s 步超时。
+            # 只有模型训练吃采样；data_overview/漏斗/阈值等仍用全量，报告口径不受影响。
+            # 策略（2026-08-04 定）：正样本（少数类）全保留，只采样负样本（多数类）——
+            # 正样本稀少的活动不再被等比稀释。代价是训练类别先验高于真实：AUC/特征重要性
+            # 这类排序型结论不受影响；若以模型概率阈值直接圈人需按先验校准（已写入 caveats）。
+            # 少数类自身超预算的异常分布自动退回等比分层。
+            # MA_MODEL_SAMPLE：训练样本上限行数，默认 500000；0=关闭采样（回到全量）。
+            import os as _os
+            import pandas as _pd
+            df_model = df
+            try:
+                _cap = int((_os.environ.get("MA_MODEL_SAMPLE") or "500000").strip() or 0)
+            except ValueError:
+                _cap = 500000
+            if _cap > 0 and len(df) > _cap:
+                _grps = sorted(((k, g) for k, g in df.groupby(model_target) if len(g)),
+                               key=lambda kv: len(kv[1]))
+                _maj_key, _major = _grps[-1]
+                _minor = [g for _, g in _grps[:-1]]          # 除最大类外全保留（二分类=正样本）
+                _kept = sum(len(g) for g in _minor)
+                if 0 < _kept < _cap:
+                    _parts = _minor + [_major.sample(n=min(len(_major), _cap - _kept),
+                                                     random_state=42)]
+                    _mode = "正样本全保留、只采样负样本"
+                else:
+                    _frac = _cap / float(len(df))
+                    _parts = [g.sample(n=max(1, int(len(g) * _frac)), random_state=42)
+                              for _, g in df.groupby(model_target) if len(g)]
+                    _mode = "少数类占比异常，退回等比分层"
+                df_model = _pd.concat(_parts)
+                _pos_all = int(len(df) - df[model_target].value_counts().get(_maj_key, 0))
+                _pos_tr = int(len(df_model) - df_model[model_target].value_counts().get(_maj_key, 0))
+                _r0 = _pos_all / float(len(df))
+                _r1 = _pos_tr / float(len(df_model)) if len(df_model) else 0.0
+                print(f"          [sample] 模型训练下采样 {len(df):,} → {len(df_model):,} 行"
+                      f"（{_mode}；正样本 {_pos_tr:,}/{_pos_all:,}，训练正样本率 {_r1:.2%}，"
+                      f"全量 {_r0:.2%}；MA_MODEL_SAMPLE={_cap}；统计/阈值仍用全量）", flush=True)
+                log.log_decision(tool_id="model_analysis", kind="fallback",
+                                 reason=f"training_downsample {len(df)}->{len(df_model)}",
+                                 fallback_used=f"keep_minority_downsample_majority cap={_cap}")
+                state["data_caveats"].append({
+                    "field": "model_analysis",
+                    "issue": f"模型训练采样 {len(df_model):,}/{len(df):,} 行：{_mode}"
+                             f"（正样本 {_pos_tr:,}/{_pos_all:,}，MA_MODEL_SAMPLE={_cap}）",
+                    "impact": f"训练正样本率 {_r1:.2%} 高于全量 {_r0:.2%}（类别先验被抬高）："
+                              "AUC/特征重要性等排序型结论不受影响；若以模型概率阈值直接圈人需按先验校准。"
+                              "统计/漏斗/阈值仍为全量口径",
+                })
+            ma = model_analyst.run_model_analysis(df_model)
             state["model_analysis"] = ma.to_dict() if ma else None
             log.log_decision(tool_id="model_analysis", kind="invoke",
                              reason="preconditions_ok",

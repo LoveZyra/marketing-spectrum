@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # 营销诊断 API 服务安装脚本。先备份、再覆盖、最后自检。
 # 累积包:装这一个就够了,不用再装之前的 fix / fix2 / … / fix9 / fix10。
+# fix17(2026-08-04):prepare 提速与降级不冻死(1011270 单复盘:pull 修好后瓶颈下移,
+#   prepare 对 5.9M×250 全量单跑 28.6min 顶穿 1800s,其中 lightgbm 训练 1058s 占 59%;
+#   降级"本地骨架"后又因骨架取列的十几个无日志 Spark 查询把任务冻死在 phase=prepare)——
+#   ① 配套 cli.py:模型训练前下采样 —— 正样本全保留、只采样负样本(MA_MODEL_SAMPLE
+#      默认 50 万行,0=关;少数类占比异常自动退回等比分层)。只有模型吃采样,统计/漏斗/
+#      阈值仍全量;"训练先验被抬高"与采样明细写进 data_caveats 与决策日志。
+#   ② ma_pipeline.py:骨架构建加硬上限 MA_STUB_TIMEOUT(默认 900s)+ 逐列心跳日志;
+#      超时/异常一律退化为"无列骨架"继续走,降级路径永不冻死。
+#   ③ restart_prism.sh(随包更新到 Prism 根目录):export PRISM_ALLOW_QUERY_TOKEN=1
+#      (浏览器 WS 只能 ?token= 传凭据,默认关 → WS 鉴权 0 成功,对话/shell 全挂);
+#      启动命令加 env -u API_KEY(去掉 pod 继承的模型凭据,防 REST 401)。
 # fix16(2026-08-03):合流版 —— 当天两条并行开发线在此合一(此前两条线各自发过"fix14"):
 #   A) 健壮性线(另一会话的 fix14):ma_core 超时改杀整个进程组(孙进程拖不死 worker)、
 #      启动扫描残留任务判 E_INTERRUPTED、降级报告发布页压警示横幅、MA_JOB_DEADLINE
@@ -38,7 +49,7 @@
 #   特征表默认 app_dm.tmp_ctj_marketing_audit_features_hebo,过滤列默认 activity_id
 #   (MA_FILTER_COL 可调,老表是 task_id;配错不报错只捞 0 行,换表必查);
 #   人群池默认 app_dm.long_ctj_marketing_audit_sample(圈人计数与 push_sql 的 FROM)。
-# 用法:tar xzf ma-fix16.tar.gz -C ~/prism/ma-api-mode/ && bash ~/prism/ma-api-mode/install.sh
+# 用法:tar xzf ma-fix17.tar.gz -C ~/prism/ma-api-mode/ && bash ~/prism/ma-api-mode/install.sh
 #      (ma_server 上按实际部署路径,如 ~/prism/ma-api-mode/)
 # ⚠ fix9 还配套改了 skill 的渲染器(业务影响排版碎裂修复),那个文件不在本包里:
 #   把 report_renderer.py 拷到 ~/.claude/skills/marketing-audit/snippets/ 里(先备份原件)。
@@ -130,6 +141,14 @@ if [ "$FAIL" -ne 0 ]; then
 fi
 
 echo "=== 装完了,回归全过。 ==="
+echo
+echo "fix17:prepare 提速与降级不冻死 ——"
+echo "  - 模型训练下采样(正样本全保留、只采负样本)MA_MODEL_SAMPLE=500000(0=关):"
+echo "    千万行单 model_analysis ~17min→1-2min;训练先验抬高一事写进 data_caveats。"
+echo "  - 骨架构建硬上限 MA_STUB_TIMEOUT=900s + 逐列心跳:降级路径超时/异常退化为无列骨架,不再冻死。"
+echo "  - ⚠ cli.py 本轮有更新,记得拷:cp cli.py ~/.claude/skills/marketing-audit/cli.py(先备份)。"
+echo "  - 大活动(千万行级)prepare 其余步骤仍是全量统计,若仍贴近 1800s:临时调 MA_STEP_TIMEOUT=2700"
+echo "    并同步调大 MA_JOB_DEADLINE;根治靠列裁剪(MA_PULL_COLUMNS/feature_registry,待落地)。"
 echo
 echo "fix16:合流版(健壮性线 fix14 + 表口径线 fix15 + cli.py 削峰),新增必读:"
 echo "  - MA_JOB_DEADLINE 总闸默认 3600s(0=关):步骤边界检查任务总耗时,超支判 E_JOB_DEADLINE。"

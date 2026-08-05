@@ -17,6 +17,12 @@ cd "$PRISM_DIR" || exit 1
 export MA_RUNTIME=${MA_RUNTIME:-real}
 export PRISM_MA_API_TARGET=${PRISM_MA_API_TARGET:-127.0.0.1:8092}
 export PRISM_MA_API_AUTOSTART=${PRISM_MA_API_AUTOSTART:-$MA_DIR/ma_api_c.py}
+# WebSocket 鉴权开关(2026-08-04 踩坑):浏览器 WS 升级请求设不了 Authorization 头,
+# 只能走 ?token=<jwt> 传凭据;而服务端默认不读 query token,必须显式开这个开关 ——
+# 不开就是 881 次失败 / 0 次成功,对话无响应、shell 永远"连接中"。
+# 代价:JWT 进 URL,可能落到网关 access log;本部署走内网网关,可接受。
+# 根治(前端改 ?ticket= 单次票据,JWT 不进 URL)见 Prism 启动加固文档 §3.2。
+export PRISM_ALLOW_QUERY_TOKEN=${PRISM_ALLOW_QUERY_TOKEN:-1}
 # fix9 的默认值已在代码里(push_source=both、超时 600/1800/2400、模型 sonnet/haiku),
 # 只有要改掉默认时才需要在下面显式 export:
 # export MA_PUSH_SOURCE=model
@@ -81,11 +87,17 @@ echo "  端口已释放。"
 
 # ------------------------------------------------------------------ 4. 起新的
 echo "=== 3. 起 Prism ==="
+# env -u API_KEY:去掉 pod 继承的模型 CLI 凭据(不是 Prism 自己的密钥)。不去掉的话
+# Prism REST 鉴权会拿它比对,报 401 Invalid API key(2026-07-29 踩过,记忆锚点
+# prism-api-key-env-conflict;上面的撞值检查只防"同值",防不了"存在即冲突")。
+# 只影响这一条命令的进程子树,不改当前 shell,也不影响 MA_API_KEY(独立变量)。
+# ⚠ 装完验一把 report agent(claude 走 ~/.claude 配置/网关的不受影响;
+#   若某环境的 claude 凭据恰好只靠 API_KEY 环境变量,这里会把它切断,及时能发现)。
 if [ "${REBUILD:-0}" = "1" ]; then
   echo "  REBUILD=1:npm start(先 build 再起,慢)"
-  nohup npm start > "$PRISM_DIR/prism.log" 2>&1 &
+  nohup env -u API_KEY npm start > "$PRISM_DIR/prism.log" 2>&1 &
 else
-  nohup npm run server > "$PRISM_DIR/prism.log" 2>&1 &
+  nohup env -u API_KEY npm run server > "$PRISM_DIR/prism.log" 2>&1 &
 fi
 echo "  pid=$! 日志=$PRISM_DIR/prism.log(MA 子进程的输出带 [ma-service] 前缀)"
 
