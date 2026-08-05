@@ -1,0 +1,30 @@
+ma_server/marketing-audit/CHANGELOG.md
+  h_4e3a4dcdcf415f 7-51
+ma_server/marketing-audit/SKILL.md
+  h_4e3a4dcdcf415f 44,105
+ma_server/marketing-audit/cli.py
+  h_4e3a4dcdcf415f 310,335-339,354-360
+ma_server/marketing-audit/methodology/02_model_analysis.md
+  h_4e3a4dcdcf415f 152,188-218
+ma_server/marketing-audit/snippets/case_extractor.py
+  h_4e3a4dcdcf415f 325-329
+ma_server/marketing-audit/snippets/model_analyst.py
+  h_4e3a4dcdcf415f 57-59,96,100-105,139-144,173-176,195-199,321-323,327,508-611,616-619,622,633,638,641,643,645,647-651,653-654,656-657,670-673,701-709,743,768,788,794,796-798,800-802,804-807,809,1119-1124,1129-1147,1377-1378,1385-1394,1455-1460,1462-1482,1491-1492,1494,1499-1532,1536-1539,1566-1570
+ma_server/marketing-audit/snippets/model_interpreter.py
+  h_4e3a4dcdcf415f 8,42,191-206,254,290-300,303-311,320-324,326
+ma_server/marketing-audit/snippets/threshold_computer.py
+  h_4e3a4dcdcf415f 94-114,116-117,126-127,130-132,175-178,182-192,205-210,217-246,248-262,317-320,326,339,348,355,358
+ma_server/marketing-audit/优化方案_20260804_四方向.md
+  h_4e3a4dcdcf415f 1-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2399a1d4fc70a8872a8348ddcafe8f696103b470",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
