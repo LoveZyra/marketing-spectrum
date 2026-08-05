@@ -5,7 +5,7 @@
   高价值（6）：
     1. `calibration`            → finding + blind_spots（圈人阈值警告）
     2. `low_score_converted`    → finding + blind_spots（特征工程盲区）
-    3. `decision_rules`         → audience_segments（lift ≥ 2 的规则）
+    3. `decision_rules`         → audience_segments（lift ≥ 2 的规则,按全量口径 lift 取效果最好的 top3）
     4. `note`                   → data_caveats（零方差剔除 / 低样本量）
     5. `stratified_auc`         → finding + blind_spots（子群拟合不足）
     6. `rule_stability`         → caveat（规则跨子群稳定性）
@@ -39,6 +39,7 @@ DEFAULTS = {
     "low_score_share_high":           0.20,   # > 20% → high
     "decision_rule_lift_min":         2.0,    # 规则 lift 阈值
     "decision_rule_sample_min":       100,    # 规则覆盖人数下限
+    "decision_rule_top_n":            3,      # 报告只保留预测效果最好的前 N 条模型规则(按全量口径 lift 排序,同 lift 取覆盖大者)
     "stratified_auc_gap_min":         0.05,   # 子群 AUC 跨度阈值
     "rule_stability_precision_gap":   0.15,   # 规则跨子群 precision 差异阈值
     "score_bucket_gap_mid":           0.10,   # 桶级 |actual - predicted| → mid
@@ -187,11 +188,22 @@ def _interpret_calibration(ma: dict, t: dict, out: dict) -> None:
     if not overconf and max_gap < t["calibration_overconf_gap_mid"]:
         return
     # 仅记录为数据缺陷提示，供 synthesis 参考；不写入 auto_findings（避免在报告中显示）
-    out["auto_caveats"].append({
-        "field": "model.calibration",
-        "issue": f"模型校准偏差较大（max_gap={max_gap:.3f}），高分段预测CVR高于实际",
-        "impact": "圈人时勿直接按预测分位数划线，建议下调10-15%；决策树规则的lift数值仅供参考",
-    })
+    sampled = bool(calib.get("sampled_prior")) or bool(ma.get("sampled"))
+    if sampled:
+        # fix19:训练采样(正样本全保留)把先验抬高,概率绝对值本就不代表线上先验,
+        # 校准差是采样口径内的现象,不当成模型缺陷吵;按分位圈人不受影响。
+        out["auto_caveats"].append({
+            "field": "model.calibration",
+            "issue": f"校准差 max_gap={max_gap:.3f} 系训练采样先验口径下的读数(正样本全保留训练)",
+            "impact": "按预测分位数圈人不受影响;勿把预测概率当线上绝对转化率使用,"
+                      "增量估算已改用按采样率外推的真实CVR(precision_population)",
+        })
+    else:
+        out["auto_caveats"].append({
+            "field": "model.calibration",
+            "issue": f"模型校准偏差较大（max_gap={max_gap:.3f}），高分段预测CVR高于实际",
+            "impact": "圈人时勿直接按预测分位数划线，建议下调10-15%；决策树规则的lift数值仅供参考",
+        })
 
 
 # ── 2. low_score_converted: 漏判 → 特征工程盲区 ────────────────
@@ -239,7 +251,7 @@ def _interpret_low_score_converted(ma: dict, t: dict, out: dict) -> None:
     })
 
 
-# ── 3. decision_rules: lift≥2 → audience_segments ─────────────
+# ── 3. decision_rules: lift≥2 → audience_segments(效果最好 top3)──
 
 # 决策树规则关键特征 → 人群名短标签（用于从规则自动起业务化人群名）
 _FEAT_TAG: dict[str, str] = {
@@ -275,14 +287,28 @@ def _interpret_decision_rules(ma: dict, t: dict, out: dict) -> None:
         return
     lift_min = float(t["decision_rule_lift_min"])
     sample_min = int(t["decision_rule_sample_min"])
-    overall_cvr = float(ma.get("overall_cvr") or 0)
+    top_n = int(t["decision_rule_top_n"])
+    # fix19:增量估算用全量真实 CVR(训练采样时 overall_cvr 是采样世界的 30% 级口径,
+    # 直接参与增量计算会整体错位);未采样时 true_overall_cvr == overall_cvr。
+    overall_cvr = float(ma.get("true_overall_cvr") or ma.get("overall_cvr") or 0)
 
-    seen_names: dict[str, int] = {}
-    for i, rule in enumerate(rules):
-        lift = float(rule.get("lift") or 0)
-        n_sample = int(rule.get("sample_count") or 0)
+    # 第一遍:过质量门槛(lift≥lift_min 且覆盖≥sample_min)
+    qualified: list[tuple[float, int, dict]] = []
+    for rule in rules:
+        # fix19:优先用全量口径的 lift(采样世界的 lift 分母是被抬高的先验)
+        lift = float(rule.get("lift_population") or rule.get("lift") or 0)
+        n_sample = int(rule.get("sample_count") or 0)   # fix19 起已是全量外推值
         if lift < lift_min or n_sample < sample_min:
             continue
+        qualified.append((lift, n_sample, rule))
+    # fix19(top_n):报告只保留预测效果最好的前 N 条 —— 按真实口径 lift 降序
+    # (同 lift 取覆盖人数大者;不用 predicted_cvr,它带采样先验+类权重双重扭曲)。
+    # 全量规则仍完整保留在 state["model_analysis"]["decision_rules"] 可审计。
+    qualified.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    qualified = qualified[:top_n]
+
+    seen_names: dict[str, int] = {}
+    for i, (lift, n_sample, rule) in enumerate(qualified):
         pred_cvr = float(rule.get("predicted_cvr") or 0)
         rule_text = rule.get("rule") or rule.get("rule_text") or ""
         filter_cond = _rule_to_filter(rule_text)
@@ -291,9 +317,13 @@ def _interpret_decision_rules(ma: dict, t: dict, out: dict) -> None:
         seen_names[seg_name] = seen_names.get(seg_name, 0) + 1
         if seen_names[seg_name] > 1:
             seg_name = f"{seg_name}·变体{seen_names[seg_name]}"
-        # estimated_incremental_orders: lift提升倍数 × 覆盖人数 × (预测CVR - 基准CVR)
+        # estimated_incremental_orders: 覆盖人数 × (人群真实CVR - 基准CVR)
+        # fix19:人群 CVR 优先用验证集实测并按采样率无偏外推的 precision_population
+        # (predicted_cvr 是采样先验+类权重双重扭曲下的概率,不可当绝对值用)。
+        cvr_for_inc = float(rule.get("precision_population") or rule.get("precision")
+                            or rule.get("predicted_cvr") or 0)
         estimated_incremental_orders = max(0, int(
-            n_sample * (pred_cvr - overall_cvr)
+            n_sample * (cvr_for_inc - overall_cvr)
         ))
         out["auto_segments"].append({
             "name": seg_name,

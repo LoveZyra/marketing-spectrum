@@ -149,7 +149,7 @@
 |---|---|---|
 | `calibration.overconfident` | `max_gap > 0.05` | `auto_finding` + 圈人阈值 `blind_spot` |
 | `low_score_converted` | 漏判占比 > 10% | `auto_finding` + 特征工程 `blind_spot` |
-| `decision_rules` | `lift ≥ 2 且 sample_count ≥ 100` | `auto_segment`（含 filter_conditions） |
+| `decision_rules` | `lift ≥ 2 且 sample_count ≥ 100`,再按全量口径 lift 降序只保留**效果最好的 top3**(`decision_rule_top_n` 可调;同 lift 取覆盖大者;全量规则仍留在 `model_analysis.decision_rules` 可审计) | `auto_segment`（含 filter_conditions） |
 | `note` | 含 `[零方差剔除]` / `[低样本量·*]` | `auto_caveat` |
 | `stratified_auc` | 子群 AUC 跨度 > 0.05 | `auto_finding` + 子群拟合 `blind_spot` |
 | `rule_stability` | 跨子群 precision 差 ≥ 0.15 | `auto_caveat`（不可跨群复用） |
@@ -185,3 +185,34 @@ Top 5 特征按前缀映射到对应维度，宿主 Agent 在 Step 3 应**优先
 - 数据量 < 100（样本太少模型不可信）
 
 跳过时把 `state['model_analysis'] = None`。Step 4 合成阶段会自动只走统计路径。
+
+## 大数据量下的训练采样(2026-08-04 新增)
+
+行数超过 `MA_MODEL_SAMPLE`(默认 50 万,0=关闭)时,训练前对数据做**正样本全保留、只采样负样本**的下采样;少数类占比异常(少数类自身超过预算)时自动退回等比分层,保证行为可预期。设计取舍:
+
+- 只影响模型训练:data_overview/漏斗/阈值等统计仍在全量上计算,报告口径不变;
+- 训练集类别先验因此高于真实(如 3%→30%):AUC/特征重要性等**排序型**结论不受影响;若把模型输出概率当绝对值使用(概率阈值圈人),需按训练/真实先验比校准;
+- 采样明细(保留/采样行数、训练与全量正样本率)写入 `data_caveats` 与 events 决策日志,报告可溯源。
+
+背景:2026-08-04 activity 1011270(5.9M 行×250 列)实测,全量喂 lightgbm 单步 1058s、占 prepare 59%,直接顶穿 1800s 步超时;采样至 50 万后该步预期 1-2 分钟。
+
+## 统计口径:验证集 + 采样外推(2026-08-05 更新)
+
+`run_model_analysis` 的分数型统计(score_buckets / high_score_not_converted / low_score_converted / calibration / 规则 precision-recall)自 fix19 起**只在验证集(20%)上计算**——训练集分数带 in-sample 乐观偏差,混入会系统性高估模型区分度。
+
+若调用方做过类别下采样(`MA_MODEL_SAMPLE`,正样本全保留、只采负样本),`cli.py` 会把实测 `(正采样率, 负采样率)` 与全量真实 CVR 传入(`class_rates` / `true_overall_cvr`),模型侧按每类放大系数做**无偏外推**:
+
+- `pos_scale = (全量正样本数 / val 正样本数) / 正采样率`,`neg_scale` 同理;
+- 组人数 = `p·pos_scale + n·neg_scale`;组 CVR = `p·pos_scale / 组人数`。
+
+因此输出中的 `user_count` / `n` / `sample_count` 是**全量人数口径**,`precision_population` / `lift_population` 是**全量 CVR/提升口径**(lift 相对 `true_overall_cvr`)。验证集原始命中数保留在 `sample_count_raw` / `n_raw`;`stats_scope="val"`、`sampled`、`calibration.sampled_prior` 标注口径供下游判别。**报告与圈人预估可直接引用外推后的数字**;唯一仍需按先验校准的是"把模型输出概率当绝对值用"(概率阈值圈人)的场景。
+
+## 分类特征的规则抽取(2026-08-05 更新)
+
+两后端(LightGBM / XGBoost)的"树路径→规则"翻译共用同一合并渲染器 `_merge_render_clauses`,非数值特征的规则从此可读、可执行、可回放:
+
+- **空值语义**:入模前分类特征 NaN→`__NA__` 哨兵;渲染时 display 写「空值」,SQL 译为 `feat IS NULL`(或 `(feat IS NULL OR feat IN (...))` 组合)——哨兵字面量不出现在任何输出,线上表匹配的是真实 NULL;
+- **反选改写**:`NOT IN(长清单)` 若补集 ≤8 且不大于清单,改写为等价 `IN(补集)`,更短且对训练中未见过的新类别更保守;
+- **同特征合并**:一条路径对同一特征的多次切分,数值合并为最紧上下界、分类集合按 AND 语义求交/差,圈人 SQL 无冗余子句;
+- **后端边界差异**:XGBoost 数值切分渲染为 `<` / `>=`,LightGBM 为 `<=` / `>`,均为精确语义的 Spark SQL;
+- **规则可回放**:`_apply_rule_mask` 支持数值比较与 `in / not in [...]`(含「空值」),稳定性(O25)/重叠(O28)检验覆盖分类规则。

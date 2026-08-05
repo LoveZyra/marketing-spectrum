@@ -91,12 +91,30 @@ def _youden_optimal_split(
 
     overall_cvr = float(t.mean())
 
-    # 候选切分点取分位数值（去重）
-    candidates = sorted(set(
-        float(s.quantile(q)) for q in candidate_quantiles
-    ))
+    # fix18(2026-08-04)等价改写:原实现对每个候选切分点反复全列扫描 ——
+    # 13 次 quantile(每次 O(n))+ 候选过滤每个 2 次全列扫 + 主循环每 cut 一次布尔
+    # 掩码与两次 fancy-index 整列拷贝,合计每字段 ~90 趟 O(n);5.9M 行 × 几十个阈值
+    # 字段实测 compute-thresholds 要 17-30 分钟。改为:一次 argsort + 目标列前缀和,
+    # 之后"严格小于 cut 的行数"= searchsorted(side='left'),两侧转化和 = 前缀和查表,
+    # 每候选 O(log n)。结果与原实现逐位一致:searchsorted(left) ≡ (s<cut).sum();
+    # 目标取值 0/1 时前缀和是精确整数,CVR = 整数/整数,与 fancy-index 后 .mean()
+    # 完全相同;np.quantile 与 pandas Series.quantile 同为线性插值,数值一致。
+    s_arr = s.to_numpy(dtype=float)
+    order = np.argsort(s_arr)
+    s_sorted = s_arr[order]
+    t_prefix = np.cumsum(t.to_numpy(dtype=float)[order])
+    total_conv = float(t_prefix[-1])
+
+    def _n_below(cut: float) -> int:
+        return int(np.searchsorted(s_sorted, cut, side="left"))
+
+    # 候选切分点取分位数值（去重）。一次向量化调用算全部 13 个分位数
+    # (numpy 对多分位点单趟 partition),数值与逐个调用完全相同。
+    _qvals = np.quantile(s_sorted, list(candidate_quantiles))
+    candidates = sorted(set(float(v) for v in _qvals))
     # 过滤掉边界值（不能将所有样本划入一侧）
-    candidates = [c for c in candidates if (s < c).sum() >= 10 and (s >= c).sum() >= 10]
+    candidates = [c for c in candidates
+                  if _n_below(c) >= 10 and (n_total - _n_below(c)) >= 10]
 
     if not candidates:
         return _fallback_to_percentile(series, tag="no_valid_candidates")
@@ -105,13 +123,13 @@ def _youden_optimal_split(
     profile: list[dict] = []
 
     for cut in candidates:
-        below_mask = s < cut
-        above_mask = ~below_mask
-        n_b, n_a = int(below_mask.sum()), int(above_mask.sum())
+        n_b = _n_below(cut)
+        n_a = n_total - n_b
         if n_b < 5 or n_a < 5:
             continue
-        cvr_b = float(t[below_mask].mean())
-        cvr_a = float(t[above_mask].mean())
+        conv_b = float(t_prefix[n_b - 1])
+        cvr_b = conv_b / n_b
+        cvr_a = (total_conv - conv_b) / n_a
         gap = abs(cvr_a - cvr_b)
         profile.append({
             "threshold": round(cut, 4),
@@ -154,17 +172,24 @@ def _fallback_to_percentile(series: pd.Series, tag: str = "") -> dict:
 
 
 def _compute_percentiles(series: pd.Series, percentiles: list[int]) -> dict:
-    """计算指定分位数，返回 {p25: val, p50: val, ...}。"""
+    """计算指定分位数，返回 {p25: val, p50: val, ...}。
+
+    fix18:一次向量化 np.percentile 调用算全部分位点(原来逐个调用,每次 O(n));
+    数值与逐个调用完全相同。整体失败时退回逐个调用,保持原有的单点容错语义。"""
     s = series.dropna()
     if len(s) == 0:
         return {}
-    result = {}
-    for p in percentiles:
-        try:
-            result[f"p{p}"] = round(float(np.percentile(s, p)), 4)
-        except Exception:
-            pass
-    return result
+    try:
+        vals = np.percentile(s, list(percentiles))
+        return {f"p{p}": round(float(v), 4) for p, v in zip(percentiles, vals)}
+    except Exception:
+        result = {}
+        for p in percentiles:
+            try:
+                result[f"p{p}"] = round(float(np.percentile(s, p)), 4)
+            except Exception:
+                pass
+        return result
 
 
 def _compute_cvr_profile_by_bucket(
@@ -177,29 +202,64 @@ def _compute_cvr_profile_by_bucket(
     Args:
         bucket_method: "percentile"（分位数分桶）或 "value"（按唯一值分桶）
     """
+    # fix18(2026-08-04)等价改写:原实现的 astype(str) 会把整列物化成 Python 字符串
+    # (200 万行 ≈ 数秒),groupby(...).groups 再逐桶 fancy-index 拷贝 —— 单字段实测
+    # 5.2s,是 compute-thresholds 的第一大耗时。改为 factorize/codes + bincount:
+    # 每桶行数与转化和一趟算完。分组键、标签字符串与行序均按原实现逐分支复刻
+    # (原值分支按数值升序;字符串分支按字典序 —— 与 groupby 对键排序的行为一致),
+    # 目标列 0/1 时 bincount 加权和为精确整数,输出与原实现逐位相同。
     mask = series.notna() & target.notna()
     s = series[mask]
     t = target[mask]
     if len(s) < 10:
         return []
 
-    if bucket_method == "value" or s.nunique() <= 10:
-        buckets = s
-    else:
-        buckets = _percentile_buckets(s)
+    t_arr = t.to_numpy(dtype=float)
 
-    rows = []
-    for bkt, grp_idx in buckets.groupby(buckets).groups.items():
-        t_grp = t.loc[grp_idx]
-        n = len(t_grp)
-        if n < 3:
-            continue
-        rows.append({
-            "bucket": str(bkt),
-            "n": n,
-            "cvr": round(float(t_grp.mean()), 4),
-        })
-    return rows
+    def _rows_from_codes(codes, labels, order):
+        n_grp = np.bincount(codes, minlength=len(labels))
+        conv = np.bincount(codes, weights=t_arr, minlength=len(labels))
+        rows = []
+        for i in order:
+            n = int(n_grp[i])
+            if n < 3:
+                continue
+            rows.append({
+                "bucket": labels[i],
+                "n": n,
+                "cvr": round(float(conv[i]) / n, 4),
+            })
+        return rows
+
+    nu = s.nunique()
+    if bucket_method == "value" or nu <= 10:
+        # 原实现按原值 groupby:键为数值、升序;标签 = str(值)
+        codes, uniques = pd.factorize(s, sort=True)
+        labels = [str(u) for u in uniques]
+        return _rows_from_codes(codes, labels, range(len(labels)))
+
+    if nu <= _N_QUANTILE_CUTS:
+        # 原 _percentile_buckets 低基数分支:astype(str) 后按字符串字典序分组
+        codes, uniques = pd.factorize(s, sort=True)
+        labels = [str(u) for u in uniques]
+        order = sorted(range(len(labels)), key=lambda i: labels[i])
+        return _rows_from_codes(codes, labels, order)
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cat = pd.qcut(s, q=_N_QUANTILE_CUTS, duplicates="drop", retbins=False)
+    except Exception:
+        # 原 _percentile_buckets 失败分支:退回原值字符串(字典序)
+        codes, uniques = pd.factorize(s, sort=True)
+        labels = [str(u) for u in uniques]
+        order = sorted(range(len(labels)), key=lambda i: labels[i])
+        return _rows_from_codes(codes, labels, order)
+
+    codes = cat.cat.codes.to_numpy()
+    labels = [str(iv) for iv in cat.cat.categories]
+    order = sorted(range(len(labels)), key=lambda i: labels[i])
+    return _rows_from_codes(codes, labels, order)
 
 
 def compute_adaptive_thresholds(
@@ -254,12 +314,16 @@ def compute_adaptive_thresholds(
     for fmeta in fields:
         name = fmeta["name"]
         series = _numeric(df[name])
+        # fix18:dropna/nunique/notna 每字段只算一次(原实现在本循环内重复算 3-4 次,
+        # 每次都是整列拷贝+扫描,千万行级下每字段白花数百 ms)。语义完全等价。
+        _n_unique = series.dropna().nunique()
+        _n_valid = int(series.notna().sum())
 
         # 计算参考分位数（始终计算，不依赖 CVR）
         pct_list = fmeta.get("threshold_percentiles") or [25, 50, 75, 90, 95]
         pct_vals = _compute_percentiles(series, pct_list)
 
-        if not has_target or series.dropna().nunique() < 2:
+        if not has_target or _n_unique < 2:
             # 无法计算 CVR，直接退回分位数
             result = _fallback_to_percentile(series, tag="no_target_or_no_variance")
         else:
@@ -272,7 +336,7 @@ def compute_adaptive_thresholds(
 
         # signal_quality：区分零方差/无CVR区分性/有效阈值三种情况
         method = result.get("method", "")
-        n_unique = series.dropna().nunique()
+        n_unique = _n_unique
         if n_unique < 2:
             result["signal_quality"] = "structural_zero_variance"  # 渠道/活动特性导致全量相同
         elif method.startswith("percentile_p75_fallback"):
@@ -281,17 +345,17 @@ def compute_adaptive_thresholds(
             result["signal_quality"] = "threshold_found"           # 找到有效CVR切分点
 
         # CVR 分桶分布（用于 thresholds_report.md 可读性）
-        if has_target and series.notna().sum() >= 10:
+        if has_target and _n_valid >= 10:
             result["cvr_by_bucket"] = _compute_cvr_profile_by_bucket(
                 series, target,
                 bucket_method="value" if fmeta.get("type") in ("binary", "ordinal") else "percentile",
             )
 
         # 异常值检测：count/ordinal 类型，p99 >> IQR 时标注
-        if fmeta.get("type") in ("count", "ordinal") and series.notna().sum() >= 10:
+        if fmeta.get("type") in ("count", "ordinal") and _n_valid >= 10:
             p25 = result.get("p25")
             p75 = result.get("p75")
-            p99 = float(series.quantile(0.99)) if series.notna().sum() >= 10 else None
+            p99 = float(series.quantile(0.99)) if _n_valid >= 10 else None
             if p25 is not None and p75 is not None and p99 is not None:
                 iqr = float(p75) - float(p25)
                 if iqr > 0 and p99 > float(p25) + 10 * iqr:

@@ -322,7 +322,11 @@ def _fit_cross_category(df: pd.DataFrame) -> pd.Series:
     # 两个品类都浏览得深 = 典型比价：取各品类漏斗深度的"最高两项之和"
     depth_cols = ["pre_hotel_depth", "pre_flight_depth", "pre_train_depth", "pre_scenic_depth"]
     depths = pd.concat([_col(df, c) for c in depth_cols], axis=1)
-    top2 = depths.apply(lambda r: float(sum(sorted(r, reverse=True)[:2])), axis=1)
+    # fix18(2026-08-04)等价改写:原 apply(axis=1) 逐行起 Python lambda,千万行级
+    # 是 prepare 的显著热点之一。_col 已 fillna(0) 保证无 NaN,np.sort 每行取
+    # 最大两项之和与原 sorted(reverse=True)[:2] 逐位一致(两数相加满足交换律)。
+    vals = np.sort(depths.to_numpy(dtype=float), axis=1)
+    top2 = pd.Series(vals[:, -2:].sum(axis=1), index=depths.index)
     return top2 + 0.1 * _col(df, "pre_product_category_cnt")
 
 

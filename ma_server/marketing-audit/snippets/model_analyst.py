@@ -54,6 +54,9 @@ DEFAULT_EXCLUDE = {
     "pre_first_search_time", "pre_last_search_time",
     "pre_last_order_time",
     "intotime", "label001", "last_create_order_time",
+    # ── 按需求排除（2026-08-05）：timediff 不作为模型特征入模
+    #    （仅模型分析口径；统计/漏斗/阈值等其余环节不受影响）
+    "timediff",
 }
 
 # 整维度排除：维度 13（marketing_scene，活动静态信息与先知场景）是活动级元数据，
@@ -90,10 +93,16 @@ class DecisionRule:
     predicted_cvr: float
     sample_count: int
     lift: float
-    precision: float = 0.0          # 命中规则的样本中真实转化比例
+    precision: float = 0.0          # 命中规则的样本中真实转化比例（评估集口径）
     recall: float = 0.0             # 命中规则的转化样本占全部转化样本的比例
     n_converted: int = 0            # 命中规则的真实转化数（审计用）
     rule_sql: str = ""              # 可执行 Spark SQL WHERE（分类切分用 cat_maps 还原 code→name）
+    # fix19:训练采样(正样本全保留、只采负样本)后的全量外推口径。
+    # sample_count 会被回填为全量估计,原始评估集命中数保留在 sample_count_raw;
+    # precision_population/lift_population 用分类别采样率无偏还原真实 CVR 口径。
+    sample_count_raw: int = 0       # 评估集原始命中数（审计用）
+    precision_population: float = 0.0  # 全量口径下的规则真实转化率估计
+    lift_population: float = 0.0       # precision_population / 全量整体CVR
 
 
 @dataclass
@@ -127,6 +136,12 @@ class ModelAnalysisResult:
     score_distribution: dict = field(default_factory=dict)   # O29：skewness, kurtosis, pct_above_0.9
     stratified_score_buckets: dict = field(default_factory=dict)  # O30：{dim: [{bucket, dim_val, cvr}]}
     note: str = ""
+    # fix19:采样与统计口径审计字段
+    sampled: bool = False                 # 输入 df 是否为类别不均衡下采样产物
+    class_rates: tuple = (1.0, 1.0)       # (正样本采样率, 负样本采样率)
+    true_overall_cvr: float = 0.0         # 全量口径成单率（未采样时 = overall_cvr）
+    n_samples_population: int = 0         # 全量口径样本数估计
+    stats_scope: str = "val"              # 人群/分桶/校准等统计的计算范围（fix19 起为验证集）
 
     def to_dict(self) -> dict:
         return {
@@ -155,7 +170,10 @@ class ModelAnalysisResult:
                  "lift": round(r.lift, 2), "sample_count": r.sample_count,
                  "precision": round(r.precision, 4),
                  "recall": round(r.recall, 4),
-                 "n_converted": r.n_converted}
+                 "n_converted": r.n_converted,
+                 "sample_count_raw": r.sample_count_raw,
+                 "precision_population": round(r.precision_population, 4),
+                 "lift_population": round(r.lift_population, 2)}
                 for r in self.decision_rules
             ],
             "score_buckets": [
@@ -174,6 +192,11 @@ class ModelAnalysisResult:
             "score_distribution": self.score_distribution,
             "stratified_score_buckets": self.stratified_score_buckets,
             "note": self.note,
+            "sampled": self.sampled,
+            "class_rates": [round(self.class_rates[0], 6), round(self.class_rates[1], 6)],
+            "true_overall_cvr": round(self.true_overall_cvr, 6),
+            "n_samples_population": self.n_samples_population,
+            "stats_scope": self.stats_scope,
         }
 
 
@@ -295,11 +318,13 @@ def _train_and_score(X: pd.DataFrame, y: pd.Series, backend: str):
         )
         model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
 
-    scores = model.predict_proba(X)[:, 1]
+    # fix19:不再对全量(含训练集)打分 —— 训练集上的分数带 in-sample 乐观偏差,
+    # 之前的分桶/高分未转化/校准等统计混着这份偏差。所有分数型统计改在验证集上做
+    # (调用方按 val_index 对齐 df/y),顺带省掉一次全量 predict。
     val_scores = model.predict_proba(X_val)[:, 1]
     auc = float(roc_auc_score(y_val, val_scores))
     auc_ci_low, auc_ci_high = _bootstrap_auc_ci(y_val.values, val_scores)
-    return model, scores, auc, auc_ci_low, auc_ci_high, float(pos_weight)
+    return model, val_scores, auc, auc_ci_low, auc_ci_high, float(pos_weight), X_val.index
 
 
 def _bootstrap_auc_ci(y_true: np.ndarray, y_scores: np.ndarray,
@@ -480,17 +505,121 @@ def _fmt_threshold(v: float) -> str:
     return s if float(s) != 0 else repr(v)
 
 
+def _merge_render_clauses(steps: list, cat_maps: dict | None = None) -> tuple[list[str], list[str]]:
+    """fix19:LGB/XGB 共用的"结构化路径子句 → (display, SQL)"合并渲染器。
+
+    steps 为根→叶顺序的切分步骤列表:
+      ("num", feat, lo, hi)      lo/hi = (阈值, 是否闭边界) 或 None,每步恰有一侧;
+      ("cat", feat, names, is_in) names 为已还原的类别名集合(str)。
+    两个后端统一享受三件事:
+      1) 同特征多次切分合并:数值取最紧上下界(同值时开边界更紧);分类 IN 求交、
+         NOT IN 求并,再按 AND 语义 pos-neg 相减 —— 规则更短,圈人 SQL 无冗余;
+      2) __NA__ 哨兵不外泄:display 写「空值」,SQL 翻译为 IS NULL / IS NOT NULL 组合
+         (哨兵字面量在线上表匹配不到真实 NULL);
+      3) 反选清单若补集更小(≤8 且不大于清单),改写为等价 IN(补集),长清单 NOT IN
+         可读可执行(注:补集写法对训练中未见过的新类别更保守)。
+    边界写法由步骤自带的开闭标记决定:LGB 只产生 <=/>,XGB 只产生 </>=,各保原味。
+    """
+    num_bounds: dict = {}   # feat -> [lo(值,闭)|None, hi(值,闭)|None]
+    cat_sets: dict = {}     # feat -> {"pos": set|None, "neg": set}
+    order: list[str] = []
+
+    for step in steps:
+        kind, feat = step[0], step[1]
+        if feat not in order:
+            order.append(feat)
+        if kind == "num":
+            lo, hi = step[2], step[3]
+            slot = num_bounds.setdefault(feat, [None, None])
+            if lo is not None and (slot[0] is None or lo[0] > slot[0][0]
+                                   or (lo[0] == slot[0][0] and not lo[1])):
+                slot[0] = lo    # 下界取更大;同值时开边界(>)比闭边界(>=)更紧
+            if hi is not None and (slot[1] is None or hi[0] < slot[1][0]
+                                   or (hi[0] == slot[1][0] and not hi[1])):
+                slot[1] = hi    # 上界取更小;同值时开边界(<)更紧
+        else:
+            names, is_in = set(step[2]), step[3]
+            slot = cat_sets.setdefault(feat, {"pos": None, "neg": set()})
+            if is_in:
+                slot["pos"] = names if slot["pos"] is None else (slot["pos"] & names)
+            else:
+                slot["neg"] |= names
+
+    path: list[str] = []
+    sql_path: list[str] = []
+
+    def _render_cat(feat: str, values: set, negated: bool) -> None:
+        vals = sorted(str(v) for v in values)
+        disp = ",".join("空值" if v == "__NA__" else v for v in vals)
+        real = [v for v in vals if v != "__NA__"]
+        has_na = len(real) != len(vals)
+        quoted = ",".join("'{}'".format(v.replace("'", "''")) for v in real)
+        if not negated:
+            path.append(f"{feat} in [{disp}]")
+        else:
+            path.append(f"{feat} not in [{disp}]")
+        if not negated:
+            if has_na and real:
+                sql_path.append(f"({feat} IS NULL OR {feat} IN ({quoted}))")
+            elif has_na:
+                sql_path.append(f"{feat} IS NULL")
+            else:
+                sql_path.append(f"{feat} IN ({quoted})")
+        else:
+            if has_na and real:
+                sql_path.append(f"({feat} IS NOT NULL AND {feat} NOT IN ({quoted}))")
+            elif has_na:
+                sql_path.append(f"{feat} IS NOT NULL")
+            else:
+                sql_path.append(f"{feat} NOT IN ({quoted})")
+
+    for feat in order:
+        if feat in num_bounds:
+            lo, hi = num_bounds[feat]
+            if lo is not None:
+                op = ">=" if lo[1] else ">"
+                vs = _fmt_threshold(lo[0])
+                path.append(f"{feat}{op}{vs}")
+                sql_path.append(f"{feat} {op} {vs}")
+            if hi is not None:
+                op = "<=" if hi[1] else "<"
+                vs = _fmt_threshold(hi[0])
+                path.append(f"{feat}{op}{vs}")
+                sql_path.append(f"{feat} {op} {vs}")
+            continue
+        slot = cat_sets[feat]
+        pos, neg = slot["pos"], slot["neg"]
+        cm = (cat_maps or {}).get(feat)
+        if pos is not None:
+            merged = pos - neg          # AND 语义:命中集合剔除反选集合
+            if merged:
+                _render_cat(feat, merged, False)
+            else:                        # 极端矛盾路径,退回不合并的两段(保守)
+                _render_cat(feat, pos, False)
+                if neg:
+                    _render_cat(feat, neg, True)
+        else:
+            if cm:
+                comp = {str(c) for c in cm} - {str(v) for v in neg}
+                if comp and len(comp) <= min(8, len(neg)):
+                    _render_cat(feat, comp, False)
+                    continue
+            _render_cat(feat, neg, True)
+
+    return path, sql_path
+
+
 def _trace_path_lgb(trees_df, tree_idx, node_idx, cat_maps=None) -> tuple[list[str], list[str]]:
     """返回 (display_path, sql_path)。
 
     LightGBM 分类切分的 threshold 形如 "1||8||9"（category code 集合，走向 left 子节点）；
-    用 cat_maps 把 code 还原为真实品类名，产出可读 display 与可执行 Spark SQL。
-    数值切分：哨兵阈值（<1e-20，二值特征）在源头就转为 <=0 / >0，其余阈值用位置计数
-    格式化——保证 rule_text/rule_sql 不出科学计数法。
+    用 cat_maps 把 code 还原为真实品类名。数值切分：哨兵阈值（<1e-20，二值特征）在源头
+    转为 <=0 / >0，其余阈值位置计数格式化——rule_text/rule_sql 不出科学计数法。
+    fix19:叶→根收集结构化步骤后反转,交给 _merge_render_clauses 统一合并/渲染
+    (与 XGBoost 路径共用 __NA__/补集改写/同特征合并逻辑)。
     """
     subtree = trees_df[trees_df["tree_index"] == tree_idx]
-    path: list[str] = []
-    sql_path: list[str] = []
+    steps_rev: list = []    # 叶→根
     current = node_idx
     for _ in range(20):
         parent_rows = subtree[
@@ -501,43 +630,31 @@ def _trace_path_lgb(trees_df, tree_idx, node_idx, cat_maps=None) -> tuple[list[s
         parent = parent_rows.iloc[0]
         feat = parent["split_feature"]
         thresh = parent["threshold"]
+        went_left = parent["left_child"] == current
         is_cat = isinstance(thresh, str) and "||" in str(thresh)
         if is_cat:
             codes = [c for c in str(thresh).split("||") if c != ""]
             cm = (cat_maps or {}).get(feat)
-            names = []
+            names = set()
             for c in codes:
                 try:
-                    names.append(str(cm[int(c)]) if cm else c)
+                    names.add(str(cm[int(c)]) if cm else str(c))
                 except (ValueError, IndexError):
-                    names.append(c)
-            joined = ",".join(names)
-            joined_sql = ",".join("'{}'".format(n.replace("'", "''")) for n in names)
+                    names.add(str(c))
             # LightGBM：threshold 列出的是走向 left 子节点的类别集合
-            if parent["left_child"] == current:
-                path.append(f"{feat} in [{joined}]")
-                sql_path.append(f"{feat} IN ({joined_sql})")
-            else:
-                path.append(f"{feat} not in [{joined}]")
-                sql_path.append(f"{feat} NOT IN ({joined_sql})")
-        elif isinstance(thresh, (int, float)) and 0 < thresh < _SENTINEL_EPS:
-            # 二值 0/1 特征的哨兵切分（约 1e-35）：源头语义化，杜绝科学计数法外泄
-            if parent["left_child"] == current:
-                path.append(f"{feat}<=0")
-                sql_path.append(f"{feat} <= 0")
-            else:
-                path.append(f"{feat}>0")
-                sql_path.append(f"{feat} > 0")
+            steps_rev.append(("cat", feat, names, went_left))
         else:
-            thresh_str = _fmt_threshold(thresh) if isinstance(thresh, (int, float)) else str(thresh)
-            if parent["left_child"] == current:
-                path.append(f"{feat}<={thresh_str}")
-                sql_path.append(f"{feat} <= {thresh_str}")
+            if isinstance(thresh, (int, float)) and 0 < thresh < _SENTINEL_EPS:
+                # 二值 0/1 特征的哨兵切分（约 1e-35）：左 ≡ <=0，右 ≡ >0
+                lo, hi = (None, (0.0, True)) if went_left else ((0.0, False), None)
+            elif went_left:
+                lo, hi = None, (float(thresh), True)     # 左:feat <= thresh
             else:
-                path.append(f"{feat}>{thresh_str}")
-                sql_path.append(f"{feat} > {thresh_str}")
+                lo, hi = (float(thresh), False), None    # 右:feat > thresh
+            steps_rev.append(("num", feat, lo, hi))
         current = parent["node_index"]
-    return list(reversed(path)), list(reversed(sql_path))
+
+    return _merge_render_clauses(list(reversed(steps_rev)), cat_maps)
 
 
 def _extract_rules_xgb(model, overall_cvr: float, top_n: int,
@@ -550,7 +667,10 @@ def _extract_rules_xgb(model, overall_cvr: float, top_n: int,
     pred_leaves = None
     if X is not None and y is not None and len(X) > 0:
         try:
-            pred_leaves = model.apply(X)  # shape: (n_samples, n_trees)
+            pred_leaves = np.asarray(model.apply(X))  # shape: (n_samples, n_trees)
+            if pred_leaves.ndim == 1:
+                # 单树模型时 apply 返回 1 维,统一成 (n,1) 供 [:, tree_idx] 索引
+                pred_leaves = pred_leaves.reshape(-1, 1)
         except Exception:
             pred_leaves = None
     y_arr = y.values if y is not None else None
@@ -578,6 +698,15 @@ def _parse_xgb_tree(tree_str: str, overall_cvr: float, tree_idx: int = 0,
                     y_arr: np.ndarray | None = None,
                     n_positives: int = 0,
                     cat_maps: dict[str, list] | None = None) -> list[DecisionRule]:
+    """解析 XGBoost get_dump 文本树。
+
+    切分语法（实测 xgboost 3.x，enable_categorical=True + tree_method="hist"）:
+      数值:`[feat<thresh]`  yes ≡ feat < thresh,no ≡ feat >= thresh;
+      分类:`[feat:{2,5,8}]` 花括号内为 category code 集合,yes ≡ 类别 ∈ 集合
+           （沙箱实证:强正类别不在集合中时落 no 分支、叶值为正,方向与此一致）。
+    fix19:DFS 收集结构化步骤,叶节点处交给 _merge_render_clauses 渲染 ——
+    与 LightGBM 路径共用 __NA__→空值/IS NULL、NOT IN 补集改写、同特征合并逻辑。
+    """
     lines = tree_str.strip().split("\n")
     node_info: dict[str, dict] = {}
     for line in lines:
@@ -611,7 +740,7 @@ def _parse_xgb_tree(tree_str: str, overall_cvr: float, tree_idx: int = 0,
 
     rules: list[DecisionRule] = []
 
-    def dfs(nid, path, sql_path):
+    def dfs(nid, steps):
         info = node_info.get(nid)
         if info is None:
             return
@@ -636,6 +765,7 @@ def _parse_xgb_tree(tree_str: str, overall_cvr: float, tree_idx: int = 0,
                             n_converted = int(y_arr[mask].sum())
                             precision = n_converted / hits
                             recall = (n_converted / n_positives) if n_positives > 0 else 0.0
+                path, sql_path = _merge_render_clauses(steps, cat_maps)
                 rules.append(DecisionRule(
                     rule_text=" AND ".join(path) or "(root leaf)",
                     rule_sql=" AND ".join(sql_path),
@@ -655,31 +785,28 @@ def _parse_xgb_tree(tree_str: str, overall_cvr: float, tree_idx: int = 0,
                 # 去花括号、按 code 还原为真实品类值（字段名保持英文原文，方便对应数据表）
                 cm = (cat_maps or {}).get(feat)
                 raw = str(thresh).strip().strip("{}")
-                names = []
+                names = set()
                 for c in raw.split(","):
                     c = c.strip()
                     if not c:
                         continue
                     try:
-                        names.append(str(cm[int(c)]) if cm else c)
+                        names.add(str(cm[int(c)]) if cm else c)
                     except (ValueError, IndexError):
-                        names.append(c)
-                cat_disp = ",".join(names)
-                sql_disp = ",".join("'{}'".format(n.replace("'", "''")) for n in names)
-                dfs(info["yes"], path + [f"{feat} in [{cat_disp}]"], sql_path + [f"{feat} IN ({sql_disp})"])
-                dfs(info["no"], path + [f"{feat} not in [{cat_disp}]"], sql_path + [f"{feat} NOT IN ({sql_disp})"])
+                        names.add(c)
+                dfs(info["yes"], steps + [("cat", feat, names, True)])
+                dfs(info["no"], steps + [("cat", feat, names, False)])
             elif 0 < thresh < _SENTINEL_EPS:
-                # 哨兵切分（二值特征）：左(<哨兵)≡<=0，右(>=哨兵)≡>0；源头消掉科学计数法
-                dfs(info["yes"], path + [f"{feat}<=0"], sql_path + [f"{feat} <= 0"])
-                dfs(info["no"], path + [f"{feat}>0"], sql_path + [f"{feat} > 0"])
+                # 哨兵切分（二值特征）：yes(<哨兵)≡<=0，no(>=哨兵)≡>0；源头消掉科学计数法
+                dfs(info["yes"], steps + [("num", feat, None, (0.0, True))])
+                dfs(info["no"], steps + [("num", feat, (0.0, False), None)])
             else:
-                thresh_str = _fmt_threshold(thresh)
-                # XGBoost 数值切分 [feat<thresh]：左=feat<thresh，右=feat>=thresh。
-                # 必须写 `<` / `>=`（而非 `<=` / `>`），否则二值/计数特征产生 ">1" 这类空条件。
-                dfs(info["yes"], path + [f"{feat}<{thresh_str}"], sql_path + [f"{feat} < {thresh_str}"])
-                dfs(info["no"], path + [f"{feat}>={thresh_str}"], sql_path + [f"{feat} >= {thresh_str}"])
+                # XGBoost 数值切分 [feat<thresh]：yes=feat<thresh，no=feat>=thresh。
+                # 必须是开上界/闭下界（`<`/`>=`），否则二值/计数特征产生 ">1" 这类空条件。
+                dfs(info["yes"], steps + [("num", feat, None, (float(thresh), False))])
+                dfs(info["no"], steps + [("num", feat, (float(thresh), True), None)])
 
-    dfs("0", [], [])
+    dfs("0", [])
     return rules
 
 
@@ -989,11 +1116,35 @@ def _rule_stability(
 
 
 def _apply_rule_mask(df: pd.DataFrame, rule_text: str) -> "np.ndarray | None":
-    """将简单条件规则文本解析为 bool 数组（仅支持 AND 连接的 col op val 格式）。"""
+    """将简单条件规则文本解析为 bool 数组（AND 连接的 col op val / col in [...] 格式）。
+
+    fix19:补上分类切分子句 `feat in [a,b]` / `feat not in [a,b]` 的解析 ——
+    此前含分类切分的规则整条返回 None,稳定性(O25)/重叠(O28)检验把它们静默跳过。
+    `空值` 标签对应 NaN(入模时的 __NA__ 哨兵);not in 按 SQL 语义排除 NULL。
+    """
     import re
     conditions = [c.strip() for c in rule_text.split(" AND ")]
     mask = np.ones(len(df), dtype=bool)
     for cond in conditions:
+        m_cat = re.match(r"(.+?)\s+(not in|in)\s+\[(.*)\]$", cond)
+        if m_cat:
+            col, neg = m_cat.group(1).strip(), m_cat.group(2) == "not in"
+            if col not in df.columns:
+                return None
+            vals = [v.strip() for v in m_cat.group(3).split(",") if v.strip() != ""]
+            has_na = any(v in ("空值", "__NA__") for v in vals)
+            vals = [v for v in vals if v not in ("空值", "__NA__")]
+            in_mask = df[col].astype(str).isin(vals).values & df[col].notna().values
+            if has_na:
+                in_mask |= df[col].isna().values
+            if neg:
+                cond_mask = ~in_mask
+                if not has_na:
+                    cond_mask &= df[col].notna().values   # SQL NOT IN 语义:NULL 不命中
+            else:
+                cond_mask = in_mask
+            mask &= cond_mask
+            continue
         m = re.match(r"(.+?)\s*(<=|>=|<|>|==|!=)\s*(.+)", cond)
         if not m:
             return None
@@ -1223,12 +1374,24 @@ def run_model_analysis(
     hard_min_samples: int = 100,
     target_col: str = TARGET_COL,
     feature_loader: "Any | None" = None,
+    class_rates: "tuple[float, float] | None" = None,
+    true_overall_cvr: "float | None" = None,
 ) -> ModelAnalysisResult | None:
     """跑一遍小模型路径，返回 ModelAnalysisResult；不可跑则返回 None。
 
     参数：
         target_col     : 目标列，默认 "is_converted"；也可传 "is_paid" 聚焦成单分析
         feature_loader : FeatureLoader 实例（可选）；传入时 top_features 附带字段描述
+        class_rates    : (正样本采样率, 负样本采样率)。调用方做过类别下采样
+                         (如 MA_MODEL_SAMPLE 的"正样本全保留、只采负样本")时传入,
+                         人数/CVR 按分类别采样率无偏外推回全量口径;None=(1,1)=未采样
+        true_overall_cvr: 全量口径成单率(采样时由调用方在全量数据上算好传入);
+                         None 时按 class_rates 无偏估计,未采样时即 overall_cvr
+
+    统计口径(fix19):分桶/高分未转化/低分已转化/分层AUC/校准/规则精度等分数型统计
+    一律在**验证集(20%)**上计算(训练集分数带 in-sample 乐观偏差),人数字段按
+    "验证集→采样集→全量"分类别外推;规则/人群的 `n`、`sample_count` 均为全量估计,
+    原始计数保留在 *_raw 字段。
 
     样本量分级：
       - len(df) < hard_min_samples（默认 100）：直接跳过
@@ -1289,8 +1452,34 @@ def run_model_analysis(
             note=f"[跳过] 目标列 {effective_target} 单类",
         )
 
-    model, scores, auc, auc_ci_low, auc_ci_high, pos_weight = _train_and_score(
+    pos_rate, neg_rate = (class_rates or (1.0, 1.0))
+    pos_rate = float(pos_rate) if pos_rate else 1.0
+    neg_rate = float(neg_rate) if neg_rate else 1.0
+    sampled = abs(pos_rate - 1.0) > 1e-12 or abs(neg_rate - 1.0) > 1e-12
+
+    model, val_scores, auc, auc_ci_low, auc_ci_high, pos_weight, val_index = _train_and_score(
         X, y, backend_resolved)
+    df_val = df.loc[val_index]
+    y_val = y.loc[val_index]
+    n_pos_all = int((y == 1).sum())
+    n_neg_all = int(len(y) - n_pos_all)
+    n_pos_val = int((y_val == 1).sum())
+    n_neg_val = int(len(y_val) - n_pos_val)
+    # 分类别外推系数:验证集 → 采样集 → 全量。分层切分 + 已知采样率,估计无偏。
+    pos_scale = (n_pos_all / max(n_pos_val, 1)) / pos_rate
+    neg_scale = (n_neg_all / max(n_neg_val, 1)) / neg_rate
+
+    def _pop_n(n_pos_grp: float, n_neg_grp: float) -> int:
+        return int(round(n_pos_grp * pos_scale + n_neg_grp * neg_scale))
+
+    n_samples_population = _pop_n(n_pos_val, n_neg_val)
+    if true_overall_cvr is not None:
+        true_cvr = float(true_overall_cvr)
+    else:
+        _est_pos = n_pos_all / pos_rate
+        _est_all = _est_pos + n_neg_all / neg_rate
+        true_cvr = float(_est_pos / _est_all) if _est_all > 0 else overall_cvr
+
     top_features = _extract_importance(model, feature_names, backend_resolved, top_n_features)
 
     # O27：为每个 top 特征附加方向性标注和特征描述
@@ -1299,26 +1488,55 @@ def run_model_analysis(
     _enrich_with_feature_descriptions(top_features, feature_loader)
 
     try:
-        rules = (_extract_rules_lgb(model, overall_cvr, top_n_rules, X=X, y=y)
+        # fix19:规则的 precision/recall 也在验证集上评估(训练集命中带乐观偏差)
+        rules = (_extract_rules_lgb(model, overall_cvr, top_n_rules, X=X.loc[val_index], y=y_val)
                  if backend_resolved == "lightgbm"
-                 else _extract_rules_xgb(model, overall_cvr, top_n_rules, X=X, y=y))
+                 else _extract_rules_xgb(model, overall_cvr, top_n_rules, X=X.loc[val_index], y=y_val))
     except Exception as e:
         rules = []
         print(f"[model_analyst] 规则提取失败: {e}")
 
-    buckets       = _build_score_buckets(y, scores, n_buckets)
-    high_nc       = _high_score_not_converted(df, scores, y, top_features)
-    low_conv      = _low_score_converted(df, scores, y, top_features)           # O24
-    strat_auc     = _stratified_auc(df, scores, y)                              # O23
-    calib         = _calibration(y, scores)                                     # O26
-    rule_stab     = _rule_stability(df, rules, target_col=effective_target)     # O25
-    rule_ovlp     = _rule_overlap(df, rules, target_col=effective_target)        # O28
-    score_dist    = _score_distribution(y, scores)                              # O29
-    strat_buckets = _stratified_score_buckets(df, y, scores)                    # O30
+    # fix19:规则人数/CVR 外推到全量口径(sample_count 回填为全量估计,原值留 raw)
+    if any(r.precision > 0 or r.n_converted > 0 for r in rules):
+        for r in rules:
+            _p = int(r.n_converted)
+            _ng = max(int(r.sample_count) - _p, 0)
+            r.sample_count_raw = int(r.sample_count)
+            r.sample_count = _pop_n(_p, _ng)
+            _denom = _p * pos_scale + _ng * neg_scale
+            r.precision_population = float(_p * pos_scale / _denom) if _denom > 0 else 0.0
+            r.lift_population = float(r.precision_population / true_cvr) if true_cvr > 0 else 0.0
+
+    buckets       = _build_score_buckets(y_val, val_scores, n_buckets)
+    for b in buckets:
+        _bp = b.actual_cvr * b.user_count          # 0/1 均值 × 数量 = 精确正样本数
+        b.user_count = _pop_n(_bp, b.user_count - _bp)
+    high_nc       = _high_score_not_converted(df_val, val_scores, y_val, top_features)
+    if high_nc.get("n"):
+        high_nc["n_raw"] = int(high_nc["n"])
+        high_nc["n"] = _pop_n(0, high_nc["n_raw"])   # 该人群全为未转化 → 按负类外推
+    low_conv      = _low_score_converted(df_val, val_scores, y_val, top_features)   # O24
+    if low_conv.get("n"):
+        low_conv["n_raw"] = int(low_conv["n"])
+        low_conv["n"] = _pop_n(low_conv["n_raw"], 0)  # 该人群全为已转化 → 按正类外推
+    strat_auc     = _stratified_auc(df_val, val_scores, y_val)                      # O23
+    calib         = _calibration(y_val, val_scores)                                 # O26
+    if calib:
+        calib["sampled_prior"] = bool(sampled)
+        if sampled:
+            calib["note"] = ("训练数据为类别下采样产物(正样本全保留),预测概率绝对值反映"
+                             "采样先验而非线上先验;桶级校准仅在采样口径内有意义")
+    rule_stab     = _rule_stability(df_val, rules, target_col=effective_target)     # O25
+    rule_ovlp     = _rule_overlap(df_val, rules, target_col=effective_target)        # O28
+    score_dist    = _score_distribution(y_val, val_scores)                          # O29
+    strat_buckets = _stratified_score_buckets(df_val, y_val, val_scores)            # O30
 
     # 把零方差剔除信息、目标列追加到 note，便于诊断报告透明展示
     target_note = f"[目标列: {effective_target}]" if effective_target != TARGET_COL else ""
-    note_parts = [p for p in [target_note, low_sample_warning] if p]
+    scope_note = "[统计口径] 分桶/人群/校准/规则精度基于验证集(20%),人数已按类别外推至全量"
+    if sampled:
+        scope_note += f";训练采样率 正={pos_rate:.4g}/负={neg_rate:.4g}"
+    note_parts = [p for p in [target_note, low_sample_warning, scope_note] if p]
     if dropped_zero_var:
         preview = ", ".join(dropped_zero_var[:8])
         more = f"…(共 {len(dropped_zero_var)} 列)" if len(dropped_zero_var) > 8 else ""
@@ -1345,4 +1563,9 @@ def run_model_analysis(
         score_distribution=score_dist,
         stratified_score_buckets=strat_buckets,
         note=" / ".join(note_parts),
+        sampled=sampled,
+        class_rates=(pos_rate, neg_rate),
+        true_overall_cvr=true_cvr,
+        n_samples_population=n_samples_population,
+        stats_scope="val",
     )

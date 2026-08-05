@@ -4,7 +4,51 @@
 
 ---
 
-## ★ 2026-07-01 未润色报告拦截闸门收紧（根治"报告产出不完整"）
+## ★ 2026-08-05 模型分析:统计口径矫正 + 非数值特征规则质量 + XGBoost 同权(fix19)
+
+**动机**:模型分析(`model_analyst`)三处积弊。① 分数型统计(分桶/高分未转化/校准/规则 precision)在**全量(含训练集)分数**上计算,混入 in-sample 乐观偏差;且 `MA_MODEL_SAMPLE` 下采样后所有计数仍是**采样口径**,报告直接引用会把人数低估近一个数量级、CVR 高估近一个数量级。② 分类特征切分的规则质量差:`__NA__` 哨兵字面量直接出现在 rule/rule_sql(线上表匹配不到真实 NULL)、右分支反选清单动辄十几项不可读、同一特征多次切分产生冗余重复子句。③ 这些修复不能只做在 LightGBM 路径——分级策略本就是"lightgbm 或 xgboost 二选一",**只有 xgboost 的环境必须同权**。
+
+| 变更 | 说明 | 文件 |
+|---|---|---|
+| **分数型统计改在验证集上做,并按类别采样率无偏外推回全量口径** | train/val 切分后只对 val 打分(去掉一次全量 predict);采样时 `cli.py` 传入实测 `(正采样率,负采样率)` 与全量真实 CVR,模型侧推 pos_scale/neg_scale:分桶 `user_count`、高分未转化 `n`、规则 `sample_count` 全部外推为**全量人数**,`precision_population`/`lift_population` 为**全量 CVR/提升**口径。新增字段:`n_samples_population`/`true_overall_cvr`/`stats_scope`/`sampled`、规则级 `sample_count_raw`、`calibration.sampled_prior` | `snippets/model_analyst.py`,`cli.py` |
+| **分类切分规则整治(两后端共用 `_merge_render_clauses`)** | ① `__NA__` 不外泄:display 写「空值」,SQL 译为 `IS NULL`/`IS NOT NULL` 组合;② 反选清单若补集更小(≤8 且不大于清单)改写为等价 `IN(补集)`;③ 同特征多次切分合并:数值取最紧上下界(同值时开边界更紧),分类集合按 AND 语义求交/差;阈值一律位置计数,不出科学计数法 | `snippets/model_analyst.py` |
+| **XGBoost 后端同权对齐** | dump 分类切分 `[feat:{codes}]` 解析 + code→品类名还原,分支方向经沙箱实证(类别∈集合→yes);DFS 收集结构化步骤后与 LGB 走同一合并渲染器,__NA__/补集改写/同特征合并两后端一致;单树 `apply()` 返回 1 维数组的兜底 reshape | `snippets/model_analyst.py` |
+| **interpreter 优先消费全量口径字段** | overall_cvr 取 `true_overall_cvr`,规则 lift 取 `lift_population`,圈人增量估算用 `precision_population`;采样运行时校准 caveat 切换为"采样口径"文案,不再误报模型欠校准 | `snippets/model_interpreter.py` |
+| **规则回放支持分类子句** | `_apply_rule_mask` 补 `feat in [...]`/`not in [...]` 解析(「空值」→NaN;NOT IN 按 SQL 语义排除 NULL),稳定性(O25)/重叠(O28)检验不再静默跳过含分类切分的规则 | `snippets/model_analyst.py` |
+| **排除 `timediff` 字段** | 按需求加入 `DEFAULT_EXCLUDE`,不作为模型特征入模;仅模型分析口径,统计/漏斗/阈值等其余环节不受影响 | `snippets/model_analyst.py` |
+| **报告只保留效果最好的 top3 模型规则** | 过质量门槛(lift≥2 且覆盖≥100)的规则按**全量口径 lift** 降序只取前 3 条转人群包(`DEFAULTS.decision_rule_top_n` 可调;同 lift 取覆盖大者;排序不用 predicted_cvr——它带采样先验+类权重双重扭曲)。报告附录与圈人 API 随之只出 top3;全量规则仍完整保留在 `model_analysis.decision_rules` 可审计。实测:8 条过门槛(lift 3.84~2.11)→ 只出 3.84/3.68/3.15 三条,降序;`top_n=5` 出 5 条 | `snippets/model_interpreter.py` |
+
+**验证**(合成 9 万行、CVR 3.56%,keep-pos 采样至 1.5 万、负采样率 0.136):
+- **LightGBM**:`n_samples_population` 与分桶合计外推误差 **0.0%**;最大规则外推人数 est=941 vs 全量真值 1,216(误差 22.6%,<25% 容差),CVR est=0.1009 vs 真值 0.1069;10 条规则(7 条含分类)零 `__NA__` 泄漏、`not in` 清单全部 ≤8、空值规则 SQL 含 `IS NULL`、分类规则可被 `_apply_rule_mask` 回放。
+- **XGBoost**:同一套断言全过;最大规则外推 est=20,677 vs 真值 20,629(误差 **0.2%**),CVR est=0.0551 vs 真值 0.0554;单树微测:高转化类别落 no 分支 → 正确渲染为 `in [美妆,食品]`(NOT IN 5 项被补集改写),回放命中数/CVR 与规则字段逐位一致(1,417/0.913)。
+- **回归**:未采样路径分桶合计=样本数(20,000/20,000);共用渲染器重构后 LGB 功能测试关键数字与重构前完全一致;interpreter 增量 ≤ 全量正样本数、校准 caveat 正确切换采样口径文案。
+
+**注**:XGBoost 数值切分渲染为 `<`/`>=`(开上界/闭下界),LightGBM 为 `<=`/`>`——两后端规则文本天然略有差异,均为精确语义、可直接执行的 Spark SQL。报告与圈人预估**可直接引用外推后的数字**;唯一仍需先验校准的场景是"把模型输出概率当绝对值用"(概率阈值圈人)。
+
+## ★ 2026-08-04 千万行级性能:阈值计算与案例打分等价改写(fix18)
+
+**动机**:分区表与训练采样(见下节)落地后,5.9M 行 × 250 列实测 `compute-thresholds` 仍要 17-30 分钟,逼近/顶穿 ma-api 的 1800s 步超时。剖析(200 万行单字段)定位三处热点:① `_compute_cvr_profile_by_bucket` 的 `astype(str)` 把整列物化成 Python 字符串、`groupby(...).groups` 再逐桶 fancy-index——**单字段 5.2s,占每字段总耗时 ~90%**;② `_youden_optimal_split` 对每个候选切分点反复全列扫描(13 次 quantile + 过滤 2 次/候选 + 主循环布尔掩码与两次整列拷贝,合计每字段 ~90 趟 O(n));③ `case_extractor._fit_cross_category` 的 `apply(axis=1)` 对全量逐行起 Python lambda。**改写全部以"输出逐位一致"为硬约束,报告口径零变化。**
+
+| 变更 | 说明 | 文件 |
+|---|---|---|
+| **cvr_by_bucket 改 factorize/codes + bincount** | 每桶行数与转化和一趟算完,不再物化字符串列、不再逐桶拷贝。三个分支(原值分组/低基数字符串/qcut 分位分桶)各自复刻原分组键、标签字符串与行序(数值分支按数值升序,字符串分支按字典序——与 groupby 对键排序行为一致);0/1 目标下 bincount 加权和为精确整数,CVR 逐位相同 | `snippets/threshold_computer.py` |
+| **youden 切分改一次 argsort + 前缀和 + searchsorted** | `searchsorted(side='left') ≡ (s<cut).sum()` 精确等价;两侧转化和查前缀和,每候选 O(log n);13 个候选分位一次向量化 `np.quantile`(与逐个调用同值)。0/1 目标前缀和为精确整数,CVR=整数/整数,与 fancy-index 后 `.mean()` 完全相同 | `snippets/threshold_computer.py` |
+| **每字段 dropna/nunique/notna 只算一次;`_compute_percentiles` 一次向量化** | 纯缓存与批量调用,语义等价;向量化整体失败时退回逐个调用,保留原单点容错 | `snippets/threshold_computer.py` |
+| **比价打分 top2 向量化** | `np.sort(...)[:, -2:].sum(1)` 取每行最大两项之和;`_col` 已 `fillna(0)` 无 NaN,与原 `sorted(reverse=True)[:2]` 逐位一致(两数相加满足交换律) | `snippets/case_extractor.py` |
+
+**验证**:① **新旧双实现全等断言**——`compute_adaptive_thresholds` 端到端 9 字段(含 "N+" 串列、常量、35% NaN、binary、15 值低基数,覆盖三种分桶分支)完整输出含 `cvr_by_bucket` 行序/标签逐位一致;切分函数单测 24 组合(常规/重尾/离散/重 ties/常量/NaN/小样本 fallback/全零目标)逐位一致。② **基准**:200 万行 × 6 字段端到端 38.2s → 5.0s(**7.7×**);case_extractor 40 万行 1.65s → 0.042s(**39×**,含 NaN 与缺列路径)。③ 外推 5.9M 行每字段 18.8s → 2.4s,`compute-thresholds` 预计 17-30min → **2-4min**;1800s 步超时余量恢复。
+
+## ★ 2026-08-03/04 prepare OOM 与超时治理(补记):装载削峰 + 模型训练采样
+
+**动机**(补记,改动发生于 ma-api 联调期间):activity 1000344(13.2M 行 × 250 列,zstd 落盘 4.0G)`prepare` 两次被 SIGKILL——128G 容器,`pd.read_parquet` 的 Arrow→pandas 转换期双持内存,峰值 ~116G,cgroup `max_usage_in_bytes` 顶格实锤;第一版仅 `self_destruct` 无效,根因是 **jemalloc 内存池攥住已释放页不还内核**,RSS 不降。装载修好后 activity 1011270(5.9M 行)暴露第二层:lightgbm 对全量训练单步 **1058s、占 prepare 59%**,顶穿 1800s 步超时。
+
+| 变更 | 说明 | 文件 |
+|---|---|---|
+| **`_load_dataframe` 装载削峰(fix16-a2)** | parquet 改 `pyarrow.read_table + to_pandas(self_destruct=True, split_blocks=True)`,并切换 `pa.system_memory_pool()`(大块内存 free 即归还 OS);峰值 ~116G → ~65G。任何异常梯度回退老读法,行为不会比原来更坏 | `cli.py` |
+| **模型训练前下采样(fix17-a)** | 行数超过 `MA_MODEL_SAMPLE`(默认 500000,0=关)时:**正样本全保留、只采样负样本**;少数类占比异常自动退回等比分层;`len(df)<=cap` 完全不采样。只有模型训练吃采样,data_overview/漏斗/阈值仍全量。采样明细与"训练类别先验被抬高"(如 3%→30%)写入 `data_caveats` 与 events 决策日志——AUC/特征重要性等排序型结论不受影响,以概率阈值圈人需按先验校准 | `cli.py` |
+| **文档同步** | SKILL.md「CLI 关键参数」「模型分析——分级策略」补 `MA_MODEL_SAMPLE` 与采样口径;methodology/02 新增「大数据量下的训练采样」一节 | `SKILL.md`,`methodology/02_model_analysis.md` |
+
+**验证**:① 装载等价性:Spark 风格多 part 目录 + `_SUCCESS` 与老读法 shape/dtype/值全等,注入 read_table 故障后回退路径可用;② 采样四态实测:常规(10 万行 3% 正样本,cap=1 万 → 2,996 条正样本全保留、训练正样本率 30%)、极端分布(正样本占 60% → 自动退回等比,比例保持)、低于阈值(零改动)、bool 目标列;③ 线上 1011270 实测装载成功进入统计阶段(fix16-a2 生效);采样决策记录(`training_downsample`)待部署后下一单核验。
 
 **动机**：多活动批量诊断的报告出现大量未润色内容（"补充业务影响（30-50字）"、"（基于 key_features 补一句用户画像）"、"（草稿，待润色）"等直接渲染进 HTML）。根因**不是** draft_builder——`[待润色]` 占位是**设计特性**（让宿主 Agent 的 LLM 针对每个活动的真实发现产出个性化文案，而非定死模板）。真正的漏洞在**完整性闸门太窄**：`lint_report_completeness` 的 `draft_not_polished` 只统计带方括号的 `[待润色]`。批量流程若用"机械去标记"（正则删 `[待润色…]` 方括号并置 `_stage=full`）代替真正的 LLM 润色，就会：① 删掉方括号标记后闸门计数=0、蒙混过关；② 留下占位里的说明句（不含方括号）和表头非方括号的"（草稿，待润色）"→ 未润色内容渲染进报告。
 

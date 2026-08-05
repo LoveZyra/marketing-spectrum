@@ -307,6 +307,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             import os as _os
             import pandas as _pd
             df_model = df
+            _pos_rate = _neg_rate = 1.0   # fix19:分类别采样率,传给模型侧做无偏外推
             try:
                 _cap = int((_os.environ.get("MA_MODEL_SAMPLE") or "500000").strip() or 0)
             except ValueError:
@@ -331,6 +332,11 @@ def cmd_prepare(args: argparse.Namespace) -> int:
                 _pos_tr = int(len(df_model) - df_model[model_target].value_counts().get(_maj_key, 0))
                 _r0 = _pos_all / float(len(df))
                 _r1 = _pos_tr / float(len(df_model)) if len(df_model) else 0.0
+                # fix19:实测的分类别采样率(正样本全保留时 _pos_rate=1.0;
+                # 退回等比分层时两者近似相等),模型侧据此把人数/CVR 无偏还原到全量口径
+                _pos_rate = (_pos_tr / float(_pos_all)) if _pos_all else 1.0
+                _neg_all_cnt = len(df) - _pos_all
+                _neg_rate = ((len(df_model) - _pos_tr) / float(_neg_all_cnt)) if _neg_all_cnt else 1.0
                 print(f"          [sample] 模型训练下采样 {len(df):,} → {len(df_model):,} 行"
                       f"（{_mode}；正样本 {_pos_tr:,}/{_pos_all:,}，训练正样本率 {_r1:.2%}，"
                       f"全量 {_r0:.2%}；MA_MODEL_SAMPLE={_cap}；统计/阈值仍用全量）", flush=True)
@@ -345,7 +351,13 @@ def cmd_prepare(args: argparse.Namespace) -> int:
                               "AUC/特征重要性等排序型结论不受影响；若以模型概率阈值直接圈人需按先验校准。"
                               "统计/漏斗/阈值仍为全量口径",
                 })
-            ma = model_analyst.run_model_analysis(df_model)
+            # fix19:把分类别采样率与全量口径 CVR 传给模型侧 —— 人数(sample_count/n)、
+            # 增量估算、校准判读都会按真实口径外推/标注(未采样时 rates=(1,1) 行为不变)
+            ma = model_analyst.run_model_analysis(
+                df_model,
+                class_rates=(_pos_rate, _neg_rate),
+                true_overall_cvr=float(df[model_target].mean()),
+            )
             state["model_analysis"] = ma.to_dict() if ma else None
             log.log_decision(tool_id="model_analysis", kind="invoke",
                              reason="preconditions_ok",

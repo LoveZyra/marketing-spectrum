@@ -41,6 +41,7 @@ description: Diagnose marketing campaign performance from user behavior wide tab
 - `cli prepare --auto-meta`：从数据推断 campaign_name/channel/平台/日期等（推断的平台写 `inferred_platform`，**不触发过滤**）
 - 仅当**用户显式** `--meta` 提供 `target_platform` 时才按平台过滤数据；过滤条件记入 `state._filter_applied`，`compute-thresholds` 自动复用以保证两步骤数据一致
 - `cli crowd-rules --state state_draft.json --out <dir>`：从 state（draft 即可）构建可执行人群规则 → `crowd_rules.json`。外部人群 pipeline 应走此子命令消费规则，不要直接 import `snippets/` 内部模块
+- 环境变量 `MA_MODEL_SAMPLE`（默认 `500000`，`0`=关闭）：`prepare` 的模型训练前下采样上限——**正样本全保留、只采样负样本**（少数类占比异常时自动退回等比分层）。只有模型训练吃采样，统计/漏斗/阈值仍为全量口径；模型分析输出的计数/CVR 亦已按采样率外推回全量口径（2026-08-05）；采样明细与"训练类别先验被抬高"的提示写入 `data_caveats` 与 events 决策日志（2026-08-04，治千万行级 prepare 超时）
 
 ## 功能概述
 
@@ -101,7 +102,7 @@ LOOP:
 
 ## 模型分析——分级策略
 
-1. `lightgbm` 或 `xgboost` 可 import → 运行 `run_model_analysis(df)`。
+1. `lightgbm` 或 `xgboost` 可 import → 运行 `run_model_analysis(df)`（两后端规则抽取同权：分类切分/空值/反选改写行为一致，2026-08-05）。行数超过 `MA_MODEL_SAMPLE`（默认 50 万）时训练前自动下采样（正样本全保留、只采负样本）：AUC/特征重要性等排序型结论不受影响；输出的计数/CVR/lift 已按采样率无偏外推回**全量口径**（`n_samples_population`/`precision_population`/`lift_population`，2026-08-05），报告与圈人预估可直接引用；仅"把模型概率当绝对值用"（概率阈值圈人）仍需按训练/真实先验比校准（提示在 `data_caveats`）。
 2. 不可用 → 在 `state["data_caveats"]` 记录缺席原因；`state["model_analysis"] = None`；最终诊断仅使用统计规则与领域统计；若运行内部 confidence，`model_quality` 自动降权为 0.0。
 3. **仅在用户明确同意时**才安装依赖，不得自行 `pip install`。
 
