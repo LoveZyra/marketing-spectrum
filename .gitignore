@@ -3,6 +3,7 @@ jobs/
 runs/
 *.log
 nohup.out
+*.html
 
 # --- 依赖与缓存:npm install / python 自己会生成 ---
 node_modules/

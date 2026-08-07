@@ -24,7 +24,9 @@ HTTP 契约(两者完全一致;2026-07-30 收窄过一轮,见下)
         多给的键 400 拒单,不静默忽略(静默会让老调用方以为字段还生效)。
   下单  202:job_id / state / activity_id / mode
   出参  200:job_id / state / activity_id / mode / report_url / rules
-        rules 逐条只有 name / finding_id / sql_filter / direction。
+        rules 逐条只有 name / finding_id / sql_filter / direction / suggestion
+        (suggestion 于 2026-08-07 新增:该人群的建议动作,与报告「可落地人群包」
+         第三列同源;纯增字段,老调用方不受影响)。
   完整的内部账(crowd_spec 全量、push_sql、size、warnings、degraded、backend、
   polish、steps)照旧写在 jobs/<id>/meta.json,砍的是对外出参,不是审计记录。
 
@@ -772,10 +774,16 @@ def make_handler(mode, runner, extra_health=None):
                 # 全在 jobs/<id>/meta.json 里,轮询接口 /api/ma/jobs/{id} 也照报 warnings。
                 result = meta.get("result") or {}
                 spec = result.get("crowd_spec") or {}
+                # 2026-08-07 加第五个字段 suggestion(该人群的建议动作,与报告
+                # 「可落地人群包」第三列同源)。这里是**唯一**对外出口,不加这一行的话
+                # ma_pipeline 回填的 suggestion 只躺在 meta.json 里,调用方永远看不到。
+                # suggestion_source(index/sql/name/default)是排查用的内部账,
+                # 留在 meta.json 的 crowd_spec 里,不进这份收窄过的公开契约。
                 rules = [{"name": r.get("name"),
                           "finding_id": r.get("finding_id"),
                           "sql_filter": r.get("sql_filter"),
-                          "direction": r.get("direction")}
+                          "direction": r.get("direction"),
+                          "suggestion": r.get("suggestion")}
                          for r in (spec.get("rules") or [])]
                 self._send(200, {
                     "job_id": meta["job_id"],

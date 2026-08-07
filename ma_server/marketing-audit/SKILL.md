@@ -102,7 +102,7 @@ LOOP:
 
 ## 模型分析——分级策略
 
-1. `lightgbm` 或 `xgboost` 可 import → 运行 `run_model_analysis(df)`（两后端规则抽取同权：分类切分/空值/反选改写行为一致，2026-08-05）。行数超过 `MA_MODEL_SAMPLE`（默认 50 万）时训练前自动下采样（正样本全保留、只采负样本）：AUC/特征重要性等排序型结论不受影响；输出的计数/CVR/lift 已按采样率无偏外推回**全量口径**（`n_samples_population`/`precision_population`/`lift_population`，2026-08-05），报告与圈人预估可直接引用；仅"把模型概率当绝对值用"（概率阈值圈人）仍需按训练/真实先验比校准（提示在 `data_caveats`）。
+1. `lightgbm` 或 `xgboost` 可 import → 运行 `run_model_analysis(df)`（两后端规则抽取同权：分类切分/空值/反选改写行为一致，2026-08-05）。模型人群按**区分性特征**自动命名（独有条件优先、标签带方向、类别值入名，2026-08-05），top3 选取会按命中人群 Jaccard 去冗（`decision_rule_max_jaccard` 默认 0.5），避免只差一个阈值的近重复规则各占一个名额。行数超过 `MA_MODEL_SAMPLE`（默认 50 万）时训练前自动下采样（正样本全保留、只采负样本）：AUC/特征重要性等排序型结论不受影响；输出的计数/CVR/lift 已按采样率无偏外推回**全量口径**（`n_samples_population`/`precision_population`/`lift_population`，2026-08-05），报告与圈人预估可直接引用；仅"把模型概率当绝对值用"（概率阈值圈人）仍需按训练/真实先验比校准（提示在 `data_caveats`）。
 2. 不可用 → 在 `state["data_caveats"]` 记录缺席原因；`state["model_analysis"] = None`；最终诊断仅使用统计规则与领域统计；若运行内部 confidence，`model_quality` 自动降权为 0.0。
 3. **仅在用户明确同意时**才安装依赖，不得自行 `pip install`。
 

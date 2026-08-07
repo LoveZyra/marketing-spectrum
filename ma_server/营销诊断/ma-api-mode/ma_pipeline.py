@@ -1438,6 +1438,9 @@ class StubSteps(object):
                 "pandas_filter": seg.get("pandas_filter"),
                 "sql_filter": seg["sql_filter"],
                 "estimated_size": seg.get("estimated_size"),
+                # 草稿态的建议动作:作为 suggestion 的保底值随 crowd_rules.json 落盘。
+                # 出参里的最终值由 attach_suggestions 用定稿再刷一遍(这里多半还是占位句)。
+                "suggestion": seg.get("action"),
             }
             # direction_raw 必须带出去:它是"方向没映射上"的唯一线索,
             # 白名单投影漏掉它,下游 normalize_direction 就再也认不回来了
@@ -3168,9 +3171,35 @@ def _agent_prompt(ctx, draft_path, out_path, data_label=None):
 
 
 def _seg_key(seg, idx):
-    """给人群段一个跨版本还认得出来的身份:优先 finding_id,再退到位置。"""
+    """给人群段一个跨版本还认得出来的身份:优先 finding_id,再退到位置。
+
+    ⚠ 单条版本只在没有同 fid 兄弟时才安全,批量对齐一律用 _seg_keys(见下)。
+    """
     fid = (seg or {}).get("finding_id")
     return ("fid", fid) if fid else ("idx", idx)
+
+
+def _seg_keys(segs):
+    """给一批人群段生成**互不碰撞**的身份键:同一 finding_id 内按出现次序编号。
+
+    2026-08-07 线上实证(1012006):模型抽出来的人群 finding_id 全是
+    fnd_model_decision_rule —— 老写法拿 fid 直接当字典键,三条人群塌成一条,
+    restore_seg_anchors 于是把前两条的 name/sql_filter/estimated_size 全部回填成
+    第三条的值。表现:接口出参三个不同人群名,报告里三行同名同 SQL(报告展示的
+    filter_conditions 不在锚点清单里所以还是各自的,看着更像"名字错了"而已)。
+    加上组内序号后,第 k 条同 fid 的人群对应草稿里第 k 条同 fid 的人群,身份稳定。
+    """
+    seen = {}
+    keys = []
+    for i, s in enumerate(segs or []):
+        fid = (s or {}).get("finding_id")
+        if fid:
+            n = seen.get(fid, 0)
+            seen[fid] = n + 1
+            keys.append(("fid", fid, n))
+        else:
+            keys.append(("idx", i))
+    return keys
 
 
 def restore_seg_anchors(ctx, draft, out):
@@ -3189,11 +3218,13 @@ def restore_seg_anchors(ctx, draft, out):
                  "(圈人规则已经按草稿生成,不能中途变数)".format(len(d_segs), len(o_segs)))
         out["audience_segments"] = json.loads(json.dumps(d_segs))
         return len(d_segs), renames
+    # 用带组内序号的身份键,避免同 finding_id 的人群互相覆盖(见 _seg_keys 注释)
+    d_keys, o_keys = _seg_keys(d_segs), _seg_keys(o_segs)
     by_key = {}
-    for i, s in enumerate(d_segs):
-        by_key[_seg_key(s, i)] = s
+    for k, s in zip(d_keys, d_segs):
+        by_key[k] = s
     for i, o in enumerate(o_segs):
-        d = by_key.get(_seg_key(o, i)) or d_segs[i]
+        d = by_key.get(o_keys[i]) or d_segs[i]
         for k in SEG_ANCHORS:
             if k not in d:
                 continue
@@ -3568,6 +3599,133 @@ def normalize_direction(rule):
     return d, None
 
 
+_PLACEHOLDER_RE = re.compile(r"\[待润色[^\]]*\]|\[TODO[^\]]*\]|【待润色[^】]*】|TODO|待补充")
+
+# 兜底话术:定稿里那句"建议动作"取不到时用,按方向给一句不会说错的话。
+# 促付(创单未付)在圈人侧归 exclude,但 direction_raw 留着,这里优先认它。
+_SUGG_DEFAULT = {
+    "push": "建议下一周期对该人群优先投放或预算倾斜",
+    "exclude": "建议本活动暂缓向该人群推送，减少无效触达",
+    "促付": "建议对该人群做创单未付促付提醒",
+}
+
+
+def _clean_suggestion(text):
+    """草稿占位句一律当"没写",交给下一级兜底;正常文案原样返回。
+
+    注意不能只删 `[待润色]` 标记就拿去用:草稿骨架句本身就是占位内容
+    (draft_builder 写的是「按 finding 建议方向投放/排除/促付。[待润色]」),
+    删掉标记后剩下的那半句照样是机器骨架,发给接口方比给一句兜底话术更糟。
+    带标记 ≡ Agent 没写过这句 ≡ 视为空。
+    """
+    t = text or ""
+    if _PLACEHOLDER_RE.search(t):
+        return ""
+    s = t.strip().strip("。;；,，、 ")
+    return s if len(s) >= 4 else ""
+
+
+def stamp_seg_index(all_rules):
+    """给 audience_segment 规则盖上它在 state.audience_segments 里的序号。
+
+    crowd_rules.json 里的人群规则是按 state 的 audience_segments 原序逐条生成的
+    (skill 的 build_crowd_rules 和本地骨架都是 for 循环 append),所以第 k 条
+    audience_segment 规则 ≡ 第 k 个人群段。这个序号是后面回填 suggestion 的主键 ——
+    比人名可靠:人名可能带「·变体N」、也可能被人群段重名撞上,序号不会。
+    """
+    k = 0
+    for r in all_rules or []:
+        if isinstance(r, dict) and r.get("source") == "audience_segment":
+            r["_seg_index"] = k
+            k += 1
+    return all_rules
+
+
+def attach_suggestions(rules, state_path, ctx=None):
+    """把定稿报告「可落地人群包」那一列的建议动作回填进人群规则出参(suggestion)。
+
+    为什么要回填而不是在 crowd_rules 那一步直接取:crowd_rules.json 在 report_agent /
+    polish **之前**就冻结了(锚点先冻结,Agent 不能中途改人群口径),那时候 action 还是
+    草稿占位符(「按 finding 建议方向投放/排除/促付。[待润色]」)。直接带出去,接口方拿到
+    的就是占位句,跟报告里那句业务化的建议动作对不上。所以在 assemble 前用定稿再刷一遍。
+
+    对齐三级(命中哪一级如实写进 suggestion_source,便于线上统计与排查):
+      index → 位置序号(主键,不看人名,重名也不影响),用 sql_filter 校验一次;
+      sql   → 序号对不上(Agent 重排过)时,拿 sql_filter 全表找唯一匹配;
+      name  → 前两级都落空时的最后一次尝试,人名唯一才认;
+      default → 都没命中,或定稿里那句话清洗后是空的,按方向给兜底话术。
+    """
+    segs = []
+    try:
+        segs = (_load(state_path) or {}).get("audience_segments") or []
+    except (IOError, OSError, ValueError) as exc:
+        if ctx:
+            ctx.warn("读不出定稿人群段({}),suggestion 全部走兜底话术".format(exc))
+
+    by_sql, by_name = {}, {}
+    for i, s in enumerate(segs):
+        if not isinstance(s, dict):
+            continue
+        k = (s.get("sql_filter") or "").strip()
+        if k:
+            by_sql.setdefault(k, []).append(i)
+        n = (s.get("name") or "").strip()
+        if n:
+            by_name.setdefault(n, []).append(i)
+
+    stats = {}
+    for r in rules or []:
+        if not isinstance(r, dict):
+            continue
+        seg, src = None, None
+        sql = (r.get("sql_filter") or "").strip()
+        idx = r.get("_seg_index")
+        if isinstance(idx, int) and 0 <= idx < len(segs):
+            cand = segs[idx]
+            cand_sql = (cand.get("sql_filter") or "").strip() if isinstance(cand, dict) else ""
+            if not sql or not cand_sql or cand_sql == sql:
+                seg, src = cand, "index"
+        if seg is None and sql and len(by_sql.get(sql, [])) == 1:
+            seg, src = segs[by_sql[sql][0]], "sql"
+        if seg is None:
+            nm = (r.get("name") or "").strip()
+            if nm and len(by_name.get(nm, [])) == 1:
+                seg, src = segs[by_name[nm][0]], "name"
+
+        text = ""
+        if isinstance(seg, dict):
+            text = _clean_suggestion(seg.get("action"))
+            if not text:                       # 定稿没写实(降级单):退回圈人理由首句
+                # 先整段判占位再取首句 —— 反过来会漏:草稿理由是
+                # 「对应「X」的人群，建议定向干预。[待润色]」,标记在第二句,
+                # 先切句就把骨架首句当成"写过的文案"放行了。
+                whole = _clean_suggestion(seg.get("rationale"))
+                text = _clean_suggestion(whole.split("。")[0]) if whole else ""
+                if text:
+                    src = (src or "") + "+rationale"
+        if not text:
+            d = (r.get("direction_raw") or "").strip() or (r.get("direction") or "").strip()
+            text = _SUGG_DEFAULT.get(d) or _SUGG_DEFAULT["push"]
+            src = "default"
+        r["suggestion"] = text
+        r["suggestion_source"] = src or "default"
+        r.pop("_seg_index", None)
+        stats[r["suggestion_source"]] = stats.get(r["suggestion_source"], 0) + 1
+
+    if ctx and stats:
+        ctx.log("suggestion 回填 {} 条,来源分布 {}".format(
+            sum(stats.values()), ",".join("{}={}".format(k, v) for k, v in sorted(stats.items()))))
+    return rules
+
+
+def _strip_internal(rules):
+    """内部辅助字段不出接口。"""
+    for r in rules or []:
+        if isinstance(r, dict):
+            r.pop("_seg_index", None)
+    return rules
+
+
 def pick_push_rules(all_rules, push_source):
     """从 crowd_rules 里挑出参与圈人的规则。
 
@@ -3616,6 +3774,10 @@ def pick_push_rules(all_rules, push_source):
                              "direction": direction,
                              "direction_raw": r.get("direction_raw"),
                              "estimated_size": r.get("estimated_size"),
+                             # 排除人群同样要带建议动作(运营要知道"为什么不推、那该怎么办"),
+                             # _seg_index 是回填 suggestion 的主键,白名单投影必须带上它,
+                             # 否则排除侧只能走兜底话术(direction_raw 当年就是这么丢的)
+                             "_seg_index": r.get("_seg_index"),
                              "reason": "direction={},按接口口径不参与推送".format(direction)})
     if push_source == "model":
         picked = [r for r in segs if (r.get("finding_id") or "").startswith("fnd_model")]
@@ -3777,7 +3939,7 @@ def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extrac
         sd = ctx.step("draft", lambda: steps.draft(ctx, src, sp))
         cr_path = ctx.step("crowd_rules", lambda: steps.crowd_rules(ctx, src, sd))
 
-        all_rules = _load(cr_path)
+        all_rules = stamp_seg_index(_load(cr_path))
         segs, picked, excluded, fixes = pick_push_rules(all_rules, ctx.push_source)
         for f in fixes:
             ctx.warn(f)
@@ -3838,6 +4000,11 @@ def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extrac
         report_url = ctx.step("publish", lambda: publish_html(ctx, html))
 
         def _assemble():
+            # 出参前用定稿(sf)把「可落地人群包」那一列的建议动作刷进 suggestion。
+            # 必须在这里做:crowd_rules.json 是 polish 之前冻结的,那时 action 还是占位句。
+            attach_suggestions(push_ok, sf, ctx)
+            attach_suggestions(excluded, sf, ctx)
+            _strip_internal(dropped)
             push_sql, count_sql = build_push_sql(
                 push_ok, table=src.sql_table, id_col=src.id_col, union_col=src.union_col,
                 base_where=src.base_where(ctx) if hasattr(src, "base_where") else None)

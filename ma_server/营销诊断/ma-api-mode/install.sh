@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 # 营销诊断 API 服务安装脚本。先备份、再覆盖、最后自检。
 # 累积包:装这一个就够了,不用再装之前的 fix / fix2 / … / fix9 / fix10。
+# fix18.1(2026-08-07):上线首单(1012006)复盘补丁 ——
+#   ⓐ ma_core.py:/result 的公开投影加第五个字段 suggestion(此前 attach_suggestions
+#      回填的值只留在 meta.json,调用方看不到)。suggestion_source 仍留 meta.json。
+#   ⓑ ma_pipeline.py:restore_seg_anchors 的人群身份键改为「finding_id + 组内序号」。
+#      模型人群的 finding_id 全是 fnd_model_decision_rule,老写法拿 fid 当字典键会让
+#      三条人群塌成一条 —— 前两条的 name/sql_filter/estimated_size 被回填成第三条的值,
+#      表现为「接口三个人群名各不相同、报告里三行同名」。首单实证,已修。
+#   ⓒ 配套 skill(ma-skill-fix20 同批更新):阈值最多 4 位小数(修 fix20 引入的
+#      `> 2.50000000000000044409` 回归)。
+# fix18(2026-08-05):人群规则出参加 suggestion(建议动作)——
+#   ① ma_pipeline.py:出参 crowd_spec.rules[] 与 excluded_rules[] 每条新增
+#      suggestion(= 报告「可落地人群包」里与该人群对应的那句建议动作)+ suggestion_source
+#      (index/sql/name/default,标记这句话是怎么对上的,便于线上统计走没走兜底)。
+#      为什么要在 assemble 前回填而不是在 crowd-rules 那步直接取:crowd_rules.json 是在
+#      report_agent/polish **之前**冻结的(锚点先冻结,Agent 不能中途改人群口径),
+#      那时 action 还是草稿骨架句「按 finding 建议方向投放/排除/促付。[待润色]」,
+#      直接带出去就是占位符。对齐用位置序号做主键(不看人名 —— 人名可能带·变体N、
+#      也可能撞名),sql_filter 校验,name 兜底,都落空按方向给兜底话术。
+#   ② 配套 skill(ma-skill-fix20,单独包):crowd_rules.json 也带 suggestion 作保底值;
+#      模型人群命名按"区分性特征"重写(原来三条规则都叫「深漏斗高潜人群」靠·变体N 区分);
+#      top3 选人群时按命中人群 Jaccard 去冗(避免只差一个阈值的近重复规则占掉名额)。
 # fix17(2026-08-04):prepare 提速与降级不冻死(1011270 单复盘:pull 修好后瓶颈下移,
 #   prepare 对 5.9M×250 全量单跑 28.6min 顶穿 1800s,其中 lightgbm 训练 1058s 占 59%;
 #   降级"本地骨架"后又因骨架取列的十几个无日志 Spark 查询把任务冻死在 phase=prepare)——
@@ -49,7 +70,7 @@
 #   特征表默认 app_dm.tmp_ctj_marketing_audit_features_hebo,过滤列默认 activity_id
 #   (MA_FILTER_COL 可调,老表是 task_id;配错不报错只捞 0 行,换表必查);
 #   人群池默认 app_dm.long_ctj_marketing_audit_sample(圈人计数与 push_sql 的 FROM)。
-# 用法:tar xzf ma-fix17.tar.gz -C ~/prism/ma-api-mode/ && bash ~/prism/ma-api-mode/install.sh
+# 用法:tar xzf ma-fix18.tar.gz -C ~/prism/ma-api-mode/ && bash ~/prism/ma-api-mode/install.sh
 #      (ma_server 上按实际部署路径,如 ~/prism/ma-api-mode/)
 # ⚠ fix9 还配套改了 skill 的渲染器(业务影响排版碎裂修复),那个文件不在本包里:
 #   把 report_renderer.py 拷到 ~/.claude/skills/marketing-audit/snippets/ 里(先备份原件)。
@@ -141,6 +162,21 @@ if [ "$FAIL" -ne 0 ]; then
 fi
 
 echo "=== 装完了,回归全过。 ==="
+echo
+echo "fix18.1:上线首单复盘补丁 ——"
+echo "  - /result 出参 rules 逐条现在是五个字段:name/finding_id/sql_filter/direction/suggestion。"
+echo "  - 人群身份键修碰撞:同 finding_id 的模型人群不会再互相覆盖(报告与接口人群名从此一致)。"
+echo "  - 配套 skill 包 ma-skill-fix20 同批更新(阈值最多 4 位小数),两个包一起装。"
+echo
+echo "fix18:人群规则出参新增 suggestion(建议动作)——"
+echo "  - crowd_spec.rules[] 与 excluded_rules[] 每条多两个字段:"
+echo "      suggestion        = 报告「可落地人群包」里该人群对应的建议动作(纯文本)"
+echo "      suggestion_source = index / sql / name / default,标记这句话是怎么对上的"
+echo "  - 纯增字段,老调用方不受影响;下游若要用,认 suggestion 即可。"
+echo "  - 上线后抽查:出参里 suggestion_source=default 的条数应当很少;若大面积是 default,"
+echo "    说明定稿人群段没对上(看日志里那行「suggestion 回填 N 条,来源分布 …」)。"
+echo "  - ⚠ 配套 skill 包 ma-skill-fix20 要一起装,否则模型人群仍会重名、且 crowd_rules.json 无保底值:"
+echo "      tar xzf ma-skill-fix20.tar.gz -C ~/.claude/skills/marketing-audit/"
 echo
 echo "fix17:prepare 提速与降级不冻死 ——"
 echo "  - 模型训练下采样(正样本全保留、只采负样本)MA_MODEL_SAMPLE=500000(0=关):"

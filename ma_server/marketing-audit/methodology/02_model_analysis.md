@@ -149,7 +149,7 @@
 |---|---|---|
 | `calibration.overconfident` | `max_gap > 0.05` | `auto_finding` + 圈人阈值 `blind_spot` |
 | `low_score_converted` | 漏判占比 > 10% | `auto_finding` + 特征工程 `blind_spot` |
-| `decision_rules` | `lift ≥ 2 且 sample_count ≥ 100`,再按全量口径 lift 降序只保留**效果最好的 top3**(`decision_rule_top_n` 可调;同 lift 取覆盖大者;全量规则仍留在 `model_analysis.decision_rules` 可审计) | `auto_segment`（含 filter_conditions） |
+| `decision_rules` | `lift ≥ 2 且 sample_count ≥ 100`,再按全量口径 lift 降序贪心选出**效果最好且互不重复的 top3**(与已选人群 Jaccard ≥ `decision_rule_max_jaccard`(默认 0.5)的跳过并往下补足;`decision_rule_top_n` 可调;被跳过的规则记入 blind_spots;全量规则仍留在 `model_analysis.decision_rules` 可审计) | `auto_segment`（含 filter_conditions） |
 | `note` | 含 `[零方差剔除]` / `[低样本量·*]` | `auto_caveat` |
 | `stratified_auc` | 子群 AUC 跨度 > 0.05 | `auto_finding` + 子群拟合 `blind_spot` |
 | `rule_stability` | 跨子群 precision 差 ≥ 0.15 | `auto_caveat`（不可跨群复用） |
@@ -216,3 +216,13 @@ Top 5 特征按前缀映射到对应维度，宿主 Agent 在 Step 3 应**优先
 - **同特征合并**:一条路径对同一特征的多次切分,数值合并为最紧上下界、分类集合按 AND 语义求交/差,圈人 SQL 无冗余子句;
 - **后端边界差异**:XGBoost 数值切分渲染为 `<` / `>=`,LightGBM 为 `<=` / `>`,均为精确语义的 Spark SQL;
 - **规则可回放**:`_apply_rule_mask` 支持数值比较与 `in / not in [...]`(含「空值」),稳定性(O25)/重叠(O28)检验覆盖分类规则。
+
+## 人群命名规则(2026-08-05 重写)
+
+模型抽出来的人群名是**圈人锚点**(下游 crowd_rules.json 与报告靠它对齐),既要唯一、要确定性,也要让运营看名字就知道这批人差在哪。命名按"区分度"来:
+
+- **独有条件优先**:一组规则一起起名,先统计各字段在这组里的出现次数;只在本条出现的条件才是区分点,名字主体取其中最多 2 个的带方向标签。共有条件(如三条规则都含 `pre_max_funnel_depth`)对区分毫无价值,只挑一个作收尾词保留共性语义。
+- **标签带方向**:同一字段切在高侧和低侧是两类相反的人群,`pre_max_funnel_depth > 2.5` → 「深漏斗」、`<= 1` → 「浅漏斗」;二值字段用有/无;分类切分把类别值直接写进名字(`channel in [push,popup]` → 「push/popup」),比任何字段名都有信息量。
+- **三级兜底**:精选标签表(40 字段,业务语义最好)→ `feature_registry.yaml` 中文描述提炼 ≤6 字 → 字段名可读化。任何字段都能起出可区分的名字,不会退化成「模型高潜人群一/二」。
+- **撞名后处理**:名字重复时补一个"组内取值不同"的条件——标签能区分就补标签(`·高x2`),只差阈值就补阈值(`≥4.5`)。`·变体N` 只作最后防线,正常不触发。
+- **确定性**:只依赖规则文本与其顺序,同一份数据重跑必然同名。

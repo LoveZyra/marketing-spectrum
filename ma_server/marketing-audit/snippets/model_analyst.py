@@ -492,17 +492,35 @@ def _dedup_rules(rules: list[DecisionRule], top_n: int) -> list[DecisionRule]:
 _SENTINEL_EPS = 1e-20  # 树对二值 0/1 特征的切分哨兵上界（实际切分点约 1e-35）
 
 
-def _fmt_threshold(v: float) -> str:
-    """树切分阈值 → 无科学计数法的字符串（位置计数），rule_text/rule_sql 双侧共用。
+_MAX_DECIMALS = 4   # 阈值最多保留 4 位小数（业务要求；再多既不可读也无业务意义）
 
-    下游（报告展示、org_json、Spark SQL）都不应出现 `3e-05` 这类科学计数法；
-    整值去掉小数点，小数保留位置计数（最多 10 位小数）。
+
+def _fmt_threshold(v: float) -> str:
+    """树切分阈值 → 无科学计数法、最多 4 位小数的字符串，rule_text/rule_sql 共用。
+
+    两条硬约束：
+      1) 下游（报告展示、org_json、Spark SQL）不出现 `3e-05` 这类科学计数法；
+      2) 最多 4 位小数 —— 树切分点是相邻取值的中点，带一堆浮点噪声
+         （`2.5000000000000004`、`15.520000000000001`），照抄出去既难读又毫无意义。
+
+    唯一例外：4 位小数会把值抹成 0 的极小阈值（率值特征的 3e-05 等），
+    那样等价于把 `> 0.00003` 写成 `> 0`，语义全变。这时才继续加位数，
+    取第一个非零写法（仍然不用科学计数法）。
+
+    ⚠ 2026-08-07 修回归：fix20 为消灭科学计数法改成"加位数直到 float 完全相等"，
+    结果把浮点噪声全暴露出来（线上出现 `> 2.50000000000000044409`）。
+    正确取舍是：可读性优先，噪声级差异（相对 1e-9 以下）不值得保留。
     """
     if v == int(v):
         return str(int(v))
-    s = f"{v:.10f}".rstrip("0").rstrip(".")
-    # 理论上 <1e-10 的真实阈值不存在（更小的是哨兵，另行处理）；万一出现退回 repr
-    return s if float(s) != 0 else repr(v)
+    s = f"{v:.{_MAX_DECIMALS}f}".rstrip("0").rstrip(".")
+    if s and float(s) != 0:
+        return s
+    for nd in (6, 8, 10, 12, 15, 20, 30, 40):   # 极小阈值：加到能表示出非零为止
+        s = f"{v:.{nd}f}".rstrip("0").rstrip(".")
+        if s and float(s) != 0:
+            return s
+    return "0"
 
 
 def _merge_render_clauses(steps: list, cat_maps: dict | None = None) -> tuple[list[str], list[str]]:
@@ -1166,7 +1184,7 @@ def _apply_rule_mask(df: pd.DataFrame, rule_text: str) -> "np.ndarray | None":
 
 
 def _rule_overlap(
-    df: pd.DataFrame, rules: list["DecisionRule"], top_n: int = 5,
+    df: pd.DataFrame, rules: list["DecisionRule"], top_n: int = 0,
     target_col: str = TARGET_COL,
 ) -> dict:
     """O28：Top 规则命中人群 Jaccard 相似度矩阵。
@@ -1175,12 +1193,21 @@ def _rule_overlap(
       - jaccard_matrix: list of {rule_a, rule_b, jaccard}（仅 jaccard > 0.05）
       - redundant_pairs: jaccard > 0.70 的规则对
       - complementary_pairs: jaccard < 0.05 且均 precision > 0.5 的互斥规则对
+      - pairs: list of {i, j, jaccard} —— fix20 新增,i/j 是规则在 decision_rules
+        里的**下标**(不是截断文本),下游(model_interpreter 选人群)据此做去冗贪心;
+        文本标签会被截断/改写,只有下标能稳定 join。
+      - n_rules_covered: 实际算了掩码的规则数(掩码解析失败/命中<10 的不计)
+
+    fix20:top_n 默认改为 0 = 覆盖全部规则(原来只算前 5 条)。掩码运算只在验证集上做,
+    10 条规则 45 对,开销可忽略;覆盖不全会让下游去冗对拿不到数据的规则失效。
     """
-    if not rules or "is_converted" not in df.columns:
+    # fix20:门槛原来硬写 "is_converted",而本函数算的是 target_col(可能是 is_paid)——
+    # 目标列换成 is_paid 且数据里没有 is_converted 时,整个 O28 会被静默跳过。改为查真正用到的列。
+    if not rules or target_col not in df.columns:
         return {}
-    masks = []
-    labels = []
-    for rule in rules[:top_n]:
+    subset = rules if not top_n else rules[:top_n]
+    masks, labels, idxs = [], [], []
+    for ri, rule in enumerate(subset):
         try:
             m = _apply_rule_mask(df, rule.rule_text)
         except Exception:
@@ -1188,14 +1215,17 @@ def _rule_overlap(
         if m is not None and m.sum() >= 10:
             masks.append(m)
             labels.append(rule.rule_text[:50])
+            idxs.append(ri)
 
     matrix = []
+    pairs = []
     redundant, complementary = [], []
     for i in range(len(masks)):
         for j in range(i + 1, len(masks)):
             inter = int((masks[i] & masks[j]).sum())
             union = int((masks[i] | masks[j]).sum())
             jac = round(inter / union, 4) if union > 0 else 0.0
+            pairs.append({"i": idxs[i], "j": idxs[j], "jaccard": jac})
             if jac > 0.05:
                 matrix.append({
                     "rule_a": labels[i], "rule_b": labels[j], "jaccard": jac
@@ -1211,6 +1241,8 @@ def _rule_overlap(
         "jaccard_matrix": matrix,
         "redundant_pairs": redundant,
         "complementary_pairs": complementary,
+        "pairs": pairs,
+        "n_rules_covered": len(masks),
     }
 
 
