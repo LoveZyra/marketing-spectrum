@@ -1,0 +1,22 @@
+.gitignore
+  h_4e3a4dcdcf415f 33
+prism/server/modules/files/files.routes.ts
+  h_4e3a4dcdcf415f 1,82-151,991-1198
+prism/server/routes/documents.js
+  h_4e3a4dcdcf415f 705-944
+prism/src/components/chat/hooks/useChatComposerState.ts
+  h_4e3a4dcdcf415f 35-129,748-750,754-767
+prism/src/components/file-tree/hooks/useFileTreeUpload.ts
+  h_4e3a4dcdcf415f 6,119-215,219-221,226,248,446-494
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ddef9a93f86cb023db110e42e117aa259c32c45c",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
