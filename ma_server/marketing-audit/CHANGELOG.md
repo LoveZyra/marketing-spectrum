@@ -4,6 +4,30 @@
 
 ---
 
+## ★ 2026-08-12 规则知识库业务评审对齐(fix21)
+
+**来源**:业务侧《营销诊断项目.xlsx·知识库优化》对全部规则逐条评审(34 行),含保留/删除判定、条件修订、优化建议与两条新增规则。本次把评审结论全量落进 yaml,并给 yaml schema 补了四个承载评审结论的键。
+
+**规则库:33 条 → yaml 35 条(在用 28 + 软下线 7)**
+
+| 变更 | 说明 | 文件 |
+|---|---|---|
+| **7 条软下线(`enabled: false`)** | #15 详情页营销打断、#16 弹屏打断支付、#17 填写页营销打断、#18 营销干扰支付、#24 漏斗严重倒退、#40 高频下单;#46 红包门槛过高为「P2 待数据」同样置 false。**不物理删行**:id 不复用、历史 job 的 state 仍可解释、业务反悔改回一行。引擎新增 `status=disabled` 短路,这些规则不进 rule_summary、不参与打分、不进报告 | `diagnostic_rules.yaml`,`diagnostic_engine.py` |
+| **#7 口径纠错并改名** | 原名「营销时机滞后」、description 写的是「触达晚于成单的时序反转」,但 condition 只算 `pre_last_order_to_touch_min <= 拐点`,**从未校验时序方向**——文案与实现不符已久。改名「成单后推送过急」,severity high→mid,叙述只讲间隔过短;时序倒置归口到 #44 伪实时场景配置 | `diagnostic_rules.yaml`,`methodology/08` |
+| **#11 换口径 + #43 随之收紧** | #11 由 `pre_mkt_product_browse_match == 0`(兴趣最深品类不一致)改为 `(pre_target_product_visit_cnt == 0) & (pre_browse_target_product == 0)`(目标品类零接触);#43 收紧为 #11 ∧ `pre_mainflow_event_cnt > 0`,定位为「对目标品类没兴趣但对别的品类有行为」的子集。两条**必须合并为一条 finding**。`pre_mkt_product_browse_match` 与 `pre_top_interest_product` 不再被任何规则引用(字段保留,模型分析仍用) | `diagnostic_rules.yaml`,`feature_registry.yaml`,`methodology/08` |
+| **新增 #45 低意向过度营销(仅广告投放)** | `(pre_popup+pre_push+pre_sms+pre_insite_msg 触达合计 >= 3) & (pre_mainflow_event_cnt == 0)`。四个字段 registry 已有,零数据依赖。阈值 3 为业务硬值,同时输出 `insite_total_touch_cnt` 的 CVR 拐点作**对照**(新键 `threshold_reference`,不参与判定),一个月后按对账结果决定是否切自适应 | `diagnostic_rules.yaml` |
+| **新增 #46 红包门槛过高(P2 待数据)** | 判定「红包门槛 > 对应订单项目 GMV 的 130%」。阻塞:大宽表 `action` 列现为 `concat(couponamount, smallvalidamount)`,需拆出 `coupon_amount`/`coupon_min_valid_amount`;「优享红包不可用占比」口径待补。条目先建好置 `enabled:false`,过渡期用画像 `gmv` 做代理只进 data_caveats | `diagnostic_rules.yaml` |
+| **yaml schema +4 键** | `applies_to`/`scope_filter`(适用活动范围,承载 Excel「使用范围」列;与 channel_filter 分工:后者管「哪些行」,前者管「哪类活动」)、`min_trigger_rate`(触发体量门槛,#41 取 5%)、`threshold_reference`(只对照不判定的阈值)、`recommendations`(建议方向)。另有 `data_note`/`pending_change` 两个说明性键 | `diagnostic_rules.yaml`,`diagnostic_engine.py` |
+| **建议方向从 md 归位到 yaml** | 34 条建议此前只写在 `methodology/08` 的 9 张表里、规则写在 yaml,两处必然漂移。现全部落进 yaml `recommendations`,rule_summary 直接带给 Agent;`methodology/08` 的表降级为可读快照并注明「以 yaml 为准」 | `diagnostic_rules.yaml`,`diagnostic_engine.py`,`methodology/08` |
+| **类目收缩的连带处理** | 「关键打断」5 条塌到 1 条(仅 #39),「用户价值」整类清空(仅 #40),`methodology/08` 两章重写/删除;合并组表更新为「过度触达 2/20/33/37」「无主流程低意向 1/5/45」「内容错配 11/43(必须合并)」「遗单召回 21/25」;`feature_registry.yaml` 摘掉下线规则的 id 引用、挂上 #45 | `methodology/08`,`feature_registry.yaml` |
+| **口径备注登记** | #2 记 `data_note`:弹屏有曝光/点击/关闭三种 action,触达次数应只计曝光,上游修正前对 popup 渠道偏严。#3 记 `pending_change`:条件待扩为 `... & ((pre_popup_close_rate>0.6) | (timediff<10))`,依赖新派生字段 | `diagnostic_rules.yaml` |
+
+**验证**(`smoke_test.py`,26 项断言全过):7 条下线规则 `status=disabled` 且不入 summary(在用 28 条);#45 在 push 活动上 `not_applicable`(scope_filter 生效)、在 ads 活动上触发行数与手算逐行一致、对照阈值正常输出;#41 触发率 2.5% 被 `min_trigger_rate` 拦为 `below_min_trigger_rate`、50% 时正常上报;#11/#43 触发行数与手算一致;22 条未改动规则的 condition/severity/required_fields 逐字未变;registry 不再引用任何下线规则。
+
+**⚠️ 上线后需盯**:#11 与 #43 在合成数据上 Jaccard = 0.96(43 本就是 11 的真子集,只差 `pre_mainflow_event_cnt > 0`)。真实活动上若仍 ≥0.9,说明 #43 无独立信息量,应把 #43 也软下线由 #11 单独承载。
+
+---
+
 ## ★ 2026-08-07 线上首单复盘:阈值精度回归 + 人群身份键碰撞 + 出参字段(fix20.1 / api fix18.1)
 
 **来源**:fix20+fix18 上线后第一单(1012006, job_20260807_115338)暴露三个问题,都已修。

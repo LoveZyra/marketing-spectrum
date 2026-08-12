@@ -75,7 +75,7 @@ features:
     dimension: activity_info
     description: 推送方式标准化（popup/push/sms/ads/insite_msg/activity）
     threshold_method: none
-    diagnostic_rules: [3, 16, 35, 39]
+    diagnostic_rules: [3, 35, 39]
     fallback: null
 
   - name: activity_product_name
@@ -169,7 +169,7 @@ features:
     dimension: label
     description: 触达当日 product_name 匹配的创单或成单（0/1，目标变量）
     threshold_method: none
-    diagnostic_rules: [16, 18, 19, 20, 21, 23, 24, 25, 41]
+    diagnostic_rules: [19, 20, 21, 23, 25, 41]
     fallback: null
 
   - name: is_paid
@@ -227,7 +227,7 @@ features:
     description: 最近一次主流程行为到最后触达时刻的时间差（分钟）
     threshold_method: percentile
     threshold_percentiles: [25, 50, 75, 90]
-    diagnostic_rules: [15, 17]
+    diagnostic_rules: []
     fallback: null
 
   - name: pre_last_mkt_to_touch_min
@@ -285,7 +285,7 @@ features:
     description: 主流程行为总次数
     threshold_method: percentile
     threshold_percentiles: [25, 50, 75, 90]
-    diagnostic_rules: [1, 5]
+    diagnostic_rules: [1, 5, 43, 45]
     fallback: 0
 
   - name: pre_reached_homepage
@@ -317,7 +317,7 @@ features:
     dimension: funnel
     description: 是否曾到达填写页（0/1）
     threshold_method: none
-    diagnostic_rules: [16, 39]
+    diagnostic_rules: [39]
     fallback: 0
 
   - name: pre_reached_payment
@@ -334,7 +334,7 @@ features:
     description: 从详情页返回列表页的历史次数（犹豫/比价信号）
     threshold_method: percentile
     threshold_percentiles: [75, 90, 95]
-    diagnostic_rules: [24]
+    diagnostic_rules: []
     fallback: 0
 
   - name: pre_back_to_booking_cnt
@@ -343,7 +343,7 @@ features:
     description: 从填写页返回详情页的历史次数
     threshold_method: percentile
     threshold_percentiles: [75, 90, 95]
-    diagnostic_rules: [24]
+    diagnostic_rules: []
     fallback: 0
 
   - name: pre_skip_detail_flag
@@ -368,7 +368,7 @@ features:
     dimension: funnel
     description: 触达前是否有目标品类主流程浏览（0/1）
     threshold_method: none
-    diagnostic_rules: []
+    diagnostic_rules: [11, 43]
     fallback: 0
 
   - name: pre_target_product_visit_cnt
@@ -377,7 +377,7 @@ features:
     description: 触达前目标品类主流程访问次数
     threshold_method: percentile
     threshold_percentiles: [50, 75, 90]
-    diagnostic_rules: []
+    diagnostic_rules: [11, 43]
     fallback: 0
 
   # ─────────────────────────────────────────────────────────
@@ -456,7 +456,7 @@ features:
     description: 历史弹屏触达次数
     threshold_method: percentile
     threshold_percentiles: [75, 90, 95]
-    diagnostic_rules: [35]
+    diagnostic_rules: [35, 45]
     fallback: 0
 
   - name: pre_push_touch_cnt
@@ -465,7 +465,7 @@ features:
     description: 历史Push触达次数
     threshold_method: percentile
     threshold_percentiles: [75, 90, 95]
-    diagnostic_rules: []
+    diagnostic_rules: [45]
     fallback: 0
 
   - name: pre_sms_touch_cnt
@@ -474,7 +474,7 @@ features:
     description: 历史短信触达次数
     threshold_method: percentile
     threshold_percentiles: [75, 90, 95]
-    diagnostic_rules: []
+    diagnostic_rules: [45]
     fallback: 0
 
   - name: pre_ads_touch_cnt
@@ -492,7 +492,7 @@ features:
     description: 历史站内信触达次数
     threshold_method: percentile
     threshold_percentiles: [75, 90, 95]
-    diagnostic_rules: []
+    diagnostic_rules: [45]
     fallback: 0
 
   - name: pre_activity_touch_cnt
@@ -581,7 +581,7 @@ features:
     description: 历史弹屏10秒内即离开的次数（强拒绝信号）
     threshold_method: percentile
     threshold_percentiles: [75, 90]
-    diagnostic_rules: [3, 16, 39]
+    diagnostic_rules: [3, 39]
     fallback: 0
 
   - name: pre_funnel_regression_after_mkt
@@ -590,7 +590,7 @@ features:
     description: 历史营销后漏斗倒退次数（营销干扰购买流程）
     threshold_method: percentile
     threshold_percentiles: [75, 90]
-    diagnostic_rules: [18]
+    diagnostic_rules: []
     fallback: 0
 
   - name: pre_mkt_trigger_mainflow_cnt
@@ -817,7 +817,7 @@ features:
     dimension: product_preference
     description: 历史浏览最深的品类（酒店/机票/火车票/景区/用车/汽车票/无浏览）
     threshold_method: none
-    diagnostic_rules: [11]
+    diagnostic_rules: []
     fallback: "无浏览"
 
   - name: pre_mkt_product_browse_match
@@ -825,7 +825,7 @@ features:
     dimension: product_preference
     description: 活动目标品类是否与用户历史兴趣最深品类一致（0/1）
     threshold_method: none
-    diagnostic_rules: [11]
+    diagnostic_rules: []
     fallback: 0
 
   - name: pre_has_search
@@ -1375,7 +1375,7 @@ features:
     dimension: path
     description: 触达前最后一个行为的 detailname
     threshold_method: none
-    diagnostic_rules: [15, 17]
+    diagnostic_rules: []
     fallback: null
 
   - name: pre_last_touch_platform
@@ -1519,7 +1519,7 @@ features:
     dimension: path
     description: 触达前末次主流程行为的页面
     threshold_method: none
-    diagnostic_rules: [15, 17]
+    diagnostic_rules: []
     fallback: null
 
   - name: pre_last_mainflow_product
@@ -1709,7 +1709,7 @@ features:
     description: 历史成单次数
     threshold_method: percentile
     threshold_percentiles: [50, 75, 90]
-    diagnostic_rules: [40]
+    diagnostic_rules: []
     fallback: 0
 
   - name: pre_has_create_order
@@ -1758,7 +1758,7 @@ features:
     dimension: order_context
     description: 历史是否有多次成单（复购用户，0/1）
     threshold_method: none
-    diagnostic_rules: [40]
+    diagnostic_rules: []
     fallback: 0
 
   - name: pre_is_target_product_repurchase
@@ -1790,7 +1790,7 @@ features:
     dimension: order_context
     description: 历史是否有创单未成单（遗单用户，0/1）
     threshold_method: none
-    diagnostic_rules: [16, 18, 21, 25]
+    diagnostic_rules: [21, 25]
     fallback: 0
 
   # ─────────────────────────────────────────────────────────

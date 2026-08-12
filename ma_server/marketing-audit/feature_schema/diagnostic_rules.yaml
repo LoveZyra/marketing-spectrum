@@ -1,7 +1,26 @@
+# 诊断规则库 — marketing-audit
+#
+# enabled=false 的条目为「软下线」：引擎短路跳过（status=disabled），不参与打分、不进报告，
+# 但 id 不复用、历史 job 的 state 仍可解释，业务反悔时改回 true 即可。
+#
+# 字段说明
+# --------
+# applies_to          : 适用范围（通用 / 广告投放 / 红包提醒·红包发放），对应 Excel「使用范围」列
+# scope_filter        : applies_to 的可执行表达式；不匹配时规则 not_applicable（活动类型不适用）
+# channel_filter      : 渠道子集过滤（activity_channel_std），在适用行子集上评估
+# min_trigger_rate    : 触发率低于该值时不上报（status=below_min_trigger_rate）
+# threshold_reference : 只做对照输出、不参与判定的阈值
+# recommendations     : 建议方向（业务评审沉淀，methodology/08 的表格由此同步）
+# data_note           : 上游数据口径备注，写入报告 data_caveats
+# pending_change      : 已评审但受阻于数据的待改动，供后续批次认领
+#
+# 最近一次业务评审：2026-08-12（《营销诊断项目.xlsx·知识库优化》第 50-84 行）
 rules:
 - id: 1
   category: 触达质量
   name: 无效营销触达
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - pre_mainflow_event_cnt
@@ -13,9 +32,14 @@ rules:
   description: 用户未进入主流程，却有营销触达。说明触达人群与主流程行为完全脱节，无实际转化潜力。
   execution_difficulty: medium
   positive_alias: 无主流程用户成单不低
+  recommendations:
+  - 优化人群定向，排除低意向用户
+  - 检查营销内容与落地页匹配度，确保用户点击后能找到预期内容
 - id: 2
   category: 触达质量
   name: 过度营销骚扰
+  applies_to: 通用
+  enabled: true
   channel_filter: activity_channel_std in ('push', 'popup', 'sms', 'outbound', 'insite_msg')
   required_fields:
   - activity_touch_cnt
@@ -27,9 +51,14 @@ rules:
   severity_base: mid
   description: 当日触达次数过高，超过阈值后 CVR 不再提升甚至下降，属于骚扰性触达。
   execution_difficulty: easy
+  data_note: 弹屏存在曝光/点击/关闭三种 action，activity_touch_cnt 与 pre_popup_touch_cnt 应只统计「曝光」；上游大宽表口径修正前，本条对 popup 渠道的触达次数偏高。
+  recommendations:
+  - 设置营销频次上限控制，单用户单日触达不超过 3 次，避免用户反感
 - id: 3
   category: 触达质量
   name: 弹屏打扰
+  applies_to: 通用
+  enabled: true
   channel_filter: activity_channel_std == 'popup'
   required_fields:
   - activity_channel_std
@@ -40,9 +69,16 @@ rules:
   severity_base: mid
   description: 弹屏渠道触达且用户历史上有快速拒绝弹屏的记录（10秒内离开），说明该用户对弹屏高度抵触。
   execution_difficulty: medium
+  pending_change: P1：条件拟扩为 (activity_channel_std=='popup') & (pre_popup_reject_cnt>0) & ((pre_popup_close_rate>0.6) | (timediff<10))；依赖新派生字段 pre_popup_close_rate（源自 popup 分类中 action='关闭'）。
+  recommendations:
+  - 优化弹屏触发时机，避免在用户关键操作路径弹出
+  - 弹屏内容与用户当前意图匹配
+  - 优化弹屏样式
 - id: 4
   category: 触达质量
   name: 人群质量过低
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - risk_type
@@ -54,9 +90,13 @@ rules:
   severity_base: high
   description: 触达人群中风控风险用户、近1年净营收为负、或当天停留极短（疑似误触/低质量）占比过高，营销资源投在低质量人群上。基于 V2.1 新增用户画像字段（risk_type 风控 / finance_revenue_after 营收 / timediff 停留时长）评估；字段取值（'风险用户' / 营收负值 / 停留秒数）以实际数据为准。久未消费信号（距上次消费>360天）需补充 days_since_last_order 派生字段后再叠加。
   execution_difficulty: easy
+  recommendations:
+  - 投放人群加上风控标签的过滤
 - id: 5
   category: 触达质量
   name: 僵尸用户浪费营销
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - pre_mainflow_event_cnt
@@ -71,9 +111,14 @@ rules:
   description: 用户无主流程行为且总行为极少（低于CVR拐点），属于沉默用户，营销资源浪费。
   execution_difficulty: easy
   positive_alias: 低活跃沉默用户成单较高
+  recommendations:
+  - 建立用户活跃度筛选机制，低活跃用户减少营销触达
+  - 优先触达近期有活跃行为的高价值用户
 - id: 6
   category: 时机匹配
   name: 营销时机不当
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - period_mismatch_flag
@@ -84,9 +129,14 @@ rules:
   description: 触达时段与用户历史行为主时段不一致，说明营销在用户非活跃时间推送，效果折扣大。
   execution_difficulty: easy
   positive_alias: 非常规时段触达成单较高
+  recommendations:
+  - 优先检查先知场景配置，是否实时场景使用离线标签导致场景伪实时
+  - 订阅消息实时场景建议配置即时发送
 - id: 7
   category: 时机匹配
-  name: 营销时机滞后
+  name: 成单后推送过急
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - pre_has_complete_order
@@ -96,26 +146,37 @@ rules:
   - field: pre_last_order_to_touch_min
     stat: optimal
   handling: row_level
-  severity_base: high
-  description: 营销触达时间晚于用户成单时间（时序反转），说明实时标签存在延迟或配置错误，营销在转化完成后才触发。与Rule 8（成单后间隔过短）的区别：本条是时序倒置问题，应先排查标签配置。
+  severity_base: mid
+  description: 用户已有历史成单，且最近一次成单到本次触达的间隔短于 CVR 最优切分点，属于成单后过急推送。注意本条只度量「间隔过短」，不校验触达与成单的先后顺序；疑似时序倒置应回到先知实时场景标签配置排查。
   execution_difficulty: easy
   positive_alias: 近期成单复购人群成单较高
+  recommendations:
+  - 将营销推送时间延后
+  - 查看实时场景标签是否配置错误
 - id: 11
   category: 内容匹配
   name: 跨品类推送错配
+  applies_to: 通用
+  enabled: true
   channel_filter: activity_channel_std in ('activity', 'push', 'popup', 'sms', 'outbound', 'insite_msg')
   required_fields:
-  - pre_mkt_product_browse_match
-  condition_template: pre_mkt_product_browse_match == 0
+  - pre_target_product_visit_cnt
+  - pre_browse_target_product
+  condition_template: (pre_target_product_visit_cnt == 0) & (pre_browse_target_product == 0)
   threshold_fields: []
   handling: row_level
   severity_base: mid
-  description: 活动目标品类与用户历史兴趣最深品类不一致，属于跨品类推送错配，转化潜力低。
+  description: '活动目标品类在用户历史上既无主流程访问、也无任何浏览记录，属于「推从没看过的品类」硬错配。（2026-08-12 起口径由 pre_mkt_product_browse_match==0 的兴趣不符改为目标品类零接触；与 #43 同属内容匹配主题组，#43 为本条中「仍有其他主流程行为」的子集。）'
   execution_difficulty: medium
   positive_alias: 跨品类兴趣用户成单不低
+  recommendations:
+  - 根据用户实时浏览行为动态调整推送内容
+  - 建立用户兴趣标签实时更新机制
 - id: 12
   category: 站内外衔接
   name: 站内多渠道品类不一致
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - insite_multi_channel_match_flag
@@ -125,9 +186,14 @@ rules:
   severity_base: high
   description: 同一用户当日被站内多种渠道触达但推送品类不一致，多渠道间信息矛盾，用户困惑导致转化下降。
   execution_difficulty: medium
+  recommendations:
+  - 建立跨渠道品类一致性校验机制，同一用户同日多渠道路由一致品类
+  - 设置渠道间品类互斥规则
 - id: 13
   category: 站内外衔接
   name: 站内外项目不一致
+  applies_to: 通用
+  enabled: true
   channel_filter: activity_channel_std == 'ads'
   required_fields:
   - has_ads_touch
@@ -141,9 +207,13 @@ rules:
   positive_signal_reason: 站内外品类一致的广告投放带来更高CVR，说明品类一致性有正向价值
   execution_difficulty: easy
   positive_alias: 站外引流自主进站成单较高
+  recommendations:
+  - 当广告进站用户且有项目标识时，站内首页弹屏、站内信等投放一致项目的红包和落地页
 - id: 14
   category: 站内外衔接
   name: 站外无站内承接
+  applies_to: 通用
+  enabled: true
   channel_filter: activity_channel_std == 'ads'
   required_fields:
   - ads_no_insite_flag
@@ -156,9 +226,16 @@ rules:
   positive_signal_reason: 仅有站外无站内承接的用户CVR反而更高，说明自主意向更强
   execution_difficulty: medium
   positive_alias: 仅站外触达自主意向强成单较高
+  recommendations:
+  - 建立站外广告到站内承接的联动机制
+  - 用户进站后首屏展示与广告内容相关的落地页或活动
 - id: 15
   category: 关键打断
   name: 详情页营销打断
+  applies_to: 通用
+  enabled: false
+  disabled_reason: 业务评审下线（2026-08-12 知识库优化）：详情页停留与营销触达的时间差不足以判定「打断」，误诊率高；业务侧不可执行
+  disabled_at: '2026-08-12'
   channel_filter: all
   required_fields:
   - pre_last_mainflow_detail
@@ -172,9 +249,16 @@ rules:
   description: 用户刚浏览完详情页即被营销触达打断（触达间隔极短），干扰了自然决策流程。
   execution_difficulty: medium
   positive_alias: 详情页后即时触达高成单
+  recommendations:
+  - 设置详情页营销静默期，用户浏览详情页期间暂停营销触达
+  - 等用户离开详情页 5 分钟后再触发营销
 - id: 16
   category: 关键打断
   name: 弹屏打断支付
+  applies_to: 通用
+  enabled: false
+  disabled_reason: '业务评审下线（2026-08-12 知识库优化）：与 #39 弹屏打扰填写重叠，且创单未付归因不清'
+  disabled_at: '2026-08-12'
   channel_filter: activity_channel_std == 'popup'
   required_fields:
   - activity_channel_std
@@ -188,9 +272,16 @@ rules:
   severity_base: high
   description: 有未付创单的用户被弹屏触达，且历史上弹屏后易快速离开，说明弹屏正在干扰支付流程。
   execution_difficulty: medium
+  recommendations:
+  - 支付流程期间（创单后 15 分钟内）禁止弹屏
+  - 完成支付后再恢复营销触达
 - id: 17
   category: 关键打断
   name: 填写页营销打断
+  applies_to: 通用
+  enabled: false
+  disabled_reason: 业务评审下线（2026-08-12 知识库优化）：填写页打断口径依赖 pre_last_mainflow_detail 文本匹配，稳定性差
+  disabled_at: '2026-08-12'
   channel_filter: all
   required_fields:
   - pre_last_mainflow_detail
@@ -204,9 +295,16 @@ rules:
   description: 用户刚填写订单即被营销触达打断，填写页是高意图阶段，打断代价最高。
   is_definitional: true
   execution_difficulty: medium
+  recommendations:
+  - 填写页设置营销静默期，保障用户完成下单流程
+  - 用户进入填写页后暂停所有营销触达直到订单完成或超时
 - id: 18
   category: 关键打断
   name: 营销干扰支付
+  applies_to: 通用
+  enabled: false
+  disabled_reason: 业务评审下线（2026-08-12 知识库优化）：漏斗倒退归因到营销缺乏时序证据
+  disabled_at: '2026-08-12'
   channel_filter: all
   required_fields:
   - pre_funnel_regression_after_mkt
@@ -219,9 +317,13 @@ rules:
   description: 有未付创单且历史上营销后漏斗曾倒退，说明营销正在干扰而非促进支付。
   is_definitional: true
   execution_difficulty: medium
+  recommendations:
+  - 创单未付用户优先促付营销（短信提醒、优惠券），避免其他营销内容打断支付决策
 - id: 19
   category: 转化效率
   name: 自然转化营销多余
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - pre_is_marketing_first
@@ -240,9 +342,14 @@ rules:
   positive_signal_reason: 自然转化型用户（自主直达、不依赖营销与优惠）CVR显著高于其余，是应剔除的冗余投放对象
   execution_difficulty: medium
   positive_alias: 自然高意向成单人群
+  recommendations:
+  - 建议缩小人群投放范围
+  - 接入红包补贴价敏人群算法，仅对优惠敏感用户补贴
 - id: 20
   category: 转化效率
   name: 过度营销浪费
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - activity_touch_cnt
@@ -257,9 +364,14 @@ rules:
   description: 营销频次超过CVR拐点仍无转化，且历史上营销从未触发主流程，属于高频低效的营销浪费。
   is_definitional: true
   execution_difficulty: easy
+  recommendations:
+  - 设置营销频次上限，单用户单日不超过 3 次
+  - 营销后无响应用户加入冷却名单，24 小时内不再触达
 - id: 21
   category: 转化效率
   name: 缺少临门一脚优惠
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - pre_create_not_complete
@@ -273,9 +385,15 @@ rules:
   description: 用户有未付创单但无任何历史领券记录，说明价格激励可能是促成支付的缺失临门一脚。
   is_definitional: true
   execution_difficulty: medium
+  recommendations:
+  - 创单未付用户及时发送专属优惠券或红包
+  - 设置创单未付自动发券流程
+  - 优化优惠门槛，提高核销率
 - id: 23
   category: 流程体验
   name: 跨品类比价未决策
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - pre_is_cross_category
@@ -288,9 +406,16 @@ rules:
   description: 有跨品类浏览意向但未转化，可能正在货比三家，决策尚未完成。
   is_definitional: true
   execution_difficulty: hard
+  recommendations:
+  - 识别跨品类比价用户，提供跨品类对比工具
+  - 针对比价用户推送限时优惠促进决策
 - id: 24
   category: 流程体验
   name: 漏斗严重倒退
+  applies_to: 通用
+  enabled: false
+  disabled_reason: 业务评审下线（2026-08-12 知识库优化）：漏斗倒退次数与转化的关系不稳定，阈值不可解释
+  disabled_at: '2026-08-12'
   channel_filter: all
   required_fields:
   - pre_back_to_list_cnt
@@ -304,9 +429,14 @@ rules:
   description: 历史上从详情页/填写页返回上级页面的次数过多，CVR显著偏低，属于决策犹豫信号。
   execution_difficulty: medium
   positive_alias: 历史多次回退用户成单较高
+  recommendations:
+  - 分析漏斗倒退原因（价格不透明、信息不足等）
+  - 优化详情页价格展示和优惠信息
 - id: 25
   category: 流程体验
   name: 多次创单未付
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - pre_create_order_cnt
@@ -319,9 +449,14 @@ rules:
   description: 历史多次创单但均未付款，属于遗单习惯用户，需针对性的支付促进策略。
   is_definitional: true
   execution_difficulty: medium
+  recommendations:
+  - 识别多次创单未付用户，发送专属优惠或客服介入
+  - 分析未付原因针对性解决
 - id: 27
   category: 流程体验
   name: 低意向仅营销
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - pre_max_funnel_depth
@@ -336,9 +471,15 @@ rules:
   positive_signal_reason: 低意向仅依赖营销的用户转化并不差，营销有托底作用
   execution_difficulty: medium
   positive_alias: 轻度参与用户成单不低
+  recommendations:
+  - 优化人群定向，排除低意向用户
+  - 分析低意向用户特征，建立过滤规则
+  - 优先营销高意向用户提高 ROI
 - id: 33
   category: 创单前营销
   name: 创单前营销过多
+  applies_to: 通用
+  enabled: true
   channel_filter: activity_channel_std != 'activity'
   required_fields:
   - activity_touch_cnt
@@ -350,9 +491,14 @@ rules:
   severity_base: mid
   description: 本次活动对该用户当日触达次数超过CVR最优切分点，频次过多导致用户疲劳或反感。
   execution_difficulty: medium
+  recommendations:
+  - 控制创单前营销频次，避免过度打扰
+  - 设置营销冷却期，单用户 2 小时内不超过 2 次触达
 - id: 34
   category: 创单前营销
   name: 创单前多渠道冲突
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - pre_mkt_channel_cnt
@@ -367,9 +513,14 @@ rules:
   positive_signal_reason: 多渠道冲突用户CVR略高，多渠道覆盖有正向叠加效应
   execution_difficulty: hard
   positive_alias: 多渠道覆盖用户成单较高
+  recommendations:
+  - 建立跨渠道营销协调机制，避免多渠道同时触达
+  - 设置渠道互斥规则
 - id: 35
   category: 创单前营销
   name: 创单前弹屏过多
+  applies_to: 通用
+  enabled: true
   channel_filter: activity_channel_std == 'popup'
   required_fields:
   - pre_popup_touch_cnt
@@ -381,9 +532,15 @@ rules:
   severity_base: mid
   description: 历史弹屏触达次数超过CVR拐点，过多弹屏已导致用户疲劳，CVR随弹屏次数增加而下降。
   execution_difficulty: medium
+  recommendations:
+  - 减少弹屏频次，单用户单日不超过 1 次
+  - 优化弹屏触发时机
+  - 使用其他温和渠道替代弹屏
 - id: 37
   category: 触达质量
   name: 跨渠道频次叠加疲劳
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - insite_channel_cnt
@@ -396,9 +553,14 @@ rules:
   description: 当日被多种站内渠道叠加触达（渠道种数超过 CVR 拐点），多渠道同日重复触达对成单率有负面影响；与按触达次数管控的过度触达类（Rule 2/20/33）同属频次管控组，从渠道种数维度补充。
   execution_difficulty: medium
   positive_alias: 多渠道可达用户成单较高
+  recommendations:
+  - 建立单用户跨渠道每日触达上限（合计不超过 insite_channel_cnt 的 CVR 拐点）
+  - 设置渠道互斥规则，当日已触达 N 种渠道后暂停其余渠道
 - id: 38
   category: 创单前营销
   name: 活动堆叠冲突
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - pre_unique_activity_cnt
@@ -413,9 +575,14 @@ rules:
   positive_signal_reason: 活动堆叠用户CVR略高，活动叠加有轻微正向效果
   execution_difficulty: hard
   positive_alias: 多活动叠加用户成单较高
+  recommendations:
+  - 建立活动冲突检测机制
+  - 设置活动优先级，高优先级活动优先触达
 - id: 39
   category: 关键打断
   name: 弹屏打扰填写
+  applies_to: 通用
+  enabled: true
   channel_filter: activity_channel_std == 'popup'
   required_fields:
   - pre_reached_booking
@@ -428,9 +595,16 @@ rules:
   description: 到达填写页后流失，且历史上弹屏常被快速拒绝，弹屏在填写阶段造成了干扰性打断。
   is_definitional: true
   execution_difficulty: medium
+  recommendations:
+  - 填写页期间禁止弹屏
+  - 设置订单流程中的营销静默期
 - id: 40
   category: 用户价值
   name: 高频下单
+  applies_to: 通用
+  enabled: false
+  disabled_reason: 业务评审下线（2026-08-12 知识库优化）：高频下单属于用户分层描述而非营销问题，不适合作为诊断项
+  disabled_at: '2026-08-12'
   channel_filter: activity_channel_std != 'activity'
   required_fields:
   - pre_complete_order_cnt
@@ -443,22 +617,34 @@ rules:
   description: 触达前已有多次历史成单，属于高频购买用户，营销价值不同于普通用户，需差异化策略。
   execution_difficulty: hard
   positive_alias: 高频复购成单人群
+  recommendations:
+  - 识别高频下单用户特征，进行专项运营
+  - 提供会员专属权益提升复购
 - id: 41
   category: 转化效率
   name: 营销触发下单未成单
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - is_converted
   - is_paid
   condition_template: (is_converted == 1) & (is_paid == 0)
   threshold_fields: []
+  min_trigger_rate: 0.05
   handling: row_level
   severity_base: mid
   description: 触达后当日有创单但未完成付款，营销成功引导到创单阶段但最终支付漏出。
   execution_difficulty: medium
+  recommendations:
+  - 创单未付用户及时发送促付提醒或优惠券
+  - 如果本身是红包提醒类活动，检查用户创单金额是否不满足门槛、或红包不可用
+  - 搭配支付立减提升转化
 - id: 42
   category: 优惠机制
   name: 红包与下单平台不符
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - pre_last_coupon_platform
@@ -472,23 +658,33 @@ rules:
   positive_signal_reason: 红包与下单平台不符用户CVR略高，跨平台用户购买意愿强
   execution_difficulty: easy
   positive_alias: 跨平台领券成单不低
+  recommendations:
+  - 提示业务侧考虑限制红包使用平台，避免跨平台领券不可用
 - id: 43
   category: 内容匹配
   name: 推送零浏览品类
+  applies_to: 通用
+  enabled: true
   channel_filter: activity_channel_std in ('activity', 'push', 'popup', 'sms', 'outbound', 'insite_msg')
   required_fields:
   - pre_target_product_visit_cnt
+  - pre_browse_target_product
   - pre_mainflow_event_cnt
-  condition_template: (pre_target_product_visit_cnt == 0) & (pre_mainflow_event_cnt > 0)
+  condition_template: (pre_target_product_visit_cnt == 0) & (pre_browse_target_product == 0) & (pre_mainflow_event_cnt > 0)
   threshold_fields: []
   handling: row_level
   severity_base: mid
-  description: 用户有主流程浏览行为，却从未进入活动目标品类的主流程，仍被推送该品类，属"推从没看过的品类"硬错配，比单纯兴趣不一致更强。
+  description: '用户有主流程浏览行为，却从未进入活动目标品类（既无访问也无浏览），仍被推送该品类。是 #11 的「有其他主流程行为」子集：这批人不是不活跃，是对该品类没兴趣，误投代价高于沉默用户。两条覆盖检查合并，取效应量更强者作主 finding。'
   execution_difficulty: medium
   positive_alias: 目标品类零浏览仍成单较高
+  recommendations:
+  - 推送前校验 pre_target_product_visit_cnt > 0
+  - 从未浏览目标品类则降级为通用红包
 - id: 44
   category: 时机匹配
   name: 伪实时场景配置
+  applies_to: 通用
+  enabled: true
   channel_filter: all
   required_fields:
   - is_today
@@ -499,3 +695,52 @@ rules:
   severity_base: mid
   description: 活动先知场景标记为实时场景，却同时存在离线节点（伪实时配置），导致人群量级缺失或推送时间错配、营销时机失准。基于 V2.1 新增先知场景字段（is_today 实时标记 / scene_has_offline_node 离线节点）评估；取值（1=实时/存在离线节点）以实际数据为准。
   execution_difficulty: easy
+  recommendations:
+  - 检查先知场景配置，确保 is_today=1 且 scene_has_offline_node=0
+  - 修复伪实时配置
+- id: 45
+  category: 触达质量
+  name: 低意向过度营销
+  applies_to: 广告投放
+  scope_filter: activity_channel_std == 'ads'
+  enabled: true
+  channel_filter: all
+  required_fields:
+  - pre_popup_touch_cnt
+  - pre_push_touch_cnt
+  - pre_sms_touch_cnt
+  - pre_insite_msg_touch_cnt
+  - pre_mainflow_event_cnt
+  condition_template: ((pre_popup_touch_cnt + pre_push_touch_cnt + pre_sms_touch_cnt + pre_insite_msg_touch_cnt) >= 3) & (pre_mainflow_event_cnt == 0)
+  threshold_fields: []
+  threshold_reference:
+  - field: insite_total_touch_cnt
+    stat: optimal
+  handling: row_level
+  severity_base: mid
+  description: 站内弹屏/Push/短信/站内信合计已触达 ≥3 次，用户仍无任何主流程行为，继续投放效果广告属于重复浪费。阈值 3 为业务硬值；同时输出 insite_total_touch_cnt 的 CVR 拐点作对照（不参与判定），一个月后按对账结果决定是否切换。
+  execution_difficulty: medium
+  positive_alias: 站内多次触达零行为用户成单不低
+  recommendations:
+  - 广告投放排除该人群，标记为低活跃用户不再投入效果预算
+  - 仅保留 1 次/月品牌曝光
+- id: 46
+  category: 优惠机制
+  name: 红包门槛过高
+  applies_to: 红包提醒/红包发放
+  scope_filter: activity_name.str.contains('红包', na=False)
+  enabled: false
+  disabled_reason: P2 待数据：大宽表 action 列现为 concat(couponamount, smallvalidamount)，需拆出 coupon_amount / coupon_min_valid_amount；「优享红包不可用占比」口径待业务补充。
+  disabled_at: '2026-08-12'
+  channel_filter: all
+  required_fields:
+  - coupon_min_valid_amount
+  - target_order_amount
+  condition_template: coupon_min_valid_amount > target_order_amount * 1.3
+  threshold_fields: []
+  handling: row_level
+  severity_base: mid
+  description: 红包门槛高于对应订单项目 GMV 超 30%，用户凑不到门槛导致红包形同虚设。P1 可先用画像字段 gmv（近 1 年客单价）做代理观测，仅进 data_caveats 不出 finding。
+  execution_difficulty: medium
+  recommendations:
+  - 根据用户在该品类的历史下单金额分布重新设置门槛

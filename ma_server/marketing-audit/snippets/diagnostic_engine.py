@@ -68,6 +68,13 @@ def _resolve_threshold_placeholder(
     return resolved, warnings_out
 
 
+# 软下线规则的状态值：yaml 里 enabled=false 的条目不参与评估、不进 rule_summary。
+# 与 not_applicable/skipped 区分开——那两个是「这次数据不适用」，disabled 是「业务已下线」。
+RULE_DISABLED_STATUS = "disabled"
+# 触发率低于 min_trigger_rate 的规则不上报（体量太小，写进报告是噪声）。
+BELOW_MIN_TRIGGER_STATUS = "below_min_trigger_rate"
+
+
 def _is_nan(v) -> bool:
     """None や NaN チェック。"""
     import math as _m
@@ -83,7 +90,7 @@ class DiagnosticEngine:
     用法
     ----
     engine = DiagnosticEngine(adaptive_thresholds, loader)
-    summary = engine.rule_summary(df)           # 全部 42 条规则的触发率汇总
+    summary = engine.rule_summary(df)           # 在用规则的触发率汇总（enabled=false 的不计入）
     result = engine.apply_single(rule_id=2, df) # 单条规则评估
     all_results = engine.apply_all(df)          # 全量评估
     """
@@ -176,6 +183,10 @@ class DiagnosticEngine:
         results = self.apply_all(df)
         rows = []
         for r in results:
+            # 软下线规则不进汇总表：不参与 Top N 打分，也不出现在报告任何位置。
+            # （apply_all 仍返回它们，便于排查「这条规则去哪了」。）
+            if r.get("status") == RULE_DISABLED_STATUS:
+                continue
             rule_meta = self._rule_map.get(r["rule_id"], {})
             is_def = bool(rule_meta.get("is_definitional", False))
             is_pos = bool(rule_meta.get("is_positive_signal", False))
@@ -194,7 +205,7 @@ class DiagnosticEngine:
             tc      = r.get("trigger_cnt") or 0
 
             # ── 触发组 vs 对照组 CVR 差异的卡方显著性 ──
-            # 与 6 个领域分析口径一致（chi2_test），让 42 条规则诊断也具备统计显著性约束
+            # 与 6 个领域分析口径一致（chi2_test），让规则诊断也具备统计显著性约束
             # （README「统计显著性约束」原则）。scipy 缺失或样本不足时 p_value=None（不阻断）。
             cvr_gap_p_value = None
             _total_cnt = int(r.get("total_cnt") or 0)
@@ -305,7 +316,12 @@ class DiagnosticEngine:
                 "cvr_gap":            cvr_gap,
                 "cvr_gap_p_value":    cvr_gap_p_value,
                 "cvr_gap_significant": cvr_gap_significant,
+                "applies_to":         rule_meta.get("applies_to", "通用"),
                 "channel_filter":     rule_meta.get("channel_filter", "all"),
+                "scope_filter":       rule_meta.get("scope_filter", ""),
+                "recommendations":    list(rule_meta.get("recommendations", []) or []),
+                "data_note":          rule_meta.get("data_note", ""),
+                "threshold_reference": r.get("threshold_reference", {}),
                 "condition":          _resolved_cond,
                 "severity_base":      sev,
                 "skip_reason":        r.get("skip_reason"),
@@ -468,6 +484,12 @@ class DiagnosticEngine:
             "warnings": [],
         }
 
+        # ── 软下线（业务评审判定不再使用）：短路，不做任何计算 ──
+        if not rule.get("enabled", True):
+            base["status"] = RULE_DISABLED_STATUS
+            base["skip_reason"] = rule.get("disabled_reason") or "规则已下线"
+            return base
+
         # auto_eval=false 标记的规则（如 #4 人群质量）跳过
         if not rule.get("auto_eval", True):
             base["status"] = "not_applicable"
@@ -510,6 +532,27 @@ class DiagnosticEngine:
             base["skip_reason"] = "无自动评估条件"
             return base
 
+        # ── scope_filter：活动「适用范围」门槛（applies_to 的可执行形式）──
+        # 与 channel_filter 的区别：channel_filter 说的是「这条规则在哪些渠道的行上算」，
+        # scope_filter 说的是「这条规则对哪类活动才成立」（如仅广告投放、仅红包提醒类活动）。
+        # 实现共用同一段掩码求值，只是不匹配时的 skip_reason 文案不同。
+        scope_filter = rule.get("scope_filter")
+        if scope_filter and scope_filter != "all":
+            sc_mask = self._eval_mask_from_condition(scope_filter, df)
+            if sc_mask is None:
+                base["warnings"].append(f"scope_filter 解析失败: {scope_filter}")
+            else:
+                n_scope = int(sc_mask.sum())
+                if n_scope == 0:
+                    base["status"] = "not_applicable"
+                    base["skip_reason"] = (
+                        f"本规则仅适用于「{rule.get('applies_to', '特定')}」类活动"
+                        f"（{scope_filter}），当前活动不适用"
+                    )
+                    return base
+                df = df[sc_mask]
+                base["scope_filtered_n"] = n_scope
+
         # ── channel_filter：仅在适用渠道子集上评估规则──
         channel_filter = rule.get("channel_filter", "all")
         if channel_filter and channel_filter != "all":
@@ -537,6 +580,14 @@ class DiagnosticEngine:
             val = self._thresholds.get(field, {}).get(stat)
             base["threshold_used"][field] = val
 
+        # 记录对照阈值：不参与判定，只输出供人工对账（如 #45 的固定值 vs CVR 拐点）
+        for tr_ in rule.get("threshold_reference", []) or []:
+            field = tr_["field"]
+            stat = tr_.get("stat", "optimal")
+            base.setdefault("threshold_reference", {})[field] = (
+                self._thresholds.get(field, {}).get(stat)
+            )
+
         # 计算触发 mask
         mask = self._eval_mask_from_condition(resolved_condition, df)
         if mask is None:
@@ -554,6 +605,16 @@ class DiagnosticEngine:
             base["status"] = "full_trigger_no_baseline"
         else:
             base["status"] = "triggered" if trigger_cnt > 0 else "not_triggered"
+
+        # ── min_trigger_rate：触发体量门槛（如 #41 要求触发比例 >5% 才上报）──
+        # 仍然计算并保留全部指标，只是把状态改掉，让下游不当作有效信号。
+        min_tr = rule.get("min_trigger_rate")
+        if (min_tr is not None and base["status"] == "triggered"
+                and (base["trigger_rate"] or 0) < float(min_tr)):
+            base["status"] = BELOW_MIN_TRIGGER_STATUS
+            base["skip_reason"] = (
+                f"触发率 {base['trigger_rate']:.2%} 低于本规则门槛 {float(min_tr):.0%}，不上报"
+            )
 
         # 触发行 vs 未触发行的 CVR 对比（使用 self._cvr_col，默认 is_converted）
         cvr_col = self._cvr_col if self._cvr_col in df.columns else (
