@@ -1,0 +1,52 @@
+ma_server/marketing-audit/.gitignore
+  h_4e3a4dcdcf415f 3-7
+ma_server/marketing-audit/CHANGELOG.md
+  h_4e3a4dcdcf415f 7-57
+ma_server/marketing-audit/SKILL.md
+  h_4e3a4dcdcf415f 101,126,152
+ma_server/marketing-audit/cli.py
+  h_4e3a4dcdcf415f 52-96,667-670,910-911,1030-1031,1211-1285,1359-1395
+ma_server/marketing-audit/examples/output_example.json
+  h_4e3a4dcdcf415f 2,939
+ma_server/marketing-audit/feedback/.gitkeep
+  h_4e3a4dcdcf415f 1
+ma_server/marketing-audit/feedback/README.md
+  h_4e3a4dcdcf415f 1-30
+ma_server/marketing-audit/methodology/10_feedback_protocol.md
+  h_4e3a4dcdcf415f 1-121
+ma_server/marketing-audit/scripts/install_skill.sh
+  h_4e3a4dcdcf415f 1-53
+ma_server/marketing-audit/scripts/pack_skill.sh
+  h_4e3a4dcdcf415f 1-47
+ma_server/marketing-audit/snippets/adhoc_registry.py
+  h_4e3a4dcdcf415f 9,16-17,20-26,30-47
+ma_server/marketing-audit/snippets/crowd_translator.py
+  h_4e3a4dcdcf415f 15-19,49,53-55,120-127
+ma_server/marketing-audit/snippets/diagnostic_engine.py
+  h_4e3a4dcdcf415f 62-75
+ma_server/marketing-audit/snippets/issue_ledger.py
+  h_4e3a4dcdcf415f 1-640
+ma_server/marketing-audit/snippets/model_analyst.py
+  h_4e3a4dcdcf415f 492-499,523-526,530,534-535
+ma_server/marketing-audit/snippets/model_interpreter.py
+  h_4e3a4dcdcf415f 669-676,706-709,713,717-718
+ma_server/marketing-audit/tests/smoke_fix21.py
+  h_4e3a4dcdcf415f 6,13-15,17,20,69-70,155-157,159-345,347-356
+ma_server/marketing-audit/tests/test_issue_ledger.py
+  h_4e3a4dcdcf415f 1-336
+ma_server/marketing-audit/tests/test_threshold_format.py
+  h_4e3a4dcdcf415f 1-121
+ma_server/marketing-audit/tests/test_threshold_resolve.py
+  h_4e3a4dcdcf415f 1-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "a8d5263e8f207b3b5ee0353a27c94f5e85022ae3",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
