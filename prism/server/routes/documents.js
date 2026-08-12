@@ -703,6 +703,246 @@ router.post('/land', (req, res) => {
 });
 
 /* ------------------------------------------------------------------ */
+/*  Chunked landing — for deployments behind a body-size-capped proxy   */
+/* ------------------------------------------------------------------ */
+// 反向代理(nginx/openresty)的 client_max_body_size 在请求到达 Node 之前就把超限
+// 的请求体砍掉,回自己的 413 HTML 页 —— 上游允许多大都没用,而且这一层的拒绝在应用
+// 日志里不留任何痕迹(本部署实测:15MB 附件通过,54.4MB 附件被网关拒,Prism 全程无感)。
+//
+// 分片上传把一次大请求拆成若干个小于代理上限的小请求,服务端按序追加还原,最后走与
+// /land 完全相同的落盘与响应逻辑 —— 下游(agent 拿到的磁盘路径)对此毫无感知。
+//
+// 分片大小要略小于代理上限。默认 15MB 是本部署实测通过的值;换环境用
+// PRISM_LAND_CHUNK_MB 调,不必改代码。前端通过 GET /api/documents/limits 读取它,
+// 免得又出现"前端常量与真实上限各说各话"那类问题。
+const LAND_CHUNK_MB = intFromEnv('PRISM_LAND_CHUNK_MB', 15);
+const LAND_CHUNK_BYTES = LAND_CHUNK_MB * 1024 * 1024;
+// 单个分片请求的硬上限:分片本体 + multipart 边界与字段的余量。
+const LAND_CHUNK_REQUEST_BYTES = LAND_CHUNK_BYTES + 1024 * 1024;
+// 未完成会话的保留时长。断网/关页面留下的 .part 必须有人收,否则 staging 只涨不落。
+const LAND_CHUNK_TTL_MS = intFromEnv('PRISM_LAND_CHUNK_TTL_MS', 60 * 60 * 1000);
+
+const chunkSessions = new Map();
+
+const chunkPartPath = (uploadId) => path.join(HTML_STAGING_INCOMING_DIR, `chunk_${uploadId}.part`);
+
+// uploadId 只能是服务端签发的 32 位十六进制:它要拼进文件路径,任何来自客户端的
+// 自由字符串都是一条路径穿越的口子。
+const isValidUploadId = (value) => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+
+function dropChunkSession(uploadId) {
+  const session = chunkSessions.get(uploadId);
+  chunkSessions.delete(uploadId);
+  if (session) fs.promises.unlink(session.partPath).catch(() => {});
+}
+
+/** 追加一个分片到 .part。走流式拼接,不把 15MB 拎进堆里。 */
+function appendChunkFile(partPath, chunkPath) {
+  return new Promise((resolve, reject) => {
+    const source = fs.createReadStream(chunkPath);
+    const sink = fs.createWriteStream(partPath, { flags: 'a' });
+    source.on('error', reject);
+    sink.on('error', reject);
+    sink.on('close', resolve);
+    source.pipe(sink);
+  });
+}
+
+/** 取出并校验会话;失败时已经把响应写完,调用方直接返回即可。 */
+function getChunkSession(req, res) {
+  const uploadId = req.body?.uploadId || req.query?.uploadId;
+  if (!isValidUploadId(uploadId)) {
+    res.status(400).json({ error: 'Invalid uploadId' });
+    return null;
+  }
+  const session = chunkSessions.get(uploadId);
+  if (!session) {
+    res.status(404).json({ error: 'Upload session not found or expired. Please retry the upload.' });
+    return null;
+  }
+  // 会话绑定用户:只有两端都能识别出用户时才比对,免得在没有用户上下文的部署里误伤。
+  const userId = req.user?.id ?? null;
+  if (session.userId != null && userId != null && session.userId !== userId) {
+    res.status(403).json({ error: 'Upload session belongs to another user' });
+    return null;
+  }
+  return { uploadId, session };
+}
+
+// 过期会话清扫。unref() 保证这个定时器不会把进程钉在事件循环里。
+const chunkSessionSweeper = setInterval(() => {
+  const cutoff = Date.now() - LAND_CHUNK_TTL_MS;
+  for (const [uploadId, session] of chunkSessions) {
+    if (session.updatedAt < cutoff) dropChunkSession(uploadId);
+  }
+}, Math.min(LAND_CHUNK_TTL_MS, 10 * 60_000));
+if (typeof chunkSessionSweeper.unref === 'function') chunkSessionSweeper.unref();
+
+// 前端据此决定"多大才分片"以及每片多大。硬编码在前端的副本会随部署漂移,
+// 这个端点让它只有一个权威来源。
+router.get('/limits', (_req, res) => {
+  res.json({
+    maxBytes: MAX_LAND_BYTES,
+    maxMb: MAX_LAND_MB,
+    chunkBytes: LAND_CHUNK_BYTES,
+    chunkMb: LAND_CHUNK_MB,
+  });
+});
+
+// 第一步:换一个 uploadId,并把 .part 占位文件建出来。
+router.post('/land/start', (req, res) => {
+  const declaredSize = Number(req.body?.size);
+  if (!Number.isFinite(declaredSize) || declaredSize <= 0) {
+    return res.status(400).json({ error: 'size is required' });
+  }
+  if (declaredSize > MAX_LAND_BYTES) {
+    return res.status(413).json({ error: `File too large. Maximum size is ${MAX_LAND_MB}MB.` });
+  }
+  const uploadId = crypto.randomBytes(16).toString('hex');
+  const partPath = chunkPartPath(uploadId);
+  try {
+    fs.mkdirSync(HTML_STAGING_INCOMING_DIR, { recursive: true });
+    fs.writeFileSync(partPath, '');   // 先占位,后续一律以追加方式写入
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+  chunkSessions.set(uploadId, {
+    name: fixFilename(typeof req.body?.name === 'string' ? req.body.name : 'file') || 'file',
+    partPath,
+    received: 0,
+    declaredSize,
+    nextIndex: 0,
+    userId: req.user?.id ?? null,
+    updatedAt: Date.now(),
+  });
+  res.json({ uploadId, chunkBytes: LAND_CHUNK_BYTES });
+});
+
+const landChunkUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      try {
+        fs.mkdirSync(HTML_STAGING_INCOMING_DIR, { recursive: true });
+        cb(null, HTML_STAGING_INCOMING_DIR);
+      } catch (error) {
+        cb(error, '');
+      }
+    },
+    filename: (_req, _file, cb) => cb(null, `chunkpart_${crypto.randomBytes(8).toString('hex')}`),
+  }),
+  limits: { fileSize: LAND_CHUNK_REQUEST_BYTES, files: 1 },
+});
+
+// 第二步:逐片追加。必须按序到达 —— 乱序拼出来的文件是坏的,而且坏得很安静。
+router.post('/land/chunk', (req, res) => {
+  landChunkUpload.single('chunk')(req, res, async (uploadError) => {
+    const discardTempFile = () => {
+      const tempPath = req.file?.path;
+      if (tempPath) fs.promises.unlink(tempPath).catch(() => {});
+    };
+
+    if (uploadError) {
+      discardTempFile();
+      if (uploadError.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: `Chunk too large. Maximum chunk size is ${LAND_CHUNK_MB}MB.` });
+      }
+      return res.status(500).json({ error: uploadError.message || 'Chunk upload failed' });
+    }
+
+    const found = getChunkSession(req, res);
+    if (!found) {
+      discardTempFile();
+      return;
+    }
+    const { uploadId, session } = found;
+    if (!req.file) return res.status(400).json({ error: 'No chunk uploaded' });
+
+    const index = Number(req.body?.index);
+    if (!Number.isInteger(index) || index < 0) {
+      discardTempFile();
+      return res.status(400).json({ error: 'index must be a non-negative integer' });
+    }
+    // 已收过的分片重复到达(客户端重试时很常见):幂等地当成功处理,不重复追加。
+    if (index < session.nextIndex) {
+      discardTempFile();
+      return res.json({ received: session.received, nextIndex: session.nextIndex });
+    }
+    if (index !== session.nextIndex) {
+      discardTempFile();
+      return res.status(409).json({ error: `Out-of-order chunk: expected ${session.nextIndex}, got ${index}` });
+    }
+
+    // 总量上限在服务端累加校验 —— 客户端声明的 size 只是提示,不能当约束。
+    const chunkSize = req.file.size || 0;
+    if (session.received + chunkSize > MAX_LAND_BYTES) {
+      discardTempFile();
+      dropChunkSession(uploadId);
+      return res.status(413).json({ error: `File too large. Maximum size is ${MAX_LAND_MB}MB.` });
+    }
+
+    try {
+      await appendChunkFile(session.partPath, req.file.path);
+      session.received += chunkSize;
+      session.nextIndex = index + 1;
+      session.updatedAt = Date.now();
+      res.json({ received: session.received, nextIndex: session.nextIndex });
+    } catch (error) {
+      dropChunkSession(uploadId);
+      res.status(500).json({ error: error.message });
+    } finally {
+      discardTempFile();
+    }
+  });
+});
+
+// 客户端放弃时主动收尸。没有这条,失败的会话要等 TTL(默认 1 小时)才被清扫器收走,
+// 期间那个 .part 一直占着盘 —— 一个 54MB 的失败上传就是 54MB 的僵尸文件。
+router.post('/land/abort', (req, res) => {
+  const found = getChunkSession(req, res);
+  if (!found) return;
+  dropChunkSession(found.uploadId);
+  res.json({ aborted: true });
+});
+
+// 第三步:收尾。落盘与响应结构与 /land 逐字一致,前端两条路可以共用同一段后续逻辑。
+router.post('/land/complete', (req, res) => {
+  const found = getChunkSession(req, res);
+  if (!found) return;
+  const { uploadId, session } = found;
+
+  if (session.received === 0) {
+    dropChunkSession(uploadId);
+    return res.status(400).json({ error: 'No chunks received' });
+  }
+  // 声明大小与实收不符 = 中途掉了片。宁可整单作废,也不把一个残缺文件交给 agent ——
+  // 半截 CSV 不会报错,只会让后面的分析悄悄算错。
+  if (session.declaredSize && session.received !== session.declaredSize) {
+    dropChunkSession(uploadId);
+    return res.status(400).json({
+      error: `Incomplete upload: expected ${session.declaredSize} bytes, received ${session.received}.`,
+    });
+  }
+
+  try {
+    const landed = landStagedFile(session.name, session.partPath);
+    // .part 已被 rename 走,这里只能摘会话,不能再走 dropChunkSession 的 unlink。
+    chunkSessions.delete(uploadId);
+    const text = buildHtmlUploadNotice(session.name, landed);
+    res.json({
+      name: session.name,
+      chars: text.length,
+      truncated: false,
+      text,
+      kind: 'path',
+      diskPath: landed.diskPath,
+    });
+  } catch (error) {
+    dropChunkSession(uploadId);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/* ------------------------------------------------------------------ */
 /*  URL fetch (SSRF guarded)                                           */
 /* ------------------------------------------------------------------ */
 

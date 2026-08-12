@@ -30,3 +30,4 @@ ma-env.local.sh
 # --- 系统垃圾 ---
 .DS_Store
 Thumbs.db
+/prism/prism-upload-chunk.tar.gz

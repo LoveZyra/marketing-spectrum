@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs, { promises as fsPromises } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -77,6 +78,76 @@ const MAX_FILE_UPLOAD_TOTAL_BYTES = MAX_FILE_UPLOAD_TOTAL_MB * 1024 * 1024;
 const MAX_FILE_UPLOAD_TOTAL_LABEL = formatUploadSizeLabel(MAX_FILE_UPLOAD_TOTAL_MB);
 const UPLOAD_TOTAL_EXCEEDED_MESSAGE =
   `Upload too large. Maximum total size is ${MAX_FILE_UPLOAD_TOTAL_LABEL} per upload.`;
+
+// 分片上传:给"Prism 挂在请求体受限的反向代理后面"这类部署用。nginx/openresty 的
+// client_max_body_size 在请求到达 Node 之前就把超限的体砍掉、回自己的 413 HTML 页,
+// 上游允许 1GB 也没用,而且那层拒绝在应用日志里不留痕迹。把文件切成小于代理上限的片
+// 逐个发,服务端按序追加还原,最后落到与批量上传完全相同的目标路径。
+// 默认 15MB 为本部署实测通过的值;用 PRISM_UPLOAD_CHUNK_MB 调,不必改代码。
+const parseChunkMb = (raw: string | undefined): number => {
+  const parsed = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15;
+};
+const UPLOAD_CHUNK_MB = parseChunkMb(process.env.PRISM_UPLOAD_CHUNK_MB);
+const UPLOAD_CHUNK_BYTES = UPLOAD_CHUNK_MB * 1024 * 1024;
+// 单个分片请求的硬上限:分片本体 + multipart 边界与字段的余量。
+const UPLOAD_CHUNK_REQUEST_BYTES = UPLOAD_CHUNK_BYTES + 1024 * 1024;
+// 未完成会话的保留时长:断网/关页面留下的 .part 必须有人收,否则临时盘只涨不落。
+const UPLOAD_CHUNK_TTL_MS = 60 * 60 * 1000;
+
+type ChunkSession = {
+  name: string;
+  relativePath: string;
+  targetPath: string;
+  projectId: string;
+  partPath: string;
+  received: number;
+  declaredSize: number;
+  nextIndex: number;
+  updatedAt: number;
+};
+
+const uploadChunkSessions = new Map<string, ChunkSession>();
+
+// uploadId 只能是服务端签发的 32 位十六进制:它要拼进文件路径,任何来自客户端的
+// 自由字符串都是一条路径穿越的口子。
+const isValidUploadId = (value: unknown): value is string =>
+  typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+
+const dropUploadChunkSession = (uploadId: string): void => {
+  const session = uploadChunkSessions.get(uploadId);
+  uploadChunkSessions.delete(uploadId);
+  if (session) fsPromises.unlink(session.partPath).catch(() => {});
+};
+
+/** 追加一个分片到 .part。流式拼接,不把 15MB 拎进堆里。 */
+const appendChunkFile = (partPath: string, chunkPath: string): Promise<void> => (
+  new Promise<void>((resolve, reject) => {
+    const source = fs.createReadStream(chunkPath);
+    const sink = fs.createWriteStream(partPath, { flags: 'a' });
+    source.on('error', reject);
+    sink.on('error', reject);
+    sink.on('close', () => resolve());
+    source.pipe(sink);
+  })
+);
+
+// 过期会话清扫。unref() 保证它不会把进程钉在事件循环里。
+const uploadChunkSweeper = setInterval(() => {
+  const cutoff = Date.now() - UPLOAD_CHUNK_TTL_MS;
+  for (const [uploadId, session] of uploadChunkSessions) {
+    if (session.updatedAt < cutoff) dropUploadChunkSession(uploadId);
+  }
+}, 10 * 60_000);
+if (typeof uploadChunkSweeper.unref === 'function') uploadChunkSweeper.unref();
+
+const chunkUploadMiddleware = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => { cb(null, os.tmpdir()); },
+    filename: (_req, _file, cb) => cb(null, `chunkpart-${Date.now()}-${Math.round(Math.random() * 1E9)}`),
+  }),
+  limits: { fileSize: UPLOAD_CHUNK_REQUEST_BYTES, files: 1 },
+});
 
 type FilesRouterDependencies = {
   /**
@@ -916,6 +987,214 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
     });
   };
+
+  // 前端据此决定"多大才分片"以及每片多大。硬编码在前端的副本会随部署漂移。
+  router.get('/api/projects/:projectId/files/upload/limits', authenticateToken, (_req, res) => {
+    res.json({
+      chunkBytes: UPLOAD_CHUNK_BYTES,
+      chunkMb: UPLOAD_CHUNK_MB,
+      maxFileBytes: MAX_FILE_UPLOAD_SIZE_BYTES,
+      maxTotalBytes: MAX_FILE_UPLOAD_TOTAL_BYTES,
+    });
+  });
+
+  /** 取出并校验会话;失败时已写完响应,调用方直接返回。 */
+  const takeChunkSession = (req: express.Request, res: express.Response) => {
+    const uploadId = (req.body?.uploadId ?? req.query?.uploadId) as unknown;
+    if (!isValidUploadId(uploadId)) {
+      res.status(400).json({ error: 'Invalid uploadId' });
+      return null;
+    }
+    const session = uploadChunkSessions.get(uploadId);
+    if (!session) {
+      res.status(404).json({ error: 'Upload session not found or expired. Please retry the upload.' });
+      return null;
+    }
+    // 会话与项目绑定:换个 projectId 拿同一个 uploadId 收尾,等于把文件写到别的项目里。
+    if (session.projectId !== req.params.projectId) {
+      res.status(403).json({ error: 'Upload session belongs to another project' });
+      return null;
+    }
+    return { uploadId, session };
+  };
+
+  // 第一步:换 uploadId,建 .part 占位。
+  router.post('/api/projects/:projectId/files/upload/start', authenticateToken, async (req, res) => {
+    try {
+      const declaredSize = Number(req.body?.size);
+      if (!Number.isFinite(declaredSize) || declaredSize <= 0) {
+        return res.status(400).json({ error: 'size is required' });
+      }
+      if (declaredSize > MAX_FILE_UPLOAD_SIZE_BYTES) {
+        return res.status(413).json({ error: `File too large. Maximum size is ${MAX_FILE_UPLOAD_SIZE_LABEL}.` });
+      }
+      const projectId = req.params.projectId as string;
+      const projectRoot = await projectsDb.getProjectPathById(projectId);
+      if (!projectRoot) return res.status(404).json({ error: 'Project not found' });
+
+      // 目标目录在 start 就校验一次:让越权路径在传字节之前失败,而不是传完 1GB 才被拒。
+      const targetPath = typeof req.body?.targetPath === 'string' ? req.body.targetPath : '';
+      if (targetPath && targetPath !== '.' && targetPath !== './') {
+        const validation = await validatePathInProject(projectRoot, targetPath);
+        if (!validation.valid) return res.status(403).json({ error: validation.error });
+      }
+
+      const uploadId = crypto.randomBytes(16).toString('hex');
+      const partPath = path.join(os.tmpdir(), `chunkasm-${uploadId}.part`);
+      await fsPromises.writeFile(partPath, '');   // 占位,后续一律追加
+      uploadChunkSessions.set(uploadId, {
+        name: typeof req.body?.name === 'string' && req.body.name ? req.body.name : 'upload',
+        relativePath: typeof req.body?.relativePath === 'string' ? req.body.relativePath : '',
+        targetPath,
+        projectId,
+        partPath,
+        received: 0,
+        declaredSize,
+        nextIndex: 0,
+        updatedAt: Date.now(),
+      });
+      res.json({ uploadId, chunkBytes: UPLOAD_CHUNK_BYTES });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // 第二步:逐片追加。必须按序 —— 乱序拼出来的文件是坏的,而且坏得很安静。
+  router.post('/api/projects/:projectId/files/upload/chunk', authenticateToken, (req, res) => {
+    chunkUploadMiddleware.single('chunk')(req, res, async (uploadError: unknown) => {
+      const discardTempFile = () => {
+        const tempPath = (req.file as Express.Multer.File | undefined)?.path;
+        if (tempPath) fsPromises.unlink(tempPath).catch(() => {});
+      };
+
+      if (uploadError) {
+        discardTempFile();
+        if ((uploadError as { code?: string }).code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ error: `Chunk too large. Maximum chunk size is ${UPLOAD_CHUNK_MB}MB.` });
+        }
+        return res.status(500).json({ error: (uploadError as Error).message || 'Chunk upload failed' });
+      }
+
+      const found = takeChunkSession(req, res);
+      if (!found) { discardTempFile(); return; }
+      const { uploadId, session } = found;
+      if (!req.file) return res.status(400).json({ error: 'No chunk uploaded' });
+
+      const index = Number(req.body?.index);
+      if (!Number.isInteger(index) || index < 0) {
+        discardTempFile();
+        return res.status(400).json({ error: 'index must be a non-negative integer' });
+      }
+      // 已收过的分片重复到达(客户端重试时很常见):幂等地当成功,不重复追加。
+      if (index < session.nextIndex) {
+        discardTempFile();
+        return res.json({ received: session.received, nextIndex: session.nextIndex });
+      }
+      if (index !== session.nextIndex) {
+        discardTempFile();
+        return res.status(409).json({ error: `Out-of-order chunk: expected ${session.nextIndex}, got ${index}` });
+      }
+      // 上限在服务端累加校验 —— 客户端声明的 size 只是提示,不能当约束。
+      const chunkSize = req.file.size || 0;
+      if (session.received + chunkSize > MAX_FILE_UPLOAD_SIZE_BYTES) {
+        discardTempFile();
+        dropUploadChunkSession(uploadId);
+        return res.status(413).json({ error: `File too large. Maximum size is ${MAX_FILE_UPLOAD_SIZE_LABEL}.` });
+      }
+
+      try {
+        await appendChunkFile(session.partPath, req.file.path);
+        session.received += chunkSize;
+        session.nextIndex = index + 1;
+        session.updatedAt = Date.now();
+        res.json({ received: session.received, nextIndex: session.nextIndex });
+      } catch (error) {
+        dropUploadChunkSession(uploadId);
+        res.status(500).json({ error: (error as Error).message });
+      } finally {
+        discardTempFile();
+      }
+    });
+  });
+
+  // 第三步:收尾。目标路径解析与校验和批量上传逐条对齐,写入结果结构也一致。
+  router.post('/api/projects/:projectId/files/upload/complete', authenticateToken, async (req, res) => {
+    const found = takeChunkSession(req, res);
+    if (!found) return;
+    const { uploadId, session } = found;
+    try {
+      if (session.received === 0) {
+        dropUploadChunkSession(uploadId);
+        return res.status(400).json({ error: 'No chunks received' });
+      }
+      // 声明大小与实收不符 = 中途掉了片。宁可整单作废,也不把残缺文件写进项目目录 ——
+      // 半截文件不会报错,只会在后面被当成完整的用。
+      if (session.declaredSize && session.received !== session.declaredSize) {
+        dropUploadChunkSession(uploadId);
+        return res.status(400).json({
+          error: `Incomplete upload: expected ${session.declaredSize} bytes, received ${session.received}.`,
+        });
+      }
+
+      const projectRoot = await projectsDb.getProjectPathById(session.projectId);
+      if (!projectRoot) {
+        dropUploadChunkSession(uploadId);
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      const targetDir = session.targetPath || '';
+      let resolvedTargetDir: string;
+      if (!targetDir || targetDir === '.' || targetDir === './') {
+        resolvedTargetDir = path.resolve(projectRoot);
+      } else {
+        const validation = await validatePathInProject(projectRoot, targetDir);
+        if (!validation.valid) {
+          dropUploadChunkSession(uploadId);
+          return res.status(403).json({ error: validation.error });
+        }
+        resolvedTargetDir = validation.resolved as string;
+      }
+      await fsPromises.mkdir(resolvedTargetDir, { recursive: true });
+
+      const fileName = session.relativePath || session.name;
+      const destPath = path.join(resolvedTargetDir, fileName);
+      const destValidation = await validatePathInProject(projectRoot, destPath);
+      if (!destValidation.valid) {
+        dropUploadChunkSession(uploadId);
+        return res.status(403).json({ error: destValidation.error });
+      }
+      await fsPromises.mkdir(path.dirname(destPath), { recursive: true });
+
+      // copy + unlink:分片是攒在 os.tmpdir() 的,与项目目录很可能不在同一设备上。
+      await fsPromises.copyFile(session.partPath, destPath);
+      await fsPromises.unlink(session.partPath).catch(() => {});
+      uploadChunkSessions.delete(uploadId);
+
+      res.json({
+        success: true,
+        files: [{ name: fileName, path: destPath, size: session.received, mimeType: mime.lookup(fileName) || 'application/octet-stream' }],
+        uploadedCount: 1,
+        requestedFileCount: 1,
+        targetPath: resolvedTargetDir,
+        message: `Uploaded ${fileName} successfully`,
+      });
+    } catch (error) {
+      dropUploadChunkSession(uploadId);
+      if ((error as NodeJS.ErrnoException).code === 'EACCES') {
+        res.status(403).json({ error: 'Permission denied' });
+      } else {
+        res.status(500).json({ error: (error as Error).message });
+      }
+    }
+  });
+
+  // 客户端放弃时主动收尸:没有这条,失败会话的 .part 要挂到 TTL 到期才被清扫走。
+  router.post('/api/projects/:projectId/files/upload/abort', authenticateToken, (req, res) => {
+    const found = takeChunkSession(req, res);
+    if (!found) return;
+    dropUploadChunkSession(found.uploadId);
+    res.json({ aborted: true });
+  });
 
   router.post('/api/projects/:projectId/files/upload', authenticateToken, uploadFilesHandler);
 

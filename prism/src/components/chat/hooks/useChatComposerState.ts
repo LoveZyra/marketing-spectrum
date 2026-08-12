@@ -32,6 +32,101 @@ import type { Project, ProjectSession, LLMProvider, ProviderModelsCacheInfo } fr
 import { escapeRegExp } from '../utils/chatFormatting';
 import { buildDocsBlock, type AttachedDoc } from '../utils/attachmentPrompt';
 
+/**
+ * prism: 分片落盘。反向代理(nginx/openresty)的 client_max_body_size 会在请求到
+ * 达 Prism 之前就把大请求体砍掉并返回它自己的 413 —— 服务端允许 500MB 也没用,
+ * 而且那层拒绝在应用日志里不留痕迹。把文件切成小于代理上限的片逐个发,代理只看
+ * 单请求大小,于是任意大小都能穿过去。片大小由服务端 /api/documents/limits 给出
+ * (默认 15MB,本部署实测通过的值),前端不再自己硬编码一个会漂移的常量。
+ */
+const LAND_CHUNK_FALLBACK_BYTES = 15 * 1024 * 1024;
+const LAND_CHUNK_RETRIES = 3;
+
+let landLimitsCache: { chunkBytes: number } | null = null;
+
+const fetchLandLimits = async (): Promise<{ chunkBytes: number }> => {
+  if (landLimitsCache) return landLimitsCache;
+  try {
+    const response = await authenticatedFetch('/api/documents/limits');
+    const payload = await response.json().catch(() => ({}));
+    const chunkBytes = Number(payload?.chunkBytes);
+    landLimitsCache = { chunkBytes: Number.isFinite(chunkBytes) && chunkBytes > 0 ? chunkBytes : LAND_CHUNK_FALLBACK_BYTES };
+  } catch {
+    // 老服务端没有这个端点:退回内置值,分片照样能工作。
+    landLimitsCache = { chunkBytes: LAND_CHUNK_FALLBACK_BYTES };
+  }
+  return landLimitsCache;
+};
+
+type LandPayload = { name?: string; text?: string; chars?: number; truncated?: boolean };
+
+const landFileInChunks = async (
+  file: File,
+  chunkBytes: number,
+  onPercent: (percent: number) => void,
+): Promise<LandPayload> => {
+  const started = await authenticatedFetch('/api/documents/land/start', {
+    method: 'POST',
+    body: JSON.stringify({ name: file.name, size: file.size }),
+  });
+  const startPayload = await started.json().catch(() => ({}));
+  if (!started.ok) {
+    throw new Error(startPayload?.error || `Upload start failed (${started.status})`);
+  }
+  const uploadId: string = startPayload.uploadId;
+  const effectiveChunk = Number(startPayload.chunkBytes) || chunkBytes;
+  const totalChunks = Math.ceil(file.size / effectiveChunk);
+
+  try {
+    for (let index = 0; index < totalChunks; index += 1) {
+      const start = index * effectiveChunk;
+      const blob = file.slice(start, Math.min(start + effectiveChunk, file.size));
+      const formData = new FormData();
+      formData.append('uploadId', uploadId);
+      formData.append('index', String(index));
+      formData.append('chunk', blob, `${file.name}.part${index}`);
+
+      // 单片重试:大文件传到一半被一次网络抖动打断,不该让用户从头再来。
+      // 服务端对"已收过的片"是幂等的(直接回当前进度,不重复追加),所以重发是安全的。
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < LAND_CHUNK_RETRIES; attempt += 1) {
+        try {
+          await uploadFormDataWithProgress('/api/documents/land/chunk', formData, (percent) => {
+            const sent = start + (blob.size * percent) / 100;
+            onPercent(Math.min(99, Math.round((sent / file.size) * 100)));
+          });
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+          await new Promise((resolve) => { setTimeout(resolve, 500 * (attempt + 1)); });
+        }
+      }
+      if (lastError) throw lastError;
+      onPercent(Math.min(99, Math.round(((start + blob.size) / file.size) * 100)));
+    }
+  } catch (error) {
+    // 主动收尸:不通知的话服务端那个 .part 要挂到 TTL 到期才被清扫器收走 ——
+    // 一个失败的 54MB 上传就是 54MB 的僵尸文件。best-effort:连这个请求都发不
+    // 出去时,服务端的清扫器仍然是兜底。
+    await authenticatedFetch('/api/documents/land/abort', {
+      method: 'POST',
+      body: JSON.stringify({ uploadId }),
+    }).catch(() => {});
+    throw error;
+  }
+
+  const finished = await authenticatedFetch('/api/documents/land/complete', {
+    method: 'POST',
+    body: JSON.stringify({ uploadId }),
+  });
+  const payload = await finished.json().catch(() => ({}));
+  if (!finished.ok) {
+    throw new Error(payload?.error || `Upload finalize failed (${finished.status})`);
+  }
+  return payload as LandPayload;
+};
+
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
 
@@ -650,20 +745,26 @@ export function useChatComposerState({
       // starting.
       setDocUploadProgress({ fileName: file.name, percent: null, index, total: list.length });
       try {
-        const formData = new FormData();
-        formData.append('document', file);
-        const payload = await uploadFormDataWithProgress<{
-          name?: string;
-          text?: string;
-          chars?: number;
-          truncated?: boolean;
-        }>('/api/documents/land', formData, (percent) => {
+        // 进度回调对两条路是同一个:只推进"当前正在发的这个文件"的那一条,
+        // 上一轮迟到的事件不会把进度条往回拽。
+        const reportPercent = (percent: number) => {
           setDocUploadProgress((current) => (
-            // Only advance the entry for the file still being sent. Late events
-            // from a previous iteration would otherwise rewind the bar.
             current && current.fileName === file.name ? { ...current, percent } : current
           ));
-        });
+        };
+        const { chunkBytes } = await fetchLandLimits();
+        // 小于一片的文件继续走原来的单请求路径:它本来就能穿过代理,
+        // 多绕一趟 start/chunk/complete 只是徒增三次往返与失败面。
+        let payload: LandPayload;
+        if (file.size > chunkBytes) {
+          payload = await landFileInChunks(file, chunkBytes, reportPercent);
+        } else {
+          const formData = new FormData();
+          formData.append('document', file);
+          payload = await uploadFormDataWithProgress<LandPayload>(
+            '/api/documents/land', formData, reportPercent,
+          );
+        }
         setAttachedDocs((previous) => [...previous, {
           name: payload.name || file.name,
           text: payload.text || '',
