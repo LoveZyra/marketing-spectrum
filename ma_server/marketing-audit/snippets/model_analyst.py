@@ -489,7 +489,14 @@ def _dedup_rules(rules: list[DecisionRule], top_n: int) -> list[DecisionRule]:
     return out[:top_n]
 
 
-_SENTINEL_EPS = 1e-20  # 树对二值 0/1 特征的切分哨兵上界（实际切分点约 1e-35）
+# 树切分点「刚好大于 0」的哨兵上界。
+# 2026-08-12(fix23)：由 1e-20 上调到 1e-6 —— 实际切分点会落在 1e-10 这类量级，
+# 老门槛拦不住，于是渲染成 `> 0.0000000001` 进了报告与 sql_filter。
+# 依据（feature_registry 实证）：全表仅 4 个 rate 型 + 2 个金额型字段可能非整数，
+# 最小可表示非零值 ≈ 3e-3（促销占比 1/365）；(0, 1e-6) 内不存在任何真实取值，
+# 落在那里的切分点必然是树内部产物。门槛比最小真实值仍保守 1000 倍，
+# 且对真实数据**选中的行完全不变**（`x > 1e-10` ≡ `x > 0`）。
+_SENTINEL_EPS = 1e-6
 
 
 _MAX_DECIMALS = 4   # 阈值最多保留 4 位小数（业务要求；再多既不可读也无业务意义）
@@ -513,13 +520,19 @@ def _fmt_threshold(v: float) -> str:
     """
     if v == int(v):
         return str(int(v))
+    if abs(v) < _SENTINEL_EPS:
+        # 哨兵区间直接归零：不能靠"第 N 位能否表示出非零"来判，
+        # 9.9e-7 在第 6 位会进位成 0.000001，看着非零其实仍在哨兵区间内。
+        return "0"
     s = f"{v:.{_MAX_DECIMALS}f}".rstrip("0").rstrip(".")
     if s and float(s) != 0:
         return s
-    for nd in (6, 8, 10, 12, 15, 20, 30, 40):   # 极小阈值：加到能表示出非零为止
+    for nd in (5, 6):   # 极小阈值：最多再加到 6 位；仍为 0 说明它在哨兵区间，写 0
         s = f"{v:.{nd}f}".rstrip("0").rstrip(".")
         if s and float(s) != 0:
             return s
+    # 6 位仍表示不出非零 ⇒ |v| < 1e-6 ⇒ 哨兵区间（见 _SENTINEL_EPS 推导）。
+    # 老实现会一路加到 40 位，产出 `0.0000000001` 这种既不可读、业务上也等价于 0 的串。
     return "0"
 
 

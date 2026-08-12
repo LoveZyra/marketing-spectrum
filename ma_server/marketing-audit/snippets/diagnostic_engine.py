@@ -59,7 +59,20 @@ def _resolve_threshold_placeholder(
     for match in pattern.finditer(template):
         field, stat = match.group(1), match.group(2)
         field_thresholds = adaptive_thresholds.get(field, {})
-        value = field_thresholds.get(stat) or field_thresholds.get("optimal")
+
+        # fix23：用 is None 判定"取到没有"，不能用 `or`。
+        # 阈值 0.0 是合法值（`round(cut, 4)` 会把 <0.00005 的切点收成 0；registry 里 62 个
+        # 字段算了分位数，稀疏字段的 p75 本来就是 0 —— "超过 75% 的用户从没被弹屏触达过"
+        # 这个 0 是正确答案，不是缺失）。`or` 把 0.0 当假值，会静默换成 optimal 的值。
+        # 现存 13 条带阈值的规则 stat 全是 optimal，两边同键，所以此前一直没暴露。
+        value = field_thresholds.get(stat)
+        if value is None:
+            # 请求的分位数没算过 → 退回 optimal。这个降级是有意设计的，
+            # 但**必须留痕**：原实现悄悄换值、一句 warning 都不给。
+            value = field_thresholds.get("optimal")
+            if value is not None:
+                warnings_out.append(
+                    f"字段 '{field}' 的 '{stat}' 阈值未计算，回退到 optimal={value}")
         if value is None:
             value = _MISSING_THRESHOLD_SENTINEL
             warnings_out.append(f"字段 '{field}' 的 '{stat}' 阈值未计算，使用 inf（规则不会触发）")

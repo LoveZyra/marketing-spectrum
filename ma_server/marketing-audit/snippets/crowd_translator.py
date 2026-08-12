@@ -12,8 +12,11 @@ import re
 _DIR_MAP = {"positive": "push", "causal": "exclude", "leakage": "exclude"}
 VALID_DIRECTIONS = ("push", "exclude")
 
-# 二值/计数特征树切分点哨兵（如 1e-35）：仅指数 ≥20 视为哨兵，归一化为 >=1/<=0/>0。
-_SENTINEL = r"[\d.]+e-(?:[2-9]\d|\d{3,})\b"
+# 二值/计数特征树切分点哨兵：归一化为 >=1/<=0/>0。
+# 2026-08-12(fix23)：门槛由「指数 ≥20」放宽到「指数 ≥6」，与 model_analyst._SENTINEL_EPS=1e-6
+# 保持同一约定 —— 老门槛只拦 1e-20 及更小，1e-10 掉进缝里被写成 `> 0.0000000001`。
+# 依据见 model_analyst._SENTINEL_EPS 的推导（全表最小可表示非零值 ≈ 3e-3）。
+_SENTINEL = r"[\d.]+e-(?:0*[6-9]|0*[1-9]\d+)\b"
 
 # fix20：非哨兵的科学计数法一律改写成位置计数（3e-05 → 0.00003）。
 # 此前这里写的是"Spark SQL 原生支持科学计数法字面量，无需改写"——SQL 能不能执行是一回事，
@@ -43,11 +46,13 @@ def _sci_to_plain(text: str) -> str:
         s = f"{v:.{_MAX_DECIMALS}f}".rstrip("0").rstrip(".")
         if s and float(s) != 0:
             return s
-        for nd in (6, 8, 10, 12, 15, 20):
+        for nd in (5, 6):             # 最多再加到 6 位
             s = f"{v:.{nd}f}".rstrip("0").rstrip(".")
             if s and float(s) != 0:
                 return s
-        return raw                        # <1e-20 的只可能是哨兵，交给哨兵归一化
+        # 兜到这里说明 |v| < 1e-6 且未被哨兵归一化命中（非比较位置的字面量）。
+        # 返回 raw 会把 `3e-08` 泄给运营看，违背"全链路不出科学计数法"的约定 → 写 0。
+        return "0"
     return _SCI_NUM.sub(_one, text)
 
 
@@ -112,9 +117,14 @@ def pandas_to_sql(cond: str) -> str:
     s = re.sub(r"(\w+)\.isin\(\s*\[([^\]]*)\]\s*\)", r"\1 IN (\2)", s)
     # 3.5) 哨兵阈值归一化（语义为 ==0 / >=1）：仅指数 ≥20 的极小值（树切分哨兵 1e-35 等）；
     #      真实小阈值（3e-05 这类率值切分点）不动，避免语义反转
-    s = re.sub(r">=\s*" + _SENTINEL, ">= 1", s)   # xgb: >=1e-35 → >=1（二值==1）
-    s = re.sub(r"<=\s*" + _SENTINEL, "<= 0", s)   # lgb: <=1e-35 → <=0（二值==0）
-    s = re.sub(r">\s*" + _SENTINEL, "> 0", s)     # lgb: >1e-35  → >0 （二值==1）
+    # fix23：统一归一到 0 边界。原来 `>=哨兵` 改写成 `>= 1` 是**二值字段专用**的写法，
+    # 门槛放宽到 1e-6 后 rate 字段也会命中 —— `serialid_bonus >= 1` 是"促销占比 100%"，
+    # 与原意「占比 > 0」差了几个数量级。`> 0` 对二值/计数/率值三类都正确
+    # （整数域下 `> 0` ≡ `>= 1`，整数美化由 model_interpreter 另行处理）。
+    s = re.sub(r">=\s*" + _SENTINEL, "> 0", s)
+    s = re.sub(r">\s*" + _SENTINEL, "> 0", s)
+    s = re.sub(r"<=\s*" + _SENTINEL, "<= 0", s)
+    s = re.sub(r"<\s*" + _SENTINEL, "<= 0", s)    # `< 哨兵` 语义是「等于 0」，不是「小于 0」
     # 4) 比较/逻辑运算符。先摘走字符串字面量，避免字面量内的 &/|/==/!= 被误改
     lits: list[str] = []
 

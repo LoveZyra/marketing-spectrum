@@ -98,6 +98,7 @@ LOOP:
 | 生成内部临时工具（现有工具不满足时） | `methodology/07_adhoc_tools.md` |
 | 诊断规则评估与结论生成（含执行难易权重、建议方向约束） | `methodology/08_diagnostic_rules.md` |
 | 读取数据驱动阈值（含异常值警告字段） | `methodology/09_adaptive_thresholds.md` |
+| **处理用户反馈 / 记问题账本** | `methodology/10_feedback_protocol.md` |
 | 查询字段语义 | 在 `references/behavior_fields.md` 中按字段名搜索，只加载匹配章节 |
 
 ## 模型分析——分级策略
@@ -122,6 +123,7 @@ LOOP:
 - [ ] `state["_stage"]` 已设为 `"full"`
 - [ ] `validate_report(state)` 返回空列表（无 schema 错误）
 - [ ] `lint_report_completeness(state)` 无 `level=="block"` 项（页面一致性硬保障：核心问题非空、`priority_actions[].problem_rank` 在 `[1,N]` 内）；`render` 默认对 block 级缺项阻断产出。warn 级（缺 `typical_case`、人群断链、问题数 <3、问题无行动）应尽量补齐
+- [ ] 若本次会话产生了 `source=user` 的账本条目（`cli feedback`）：已按 `methodology/10_feedback_protocol.md` 向用户**复述确认**，且 `--quote` 保留的是用户原话（未被 Agent 转述覆盖）；分不清归属时用 `--scope unknown` 也要记，**不得因对不上号而丢弃反馈**
 - [ ] 若 `findings` 中 `severity=="high"` 少于 3 条：将证据最强的 `mid` 条目提升进主问题列表，**保留其真实 severity**，不得为凑数量而拔高 severity
 
 > **页面一致性保障（render 内置，Agent 无需手动处理）**：章节缺数据时渲染带标签占位卡而非整章消失，单模块异常自动降级，4 大章节（核心问题 I / 行动建议 II / 详细诊断数据 III / 附录）锚点与左侧目录恒在。
@@ -147,4 +149,5 @@ LOOP:
 ## 输出
 
 - `{output_dir}/diagnosis_report.json` / `.md` / `.html`：由 `snippets/report_renderer.save_report(state, output_dir)` 生成，须在 `validate_report(state)` 无错误后调用
+- `feedback/issues.jsonl`（**skill 目录内，跨 job 累积，不随 job 走**）：问题账本。自动采集规则/校验/质检异常，`cli feedback` 记用户与 Agent 反馈。创建者用 `cli issues report` 出评审报告后人工改规则；**Agent 不读取该文件**，它不参与任何诊断判定（见 `methodology/10`）
 - `{output_dir}/crowd_rules.json`：可执行人群规则（`source`/`direction`(push|exclude)/`pandas_filter`/`sql_filter`(Spark SQL)/`estimated_size` 等）。render 时随报告自动产出；也可在 draft 后用 `cli crowd-rules` 提前单独产出（两者同源 `snippets/crowd_translator.build_crowd_rules`，内容一致）。`sql_filter` 为 best-effort 翻译，消费方在目标表上执行前应做 `LIMIT 0` dry-run 校验

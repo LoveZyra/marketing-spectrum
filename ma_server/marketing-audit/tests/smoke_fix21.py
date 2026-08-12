@@ -3,18 +3,21 @@
 """fix21 冒烟测试：软下线 / scope_filter / min_trigger_rate / 新规则 #45 / #11-#43 重划。"""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# skill 目录名可能含连字符，不能当包名 import；把 skill 根目录加进 sys.path
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
-from ma.snippets.diagnostic_engine import (  # noqa: E402
+from snippets.diagnostic_engine import (  # noqa: E402
     BELOW_MIN_TRIGGER_STATUS, RULE_DISABLED_STATUS, DiagnosticEngine,
 )
-from ma.snippets.feature_loader import FeatureLoader  # noqa: E402
+from snippets.feature_loader import FeatureLoader  # noqa: E402
 
 RNG = np.random.default_rng(20260812)
 N = 4000
@@ -63,8 +66,8 @@ THRESHOLDS = {
     "insite_total_touch_cnt": {"optimal": 5},
 }
 
-RULES = Path(__file__).resolve().parent / "feature_schema" / "diagnostic_rules.yaml"
-REG = Path(__file__).resolve().parent / "feature_schema" / "feature_registry.yaml"
+RULES = ROOT / "feature_schema" / "diagnostic_rules.yaml"
+REG = ROOT / "feature_schema" / "feature_registry.yaml"
 
 fails: list[str] = []
 
@@ -149,25 +152,208 @@ check("summary 带 applies_to", "applies_to" in summary.columns)
 check("#45 applies_to=广告投放",
       summary.loc[summary.rule_id == 45, "applies_to"].iloc[0] == "广告投放")
 
-# 7. 不变性：未改动的规则在同一份数据上结果与旧引擎一致
-UNCHANGED = [1, 2, 4, 5, 6, 12, 13, 14, 19, 20, 21, 23, 25, 27, 33, 34, 35, 37, 38, 39, 42, 44]
-old_sys = str(Path(__file__).resolve().parent.parent)
-import importlib.util  # noqa: E402
-spec = importlib.util.spec_from_file_location("old_engine", "/tmp/engine.bak.py")
-# 旧引擎带相对 import，无法单文件加载 → 改用旧 yaml + 新引擎交叉验证条件未变
+# 7. 不变性：fix21 未改动的 22 条规则，条件/严重度/字段必须与冻结快照逐字一致
+#    快照在 fix21 落地时对照 fix20 备份验证通过后冻结，此后作为长期回归基线
+#    （不再依赖 /tmp 备份文件，脚本可在任意机器上独立运行）
 import yaml  # noqa: E402
-old_rules = {r["id"]: r for r in yaml.safe_load(
-    open("/tmp/rules.bak.yaml", encoding="utf-8"))["rules"]}
-new_rules = {r["id"]: r for r in yaml.safe_load(
+
+FROZEN = json.loads(r"""
+{
+  "1": {
+    "condition_template": "(pre_mainflow_event_cnt == 0) & (activity_touch_cnt > 0)",
+    "severity_base": "mid",
+    "required_fields": [
+      "pre_mainflow_event_cnt",
+      "activity_touch_cnt"
+    ]
+  },
+  "2": {
+    "condition_template": "activity_touch_cnt >= threshold('activity_touch_cnt', 'optimal')",
+    "severity_base": "mid",
+    "required_fields": [
+      "activity_touch_cnt"
+    ]
+  },
+  "4": {
+    "condition_template": "(risk_type == '风险用户') | (finance_revenue_after < 0) | (timediff < 10)",
+    "severity_base": "high",
+    "required_fields": [
+      "risk_type",
+      "finance_revenue_after",
+      "timediff"
+    ]
+  },
+  "5": {
+    "condition_template": "(pre_mainflow_event_cnt == 0) & ((pre_is_dormant_user == 1) | (pre_total_event_cnt <= threshold('pre_total_event_cnt', 'optimal')))",
+    "severity_base": "mid",
+    "required_fields": [
+      "pre_mainflow_event_cnt",
+      "pre_is_dormant_user",
+      "pre_total_event_cnt"
+    ]
+  },
+  "6": {
+    "condition_template": "period_mismatch_flag == 1",
+    "severity_base": "mid",
+    "required_fields": [
+      "period_mismatch_flag"
+    ]
+  },
+  "12": {
+    "condition_template": "insite_multi_channel_match_flag == 0",
+    "severity_base": "high",
+    "required_fields": [
+      "insite_multi_channel_match_flag"
+    ]
+  },
+  "13": {
+    "condition_template": "(has_ads_touch == 1) & (ads_insite_match_flag == 0)",
+    "severity_base": "high",
+    "required_fields": [
+      "has_ads_touch",
+      "ads_insite_match_flag"
+    ]
+  },
+  "14": {
+    "condition_template": "ads_no_insite_flag == 1",
+    "severity_base": "high",
+    "required_fields": [
+      "ads_no_insite_flag"
+    ]
+  },
+  "19": {
+    "condition_template": "(pre_is_marketing_first == 0) & (pre_has_coupon == 0) & (pre_has_mkt_click == 0) & ((pre_skip_detail_flag == 1) | ((pre_back_to_list_cnt == 0) & (pre_is_cross_category == 0) & (pre_funnel_pages_cnt <= 3)))",
+    "severity_base": "mid",
+    "required_fields": [
+      "pre_is_marketing_first",
+      "pre_has_coupon",
+      "pre_has_mkt_click",
+      "pre_skip_detail_flag",
+      "pre_back_to_list_cnt",
+      "pre_is_cross_category",
+      "pre_funnel_pages_cnt"
+    ]
+  },
+  "20": {
+    "condition_template": "(activity_touch_cnt >= threshold('activity_touch_cnt', 'optimal')) & (is_converted == 0) & (pre_mkt_trigger_mainflow_cnt == 0)",
+    "severity_base": "high",
+    "required_fields": [
+      "activity_touch_cnt",
+      "is_converted",
+      "pre_mkt_trigger_mainflow_cnt"
+    ]
+  },
+  "21": {
+    "condition_template": "(pre_create_not_complete == 1) & (pre_has_coupon == 0) & (pre_rp_target_product == 0) & (is_converted == 0)",
+    "severity_base": "high",
+    "required_fields": [
+      "pre_create_not_complete",
+      "pre_has_coupon",
+      "pre_rp_target_product",
+      "is_converted"
+    ]
+  },
+  "23": {
+    "condition_template": "(pre_is_cross_category == 1) & (pre_reached_detail == 1) & (is_converted == 0)",
+    "severity_base": "low",
+    "required_fields": [
+      "pre_is_cross_category",
+      "pre_reached_detail",
+      "is_converted"
+    ]
+  },
+  "25": {
+    "condition_template": "(pre_create_order_cnt >= 2) & (pre_create_not_complete == 1) & (is_converted == 0)",
+    "severity_base": "high",
+    "required_fields": [
+      "pre_create_order_cnt",
+      "pre_create_not_complete",
+      "is_converted"
+    ]
+  },
+  "27": {
+    "condition_template": "(pre_max_funnel_depth <= 1) & (pre_mkt_touch_cnt > 0) & (activity_touch_cnt > 0)",
+    "severity_base": "mid",
+    "required_fields": [
+      "pre_max_funnel_depth",
+      "pre_mkt_touch_cnt",
+      "activity_touch_cnt"
+    ]
+  },
+  "33": {
+    "condition_template": "activity_touch_cnt >= threshold('activity_touch_cnt', 'optimal')",
+    "severity_base": "mid",
+    "required_fields": [
+      "activity_touch_cnt"
+    ]
+  },
+  "34": {
+    "condition_template": "pre_mkt_channel_cnt >= threshold('pre_mkt_channel_cnt', 'optimal')",
+    "severity_base": "mid",
+    "required_fields": [
+      "pre_mkt_channel_cnt"
+    ]
+  },
+  "35": {
+    "condition_template": "pre_popup_touch_cnt >= threshold('pre_popup_touch_cnt', 'optimal')",
+    "severity_base": "mid",
+    "required_fields": [
+      "pre_popup_touch_cnt"
+    ]
+  },
+  "37": {
+    "condition_template": "insite_channel_cnt >= threshold('insite_channel_cnt', 'optimal')",
+    "severity_base": "mid",
+    "required_fields": [
+      "insite_channel_cnt"
+    ]
+  },
+  "38": {
+    "condition_template": "pre_unique_activity_cnt >= threshold('pre_unique_activity_cnt', 'optimal')",
+    "severity_base": "low",
+    "required_fields": [
+      "pre_unique_activity_cnt"
+    ]
+  },
+  "39": {
+    "condition_template": "(pre_reached_booking == 1) & (pre_popup_reject_cnt > 0) & (is_converted == 0)",
+    "severity_base": "mid",
+    "required_fields": [
+      "pre_reached_booking",
+      "pre_popup_reject_cnt",
+      "is_converted"
+    ]
+  },
+  "42": {
+    "condition_template": "(pre_last_coupon_platform.notna()) & (pre_last_coupon_platform != pre_primary_platform)",
+    "severity_base": "low",
+    "required_fields": [
+      "pre_last_coupon_platform",
+      "pre_primary_platform"
+    ]
+  },
+  "44": {
+    "condition_template": "(is_today == 1) & (scene_has_offline_node == 1)",
+    "severity_base": "mid",
+    "required_fields": [
+      "is_today",
+      "scene_has_offline_node"
+    ]
+  }
+}
+""")
+_new_rules = {str(r["id"]): r for r in yaml.safe_load(
     open(RULES, encoding="utf-8"))["rules"]}
-same = all(
-    old_rules[i]["condition_template"] == new_rules[i]["condition_template"]
-    and old_rules[i]["severity_base"] == new_rules[i]["severity_base"]
-    and old_rules[i]["required_fields"] == new_rules[i]["required_fields"]
-    for i in UNCHANGED
-)
-check("22 条未改动规则的条件/严重度/字段逐字未变", same)
-_ = old_sys
+_drift = []
+for rid, exp in FROZEN.items():
+    cur = _new_rules.get(rid)
+    if cur is None:
+        _drift.append(f"#{rid} 规则消失")
+        continue
+    for k, v in exp.items():
+        if cur.get(k) != v:
+            _drift.append(f"#{rid}.{k}")
+check("22 条未改动规则与冻结快照逐字一致", not _drift, "; ".join(_drift) if _drift else "")
 
 # 8. registry 引用清理
 reg_txt = Path(REG).read_text(encoding="utf-8")

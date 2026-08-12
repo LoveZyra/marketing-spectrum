@@ -49,6 +49,51 @@ from typing import Any
 # ── 公共工具 ──────────────────────────────────────────────────────────
 
 
+def _ledger_ctx(state: dict, out_dir: "Path") -> dict:
+    """问题账本的 job 上下文。job_id 取输出目录名（本来就是 job_<ts>_<hash>）。"""
+    meta = state.get("campaign_meta") or {}
+    return {
+        "job_id": Path(out_dir).name,
+        "campaign_id": state.get("campaign_id") or meta.get("campaign_id"),
+        "campaign_channel": meta.get("activity_channel_std") or meta.get("channel"),
+        "skill_version": _skill_version(),
+    }
+
+
+def _skill_version() -> str:
+    """从 CHANGELOG 顶部的版本标题里取一个粗版本号，取不到就空串。"""
+    try:
+        import re as _re
+        head = (Path(__file__).resolve().parent / "CHANGELOG.md").read_text(
+            encoding="utf-8", errors="ignore")[:4000]
+        m = _re.search(r"\(?(fix\d+(?:\.\d+)?)\)?", head)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
+def _ledger_collect(kind: str, payload, state: dict, out_dir: "Path") -> None:
+    """把采集到的问题写进账本。纯旁路：任何异常都吞掉，绝不影响主链。"""
+    try:
+        from snippets import issue_ledger
+        ctx = _ledger_ctx(state, out_dir)
+        if kind == "rules":
+            issue_ledger.append(issue_ledger.build_job_snapshot(payload, ctx))
+            recs = issue_ledger.collect_from_rule_summary(payload, ctx)
+        elif kind == "lint":
+            recs = issue_ledger.collect_from_lint(payload, ctx)
+        elif kind == "critique":
+            recs = issue_ledger.collect_from_critique(payload, ctx)
+        else:
+            return
+        n = issue_ledger.append_many(recs)
+        if n:
+            print(f"                     [issue-ledger] 记录 {n} 条{kind}问题 → "
+                  f"{issue_ledger.ledger_path()}")
+    except Exception as e:                       # noqa: BLE001
+        print(f"                     [issue-ledger] 采集失败（已忽略）: {e}")
+
+
 def _load_dataframe(path: Path) -> "Any":
     """支持 .csv / .parquet，自动尝试 GBK/UTF-8。
 
@@ -619,6 +664,10 @@ def cmd_compute_thresholds(args: argparse.Namespace) -> int:
         state["data_overview"] = {}
     state["data_overview"]["diagnostic_rules_summary"] = rule_summary_df[export_cols].to_dict("records")
 
+    # 问题账本采集点 ①：规则状态快照 + 明确异常（字段缺失 / 阈值算不出 / 100% 触发）
+    # 放在 cli 层而不是 DiagnosticEngine 内部 —— engine 是纯统计层，不做文件 IO。
+    _ledger_collect("rules", rule_summary_df.to_dict("records"), state, out_dir)
+
     # 零方差字段写入 data_caveats
     zero_var_fields = [
         name for name, info in adaptive_thresholds.items()
@@ -858,6 +907,8 @@ def cmd_render(args: argparse.Namespace) -> int:
     blocks = [g for g in gaps if g.get("level") == "block"]
     cwarns = [g for g in gaps if g.get("level") != "block"]
     print(f"[render] completeness: {len(blocks)} blocking, {len(cwarns)} warnings")
+    # 问题账本采集点 ②：完整性 warn 项（block 级会阻断 render，无需沉淀）
+    _ledger_collect("lint", cwarns, state, out_dir)
     for g in cwarns[:8]:
         print(f"         · [warn] {g['message']}")
     if blocks and not getattr(args, "skip_completeness", False):
@@ -976,6 +1027,8 @@ def cmd_run_tools(args: argparse.Namespace) -> int:
             issues_r1 = list(state.get("self_critique") or [])
             summary_r1 = self_critique.summarize(issues_r1)
             print(f"            [R1] issues: {summary_r1}")
+            # 问题账本采集点 ③：自我质疑中的 error/warning 项
+            _ledger_collect("critique", state, state, out_dir)
 
             # 自动修复 language_compliance
             fixed = _auto_fix_critique_issues(state, issues_r1)
@@ -1155,6 +1208,81 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if not missing_required else 1
 
 
+# ── issues / feedback（问题账本）─────────────────────────────────────
+
+
+def cmd_issues(args: argparse.Namespace) -> int:
+    """问题账本：列出 / 出评审报告 / 记处置 / 折叠重写。
+
+    账本只沉淀与聚合，**绝不自动修改 diagnostic_rules.yaml**；
+    报告里的 yaml diff 仅为草稿，改不改由人决定（评估文档 §三决议：不做运行时注入）。
+    """
+    from snippets import issue_ledger
+
+    action = args.action
+    if action == "list":
+        items = issue_ledger.load()
+        if args.kind:
+            items = [i for i in items if i["kind"] == args.kind]
+        if args.source:
+            items = [i for i in items if i["source"] == args.source]
+        if args.status:
+            items = [i for i in items if i["status"] == args.status]
+        print(f"[issues] {issue_ledger.ledger_path()} — {len(items)} 条")
+        for i in items:
+            flag = " ⚠️分歧" if i.get("conflicting") else ""
+            print(f"  {i['count']:>4}×  [{i['source']:<5}] {i['status']:<9} "
+                  f"{i['issue_key']}{flag}")
+            if i["user_quotes"]:
+                print(f"          「{i['user_quotes'][0]}」")
+        return 0
+
+    if action == "report":
+        md = issue_ledger.build_report(since=args.since, na_streak=args.na_streak,
+                                       never_streak=args.never_streak)
+        if args.out:
+            Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.out).write_text(md, encoding="utf-8")
+            print(f"[issues] 评审报告 → {args.out}")
+        else:
+            print(md)
+        return 0
+
+    if action == "resolve":
+        ok = issue_ledger.set_status(args.key, args.status, args.note or "", args.by or "")
+        print(f"[issues] {'已记录' if ok else '记录失败'}：{args.key} → {args.status}")
+        return 0 if ok else 1
+
+    if action == "compact":
+        n = issue_ledger.compact()
+        print(f"[issues] compact 完成，账本现有 {n} 行")
+        return 0 if n >= 0 else 1
+    return 1
+
+
+def cmd_feedback(args: argparse.Namespace) -> int:
+    """记录一条用户/Agent 反馈。
+
+    Agent 调用前必须已按 methodology/10_feedback_protocol.md 向用户**复述确认**；
+    `--quote` 必须是用户原话，不得用 Agent 的转述覆盖。
+    对不上具体规则时留空 --rule 即可（记 scope=unknown），**不要因为对不上号就丢掉反馈**。
+    """
+    from snippets import issue_ledger
+    ok = issue_ledger.record_feedback(
+        source=args.source, kind=args.kind, campaign_id=args.campaign,
+        job_id=args.job, rule_id=args.rule, field=args.field,
+        scope=args.scope, user_quote=args.quote, agent_verdict=args.verdict,
+        agent_note=args.note, reporter=args.reporter,
+    )
+    if ok:
+        print(f"[feedback] 已记录 → {issue_ledger.ledger_path()}")
+        print(f"           规则 {args.rule if args.rule is not None else '未锚定'} / "
+              f"{args.kind} / scope={args.scope}")
+    else:
+        print("[feedback] 记录失败（参数非法或账本不可写），请检查 --kind/--scope 取值")
+    return 0 if ok else 1
+
+
 # ── 入口 ─────────────────────────────────────────────────────────────
 
 
@@ -1227,6 +1355,43 @@ def build_parser() -> argparse.ArgumentParser:
 
     dp = sub.add_parser("doctor", help="环境自检")
     dp.set_defaults(func=cmd_doctor)
+
+    # issues（问题账本）
+    iss = sub.add_parser("issues", help="问题账本：list / report / resolve / compact")
+    iss.add_argument("action", choices=["list", "report", "resolve", "compact"])
+    iss.add_argument("--kind",   help="仅 list：按 kind 过滤")
+    iss.add_argument("--source", choices=["auto", "agent", "user"], help="仅 list：按来源过滤")
+    iss.add_argument("--status", help="list：按处置状态过滤 / resolve：目标状态"
+                                      "（open|confirmed|promoted|rejected）")
+    iss.add_argument("--since",  help="仅 report：统计区间，如 30d / 4w / 3m")
+    iss.add_argument("--na-streak",    type=int, default=10, dest="na_streak",
+                     help="仅 report：连续多少个 job not_applicable 才算趋势信号")
+    iss.add_argument("--never-streak", type=int, default=10, dest="never_streak",
+                     help="仅 report：连续多少个 job not_triggered 才算趋势信号")
+    iss.add_argument("--out",    help="仅 report：写入文件（默认打印到 stdout）")
+    iss.add_argument("--key",    help="仅 resolve：issue_key")
+    iss.add_argument("--note",   help="仅 resolve：处置说明")
+    iss.add_argument("--by",     help="仅 resolve：处置人")
+    iss.set_defaults(func=cmd_issues)
+
+    # feedback（用户/Agent 上报）
+    fb = sub.add_parser("feedback", help="记录一条用户/Agent 反馈进问题账本")
+    fb.add_argument("--source", default="user", choices=["user", "agent"])
+    fb.add_argument("--kind",   required=True,
+                    choices=["wrong_scope", "advice_infeasible", "rule_semantics", "data_mismatch"],
+                    help="问题类型（封闭枚举，见 methodology/10_feedback_protocol.md）")
+    fb.add_argument("--scope",  default="unknown", choices=["this_job", "systematic", "unknown"],
+                    help="this_job=这次数据特殊 / systematic=规则本身的问题（决定要不要改规则）")
+    fb.add_argument("--quote",  help="用户原话（必须原样，不得用转述覆盖）")
+    fb.add_argument("--campaign", help="活动 ID")
+    fb.add_argument("--job",    help="job_id（可选）")
+    fb.add_argument("--rule",   type=int, help="规则 id；对不上号时留空，绝不因此丢弃反馈")
+    fb.add_argument("--field",  help="涉及字段（可选）")
+    fb.add_argument("--reporter", help="提出人")
+    fb.add_argument("--verdict", choices=["agreed", "disputed", "unverifiable"],
+                    help="Agent 核对结论")
+    fb.add_argument("--note",   help="Agent 核对依据")
+    fb.set_defaults(func=cmd_feedback)
 
     return p
 

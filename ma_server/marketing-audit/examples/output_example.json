@@ -1,5 +1,5 @@
 {
-  "_comment": "期望输出 JSON 示例（特价机票活动，成单率 is_paid 口径）。由 state_full.json 裁剪，省略 agent_raw_stats/adaptive_thresholds/case_pool 等大块过程数据。",
+  "_comment": "期望输出 JSON 示例（特价机票活动，成单率 is_paid 口径）。由 state_full.json 裁剪，省略 agent_raw_stats/adaptive_thresholds/case_pool 等大块过程数据。2026-08-12(fix22) 随规则库评审同步：已移除基于已下线规则(#15/#17/#18)的条目与 #7 的旧名，避免 Agent 照着示例模仿出永远不会再产生的 finding。本示例仍为历史裁剪产物，下次真实全链路跑通后建议整体重新生成。",
   "campaign_id": "campaign_1781702310",
   "campaign_meta": {
     "campaign_name": "特价机票业务总览",
@@ -72,24 +72,6 @@
       {
         "rule_id": 7,
         "category": "时机匹配",
-        "name": "营销时机滞后",
-        "display_name": "营销时机滞后",
-        "status": "triggered",
-        "trigger_rate": 0.0244,
-        "trigger_cnt": 1221.0,
-        "cvr_triggered": 0.0254,
-        "cvr_not_triggered": 0.0213,
-        "cvr_gap": 0.0041,
-        "create_triggered": 0.0434,
-        "create_not_triggered": 0.0701,
-        "cvr_gap_significant": false,
-        "_signal_type": "causal",
-        "effective_signal": false,
-        "is_positive_signal": false
-      },
-      {
-        "rule_id": 8,
-        "category": "时机匹配",
         "name": "成单后推送过急",
         "display_name": "成单后推送过急",
         "status": "triggered",
@@ -121,60 +103,6 @@
         "cvr_gap_significant": true,
         "_signal_type": "causal",
         "effective_signal": true,
-        "is_positive_signal": false
-      },
-      {
-        "rule_id": 15,
-        "category": "关键打断",
-        "name": "详情页营销打断",
-        "display_name": "详情页后即时触达高成单",
-        "status": "triggered",
-        "trigger_rate": 0.0103,
-        "trigger_cnt": 513.0,
-        "cvr_triggered": 0.0663,
-        "cvr_not_triggered": 0.0209,
-        "cvr_gap": 0.0454,
-        "create_triggered": 0.1754,
-        "create_not_triggered": 0.0683,
-        "cvr_gap_significant": true,
-        "_signal_type": "positive",
-        "effective_signal": true,
-        "is_positive_signal": true
-      },
-      {
-        "rule_id": 17,
-        "category": "关键打断",
-        "name": "填写页营销打断",
-        "display_name": "填写页营销打断",
-        "status": "triggered",
-        "trigger_rate": 0.0014,
-        "trigger_cnt": 69.0,
-        "cvr_triggered": 0.1304,
-        "cvr_not_triggered": 0.0212,
-        "cvr_gap": 0.1092,
-        "create_triggered": 0.2899,
-        "create_not_triggered": 0.0691,
-        "cvr_gap_significant": true,
-        "_signal_type": "definitional",
-        "effective_signal": false,
-        "is_positive_signal": false
-      },
-      {
-        "rule_id": 18,
-        "category": "关键打断",
-        "name": "营销干扰支付",
-        "display_name": "营销干扰支付",
-        "status": "triggered",
-        "trigger_rate": 0.0006,
-        "trigger_cnt": 28.0,
-        "cvr_triggered": 0.0,
-        "cvr_not_triggered": 0.0214,
-        "cvr_gap": -0.0214,
-        "create_triggered": 0.0,
-        "create_not_triggered": 0.0695,
-        "cvr_gap_significant": false,
-        "_signal_type": "definitional",
-        "effective_signal": false,
         "is_positive_signal": false
       },
       {
@@ -511,47 +439,6 @@
       "cvr_gap_p_value": 0.0,
       "direction_ambiguous": false,
       "_rule_condition": "(pre_mainflow_event_cnt == 0) & ((pre_is_dormant_user == 1) | (pre_total_event_cnt <= 86.0))"
-    },
-    {
-      "id": "fnd_r15",
-      "agent": "diagnostic_rules",
-      "rule_id": 15,
-      "signal_name": "详情页后即时触达高成单",
-      "signal": "正向机会：513 名用户刚浏览机票详情页即被活动触达，成单率 6.63% vs 2.09%（+4.54pp）——详情页后的即时触达正中决策窗口。",
-      "severity": "mid",
-      "detail": "详情页后的即时触达是高价值时机而非打断。把『刚看完机票详情页』作为优先触达时机定向扩展，承接其购买决策。（执行难度：中等）",
-      "metric_refs": [
-        {
-          "name": "cvr_triggered",
-          "value": 0.0663,
-          "n_event": 513,
-          "ci_low": 0.0478,
-          "ci_high": 0.0912
-        },
-        {
-          "name": "cvr_not_triggered",
-          "value": 0.0209
-        },
-        {
-          "name": "cvr_gap",
-          "value": 0.0454
-        },
-        {
-          "name": "trigger_rate",
-          "value": 0.0103
-        },
-        {
-          "name": "n_event",
-          "value": 513.0
-        }
-      ],
-      "confidence": 0.85,
-      "_signal_type": "positive",
-      "affected_users": 513,
-      "cvr_gap_significant": true,
-      "cvr_gap_p_value": 0.0,
-      "direction_ambiguous": false,
-      "_rule_condition": "(pre_last_mainflow_detail.str.contains('详情', na=False)) & (pre_last_mainflow_to_touch_min <= 3.0)"
     },
     {
       "id": "fnd_pos_pre_target_product_funnel_depth",

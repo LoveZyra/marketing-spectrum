@@ -6,18 +6,45 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 
 def _default_history_path() -> Path:
+    """历史文件路径。
+
+    2026-08-12(fix22) 起默认落在 skill 目录下的 `feedback/`，与 issues.jsonl 同级
+    —— 账本和它描述的规则放在一起，创建者同步 skill 时天然带着。
+    迁移策略是**只搬不删**：旧路径的文件复制过去后原样保留，幂等、可回滚。
+    `MARKETING_AUDIT_HOME` 仍然最高优先，已有部署不受影响。
+    """
     base = os.environ.get("MARKETING_AUDIT_HOME")
     if base:
         return Path(base) / "adhoc_history.jsonl"
-    return Path.home() / ".marketing_audit_skill" / "adhoc_history.jsonl"
+
+    old = Path.home() / ".marketing_audit_skill" / "adhoc_history.jsonl"
+    new = Path(__file__).resolve().parent.parent / "feedback" / "adhoc_history.jsonl"
+    try:
+        new.parent.mkdir(parents=True, exist_ok=True)
+        # 「新路径为空文件」等同于「新路径不存在」：空文件可能来自写权限探测、
+        # 中断的运行、或人为 touch。若只判 exists()，一个 0 字节的占位文件就会
+        # 让迁移永远不触发，旧历史被静默孤立。
+        _new_empty = (not new.exists()) or new.stat().st_size == 0
+        if old.exists() and old.stat().st_size > 0 and _new_empty:
+            import shutil
+            shutil.copy2(old, new)
+            logger.info("adhoc_history 已迁移至 %s（旧文件保留在 %s）", new, old)
+        return new
+    except Exception as e:                       # noqa: BLE001
+        # skill 目录只读等情况：退回旧路径，绝不因此中断主链
+        logger.warning("feedback/ 不可用（%s），adhoc_history 沿用 %s", e, old)
+        return old
 
 
 def record_usage(spec: dict[str, Any], code_hash: str | None = None,

@@ -1,2 +1,7 @@
 __pycache__/
 *.pyc
+
+# 问题账本：跨版本持久数据，两边都在追加，不进版本库
+# 要进 git 的是 `cli issues report --out` 产出的 md 评审报告
+feedback/*.jsonl
+!feedback/.gitkeep

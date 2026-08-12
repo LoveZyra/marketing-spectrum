@@ -4,6 +4,57 @@
 
 ---
 
+## ★ 2026-08-12 极小阈值渲染成 `0.0000000001` 的回归修复(fix23)
+
+**现象**:线上又出现 `> 0.0000000001` 这类阈值。**这不是科学计数法回归**——fix20.1 那道防线还在,不出现 `3e-05` 也不出现 `2.50000000000000044409`;这次是**另一个缺口**:极小切分点被"如实"渲染成了十位小数。
+
+**根因**:只有 `0 < 切分点 < 1e-20` 才被当作树内部"刚好大于 0"的哨兵,而实测切分点会落在 **1e-10** 这个量级 —— 掉进缝里,走了 `_fmt_threshold` 的"加位数直到非零"分支(上限 40 位)。两条链路的门槛一致地过紧(模型侧 `_SENTINEL_EPS=1e-20`、SQL 侧 `_SENTINEL` 要求指数 ≥20),所以同一个串**同时**出现在报告与 `sql_filter` 里。model_interpreter 对 count/binary 字段有整数吸附(`>1e-10` → `>=1`),所以泄漏只发生在 **4 个 rate 字段**与 registry 查不到的派生列上。
+
+**门槛依据(registry 实证,非拍脑袋)**:全表 241 字段中仅 4 个 rate 型(`pre_popup_click_rate`/`pre_push_click_rate`/`pre_events_per_hour`/`serialid_bonus`)与 2 个金额型可能非整数,最小可表示非零值:点击率 ≥1/几十≈1e-2、行为密度 ≥1/24≈4e-2、促销占比 ≥1/365≈2.7e-3、金额 ≥0.01。**全表最小 ≈ 2.7e-3**,(0, 1e-6) 内不存在任何真实取值。门槛定在 1e-6 仍保守 1000 倍,且**对真实数据选中的行完全不变**(`x > 1e-10` 与 `x > 0` 在最小值 2.7e-3 的列上是同一批人)——这不是取近似,是等价改写。
+
+| 变更 | 说明 | 文件 |
+|---|---|---|
+| **哨兵门槛 1e-20 → 1e-6** | 两处同名常量同步(有测试断言二者一致,防再次漂移);SQL 侧正则由"指数 ≥20"放宽到"≥6" | `model_analyst.py`、`model_interpreter.py`、`crowd_translator.py` |
+| **`_fmt_threshold` 先判哨兵再格式化** | 原来靠"第 N 位能否表示出非零"隐式判断,`9.9e-7` 在第 6 位会**进位**成 `0.000001`,看着非零其实仍在哨兵区间。改为进函数先 `abs(v) < _SENTINEL_EPS → "0"`;位数上限同时从 40 收到 6 | 同上 |
+| **补 `<` 分支** | 哨兵归一化原本只处理 `>=`/`<=`/`>`,`< 3e-08` 漏网、又因位数上限返回 raw,反而把科学计数法泄给了运营。`< 哨兵` 语义是「等于 0」,归一为 `<= 0` | `crowd_translator.py` |
+| **`>= 哨兵` 不再改写成 `>= 1`** | ⚠️ 这是本次放宽门槛**引入的新错误**,自测抓到:`>= 1` 是二值字段专用写法,门槛放宽后 rate 字段也会命中,`serialid_bonus >= 1` 变成"促销占比 100%",与原意「占比 > 0」差几个数量级。统一归一为 `> 0`——对二值/计数/率值三类都正确(整数域下 `> 0` ≡ `>= 1`,整数美化由 model_interpreter 另行处理) | `crowd_translator.py` |
+| **`_sci_to_plain` 兜底不再返回 raw** | 返回 raw 会把 `3e-08` 原样泄给运营看,违背"全链路不出科学计数法"的约定;哨兵区间统一写 0 | `crowd_translator.py` |
+
+| **阈值占位符解析:`or` 误伤合法 0.0** | 顺带修掉的潜伏 bug。`value = ft.get(stat) or ft.get("optimal")` —— Python 里 `0`/`0.0` 是假值,而阈值 **0.0 是合法值**:`round(cut, 4)` 会把 <0.00005 的切点收成 0;registry 里 62 个字段算了分位数,稀疏字段的 p75 本来就是 0(「超过 75% 的用户从没被弹屏触达过」这个 0 是正确答案,不是缺失)。老写法会把它当没取到、**静默换成 optimal 的值**。改用 `is None` 判定;并把"请求的分位数没算过→回退 optimal"这个**有意的降级**从静默改为留痕(原实现一句 warning 都不给)。现存 13 条带阈值规则的 stat 全是 `optimal`(两边同键),所以此前一直没暴露 —— 属潜伏缺陷,修复对现有规则**逐位不变**(有对拍断言) | `diagnostic_engine.py` |
+
+**验证**(`tests/test_threshold_format.py` + `tests/test_threshold_resolve.py`,均为新增,共 51 项断言全过):① 1e-10/5e-11/1e-8/1e-7/9.9e-7 五个量级在两处 `_fmt_threshold` 都归 0;② 四组真实 pandas 表达式过 `pandas_to_sql` 后**既无长串也无科学计数法**;③ **真实精度一点不动**——浮点噪声 `2.5000000000000004`→`2.5`、促销占比 `0.0027`、金额 `0.01`、行为密度 `0.0417`、手写规则 `0.12345`、`min_trigger_rate 0.05` 全部原样;④ **等价性实证**:2 万行合成数据、3 个 rate 字段 × 4 个 eps 量级,`> eps` 与 `> 0` 选中的行数**完全相同**,且最小可表示非零值(2.74e-3)比门槛大 2700 倍;⑤ 两处常量一致性断言。**解析器侧另有对拍**:把修复前的实现原样复刻成 `old_impl`,对现存 13 条带阈值规则 × 4 套阈值表(正常值/全 0/含分位数/全缺失)逐条比对,解析结果**逐字一致**;并断言老实现在 `p75=0.0 & optimal=3.0` 场景下确实会串成 `>= 3.0`。fix21/fix22 全套断言数字不变,`cli doctor` 全绿。
+
+---
+
+## ★ 2026-08-12 自迭代沉淀机制:问题账本 issue_ledger(fix22)
+
+**动机**:规则/字段的缺陷此前只能靠人攒着、等一次全量评审才发现(本次 fix21 删掉的 #15/#17,下线理由是"依赖 `pre_last_mainflow_detail` 文本匹配不稳定"——这个结论其实在跑到第 5 个活动时就该自己冒出来)。引擎每次 job 都知道"哪个字段又缺了""哪条规则又没触发",但 job 一结束就全扔了。本次把这些信号跨 job 沉淀下来,并给用户反馈一条有纪律的入口。
+
+**范围决议(四项,配套文档《自迭代沉淀机制·可行性评估》)**:① 账本落 skill 目录下 `feedback/`,`adhoc_history.jsonl` 一并迁入;② **Agent 运行时不读取账本**——它与"同数据同版本=逐位一致结论"的确定性原则冲突,只保留"沉淀→聚合→人工晋升"闭环;③ `adhoc_registry` 不并入,只对齐目录与报告入口;④ 报告不加 `rule_id` 可引用标识,改由 Agent 按活动 ID 反查。**最终是纯旁路机制:不碰主链、不碰渲染、不碰判定。**
+
+| 变更 | 说明 | 文件 |
+|---|---|---|
+| **新增问题账本 `issue_ledger`** | 三种记录类型:`job_snapshot`(每 job 一行的规则 status/trigger_rate 向量)、`observe`(明确异常与反馈,带 `issue_key` 折叠主键)、`status`(人工处置)。**只追加、永不改写**——账本被并发 job 共享,原地 read-modify-write 会丢数据,而加文件锁会拖住 render;`count`/`first_seen`/`campaigns` 全部读时折叠,追加走 `O_APPEND` 单次 write(行长 <4KB 时原子),零锁 | `snippets/issue_ledger.py`(新增) |
+| **趋势信号不写进账本** | "连续 N 个 job not_triggered/not_applicable/skipped"这类信号由 `build_report` 从 snapshot 序列**算**出来。若每条规则每次都写一行,28 条规则×200 个 job = 5600 行噪声,账本三个月就没法看。现在实测**每 job 4 行** | 同上 |
+| **采集点在 cli 层,不在引擎里** | `DiagnosticEngine` 的 docstring 写明它是"纯统计层:只计算触发率和分布",塞文件 IO 进去会破坏定位、也让 engine 单测被迫碰磁盘。三处采集(compute-thresholds 后的规则汇总 / render 的 completeness warn / self_critique 的 error·warning)统一由 `_ledger_collect()` 触发,**engine 零改动**;有测试断言 engine 不 import issue_ledger | `cli.py` |
+| **`cli issues` / `cli feedback`** | `issues list/report/resolve/compact`;`feedback` 记用户与 Agent 上报。report 分三栏(用户反馈逐条全文 / 自动信号按 count / 趋势信号)并输出**可直接粘贴的 yaml diff 与 CHANGELOG 草稿**——运行时注入已排除,账本的全部价值都要经由这一个命令兑现 | `cli.py` |
+| **用户反馈处理协议** | 新增 `methodology/10_feedback_protocol.md`:①三类反馈分流(报告瑕疵走 self_critique 不进账本 / 规则口径进账本 / 数据问题进账本+caveats);②Agent 先用 rule_summary 核对、必要时反驳(列出改版后三种常见误解:把 #43 当 #11、对已下线规则提意见、把 `min_trigger_rate` 按设计拦下当失效),核对不成立但用户坚持仍要记并标 `disputed`;③**写前必须复述确认**,`--quote` 保留原话不许被转述覆盖;④隔天反馈按活动 ID 反查 job 的 report json 定位,**对不上号也不许丢**(`--scope unknown` 照记);⑤矛盾反馈不裁决,折叠时标 `conflicting` 两条原话都留 | `methodology/10_feedback_protocol.md`(新增)、`SKILL.md` |
+| **`adhoc_history.jsonl` 迁入 `feedback/`** | 默认路径改为 skill 目录相对定位;`MARKETING_AUDIT_HOME` 仍最高优先;迁移**只搬不删**(旧文件保留,幂等可回滚);skill 目录只读时回退旧路径并 warning,绝不中断主链。模块本身不合并——两者晋升语义相反(一个是"好用到值得固化",一个是"坏到值得修"),只在 `cli issues report` 的展示层汇合 | `snippets/adhoc_registry.py` |
+| **示例产物同步(补漏)** | `examples/output_example.json` 是 SKILL.md 登记的"期望输出示例",Agent 会照着它模仿。原文件仍含已下线规则 #15/#17/#18 的 summary 行与一条 `fnd_r15` 的 finding、#7 的旧名「营销时机滞后」、以及 yaml 里根本不存在的 id=8(早于 fix21 就已陈旧)——留着会让 Agent 模仿出**永远不会再产生**的 finding。已清理并验证:`validate_report` 0 错、`lint_report_completeness` 0 block 0 warn。该示例仍是历史裁剪产物,下次真实全链路跑通后建议整体重生成 | `examples/output_example.json` |
+| **三条防覆盖措施** | R1 打包排除+解包前断言(`scripts/pack_skill.sh` / `install_skill.sh`,新增);R2 `.gitignore` 忽略 `feedback/*.jsonl`(两边都在追加的 jsonl 进 git 必然冲突且无法人工消解,**进 git 的是 `issues report --out` 的 md**);R3 重装前备份、解包后**按行合并**回来再 compact 去重——合并而非覆盖,防止备份期间的新条目被吃掉。"纯追加+读时折叠"让合并只需 `cat` + `compact`,无需任何冲突消解逻辑 | `scripts/*.sh`(新增)、`.gitignore`、`feedback/README.md`(新增) |
+
+| **本地实跑修正(3 处)** | 在用户本机跑测试时暴露并修掉:① `feedback_dir()` 的写权限探测原用 `touch`+`unlink`,会在**允许写但不允许删**的挂载上误判不可写并无谓降级到 home 目录 —— 改为只探测"能否以追加方式打开账本",这正是本模块唯一需要的能力;② `_default_history_path()` 原判据是 `not new.exists()`,一个 0 字节占位文件(来自写探测/中断的运行/人为 touch)就会让迁移永远不触发、旧历史被静默孤立 —— 改为**空文件视同不存在**;③ 两个测试脚本原先写死工作区目录名(`marketing-audit` 含连字符不能当包名 import)并依赖 `/tmp` 备份文件,改为把 skill 根目录加进 `sys.path` 直接 import `snippets`,不变性断言改用**内嵌冻结快照**,脚本可在任意机器独立运行;迁移用例的清理从 `unlink` 改为快照+写回 | `snippets/issue_ledger.py`、`snippets/adhoc_registry.py`、`tests/*.py` |
+
+**验证**(`tests/test_issue_ledger.py`,47 项断言全过):8 进程×200 行并发追加 = 1600 行且无撕裂行;折叠 count/时间极值/campaigns 去重与 20 上限;矛盾反馈标记 `conflicting` 且两条原话都在;status 取最后一条、非法值被拒;掺入半行/脏行后 `load()` 跳过不抛、路径不可写时 `append()` 返回 False 不抛;超长 quote 截断后单行 <4KB 且仍是合法 json;采集器只抽明确异常(不含 triggered/not_applicable)、lint 只收 warn 不收 block;趋势信号连续段被打断即不报;**越界断言:issue_ledger 不含 yaml 写入调用、diagnostic_engine 不 import issue_ledger**;迁移只搬不删且重复执行不覆盖、`MARKETING_AUDIT_HOME` 仍优先;R3 两份账本 cat 后 compact 去重不丢新条目。集成跑 12 个 job:账本 48 行(每 job 1 snapshot + 3 observe),报告正确产出 3 条趋势信号(#3 长期 skipped→数仓待办、#38 长期不触发→下线候选、#45 长期 not_applicable→先看活动类型再判断)。fix21 全套断言数字不变。**已在用户本机(Python 3.10 / pandas 2.3.3 / 无 scipy)实跑通过**:两套测试全绿、`cli doctor` 全绿(含 TOOLS_MANIFEST schema 校验)、12 个 job 端到端采集与评审报告正确产出。
+
+**打包脚本的一个静默失效(负向用例抓到)**:`install_skill.sh`/`pack_skill.sh` 的"包内不得含 feedback/"断言原写作 `tar tzf "$PKG" | grep -qE ...`,而脚本开了 `set -o pipefail` —— `grep -q` 命中后立刻退出会让 `tar` 收到 SIGPIPE(141),pipefail 取管道最后一个非零状态,整条管道返回 141,`if` 判为假,**断言被静默跳过**。正向打包时因为无匹配、grep 读完全部输入正常退出,所以一直看不出问题;直到造了一个含 `feedback/` 的坏包才暴露 —— 老写法**放行了**。改用 here-string 消掉管道。负向用例现已固化:坏包退出码 1、且拦在解包之前(目标目录不会被创建)。
+
+**打包排除 `营销诊断介绍.html`**:13MB 的说明材料,是仓库里给人看的东西,线上运行完全用不到 —— 它一个文件就占了整包 97% 的体积(9.7MB → **332KB**)。`pack_skill.sh` 已加 `--exclude` 与对应自检(混进去直接拒绝出包)。
+
+**⚠️ 部署注意**:① 必须用 `scripts/pack_skill.sh` 打包(手工 tar 请加 `--exclude='feedback'`),包内出现 `feedback/` 会覆盖线上账本,`install_skill.sh` 会拒绝安装;② 服务器上确认 skill 目录可写,否则账本静默降级到 `~/.marketing_audit_skill/`(日志有 warning),可用 `MA_FEEDBACK_DIR` 指定可写目录。
+
+---
+
 ## ★ 2026-08-12 规则知识库业务评审对齐(fix21)
 
 **来源**:业务侧《营销诊断项目.xlsx·知识库优化》对全部规则逐条评审(34 行),含保留/删除判定、条件修订、优化建议与两条新增规则。本次把评审结论全量落进 yaml,并给 yaml schema 补了四个承载评审结论的键。
