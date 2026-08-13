@@ -1,0 +1,254 @@
+platform-foundation/README.md
+  h_4e3a4dcdcf415f 1-75
+platform-foundation/docs/复盘/优化方案_20260803_prepare_OOM.md
+  h_4e3a4dcdcf415f 1-72
+platform-foundation/docs/复盘/处置_20260803_activity1000344.md
+  h_4e3a4dcdcf415f 1-81
+platform-foundation/docs/复盘/诊断_20260803_activity1000344.md
+  h_4e3a4dcdcf415f 1-119
+platform-foundation/docs/目录重构方案_20260813.md
+  h_4e3a4dcdcf415f 1-162
+platform-foundation/docs/诊断接口调用说明.md
+  h_4e3a4dcdcf415f 1-344
+platform-foundation/services/ma-api/DEPLOY.md
+  h_4e3a4dcdcf415f 1-43
+platform-foundation/services/ma-api/fixtures/crowd_rules_20260728_fnd_r41.json
+  h_4e3a4dcdcf415f 1-181
+platform-foundation/services/ma-api/install.sh
+  h_4e3a4dcdcf415f 1-311
+platform-foundation/services/ma-api/ma_api_b.py
+  h_4e3a4dcdcf415f 1-593
+platform-foundation/services/ma-api/ma_api_c.py
+  h_4e3a4dcdcf415f 1-251
+platform-foundation/services/ma-api/ma_core.py
+  h_4e3a4dcdcf415f 1-913
+platform-foundation/services/ma-api/ma_pipeline.py
+  h_4e3a4dcdcf415f 1-4135
+platform-foundation/services/ma-api/preflight_ma_server.py
+  h_4e3a4dcdcf415f 1-504
+platform-foundation/services/ma-api/regress_agent.py
+  h_4e3a4dcdcf415f 1-624
+platform-foundation/services/ma-api/regress_contract.py
+  h_4e3a4dcdcf415f 1-94
+platform-foundation/services/ma-api/regress_critique.py
+  h_4e3a4dcdcf415f 1-929
+platform-foundation/services/ma-api/regress_direction.py
+  h_4e3a4dcdcf415f 1-227
+platform-foundation/services/ma-api/regress_env.py
+  h_4e3a4dcdcf415f 1-491
+platform-foundation/services/ma-api/regress_polish.py
+  h_4e3a4dcdcf415f 1-726
+platform-foundation/services/ma-api/restart_prism.sh
+  h_4e3a4dcdcf415f 1-135
+platform-foundation/services/ma-api/run_ma_server.sh
+  h_4e3a4dcdcf415f 1-429
+platform-foundation/services/ma-api/run_real_b.sh
+  h_4e3a4dcdcf415f 1-130
+platform-foundation/services/ma-api/run_real_c.sh
+  h_4e3a4dcdcf415f 1-192
+platform-foundation/services/ma-api/运行说明.md
+  h_4e3a4dcdcf415f 1-323
+platform-foundation/skills/hdfs-data/SKILL.md
+  h_4e3a4dcdcf415f 1-130
+platform-foundation/skills/hdfs-data/scripts/hdfs_data_conf.example.json
+  h_4e3a4dcdcf415f 1-13
+platform-foundation/skills/hdfs-data/scripts/hdfs_data_conf.json
+  h_4e3a4dcdcf415f 1-11
+platform-foundation/skills/hdfs-data/scripts/hdfs_get.py
+  h_4e3a4dcdcf415f 1-674
+platform-foundation/skills/hdfs-data/scripts/hdfs_push.py
+  h_4e3a4dcdcf415f 1-560
+platform-foundation/skills/html-edit-mode/SKILL.md
+  h_4e3a4dcdcf415f 1-159
+platform-foundation/skills/html-edit-mode/assets/edit-mode.css
+  h_4e3a4dcdcf415f 1-282
+platform-foundation/skills/html-edit-mode/assets/edit-mode.js
+  h_4e3a4dcdcf415f 1-961
+platform-foundation/skills/marketing-audit/.gitignore
+  h_4e3a4dcdcf415f 1-7
+platform-foundation/skills/marketing-audit/CHANGELOG.md
+  h_4e3a4dcdcf415f 1-605
+platform-foundation/skills/marketing-audit/README.md
+  h_4e3a4dcdcf415f 1-259
+platform-foundation/skills/marketing-audit/SKILL.md
+  h_4e3a4dcdcf415f 1-153
+platform-foundation/skills/marketing-audit/TOOLS_MANIFEST.json
+  h_4e3a4dcdcf415f 1-257
+platform-foundation/skills/marketing-audit/assets/fonts/fonts.css
+  h_4e3a4dcdcf415f 1-9
+platform-foundation/skills/marketing-audit/cli.py
+  h_4e3a4dcdcf415f 1-1406
+platform-foundation/skills/marketing-audit/examples/enrich_with_adhoc.py
+  h_4e3a4dcdcf415f 1-208
+platform-foundation/skills/marketing-audit/examples/enrich_with_critique_loop.py
+  h_4e3a4dcdcf415f 1-494
+platform-foundation/skills/marketing-audit/examples/input_example.md
+  h_4e3a4dcdcf415f 1-182
+platform-foundation/skills/marketing-audit/examples/output_example.json
+  h_4e3a4dcdcf415f 1-939
+platform-foundation/skills/marketing-audit/feature_schema/diagnostic_rules.yaml
+  h_4e3a4dcdcf415f 1-754
+platform-foundation/skills/marketing-audit/feature_schema/feature_registry.yaml
+  h_4e3a4dcdcf415f 1-2089
+platform-foundation/skills/marketing-audit/feedback/.gitkeep
+  h_4e3a4dcdcf415f 1
+platform-foundation/skills/marketing-audit/feedback/README.md
+  h_4e3a4dcdcf415f 1-30
+platform-foundation/skills/marketing-audit/methodology/00_overview.md
+  h_4e3a4dcdcf415f 1-140
+platform-foundation/skills/marketing-audit/methodology/01_campaign_profile.md
+  h_4e3a4dcdcf415f 1-159
+platform-foundation/skills/marketing-audit/methodology/02_model_analysis.md
+  h_4e3a4dcdcf415f 1-228
+platform-foundation/skills/marketing-audit/methodology/03_synthesis.md
+  h_4e3a4dcdcf415f 1-281
+platform-foundation/skills/marketing-audit/methodology/04_confidence.md
+  h_4e3a4dcdcf415f 1-106
+platform-foundation/skills/marketing-audit/methodology/05_self_critique.md
+  h_4e3a4dcdcf415f 1-173
+platform-foundation/skills/marketing-audit/methodology/06_data_fallback.md
+  h_4e3a4dcdcf415f 1-78
+platform-foundation/skills/marketing-audit/methodology/07_adhoc_tools.md
+  h_4e3a4dcdcf415f 1-140
+platform-foundation/skills/marketing-audit/methodology/08_diagnostic_rules.md
+  h_4e3a4dcdcf415f 1-438
+platform-foundation/skills/marketing-audit/methodology/09_adaptive_thresholds.md
+  h_4e3a4dcdcf415f 1-121
+platform-foundation/skills/marketing-audit/methodology/10_feedback_protocol.md
+  h_4e3a4dcdcf415f 1-121
+platform-foundation/skills/marketing-audit/references/REPORT_CONSISTENCY_OPTIMIZATION.md
+  h_4e3a4dcdcf415f 1-109
+platform-foundation/skills/marketing-audit/references/behavior_fields.md
+  h_4e3a4dcdcf415f 1-434
+platform-foundation/skills/marketing-audit/schemas/action.schema.json
+  h_4e3a4dcdcf415f 1-70
+platform-foundation/skills/marketing-audit/schemas/audience_segment.schema.json
+  h_4e3a4dcdcf415f 1-37
+platform-foundation/skills/marketing-audit/schemas/finding.schema.json
+  h_4e3a4dcdcf415f 1-81
+platform-foundation/skills/marketing-audit/schemas/report.schema.json
+  h_4e3a4dcdcf415f 1-119
+platform-foundation/skills/marketing-audit/schemas/tools_manifest.schema.json
+  h_4e3a4dcdcf415f 1-97
+platform-foundation/skills/marketing-audit/scripts/install_skill.sh
+  h_4e3a4dcdcf415f 1-53
+platform-foundation/skills/marketing-audit/scripts/pack_skill.sh
+  h_4e3a4dcdcf415f 1-50
+platform-foundation/skills/marketing-audit/snippets/__init__.py
+  h_4e3a4dcdcf415f 1-12
+platform-foundation/skills/marketing-audit/snippets/adhoc_registry.py
+  h_4e3a4dcdcf415f 1-140
+platform-foundation/skills/marketing-audit/snippets/adhoc_runner.py
+  h_4e3a4dcdcf415f 1-246
+platform-foundation/skills/marketing-audit/snippets/adhoc_validator.py
+  h_4e3a4dcdcf415f 1-141
+platform-foundation/skills/marketing-audit/snippets/attribution.py
+  h_4e3a4dcdcf415f 1-230
+platform-foundation/skills/marketing-audit/snippets/case_extractor.py
+  h_4e3a4dcdcf415f 1-979
+platform-foundation/skills/marketing-audit/snippets/chart.umd.min.js
+  h_4e3a4dcdcf415f 1-20
+platform-foundation/skills/marketing-audit/snippets/confidence.py
+  h_4e3a4dcdcf415f 1-128
+platform-foundation/skills/marketing-audit/snippets/crowd_translator.py
+  h_4e3a4dcdcf415f 1-282
+platform-foundation/skills/marketing-audit/snippets/data_fallback.py
+  h_4e3a4dcdcf415f 1-260
+platform-foundation/skills/marketing-audit/snippets/data_overview.py
+  h_4e3a4dcdcf415f 1-371
+platform-foundation/skills/marketing-audit/snippets/diagnostic_engine.py
+  h_4e3a4dcdcf415f 1-776
+platform-foundation/skills/marketing-audit/snippets/draft_builder.py
+  h_4e3a4dcdcf415f 1-495
+platform-foundation/skills/marketing-audit/snippets/event_logger.py
+  h_4e3a4dcdcf415f 1-324
+platform-foundation/skills/marketing-audit/snippets/feature_loader.py
+  h_4e3a4dcdcf415f 1-263
+platform-foundation/skills/marketing-audit/snippets/funnel.py
+  h_4e3a4dcdcf415f 1-203
+platform-foundation/skills/marketing-audit/snippets/issue_ledger.py
+  h_4e3a4dcdcf415f 1-640
+platform-foundation/skills/marketing-audit/snippets/model_analyst.py
+  h_4e3a4dcdcf415f 1-1616
+platform-foundation/skills/marketing-audit/snippets/model_interpreter.py
+  h_4e3a4dcdcf415f 1-1020
+platform-foundation/skills/marketing-audit/snippets/path_quality.py
+  h_4e3a4dcdcf415f 1-219
+platform-foundation/skills/marketing-audit/snippets/platform_behavior.py
+  h_4e3a4dcdcf415f 1-219
+platform-foundation/skills/marketing-audit/snippets/price_sensitivity.py
+  h_4e3a4dcdcf415f 1-144
+platform-foundation/skills/marketing-audit/snippets/report_renderer.py
+  h_4e3a4dcdcf415f 1-1934
+platform-foundation/skills/marketing-audit/snippets/report_validator.py
+  h_4e3a4dcdcf415f 1-683
+platform-foundation/skills/marketing-audit/snippets/sample_data.py
+  h_4e3a4dcdcf415f 1-286
+platform-foundation/skills/marketing-audit/snippets/self_critique.py
+  h_4e3a4dcdcf415f 1-795
+platform-foundation/skills/marketing-audit/snippets/stats_utils.py
+  h_4e3a4dcdcf415f 1-219
+platform-foundation/skills/marketing-audit/snippets/threshold_computer.py
+  h_4e3a4dcdcf415f 1-501
+platform-foundation/skills/marketing-audit/snippets/user_segment.py
+  h_4e3a4dcdcf415f 1-164
+platform-foundation/skills/marketing-audit/tests/smoke_fix21.py
+  h_4e3a4dcdcf415f 1-353
+platform-foundation/skills/marketing-audit/tests/test_backlink.py
+  h_4e3a4dcdcf415f 1-95
+platform-foundation/skills/marketing-audit/tests/test_condition_zh.py
+  h_4e3a4dcdcf415f 1-207
+platform-foundation/skills/marketing-audit/tests/test_crowd_filter_zh.py
+  h_4e3a4dcdcf415f 1-106
+platform-foundation/skills/marketing-audit/tests/test_issue_ledger.py
+  h_4e3a4dcdcf415f 1-336
+platform-foundation/skills/marketing-audit/tests/test_rules_fix26.py
+  h_4e3a4dcdcf415f 1-133
+platform-foundation/skills/marketing-audit/tests/test_threshold_format.py
+  h_4e3a4dcdcf415f 1-121
+platform-foundation/skills/marketing-audit/tests/test_threshold_resolve.py
+  h_4e3a4dcdcf415f 1-105
+platform-foundation/skills/onesql/SKILL.md
+  h_4e3a4dcdcf415f 1-203
+platform-foundation/skills/onesql/scripts/onesql.py
+  h_4e3a4dcdcf415f 1-196
+platform-foundation/skills/schedule-task/SKILL.md
+  h_4e3a4dcdcf415f 1-214
+platform-foundation/skills/schedule-task/_shared/add_task.sh
+  h_4e3a4dcdcf415f 1-62
+platform-foundation/skills/schedule-task/_shared/bigdata_env.sh.example
+  h_4e3a4dcdcf415f 1-47
+platform-foundation/skills/schedule-task/_shared/capture_env.sh
+  h_4e3a4dcdcf415f 1-103
+platform-foundation/skills/schedule-task/_shared/check_all_health.sh
+  h_4e3a4dcdcf415f 1-91
+platform-foundation/skills/schedule-task/_shared/claude_env.sh
+  h_4e3a4dcdcf415f 1-121
+platform-foundation/skills/schedule-task/_shared/list_tasks.sh
+  h_4e3a4dcdcf415f 1-62
+platform-foundation/skills/schedule-task/_shared/preflight.sh
+  h_4e3a4dcdcf415f 1-265
+platform-foundation/skills/schedule-task/_shared/setup_cron.sh
+  h_4e3a4dcdcf415f 1-58
+platform-foundation/skills/schedule-task/_template/run.sh
+  h_4e3a4dcdcf415f 1-206
+platform-foundation/skills/schedule-task/install.sh
+  h_4e3a4dcdcf415f 1-69
+platform-foundation/skills/upload-html/SKILL.md
+  h_4e3a4dcdcf415f 1-6
+platform-foundation/skills/upload-html/instructions.md
+  h_4e3a4dcdcf415f 1-46
+platform-foundation/skills/upload-html/upload.sh
+  h_4e3a4dcdcf415f 1-81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "acfbd4387a5c11fb736ca68eb0dafba07f289354",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
