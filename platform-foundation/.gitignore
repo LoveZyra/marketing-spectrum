@@ -1,0 +1,22 @@
+# ── 运行时产物：跑出来的，不是写出来的 ────────────────────────────
+__pycache__/
+*.pyc
+runs/
+logs/
+work/
+
+# ── 发布产物：由 pack 脚本生成，线上回滚靠 .bak_<时间戳>，不靠仓库 ──
+dist/
+*.tar.gz
+
+# ── 跨版本持久数据：问题账本，install_skill.sh 会备份合并，绝不能被包覆盖 ──
+skills/marketing-audit/feedback/*.jsonl
+
+# ── 挂载盘不允许删文件，删除动作一律先 mv 到这里，由人工在资源管理器清 ──
+_to_delete/
+
+# ── 机器特定的环境快照：capture_env.sh / preflight.sh / add_task.sh 生成 ──
+skills/schedule-task/_shared/runtime_env.sh
+skills/schedule-task/_shared/bigdata_env.sh
+skills/schedule-task/_shared/claude_bin.env
+skills/schedule-task/_shared/crontab.txt
