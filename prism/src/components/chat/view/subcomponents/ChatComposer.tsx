@@ -11,13 +11,14 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { ImageIcon, MessageSquareIcon, XIcon, Loader2, ChevronDown, Check, ArrowUpIcon, FileTextIcon, LinkIcon, History, Paperclip } from 'lucide-react';
+import { ImageIcon, MessageSquareIcon, XIcon, Loader2, ChevronDown, Check, ArrowUpIcon, Cpu, FileTextIcon, LinkIcon, History, Paperclip } from 'lucide-react';
 
 import { useVoiceInput } from '../../hooks/useVoiceInput';
 import { useVoiceAvailable } from '../../hooks/useVoiceAvailable';
 import type { AttachedDoc, DocUploadProgress, QueuedDraft } from '../../hooks/useChatComposerState';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
 import type { PendingPermissionRequest, PermissionMode } from '../../types/types';
+import { executionModeMeta, orderedExecutionModes } from '../../utils/executionModes';
 import type { ProviderModelOption } from '../../../../types/app';
 import {
   PromptInput,
@@ -63,8 +64,13 @@ interface ChatComposerProps {
   activity: SessionActivity | null;
   isLoading: boolean;
   onAbortSession: () => void;
+  /** Model this conversation is actually running. Null while it is unknown. */
+  activeModel: string | null;
   permissionMode: PermissionMode | string;
-  onModeSwitch: () => void;
+  /** Jump straight to a gear. Tab still cycles, handled in useChatComposerState. */
+  onSelectMode: (mode: PermissionMode) => void;
+  /** Gears this provider actually supports. */
+  availablePermissionModes: readonly (PermissionMode | string)[];
   effort: string;
   availableEffortOptions: NonNullable<ProviderModelOption['effort']>['values'];
   onSelectEffort: (effort: string) => void;
@@ -132,8 +138,10 @@ export default function ChatComposer({
   activity,
   isLoading,
   onAbortSession,
+  activeModel,
   permissionMode,
-  onModeSwitch,
+  onSelectMode,
+  availablePermissionModes,
   effort,
   availableEffortOptions,
   onSelectEffort,
@@ -227,6 +235,68 @@ export default function ChatComposer({
   );
   const isRecording = voiceState === 'recording';
   const isTranscribing = voiceState === 'transcribing';
+  const [isModeDropdownOpen, setIsModeDropdownOpen] = useState(false);
+  const modeDropdownRef = useRef<HTMLDivElement | null>(null);
+  const modeDropdownMenuRef = useRef<HTMLDivElement | null>(null);
+  const modeDropdownButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [modeDropdownPosition, setModeDropdownPosition] = useState<{
+    left: number;
+    top: number;
+    maxHeight: number;
+  } | null>(null);
+
+  const executionModes = useMemo(
+    () => orderedExecutionModes(availablePermissionModes),
+    [availablePermissionModes],
+  );
+  const activeMode = executionModeMeta(permissionMode);
+
+  const updateModeDropdownPosition = useCallback(() => {
+    const rect = modeDropdownButtonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    setModeDropdownPosition({
+      left: rect.left,
+      top: rect.top - 8,
+      maxHeight: Math.max(96, rect.top - 16),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isModeDropdownOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        !modeDropdownRef.current?.contains(target)
+        && !modeDropdownMenuRef.current?.contains(target)
+      ) {
+        setIsModeDropdownOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsModeDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('resize', updateModeDropdownPosition);
+    window.addEventListener('scroll', updateModeDropdownPosition, true);
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    updateModeDropdownPosition();
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('resize', updateModeDropdownPosition);
+      window.removeEventListener('scroll', updateModeDropdownPosition, true);
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+    };
+  }, [isModeDropdownOpen, updateModeDropdownPosition]);
+
   const [isEffortDropdownOpen, setIsEffortDropdownOpen] = useState(false);
   const effortDropdownRef = useRef<HTMLDivElement | null>(null);
   const effortDropdownMenuRef = useRef<HTMLDivElement | null>(null);
@@ -598,45 +668,97 @@ export default function ChatComposer({
               <VoiceInputButton state={voiceState} onToggle={voiceToggle} errorMsg={voiceError} />
             )}
 
-            <button
-              type="button"
-              onClick={onModeSwitch}
-              className={`inline-flex h-8 items-center rounded-lg border px-2 text-xs font-medium transition-all duration-200 sm:px-2.5 ${
-                permissionMode === 'default'
-                  ? 'border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted'
-                  : permissionMode === 'acceptEdits'
-                    ? 'border-green-300/60 bg-green-50 text-green-700 hover:bg-green-100 dark:border-green-600/40 dark:bg-green-900/15 dark:text-green-300 dark:hover:bg-green-900/25'
-                    : permissionMode === 'auto'
-                      ? 'border-blue-300/60 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-600/40 dark:bg-blue-900/15 dark:text-blue-300 dark:hover:bg-blue-900/25'
-                      : permissionMode === 'bypassPermissions'
-                        ? 'border-orange-300/60 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-600/40 dark:bg-orange-900/15 dark:text-orange-300 dark:hover:bg-orange-900/25'
-                        : 'border-primary/20 bg-primary/5 text-primary hover:bg-primary/10'
-              }`}
-              title={t('input.clickToChangeMode')}
-            >
-              <div className="flex items-center gap-1.5">
+            {/* Which model is actually running.
+                Read-only on purpose: /models is the single switch. Before this
+                chip existed the model was displayed only on the empty new-chat
+                screen, so inside a live conversation there was no way to tell
+                what you were talking to — or whether a /models switch had
+                taken. */}
+            {activeModel && (
+              <span
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border/60 bg-muted/40 px-2 text-xs font-medium text-muted-foreground sm:px-2.5"
+                title={t('input.modelHint', { model: activeModel, defaultValue: `当前模型：${activeModel}，输入 /models 切换` })}
+              >
+                <Cpu className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                <span className="hidden max-w-28 truncate sm:inline">{activeModel}</span>
+              </span>
+            )}
+
+            {/* Execution mode.
+                This used to be a single button that cycled through five modes
+                with nothing but a colour to distinguish them — including two
+                that let the agent write files or run commands unattended. It is
+                a labelled picker now, with one line each on what the gear
+                actually permits. Tab still cycles, for anyone with the old
+                muscle memory. */}
+            <div ref={modeDropdownRef} className="relative">
+              <button
+                ref={modeDropdownButtonRef}
+                type="button"
+                onClick={() => {
+                  updateModeDropdownPosition();
+                  setIsModeDropdownOpen((current) => !current);
+                }}
+                className={`inline-flex h-8 items-center rounded-lg border px-2 text-xs font-medium transition-all duration-200 sm:px-2.5 ${activeMode.chipClassName}`}
+                aria-haspopup="menu"
+                aria-expanded={isModeDropdownOpen}
+                aria-label={t('executionModes.title', { defaultValue: 'Execution mode' })}
+                title={t('input.clickToChangeMode')}
+              >
+                <div className="flex items-center gap-1.5">
+                  <div className={`h-2.5 w-2.5 rounded-full sm:h-1.5 sm:w-1.5 ${activeMode.dotClassName}`} />
+                  <span className="hidden whitespace-nowrap sm:inline">{t(activeMode.labelKey)}</span>
+                  <ChevronDown className={`h-3 w-3 transition-transform ${isModeDropdownOpen ? 'rotate-180' : ''}`} />
+                </div>
+              </button>
+
+              {isModeDropdownOpen && modeDropdownPosition && createPortal(
                 <div
-                  className={`h-2.5 w-2.5 rounded-full sm:h-1.5 sm:w-1.5 ${
-                    permissionMode === 'default'
-                      ? 'bg-muted-foreground'
-                      : permissionMode === 'acceptEdits'
-                        ? 'bg-green-500'
-                        : permissionMode === 'auto'
-                          ? 'bg-blue-500'
-                          : permissionMode === 'bypassPermissions'
-                            ? 'bg-orange-500'
-                            : 'bg-primary'
-                  }`}
-                />
-                <span className="hidden whitespace-nowrap sm:inline">
-                  {permissionMode === 'default' && t('permissionModes.default')}
-                  {permissionMode === 'acceptEdits' && t('permissionModes.acceptEdits')}
-                  {permissionMode === 'auto' && t('permissionModes.auto')}
-                  {permissionMode === 'bypassPermissions' && t('permissionModes.bypassPermissions')}
-                  {permissionMode === 'plan' && t('permissionModes.plan')}
-                </span>
-              </div>
-            </button>
+                  ref={modeDropdownMenuRef}
+                  className="fixed z-[100] w-72 overflow-y-auto rounded-lg border border-border bg-card p-1 shadow-lg"
+                  style={{
+                    left: modeDropdownPosition.left,
+                    top: modeDropdownPosition.top,
+                    maxHeight: modeDropdownPosition.maxHeight,
+                    transform: 'translateY(-100%)',
+                  }}
+                  role="menu"
+                >
+                  {executionModes.map((option) => {
+                    const isSelected = option.mode === permissionMode;
+                    return (
+                      <button
+                        key={option.mode}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={isSelected}
+                        onClick={() => {
+                          onSelectMode(option.mode);
+                          setIsModeDropdownOpen(false);
+                        }}
+                        className={`flex w-full items-start gap-2 rounded px-2 py-1.5 text-left transition-colors ${
+                          isSelected ? 'bg-accent text-foreground' : 'hover:bg-accent/70'
+                        }`}
+                      >
+                        <span className="flex h-4 w-3 shrink-0 items-center justify-center">
+                          {isSelected && <Check className="h-3 w-3 text-primary" />}
+                        </span>
+                        <span className="flex min-w-0 flex-col">
+                          <span className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                            <span className={`h-1.5 w-1.5 rounded-full ${option.dotClassName}`} />
+                            {t(option.labelKey)}
+                          </span>
+                          <span className="text-[11px] leading-snug text-muted-foreground">
+                            {t(option.descriptionKey)}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>,
+                document.body,
+              )}
+            </div>
 
             {availableEffortOptions.length > 0 && (
               <div ref={effortDropdownRef} className="relative">

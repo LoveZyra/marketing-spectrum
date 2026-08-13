@@ -22,7 +22,10 @@
     "fullscreen": "Plein écran",
     "close": "Fermer",
     "previewMarkdown": "Aperçu markdown",
-    "editMarkdown": "Modifier le markdown"
+    "editMarkdown": "Modifier le markdown",
+    "reloadPreview": "Reload",
+    "editHtml": "Back to source",
+    "previewHtml": "Preview rendered HTML"
   },
   "footer": {
     "lines": "Lignes :",
@@ -32,5 +35,8 @@
   "binaryFile": {
     "title": "Fichier binaire",
     "message": "Le fichier \"{{fileName}}\" ne peut pas être affiché dans l'éditeur de texte car c'est un fichier binaire."
+  },
+  "filePreview": {
+    "unsavedNotice": "Preview shows the saved file. Save to see your latest edits."
   }
 }

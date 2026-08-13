@@ -19,6 +19,9 @@ const getErrorMessage = (error: unknown) => {
 
 export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocumentParams) => {
   const [content, setContent] = useState('');
+  // What the server last confirmed. The HTML preview reads the file from disk,
+  // so it needs to know when the buffer has moved on without it.
+  const [persistedContent, setPersistedContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -78,6 +81,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
 
         const data = await response.json();
         setContent(data.content);
+        setPersistedContent(data.content);
       } catch (error) {
         const message = getErrorMessage(error);
         console.error('Error loading file:', error);
@@ -121,6 +125,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
 
       await response.json();
 
+      setPersistedContent(content);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
     } catch (error) {
@@ -150,6 +155,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
   return {
     content,
     setContent,
+    hasUnsavedChanges: content !== persistedContent,
     loading,
     saving,
     saveSuccess,

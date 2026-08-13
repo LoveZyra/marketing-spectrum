@@ -1,7 +1,7 @@
 import express from 'express';
 
+import { auditLogDb, projectsDb, userDb } from '@/modules/database/index.js';
 import { createProject, updateProjectDisplayName } from '@/modules/projects/services/project-management.service.js';
-import { startCloneProject } from '@/modules/projects/services/project-clone.service.js';
 import { getProjectTaskMaster } from '@/modules/projects/services/projects-has-taskmaster.service.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
@@ -11,7 +11,28 @@ import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/proje
 const router = express.Router();
 
 type AuthenticatedUser = {
-  id?: number | string;
+  id?: number;
+  username?: string;
+  isRoot?: boolean;
+};
+
+const readUser = (req: express.Request): AuthenticatedUser | undefined =>
+  (req as express.Request & { user?: AuthenticatedUser }).user;
+
+/**
+ * Which owner scope this caller's list should use.
+ *
+ * `null` means "no filter" and is returned for root — and also when there is no
+ * user on the request at all, which is the platform-mode path. Erring towards
+ * the unfiltered list there is deliberate: platform deployments authenticate
+ * upstream and have always shown every project.
+ */
+const visibilityScopeFor = (req: express.Request): number | null => {
+  const user = readUser(req);
+  if (!user || user.isRoot || typeof user.id !== 'number') {
+    return null;
+  }
+  return user.id;
 };
 
 function readQueryStringValue(value: unknown): string {
@@ -53,18 +74,6 @@ function parseNonNegativeIntQuery(value: unknown, name: string, fallback: number
   return parsedValue;
 }
 
-function resolveRouteErrorMessage(error: unknown): string {
-  if (error instanceof AppError) {
-    return error.message;
-  }
-
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
-  return 'Failed to clone repository';
-}
-
 router.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -77,6 +86,7 @@ router.get(
       skipSynchronization,
       sessionsLimit,
       sessionsOffset,
+      visibleTo: visibilityScopeFor(req),
     });
     res.json(projects);
   }),
@@ -84,8 +94,8 @@ router.get(
 
 router.get(
   '/archived',
-  asyncHandler(async (_req, res) => {
-    const projects = await getArchivedProjectsWithSessions();
+  asyncHandler(async (req, res) => {
+    const projects = await getArchivedProjectsWithSessions({ visibleTo: visibilityScopeFor(req) });
     res.json(createApiSuccessResponse({ projects }));
   }),
 );
@@ -116,16 +126,17 @@ router.post(
     }
 
     if (requestBody.githubUrl || requestBody.githubTokenId || requestBody.newGithubToken) {
-      throw new AppError('Repository cloning is not supported on create-project', {
-        code: 'CLONE_NOT_SUPPORTED_ON_CREATE_PROJECT',
+      throw new AppError('Repository cloning is no longer supported', {
+        code: 'CLONE_NOT_SUPPORTED',
         statusCode: 400,
-        details: 'Use /api/projects/clone-progress for cloning workflows',
+        details: 'Create the project from a directory that already exists on the server.',
       });
     }
 
     const projectCreationResult = await createProject({
       projectPath,
       customName,
+      ownerUserId: readUser(req)?.id ?? null,
     });
 
     res.json({
@@ -153,77 +164,68 @@ router.post(
   }),
 );
 
-router.get('/clone-progress', async (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  const sendEvent = (type: string, data: Record<string, unknown>) => {
-    if (res.writableEnded) {
-      return;
-    }
-
-    res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
-  };
-
-  let cloneOperation: Awaited<ReturnType<typeof startCloneProject>> | null = null;
-  const closeListener = () => {
-    cloneOperation?.cancel();
-  };
-  req.on('close', closeListener);
-
-  try {
-    const queryParams = req.query as Record<string, unknown>;
-    const workspacePath = readQueryStringValue(queryParams.path);
-    const githubUrl = readQueryStringValue(queryParams.githubUrl);
-    const githubTokenId = readOptionalNumericQueryValue(queryParams.githubTokenId);
-    const newGithubToken = readQueryStringValue(queryParams.newGithubToken) || null;
-
-    const authenticatedUser = (req as typeof req & { user?: AuthenticatedUser }).user;
-    const userId = authenticatedUser?.id;
-    if (userId === undefined || userId === null) {
-      throw new AppError('Authenticated user is required', {
-        code: 'AUTHENTICATION_REQUIRED',
-        statusCode: 401,
-      });
-    }
-
-    cloneOperation = await startCloneProject(
-      {
-        workspacePath,
-        githubUrl,
-        githubTokenId,
-        newGithubToken,
-        userId,
-      },
-      {
-        onProgress: (message) => {
-          sendEvent('progress', { message });
-        },
-        onComplete: ({ project, message }) => {
-          sendEvent('complete', { project, message });
-        },
-      },
-    );
-
-    await cloneOperation.waitForCompletion;
-  } catch (error) {
-    sendEvent('error', { message: resolveRouteErrorMessage(error) });
-  } finally {
-    req.off('close', closeListener);
-    if (!res.writableEnded) {
-      res.end();
-    }
-  }
-});
-
 router.get(
   '/:projectId/taskmaster',
   asyncHandler(async (req, res) => {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
     const taskMasterDetails = await getProjectTaskMaster(projectId);
     res.json(taskMasterDetails);
+  }),
+);
+
+/**
+ * Reassign a project, or make it public with `{ "ownerUserId": null }`.
+ *
+ * Root only. Ownership is what the sidebar filters on, so letting a
+ * non-owner rewrite it would make the filter meaningless.
+ */
+router.patch(
+  '/:projectId/owner',
+  asyncHandler(async (req, res) => {
+    const actor = readUser(req);
+    if (!actor?.isRoot) {
+      throw new AppError('Administrator access required', {
+        code: 'ROOT_REQUIRED',
+        statusCode: 403,
+      });
+    }
+
+    const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
+    const rawOwner = (req.body as { ownerUserId?: unknown })?.ownerUserId;
+
+    let ownerUserId: number | null;
+    if (rawOwner === null) {
+      ownerUserId = null;
+    } else if (typeof rawOwner === 'number' && Number.isInteger(rawOwner) && rawOwner > 0) {
+      if (!userDb.getUserById(rawOwner)) {
+        throw new AppError('Target user does not exist', {
+          code: 'OWNER_NOT_FOUND',
+          statusCode: 400,
+        });
+      }
+      ownerUserId = rawOwner;
+    } else {
+      throw new AppError('ownerUserId must be a positive integer or null', {
+        code: 'INVALID_OWNER',
+        statusCode: 400,
+      });
+    }
+
+    if (!projectsDb.setProjectOwner(projectId, ownerUserId)) {
+      throw new AppError(`Project "${projectId}" was not found.`, {
+        code: 'PROJECT_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    auditLogDb.record({
+      userId: actor.id ?? null,
+      username: actor.username ?? null,
+      event: 'project_owner_changed',
+      detail: `${projectId} -> ${ownerUserId === null ? 'public' : `user ${ownerUserId}`}`,
+    });
+
+    res.json({ success: true, projectId, ownerUserId });
   }),
 );
 

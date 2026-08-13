@@ -2,12 +2,22 @@ import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
 import type { Extension } from '@codemirror/state';
 import MarkdownPreview from './markdown/MarkdownPreview';
+import HtmlPreview from './HtmlPreview';
 
 type CodeEditorSurfaceProps = {
   content: string;
   onChange: (value: string) => void;
   markdownPreview: boolean;
   isMarkdownFile: boolean;
+  htmlPreview?: {
+    active: boolean;
+    previewUrl: string | null;
+    error: string | null;
+    isLoading: boolean;
+    hasUnsavedChanges: boolean;
+    onReload: () => void;
+    labels: { loading: string; reload: string; unsavedNotice: string };
+  };
   isDarkMode: boolean;
   fontSize: number;
   showLineNumbers: boolean;
@@ -19,11 +29,25 @@ export default function CodeEditorSurface({
   onChange,
   markdownPreview,
   isMarkdownFile,
+  htmlPreview,
   isDarkMode,
   fontSize,
   showLineNumbers,
   extensions,
 }: CodeEditorSurfaceProps) {
+  if (htmlPreview?.active) {
+    return (
+      <HtmlPreview
+        previewUrl={htmlPreview.previewUrl}
+        error={htmlPreview.error}
+        isLoading={htmlPreview.isLoading}
+        hasUnsavedChanges={htmlPreview.hasUnsavedChanges}
+        onReload={htmlPreview.onReload}
+        labels={htmlPreview.labels}
+      />
+    );
+  }
+
   if (markdownPreview && isMarkdownFile) {
     return (
       <div className="h-full overflow-y-auto bg-white dark:bg-gray-900">

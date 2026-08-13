@@ -1,7 +1,7 @@
 import { EditorView } from '@codemirror/view';
 import { unifiedMergeView } from '@codemirror/merge';
 import type { Extension } from '@codemirror/state';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
@@ -20,6 +20,7 @@ import CodeEditorLoadingState from './subcomponents/CodeEditorLoadingState';
 import CodeEditorSurface from './subcomponents/CodeEditorSurface';
 import CodeEditorBinaryFile from './subcomponents/CodeEditorBinaryFile';
 import CodeEditorMediaPreview from './subcomponents/CodeEditorMediaPreview';
+import { useHtmlPreview } from '../hooks/useHtmlPreview';
 
 type CodeEditorProps = {
   file: CodeEditorFile;
@@ -45,6 +46,7 @@ export default function CodeEditor({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showDiff, setShowDiff] = useState(Boolean(file.diffInfo));
   const [markdownPreview, setMarkdownPreview] = useState(false);
+  const [htmlPreview, setHtmlPreview] = useState(false);
 
   // The code editor follows the app-wide theme; it has no theme of its own.
   const { isDarkMode } = useTheme();
@@ -59,6 +61,7 @@ export default function CodeEditor({
   const {
     content,
     setContent,
+    hasUnsavedChanges,
     loading,
     saving,
     saveSuccess,
@@ -83,23 +86,34 @@ export default function CodeEditor({
     return extension === 'html' || extension === 'htm';
   }, [file.name]);
 
-  const openHtmlPreview = useCallback(() => {
-    const previewWindow = window.open('', '_blank');
-    if (!previewWindow) return;
+  /**
+   * Project-relative path of the open file.
+   *
+   * The preview ticket is minted against the project root, so an absolute path
+   * is no use here. Null when the file sits outside the project — the editor
+   * can open such files, and the preview simply says so.
+   */
+  const previewRelPath = useMemo(() => {
+    if (!projectPath) return null;
 
-    previewWindow.opener = null;
-    previewWindow.document.title = file.name;
-    previewWindow.document.body.style.margin = '0';
+    const normalizedRoot = projectPath.replace(/\\/g, '/').replace(/\/+$/, '');
+    const normalizedFile = file.path.replace(/\\/g, '/');
+    if (!normalizedFile.startsWith(`${normalizedRoot}/`)) return null;
 
-    const iframe = previewWindow.document.createElement('iframe');
-    iframe.title = file.name;
-    iframe.sandbox.add('allow-forms', 'allow-modals', 'allow-popups', 'allow-scripts');
-    iframe.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;background:white';
+    return normalizedFile.slice(normalizedRoot.length + 1);
+  }, [file.path, projectPath]);
 
-    iframe.srcdoc = content;
+  const htmlPreviewState = useHtmlPreview({
+    projectId: fileProjectId,
+    relPath: previewRelPath,
+    enabled: htmlPreview && isHtmlPreviewFile,
+  });
 
-    previewWindow.document.body.appendChild(iframe);
-  }, [content, file.name]);
+  // Switching to a different file must not leave the previous file's preview
+  // showing under the new file's name.
+  useEffect(() => {
+    setHtmlPreview(false);
+  }, [file.path]);
 
   const minimapExtension = useMemo(
     () => (
@@ -254,10 +268,11 @@ export default function CodeEditor({
             isMarkdownFile={isMarkdownFile}
             isHtmlPreviewFile={isHtmlPreviewFile}
             markdownPreview={markdownPreview}
+            htmlPreview={htmlPreview}
             saving={saving}
             saveSuccess={saveSuccess}
             onToggleMarkdownPreview={() => setMarkdownPreview((previous) => !previous)}
-            onOpenHtmlPreview={openHtmlPreview}
+            onToggleHtmlPreview={() => setHtmlPreview((previous) => !previous)}
             onOpenSettings={() => paletteOps.openSettings('appearance')}
             onDownload={handleDownload}
             onSave={handleSave}
@@ -267,7 +282,8 @@ export default function CodeEditor({
               showingChanges: t('header.showingChanges'),
               editMarkdown: t('actions.editMarkdown'),
               previewMarkdown: t('actions.previewMarkdown'),
-              previewHtml: t('actions.previewHtml', 'Open HTML preview in new tab'),
+              previewHtml: t('actions.previewHtml', 'Preview rendered HTML'),
+              editHtml: t('actions.editHtml', 'Back to source'),
               settings: t('toolbar.settings'),
               download: t('actions.download'),
               save: t('actions.save'),
@@ -291,6 +307,22 @@ export default function CodeEditor({
               onChange={setContent}
               markdownPreview={markdownPreview}
               isMarkdownFile={isMarkdownFile}
+              htmlPreview={{
+                active: htmlPreview && isHtmlPreviewFile,
+                previewUrl: htmlPreviewState.previewUrl,
+                error: htmlPreviewState.error,
+                isLoading: htmlPreviewState.isLoading,
+                hasUnsavedChanges,
+                onReload: htmlPreviewState.reload,
+                labels: {
+                  loading: t('filePreview.loading', 'Loading preview...'),
+                  reload: t('actions.reloadPreview', 'Reload'),
+                  unsavedNotice: t(
+                    'filePreview.unsavedNotice',
+                    'Preview shows the saved file. Save to see your latest edits.',
+                  ),
+                },
+              }}
               isDarkMode={isDarkMode}
               fontSize={fontSize}
               showLineNumbers={showLineNumbers}

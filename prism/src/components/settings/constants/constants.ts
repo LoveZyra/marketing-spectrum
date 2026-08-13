@@ -2,8 +2,8 @@ import type { ComponentType } from 'react';
 import {
   Bell,
   Bot,
-  GitBranch,
   Info,
+  Users,
   KeyRound,
   ListChecks,
   MonitorPlay,
@@ -21,17 +21,22 @@ export type SettingsMainTabMeta = {
   label: string;
   keywords: string;
   icon: ComponentType<{ className?: string }>;
+  /**
+   * Hidden from non-root accounts. The server 403s these routes regardless —
+   * this only keeps a tab that can do nothing out of everyone else's settings.
+   */
+  rootOnly?: boolean;
 };
 
 export const SETTINGS_MAIN_TABS: SettingsMainTabMeta[] = [
   { id: 'agents', label: 'Agents', keywords: 'agents subagents claude code', icon: Bot },
   { id: 'appearance', label: 'Appearance', keywords: 'appearance theme dark light language', icon: Palette },
-  { id: 'git', label: 'Git', keywords: 'git github commits', icon: GitBranch },
   { id: 'api', label: 'API Tokens', keywords: 'api tokens auth keys', icon: KeyRound },
   { id: 'tasks', label: 'Tasks', keywords: 'tasks taskmaster', icon: ListChecks },
   { id: 'browser', label: 'Browser', keywords: 'browser playwright chromium automation', icon: MonitorPlay },
   { id: 'notifications', label: 'Notifications', keywords: 'notifications alerts push', icon: Bell },
   { id: 'plugins', label: 'Plugins', keywords: 'plugins extensions integrations', icon: Plug },
+  { id: 'accounts', label: 'Accounts', keywords: 'accounts users approval root admin', icon: Users, rootOnly: true },
   { id: 'about', label: 'About', keywords: 'about version info', icon: Info },
 ];
 

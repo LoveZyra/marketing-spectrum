@@ -29,6 +29,8 @@ export type ProjectListItem = {
   displayName: string;
   fullPath: string;
   isStarred: boolean;
+  /** Owning account id; null means the project is public. */
+  ownerUserId: number | null;
   sessions: SessionSummary[];
   sessionMeta: {
     hasMore: boolean;
@@ -51,6 +53,11 @@ type GetProjectsWithSessionsOptions = {
   skipSynchronization?: boolean;
   sessionsLimit?: number;
   sessionsOffset?: number;
+  /**
+   * Scope the list to one account (its own projects plus public ones).
+   * `null`/omitted returns everything — that is what root sees.
+   */
+  visibleTo?: number | null;
 };
 
 type SessionPaginationOptions = {
@@ -184,11 +191,12 @@ export async function getProjectsWithSessions(
     await sessionSynchronizerService.synchronizeSessions();
   }
 
-  const projectRows = projectsDb.getProjectPaths() as Array<{
+  const projectRows = projectsDb.getProjectPaths(options.visibleTo ?? null) as Array<{
     project_id: string;
     project_path: string;
     custom_project_name?: string | null;
     isStarred?: number;
+    owner_user_id?: number | null;
   }>;
   const totalProjects = projectRows.length;
   const projects: ProjectListItem[] = [];
@@ -223,6 +231,7 @@ export async function getProjectsWithSessions(
       displayName,
       fullPath: projectPath,
       isStarred: Boolean(row.isStarred),
+      ownerUserId: row.owner_user_id ?? null,
       sessions: sessionsPage.sessions,
       sessionMeta: {
         hasMore: sessionsPage.hasMore,
@@ -246,17 +255,18 @@ export async function getProjectsWithSessions(
  * conversation history in the archive view regardless of each session's flag.
  */
 export async function getArchivedProjectsWithSessions(
-  options: Pick<GetProjectsWithSessionsOptions, 'skipSynchronization'> = {},
+  options: Pick<GetProjectsWithSessionsOptions, 'skipSynchronization' | 'visibleTo'> = {},
 ): Promise<ArchivedProjectListItem[]> {
   if (!options.skipSynchronization) {
     await sessionSynchronizerService.synchronizeSessions();
   }
 
-  const projectRows = projectsDb.getArchivedProjectPaths() as Array<{
+  const projectRows = projectsDb.getArchivedProjectPaths(options.visibleTo ?? null) as Array<{
     project_id: string;
     project_path: string;
     custom_project_name?: string | null;
     isStarred?: number;
+    owner_user_id?: number | null;
   }>;
 
   const archivedProjects: ArchivedProjectListItem[] = [];
@@ -275,6 +285,7 @@ export async function getArchivedProjectsWithSessions(
       displayName,
       fullPath: row.project_path,
       isStarred: Boolean(row.isStarred),
+      ownerUserId: row.owner_user_id ?? null,
       isArchived: true,
       sessions: sessionsPage.sessions,
       sessionMeta: {

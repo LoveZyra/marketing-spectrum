@@ -105,7 +105,8 @@
     "showAllCommands": "Mostra tutti i comandi",
     "clearInput": "Cancella input",
     "scrollToBottom": "Scorri in basso",
-    "attachmentPath": "percorso"
+    "attachmentPath": "percorso",
+    "modelHint": "Current model: {{model}} · type /models to switch"
   },
   "providerSelection": {
     "title": "Scegli il tuo assistente AI",
@@ -113,7 +114,8 @@
     "readyPrompt": {
       "claude": "Pronto a usare Claude con {{model}}. Inizia a digitare il tuo messaggio qui sotto."
     },
-    "pressToSearch": "Premi <kbd>{{shortcut}}</kbd> per cercare sessioni, file e commit"
+    "pressToSearch": "Premi <kbd>{{shortcut}}</kbd> per cercare sessioni, file e commit",
+    "useModelsCommand": "Switch models with /models"
   },
   "session": {
     "continue": {
@@ -196,5 +198,13 @@
   },
   "attachments": {
     "truncated": "troncato"
+  },
+  "executionModes": {
+    "title": "Execution mode",
+    "default": "Asks before every tool it has not been granted.",
+    "plan": "Investigates and proposes a plan. Changes nothing.",
+    "acceptEdits": "Edits files without asking. Still asks before running commands.",
+    "auto": "Decides routine calls itself; asks about the rest.",
+    "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
   }
 }

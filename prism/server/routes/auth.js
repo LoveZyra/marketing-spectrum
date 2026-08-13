@@ -12,6 +12,7 @@ import {
   recordLoginFailure,
 } from '../middleware/rate-limit.js';
 import { issueTicket, WS_TICKET_TTL_MS } from '../shared/ws-tickets.js';
+import { isApprovalRequired, isRootUser } from '../shared/root-users.js';
 
 const router = express.Router();
 const db = getConnection();
@@ -36,7 +37,17 @@ router.get('/status', async (req, res) => {
   }
 });
 
-// User registration (setup) - only allowed if no users exist
+// Registration.
+//
+// Prism used to allow exactly one account and refuse every later signup. It now
+// accepts one account per colleague, but a new account arrives `pending` and
+// cannot log in until a root user approves it. Two exceptions get `approved`
+// immediately, and both are deliberate:
+//
+//   - the very first account on a fresh install — there is nobody to approve it
+//     yet, and refusing would leave the instance unusable;
+//   - any username listed in PRISM_ROOT_USERS — root must never be able to lock
+//     itself out of its own approval queue.
 router.post('/register', authRateLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -52,45 +63,65 @@ router.post('/register', authRateLimiter, async (req, res) => {
 
     // Use a transaction to prevent race conditions
     db.prepare('BEGIN').run();
+    let user;
+    let approvalStatus;
     try {
-      // Check if users already exist (only allow one user)
-      const hasUsers = userDb.hasUsers();
-      if (hasUsers) {
-        db.prepare('ROLLBACK').run();
-        return res.status(403).json({ error: 'User already exists. This is a single-user system.' });
-      }
+      // The first account on a fresh install is the setup account.
+      const isFirstAccount = !userDb.hasUsers();
+      approvalStatus =
+        isFirstAccount || isRootUser(username) || !isApprovalRequired()
+          ? 'approved'
+          : 'pending';
 
       // Hash password
       const saltRounds = 12;
       const passwordHash = await bcrypt.hash(password, saltRounds);
 
-      // Create user
-      const user = userDb.createUser(username, passwordHash);
-
-      // Generate token
-      const token = generateToken(user);
+      user = userDb.createUser(username, passwordHash, approvalStatus);
 
       db.prepare('COMMIT').run();
-
-      // Update last login (non-fatal, outside transaction)
-      userDb.updateLastLogin(user.id);
-
-      auditLogDb.record({
-        ...auditContext(req),
-        userId: Number(user.id),
-        username: user.username,
-        event: 'register',
-      });
-
-      res.json({
-        success: true,
-        user: { id: user.id, username: user.username },
-        token
-      });
     } catch (error) {
       db.prepare('ROLLBACK').run();
       throw error;
     }
+
+    if (approvalStatus !== 'approved') {
+      auditLogDb.record({
+        ...auditContext(req),
+        userId: Number(user.id),
+        username: user.username,
+        event: 'register_pending',
+      });
+
+      // No token: an account that cannot log in must not be handed a session.
+      // The message has to be explicit, or the user reads the success flag and
+      // reports "registered but login is broken".
+      return res.json({
+        success: true,
+        pendingApproval: true,
+        user: { id: user.id, username: user.username },
+        message: '注册申请已提交,等待管理员审批通过后即可登录。',
+      });
+    }
+
+    const token = generateToken(user);
+
+    // Update last login (non-fatal, outside transaction)
+    userDb.updateLastLogin(user.id);
+
+    auditLogDb.record({
+      ...auditContext(req),
+      userId: Number(user.id),
+      username: user.username,
+      event: 'register',
+    });
+
+    res.json({
+      success: true,
+      pendingApproval: false,
+      user: { id: user.id, username: user.username },
+      token
+    });
 
   } catch (error) {
     console.error('Registration error:', error);
@@ -146,6 +177,40 @@ router.post('/login', authRateLimiter, loginLockout, async (req, res) => {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
+    // Approval gate. Order matters, and each step exists to avoid a specific
+    // way of locking people out:
+    //   1. root bypasses the check entirely — if the approval logic is wrong,
+    //      whoever is named in PRISM_ROOT_USERS can still get in and fix it;
+    //   2. PRISM_APPROVAL_REQUIRED=0 disables the gate wholesale, which is the
+    //      escape hatch for reverting to the previous behaviour without a
+    //      code rollback;
+    //   3. only then is the account's own status consulted.
+    // Note this runs *after* the password check, so it leaks nothing about
+    // which usernames exist.
+    if (!isRootUser(user.username) && isApprovalRequired()) {
+      const status = user.approval_status ?? 'approved';
+
+      if (status !== 'approved') {
+        auditLogDb.record({
+          ...auditContext(req),
+          userId: user.id,
+          username: user.username,
+          event: 'login_unapproved',
+          outcome: 'failure',
+          detail: status,
+        });
+
+        // Distinct wording per status: "waiting" and "declined" call for very
+        // different follow-up from the person reading it.
+        return res.status(403).json({
+          error: status === 'rejected'
+            ? '注册申请未通过,如有疑问请联系管理员。'
+            : '账号待管理员审批,通过后即可登录。',
+          approvalStatus: status,
+        });
+      }
+    }
+
     // Generate token
     const token = generateToken(user);
 
@@ -162,7 +227,7 @@ router.post('/login', authRateLimiter, loginLockout, async (req, res) => {
 
     res.json({
       success: true,
-      user: { id: user.id, username: user.username },
+      user: { id: user.id, username: user.username, isRoot: isRootUser(user.username) },
       token
     });
 

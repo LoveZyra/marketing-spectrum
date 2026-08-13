@@ -550,6 +550,8 @@ export type ProjectRepositoryRow = {
   custom_project_name: string | null;
   isStarred: number;
   isArchived: number;
+  /** NULL = public project, visible to every account. */
+  owner_user_id: number | null;
 };
 
 /**

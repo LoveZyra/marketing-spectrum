@@ -21,6 +21,15 @@ export type CreatedApiKey = {
   createdAt?: string;
 };
 
+/**
+ * A GitHub personal-access token row.
+ *
+ * Stored in `user_credentials` with `credential_type = 'github_token'`, not in
+ * a table of its own. Its only reader is the external `/api/agent` endpoint,
+ * which uses it to clone private repositories and open pull requests — Prism's
+ * own UI has no git surface any more, so this is the one place a token is
+ * entered and the one place it is used.
+ */
 export type GithubCredentialItem = {
   id: string;
   credential_name: string;

@@ -16,7 +16,6 @@ import { createWebSocketServer } from '@/modules/websocket/index.js';
 import { createFilesRouter } from '@/modules/files/index.js';
 import {
     createSystemPublicRouter,
-    createSystemUpdateRouter,
     createUsageRouter,
     writeLocalServerMarker,
     removeLocalServerMarker,
@@ -27,6 +26,7 @@ import { getConnectableHost } from '../shared/networkHosts.js';
 import { findAppRoot, getModuleDir, getDataDir, migrateLegacyDataDir } from './utils/runtime-paths.js';
 import {
     queryClaudeSDK,
+    prewarmClaudeSession,
     abortClaudeSDKSession,
     getActiveClaudeSDKSessions,
     resolveToolApproval,
@@ -42,7 +42,6 @@ import {
     extractUrlsFromText,
     shouldAutoOpenUrlFromOutput,
 } from './utils/url-detection.js';
-import gitRoutes from './routes/git.js';
 import { createMaProxyRouterFromEnv, MA_PROXY_PREFIX } from './routes/ma-proxy.js';
 import { createMaServiceFromEnv } from './services/ma-service.js';
 import authRoutes from './routes/auth.js';
@@ -62,7 +61,10 @@ import browserUseMcpRoutes from './modules/browser-use/browser-use-mcp.routes.js
 import { browserUseService } from './modules/browser-use/browser-use.service.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, closeConnection, sessionsDb, stopDatabaseBackups } from './modules/database/index.js';
-import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
+import { validateApiKey, authenticateToken, requireRoot, authenticateWebSocket } from './middleware/auth.js';
+import { createAdminRouter, backfillProjectOwners } from './modules/admin/index.js';
+import { createPublishRouter, createPublishPublicRouter } from './modules/publish/index.js';
+import { createPreviewRouter, createPreviewPublicRouter } from './modules/preview/index.js';
 import { apiRateLimiter, TRUST_PROXY } from './middleware/rate-limit.js';
 import { consumeTicket } from './shared/ws-tickets.js';
 import { IS_PLATFORM } from './constants/config.js';
@@ -72,7 +74,9 @@ const __dirname = getModuleDir(import.meta.url);
 // The server source runs from /server, while the compiled output runs from /dist-server/server.
 // Resolving the app root once keeps every repo-level lookup below aligned across both layouts.
 const APP_ROOT = findAppRoot(__dirname);
-const installMode = fs.existsSync(path.join(APP_ROOT, '.git')) ? 'git' : 'npm';
+// 安装方式固定为 npm(tar 包部署)。原来靠探测 APP_ROOT/.git 自动判定 —— 那条路径
+// 已随 git 功能一并移除,残留的 .git 目录不该再改变服务行为。
+const installMode = 'npm';
 // Version of the RUNNING code, captured once at startup (deliberately not
 // re-read per request: after an update, package.json is newer than this
 // process — the mismatch tells the frontend a restart is pending).
@@ -198,6 +202,17 @@ app.use(createSystemPublicRouter({
     isWatcherReady: () => sessionsWatcherReady,
 }));
 
+// Published static pages: GET /p/:token/* with no credentials.
+//
+// Mounted here, alongside the other public router and before the /api gate, so
+// that middleware later added to /api cannot change who can read a shared link.
+// It brings its own rate limiter — see createPublishPublicRouter.
+app.use(createPublishPublicRouter({ rateLimiter: apiRateLimiter }));
+
+// Editor preview reads: GET /preview/:ticket/*. Authorized by a 5-minute
+// ticket in the path because the sandboxed iframe sends no credentials.
+app.use(createPreviewPublicRouter({ rateLimiter: apiRateLimiter }));
+
 // Rate limiting on every /api route.
 //
 // Prism binds 0.0.0.0 by default so phones and other LAN machines can reach
@@ -212,14 +227,67 @@ app.use('/api', validateApiKey);
 // Authentication routes (public)
 app.use('/api/auth', authRoutes);
 
+/**
+ * POST /api/providers/:provider/sessions/:sessionId/prewarm
+ *
+ * Build a conversation's resident runtime before its next message instead of
+ * inside it. The subprocess launch, SDK init and MCP server startup are the
+ * same work either way — this just stops them landing on the user's first
+ * turn, which is the whole reason chat felt slower than running `claude` in a
+ * shell (there you watch it boot before you start typing).
+ *
+ * Best-effort by design: every failure answers 200 with `warmed:false`. A
+ * pre-warm that could break a send would be worse than the latency it saves.
+ *
+ * Only conversations that already have a provider-native session id can be
+ * warmed: the runtime map is keyed by that id, and a brand-new conversation
+ * has none until its first turn announces one. Those still pay the cost.
+ */
+app.post('/api/providers/:provider/sessions/:sessionId/prewarm', authenticateToken, async (req, res) => {
+    if (req.params.provider !== 'claude') {
+        return res.json({ success: true, warmed: false, reason: 'unsupported_provider' });
+    }
+
+    try {
+        const session = sessionsDb.getSessionById(String(req.params.sessionId || ''));
+        if (!session?.provider_session_id) {
+            return res.json({ success: true, warmed: false, reason: 'no_provider_session' });
+        }
+
+        const body = req.body || {};
+        const result = await prewarmClaudeSession({
+            sessionId: session.provider_session_id,
+            resume: true,
+            cwd: session.project_path || body.cwd || undefined,
+            projectPath: session.project_path || undefined,
+            permissionMode: body.permissionMode,
+            toolsSettings: body.toolsSettings,
+            model: body.model,
+            effort: body.effort,
+        });
+
+        res.json({ success: true, ...result });
+    } catch (error) {
+        console.warn('[Prewarm] failed:', error?.message || error);
+        res.json({ success: true, warmed: false, reason: 'error' });
+    }
+});
+
+// Publication management. Mounted before the projects router because both
+// answer under /api/projects and the projects router has a `/:projectId/...`
+// catch-all that would otherwise swallow these paths.
+app.use('/api/projects', createPublishRouter({ authenticateToken }));
+app.use('/api/projects', createPreviewRouter({ authenticateToken }));
+
 // Projects API Routes (protected)
 app.use('/api/projects', authenticateToken, projectModuleRoutes);
+
+// Account administration — approval queue. Root only (PRISM_ROOT_USERS).
+app.use('/api/admin', createAdminRouter({ authenticateToken, requireRoot }));
 
 // Chat image asset upload/serving (global assets store, see server/modules/assets; protected)
 app.use('/api/assets', authenticateToken, assetsRoutes);
 
-// Git API Routes (protected)
-app.use('/api/git', authenticateToken, gitRoutes);
 
 // Checkpoints: per-turn git snapshots with transactional rollback (prism)
 app.use('/api/checkpoints', authenticateToken, checkpointsRoutes);
@@ -290,14 +358,6 @@ app.use(express.static(path.join(APP_ROOT, 'dist'), {
     }
 }));
 
-// POST /api/system/update (protected) — original mount position after static.
-app.use(createSystemUpdateRouter({
-    authenticateToken,
-    isPlatform: IS_PLATFORM,
-    installMode,
-    appRoot: APP_ROOT,
-}));
-
 // File CRUD, uploads, browse-filesystem, and file-tree endpoints (protected)
 app.use(createFilesRouter({ authenticateToken }));
 
@@ -346,7 +406,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-const SERVER_PORT = process.env.SERVER_PORT || 3001;
+const SERVER_PORT = process.env.SERVER_PORT || 8080;
 const HOST = process.env.HOST || '0.0.0.0';
 const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
@@ -445,6 +505,11 @@ async function startServer() {
 
         // Initialize authentication database
         await initializeDatabase();
+
+        // One-shot: hand pre-existing projects to the root account. Runs after
+        // migrations (the columns must exist) and is a no-op once its
+        // app_config flag is set, or while no configured root has registered.
+        backfillProjectOwners();
 
         // Production mode = a built dist folder exists
         const distIndexPath = path.join(APP_ROOT, 'dist', 'index.html');

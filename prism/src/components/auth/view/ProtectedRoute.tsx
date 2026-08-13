@@ -1,8 +1,9 @@
-import { lazy, Suspense, type ReactNode } from 'react';
+import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { IS_PLATFORM } from '../../../constants/config';
 import { useAuth } from '../context/AuthContext';
 import AuthLoadingScreen from './AuthLoadingScreen';
 import LoginForm from './LoginForm';
+import RegisterForm from './RegisterForm';
 import SetupForm from './SetupForm';
 
 // A one-time flow: after the first run every load pays for this module and
@@ -16,6 +17,7 @@ type ProtectedRouteProps = {
 
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { user, isLoading, needsSetup, hasCompletedOnboarding, refreshOnboardingStatus } = useAuth();
+  const [isRegistering, setIsRegistering] = useState(false);
 
   if (isLoading) {
     return <AuthLoadingScreen />;
@@ -40,7 +42,9 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   }
 
   if (!user) {
-    return <LoginForm />;
+    return isRegistering
+      ? <RegisterForm onBackToLogin={() => setIsRegistering(false)} />
+      : <LoginForm onRegister={() => setIsRegistering(true)} />;
   }
 
   if (!hasCompletedOnboarding) {

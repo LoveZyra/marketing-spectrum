@@ -93,7 +93,8 @@
     "tasks": "タスク",
     "notifications": "通知",
     "plugins": "プラグイン",
-    "about": "概要"
+    "about": "概要",
+    "accounts": "Accounts"
   },
   "notifications": {
     "title": "通知",
@@ -437,5 +438,30 @@
     "installAriaLabel": "プラグインのgitリポジトリURL",
     "tab": "タブ",
     "runningStatus": "実行中"
+  },
+  "accounts": {
+    "title": "Account approval",
+    "description": "New accounts must be approved before they can sign in. Root accounts are set on the server via PRISM_ROOT_USERS.",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "empty": "No accounts yet",
+    "pendingCount": "{{count}} account(s) awaiting approval",
+    "status": {
+      "pending": "Pending",
+      "approved": "Approved",
+      "rejected": "Rejected"
+    },
+    "columns": {
+      "username": "Username",
+      "status": "Status",
+      "registered": "Registered",
+      "reviewer": "Reviewed by",
+      "actions": "Actions"
+    },
+    "actions": {
+      "approve": "Approve",
+      "reject": "Reject"
+    },
+    "notIsolationNotice": "Note: accounts separate what people see (their own projects plus public ones). This is not access control — anyone who knows a project id can still call the API directly."
   }
 }

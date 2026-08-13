@@ -5,6 +5,7 @@ import { Database } from 'better-sqlite3';
 
 import {
   APP_CONFIG_TABLE_SCHEMA_SQL,
+  PUBLISHED_PAGES_TABLE_SCHEMA_SQL,
   AUDIT_LOG_TABLE_SCHEMA_SQL,
   LAST_SCANNED_AT_SQL,
   PROJECTS_TABLE_SCHEMA_SQL,
@@ -485,6 +486,19 @@ const migrateApiKeysToHashed = (db: Database): void => {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(api_key_hash)');
 };
 
+/**
+ * `projects.owner_user_id` — NULL means public.
+ *
+ * Added on its own rather than inside `rebuildProjectsTableWithPrimaryKeySchema`
+ * because that rebuild only fires on pre-project_id schemas; installs that
+ * already migrated would never see the column otherwise.
+ */
+const addProjectOwnerColumn = (db: Database): void => {
+  const projectsTableInfo = db.prepare('PRAGMA table_info(projects)').all() as TableInfoRow[];
+  const columnNames = projectsTableInfo.map((column) => column.name);
+  addColumnToTableIfNotExists(db, 'projects', columnNames, 'owner_user_id', 'INTEGER');
+};
+
 export const runMigrations = (db: Database) => {
   try {
     const usersTableInfo = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
@@ -506,6 +520,17 @@ export const runMigrations = (db: Database) => {
       'token_version',
       'INTEGER NOT NULL DEFAULT 0'
     );
+    // Approval trio. 'approved' as the column default is what keeps existing
+    // accounts logging in after this migration; do not tighten it.
+    addColumnToTableIfNotExists(
+      db,
+      'users',
+      userColumnNames,
+      'approval_status',
+      "TEXT NOT NULL DEFAULT 'approved'"
+    );
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'approved_at', 'DATETIME');
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'reviewed_by', 'INTEGER');
 
     migrateApiKeysToHashed(db);
 
@@ -515,12 +540,15 @@ export const runMigrations = (db: Database) => {
     db.exec('CREATE INDEX IF NOT EXISTS idx_audit_log_event ON audit_log(event)');
 
     db.exec(APP_CONFIG_TABLE_SCHEMA_SQL);
+    db.exec(PUBLISHED_PAGES_TABLE_SCHEMA_SQL);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_published_pages_project ON published_pages(project_id)');
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL);
 
     dropWebPushAndDesktopNotificationTables(db);
 
     db.exec(PROJECTS_TABLE_SCHEMA_SQL);
     rebuildProjectsTableWithPrimaryKeySchema(db);
+    addProjectOwnerColumn(db);
 
     migrateLegacyWorkspaceTableIntoProjects(db);
     rebuildSessionsTableWithProjectSchema(db);

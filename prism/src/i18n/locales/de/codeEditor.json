@@ -22,7 +22,10 @@
     "fullscreen": "Vollbild",
     "close": "Schließen",
     "previewMarkdown": "Markdown-Vorschau",
-    "editMarkdown": "Markdown bearbeiten"
+    "editMarkdown": "Markdown bearbeiten",
+    "reloadPreview": "Reload",
+    "editHtml": "Back to source",
+    "previewHtml": "Preview rendered HTML"
   },
   "footer": {
     "lines": "Zeilen:",
@@ -32,5 +35,8 @@
   "binaryFile": {
     "title": "Binärdatei",
     "message": "Die Datei \"{{fileName}}\" kann im Texteditor nicht angezeigt werden, da es sich um eine Binärdatei handelt."
+  },
+  "filePreview": {
+    "unsavedNotice": "Preview shows the saved file. Save to see your latest edits."
   }
 }

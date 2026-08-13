@@ -94,7 +94,8 @@
     "computer": "電腦使用",
     "notifications": "通知",
     "plugins": "外掛",
-    "about": "關於"
+    "about": "關於",
+    "accounts": "帳號"
   },
   "notifications": {
     "title": "通知",
@@ -438,5 +439,30 @@
     "installAriaLabel": "外掛 git 儲存庫 URL",
     "tab": "分頁",
     "runningStatus": "執行中"
+  },
+  "accounts": {
+    "title": "帳號審批",
+    "description": "新註冊的帳號需要審批後才能登入。root 帳號由伺服器端 PRISM_ROOT_USERS 指定。",
+    "refresh": "重新整理",
+    "loading": "載入中…",
+    "empty": "尚無帳號",
+    "pendingCount": "{{count}} 個帳號待審批",
+    "status": {
+      "pending": "待審批",
+      "approved": "已通過",
+      "rejected": "已駁回"
+    },
+    "columns": {
+      "username": "使用者名稱",
+      "status": "狀態",
+      "registered": "註冊時間",
+      "reviewer": "審批人",
+      "actions": "操作"
+    },
+    "actions": {
+      "approve": "通過",
+      "reject": "駁回"
+    },
+    "notIsolationNotice": "說明:帳號區分只用於介面隔離(各人只看到自己的專案與公共專案),不是越權防護 —— 知道專案 id 的人仍然可以直接呼叫介面。"
   }
 }

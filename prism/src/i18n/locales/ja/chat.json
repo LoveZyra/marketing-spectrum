@@ -103,7 +103,8 @@
     },
     "clickToChangeMode": "クリックで権限モードを変更（または入力欄でTab）",
     "showAllCommands": "すべてのコマンドを表示",
-    "attachmentPath": "パス"
+    "attachmentPath": "パス",
+    "modelHint": "Current model: {{model}} · type /models to switch"
   },
   "providerSelection": {
     "title": "AIアシスタントを選択",
@@ -111,7 +112,8 @@
     "readyPrompt": {
       "claude": "{{model}}でClaudeを使用する準備ができました。下にメッセージを入力してください。"
     },
-    "pressToSearch": "<kbd>{{shortcut}}</kbd> を押してセッション、ファイル、コミットを検索"
+    "pressToSearch": "<kbd>{{shortcut}}</kbd> を押してセッション、ファイル、コミットを検索",
+    "useModelsCommand": "Switch models with /models"
   },
   "session": {
     "continue": {
@@ -184,5 +186,13 @@
   },
   "attachments": {
     "truncated": "切り詰め済み"
+  },
+  "executionModes": {
+    "title": "Execution mode",
+    "default": "Asks before every tool it has not been granted.",
+    "plan": "Investigates and proposes a plan. Changes nothing.",
+    "acceptEdits": "Edits files without asking. Still asks before running commands.",
+    "auto": "Decides routine calls itself; asks about the rest.",
+    "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
   }
 }

@@ -486,7 +486,7 @@
                         <div class="endpoint">
                             <div class="endpoint-header">
                                 <span class="method method-post">POST</span>
-                                <span class="endpoint-path"><span class="api-url">http://localhost:3001</span>/api/agent</span>
+                                <span class="endpoint-path"><span class="api-url">http://localhost:8080</span>/api/agent</span>
                             </div>
 
                             <p>Trigger the Claude Code agent to work on a project.</p>
@@ -609,7 +609,7 @@
                         </div>
 
                         <div class="tab-content active" id="curl-basic">
-<pre><code class="language-bash">curl -X POST <span class="api-url">http://localhost:3001</span>/api/agent \
+<pre><code class="language-bash">curl -X POST <span class="api-url">http://localhost:8080</span>/api/agent \
   -H "Content-Type: application/json" \
   -H "X-API-Key: ck_..." \
   -d '{
@@ -619,7 +619,7 @@
                         </div>
 
                         <div class="tab-content" id="js-basic">
-<pre><code class="language-javascript">const response = await fetch('<span class="api-url">http://localhost:3001</span>/api/agent', {
+<pre><code class="language-javascript">const response = await fetch('<span class="api-url">http://localhost:8080</span>/api/agent', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -640,7 +640,7 @@ const result = await response.json();</code></pre>
 import os
 
 response = requests.post(
-    '<span class="api-url">http://localhost:3001</span>/api/agent',
+    '<span class="api-url">http://localhost:8080</span>/api/agent',
     headers={
         'Content-Type': 'application/json',
         'X-API-Key': os.environ['CLAUDE_API_KEY']
@@ -743,7 +743,7 @@ data: {"type":"done"}</code></pre>
                 <div class="examples-section">
                     <div class="example-block">
                         <h4>Use Existing Project</h4>
-<pre><code class="language-bash">curl -X POST <span class="api-url">http://localhost:3001</span>/api/agent \
+<pre><code class="language-bash">curl -X POST <span class="api-url">http://localhost:8080</span>/api/agent \
   -H "Content-Type: application/json" \
   -H "X-API-Key: ck_..." \
   -d '{
@@ -754,7 +754,7 @@ data: {"type":"done"}</code></pre>
 
                     <div class="example-block">
                         <h4>Clone to Custom Path</h4>
-<pre><code class="language-bash">curl -X POST <span class="api-url">http://localhost:3001</span>/api/agent \
+<pre><code class="language-bash">curl -X POST <span class="api-url">http://localhost:8080</span>/api/agent \
   -H "Content-Type: application/json" \
   -H "X-API-Key: ck_..." \
   -d '{
@@ -781,7 +781,7 @@ data: {"type":"done"}</code></pre>
 
                     <div class="example-block">
                         <h4>Create Branch and PR</h4>
-<pre><code class="language-bash">curl -X POST <span class="api-url">http://localhost:3001</span>/api/agent \
+<pre><code class="language-bash">curl -X POST <span class="api-url">http://localhost:8080</span>/api/agent \
   -H "Content-Type: application/json" \
   -H "X-API-Key: ck_..." \
   -d '{
@@ -795,7 +795,7 @@ data: {"type":"done"}</code></pre>
 
                     <div class="example-block">
                         <h4>Custom Branch Name</h4>
-<pre><code class="language-bash">curl -X POST <span class="api-url">http://localhost:3001</span>/api/agent \
+<pre><code class="language-bash">curl -X POST <span class="api-url">http://localhost:8080</span>/api/agent \
   -H "Content-Type: application/json" \
   -H "X-API-Key: ck_..." \
   -d '{

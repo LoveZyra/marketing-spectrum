@@ -40,7 +40,7 @@ const readNumber = (value: unknown): number | undefined =>
 const apiUrl = (
   process.env.PRISM_BROWSER_USE_API_URL
   || process.env.CLOUDCLI_BROWSER_USE_API_URL
-  || 'http://127.0.0.1:3001/api/browser-use-mcp'
+  || 'http://127.0.0.1:8080/api/browser-use-mcp'
 ).replace(/\/$/, '');
 const apiToken = process.env.PRISM_BROWSER_USE_MCP_TOKEN
   || process.env.CLOUDCLI_BROWSER_USE_MCP_TOKEN

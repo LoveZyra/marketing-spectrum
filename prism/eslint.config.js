@@ -192,6 +192,8 @@ export default tseslint.config(
             "server/shared/crypto-box.js", // AES-256-GCM envelope helpers; storage hooks are injected, so it stays dependency-free
             "server/shared/ip-guard.js", // SSRF address checks used by document fetching
             "server/shared/ws-tickets.js", // single-use WebSocket upgrade tickets
+            "server/shared/root-users.js", // single source of truth for root identity (env-derived)
+            "server/shared/preview-tickets.js", // short-lived, directory-scoped editor preview tickets
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },

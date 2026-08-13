@@ -105,7 +105,8 @@
     "showAllCommands": "Alle Befehle anzeigen",
     "clearInput": "Eingabe leeren",
     "scrollToBottom": "Nach unten scrollen",
-    "attachmentPath": "Pfad"
+    "attachmentPath": "Pfad",
+    "modelHint": "Current model: {{model}} · type /models to switch"
   },
   "providerSelection": {
     "title": "KI-Assistent wählen",
@@ -113,7 +114,8 @@
     "readyPrompt": {
       "claude": "Bereit, Claude mit {{model}} zu verwenden. Gib unten deine Nachricht ein."
     },
-    "pressToSearch": "Drücke <kbd>{{shortcut}}</kbd>, um Sitzungen, Dateien und Commits zu durchsuchen"
+    "pressToSearch": "Drücke <kbd>{{shortcut}}</kbd>, um Sitzungen, Dateien und Commits zu durchsuchen",
+    "useModelsCommand": "Switch models with /models"
   },
   "session": {
     "continue": {
@@ -196,5 +198,13 @@
   },
   "attachments": {
     "truncated": "gekürzt"
+  },
+  "executionModes": {
+    "title": "Execution mode",
+    "default": "Asks before every tool it has not been granted.",
+    "plan": "Investigates and proposes a plan. Changes nothing.",
+    "acceptEdits": "Edits files without asking. Still asks before running commands.",
+    "auto": "Decides routine calls itself; asks about the rest.",
+    "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
   }
 }

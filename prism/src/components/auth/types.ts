@@ -3,14 +3,25 @@ import type { ReactNode } from 'react';
 export type AuthUser = {
   id?: number | string;
   username: string;
+  /** Derived from PRISM_ROOT_USERS on the server; never stored in the database. */
+  isRoot?: boolean;
   [key: string]: unknown;
 };
 
-export type AuthActionResult = { success: true } | { success: false; error: string };
+export type AuthActionResult =
+  | { success: true; pendingApproval?: false }
+  /**
+   * Registration succeeded but the account is waiting for a root user to
+   * approve it. There is no session — the caller must show `message` rather
+   * than assume it can navigate into the app.
+   */
+  | { success: true; pendingApproval: true; message: string }
+  | { success: false; error: string };
 
 export type AuthSessionPayload = {
   token?: string;
   user?: AuthUser;
+  pendingApproval?: boolean;
   error?: string;
   message?: string;
 };

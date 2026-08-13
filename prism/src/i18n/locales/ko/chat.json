@@ -105,7 +105,8 @@
     "showAllCommands": "모든 명령어 보기",
     "clearInput": "입력 지우기",
     "scrollToBottom": "맨 아래로 스크롤",
-    "attachmentPath": "경로"
+    "attachmentPath": "경로",
+    "modelHint": "Current model: {{model}} · type /models to switch"
   },
   "providerSelection": {
     "title": "AI 어시스턴트 선택",
@@ -113,7 +114,8 @@
     "readyPrompt": {
       "claude": "{{model}} 모델로 Claude를 사용할 준비가 되었습니다. 아래에 메시지를 입력하세요."
     },
-    "pressToSearch": "<kbd>{{shortcut}}</kbd>를 눌러 세션, 파일 및 커밋을 검색하세요"
+    "pressToSearch": "<kbd>{{shortcut}}</kbd>를 눌러 세션, 파일 및 커밋을 검색하세요",
+    "useModelsCommand": "Switch models with /models"
   },
   "session": {
     "continue": {
@@ -196,5 +198,13 @@
   },
   "attachments": {
     "truncated": "잘림"
+  },
+  "executionModes": {
+    "title": "Execution mode",
+    "default": "Asks before every tool it has not been granted.",
+    "plan": "Investigates and proposes a plan. Changes nothing.",
+    "acceptEdits": "Edits files without asking. Still asks before running commands.",
+    "auto": "Decides routine calls itself; asks about the rest.",
+    "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
   }
 }

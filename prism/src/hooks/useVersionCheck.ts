@@ -21,13 +21,14 @@ const compareVersions = (v1: string, v2: string) => {
   return 0;
 };
 
-export type InstallMode = 'git' | 'npm';
+/** 安装方式只剩 npm(tar 包部署);git 安装已随 git 功能一并移除。 */
+export type InstallMode = 'npm';
 
 export const useVersionCheck = (owner: string, repo: string) => {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [releaseInfo, setReleaseInfo] = useState<ReleaseInfo | null>(null);
-  const [installMode, setInstallMode] = useState<InstallMode>('git');
+  const [installMode, setInstallMode] = useState<InstallMode>('npm');
   const [runningVersion, setRunningVersion] = useState<string | null>(null);
   const [restartRequired, setRestartRequired] = useState(false);
 
@@ -36,7 +37,7 @@ export const useVersionCheck = (owner: string, repo: string) => {
       try {
         const response = await fetch('/health');
         const data = await response.json();
-        if (data.installMode === 'npm' || data.installMode === 'git') {
+        if (data.installMode === 'npm') {
           setInstallMode(data.installMode);
         }
         // `data.version` is the version the server process is actually running.

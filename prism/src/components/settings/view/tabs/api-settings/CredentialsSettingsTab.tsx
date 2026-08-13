@@ -68,6 +68,9 @@ export default function CredentialsSettingsTab() {
         onDeleteApiKey={deleteApiKey}
       />
 
+      {/* GitHub tokens. Prism's own git surface is gone; these exist only for
+          the external /api/agent endpoint, which clones repositories and opens
+          pull requests on the caller's behalf. */}
       <GithubCredentialsSection
         githubCredentials={githubCredentials}
         showNewGithubForm={showNewGithubForm}
@@ -85,7 +88,6 @@ export default function CredentialsSettingsTab() {
         onToggleGithubCredential={toggleGithubCredential}
         onDeleteGithubCredential={deleteGithubCredential}
       />
-
     </div>
   );
 }

@@ -22,7 +22,10 @@
     "fullscreen": "Fullscreen",
     "close": "Close",
     "previewMarkdown": "Preview markdown",
-    "editMarkdown": "Edit markdown"
+    "editMarkdown": "Edit markdown",
+    "reloadPreview": "Reload",
+    "editHtml": "Back to source",
+    "previewHtml": "Preview rendered HTML"
   },
   "footer": {
     "lines": "Lines:",
@@ -36,6 +39,7 @@
   "filePreview": {
     "loading": "Loading preview...",
     "error": "Unable to display this file.",
-    "openInNewTab": "Open in new tab"
+    "openInNewTab": "Open in new tab",
+    "unsavedNotice": "Preview shows the saved file. Save to see your latest edits."
   }
 }

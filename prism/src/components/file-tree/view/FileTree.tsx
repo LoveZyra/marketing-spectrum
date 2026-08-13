@@ -12,6 +12,7 @@ import { useFileTreeOperations } from '../hooks/useFileTreeOperations';
 import { useFileTreeSearch } from '../hooks/useFileTreeSearch';
 import { useFileTreeViewMode } from '../hooks/useFileTreeViewMode';
 import { useFileTreeUpload } from '../hooks/useFileTreeUpload';
+import { usePublications } from '../hooks/usePublications';
 import type { FileTreeImageSelection, FileTreeNode } from '../types/types';
 import { formatFileSize, formatRelativeTime, isImageFile } from '../utils/fileTreeUtils';
 import { Project } from '../../../types/app';
@@ -59,6 +60,87 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     navigateUp,
     resetToProject,
   } = useFileTreeData(selectedProject);
+
+  const publications = usePublications(selectedProject?.projectId);
+
+  /**
+   * Project-relative path for a tree row.
+   *
+   * The tree carries absolute paths; publications are stored relative to the
+   * project root so a link survives the project being moved on disk. Returns
+   * null when the row is outside the project — the tree can navigate above the
+   * root, and nothing up there is ours to share.
+   */
+  const toProjectRelativePath = useCallback((item: FileTreeNode): string | null => {
+    const root = selectedProject?.path;
+    if (!root) return null;
+
+    const normalizedRoot = root.replace(/\\/g, '/').replace(/\/+$/, '');
+    const normalizedItem = item.path.replace(/\\/g, '/');
+    if (!normalizedItem.startsWith(`${normalizedRoot}/`)) return null;
+
+    return normalizedItem.slice(normalizedRoot.length + 1);
+  }, [selectedProject?.path]);
+
+  const isPathPublished = useCallback((item: FileTreeNode): boolean => {
+    const relPath = toProjectRelativePath(item);
+    return relPath !== null && publications.byRelPath.has(relPath);
+  }, [publications.byRelPath, toProjectRelativePath]);
+
+  const handlePublish = useCallback(async (item: FileTreeNode) => {
+    const relPath = toProjectRelativePath(item);
+    if (!relPath) {
+      showToast(t('fileTree.toast.publishOutsideProject', 'Only files inside the project can be shared'), 'error');
+      return;
+    }
+
+    try {
+      const publication = await publications.publish(
+        relPath,
+        item.type === 'directory' ? 'folder' : 'file',
+      );
+      if (!publication) return;
+
+      // Copy on publish: the link is the whole point, and making the user
+      // reopen the menu to fetch it is a step nobody wants.
+      const copied = await copyTextToClipboard(publications.absoluteUrl(publication));
+      showToast(
+        copied
+          ? t('fileTree.toast.published', 'Share link copied to clipboard')
+          : t('fileTree.toast.publishedNoCopy', 'Shared. Copy the link from the menu.'),
+        'success',
+      );
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to share', 'error');
+    }
+  }, [publications, showToast, t, toProjectRelativePath]);
+
+  const handleUnpublish = useCallback(async (item: FileTreeNode) => {
+    const relPath = toProjectRelativePath(item);
+    const publication = relPath ? publications.byRelPath.get(relPath) : undefined;
+    if (!publication) return;
+
+    try {
+      await publications.unpublish(publication.id);
+      showToast(t('fileTree.toast.unpublished', 'Share link revoked'), 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to revoke', 'error');
+    }
+  }, [publications, showToast, t, toProjectRelativePath]);
+
+  const handleCopyPublicLink = useCallback(async (item: FileTreeNode) => {
+    const relPath = toProjectRelativePath(item);
+    const publication = relPath ? publications.byRelPath.get(relPath) : undefined;
+    if (!publication) return;
+
+    const copied = await copyTextToClipboard(publications.absoluteUrl(publication));
+    showToast(
+      copied
+        ? t('fileTree.toast.linkCopied', 'Share link copied to clipboard')
+        : t('fileTree.toast.copyFailed', 'Failed to copy path'),
+      copied ? 'success' : 'error',
+    );
+  }, [publications, showToast, t, toProjectRelativePath]);
   const { viewMode, changeViewMode } = useFileTreeViewMode();
   const { expandedDirs, toggleDirectory, expandDirectories, collapseAll } = useExpandedDirectories();
   const { searchQuery, setSearchQuery, filteredFiles } = useFileTreeSearch({
@@ -295,6 +377,10 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           onNewFolder={(path) => operations.handleStartCreate(path, 'directory')}
           onCopyPath={operations.handleCopyPath}
           onDownload={operations.handleDownload}
+          onPublish={handlePublish}
+          onUnpublish={handleUnpublish}
+          onCopyPublicLink={handleCopyPublicLink}
+          isPathPublished={isPathPublished}
           onRefresh={refreshFiles}
           // Pass rename state and handlers for inline editing
           renamingItem={operations.renamingItem}

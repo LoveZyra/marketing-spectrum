@@ -19,8 +19,8 @@ import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
 
 // Every tab below the chat tab is already mounted only while it is the active
-// tab, so deferring its module costs nothing and keeps xterm, the Git diff
-// viewer and the plugin runtime out of the entry chunk. ChatInterface stays
+// tab, so deferring its module costs nothing and keeps xterm and the plugin
+// runtime out of the entry chunk. ChatInterface stays
 // eager: it is the default tab and is kept mounted (hidden) across tab
 // switches, so lazily loading it would only delay first paint.
 //
@@ -28,7 +28,6 @@ import MainContentStateView from './subcomponents/MainContentStateView';
 // CodeMirror itself, since it returns null until a file is actually open.
 const FileTree = lazy(() => import('../../file-tree/view/FileTree'));
 const StandaloneShell = lazy(() => import('../../standalone-shell/view/StandaloneShell'));
-const GitPanel = lazy(() => import('../../git-panel/view/GitPanel'));
 const PluginTabContent = lazy(() => import('../../plugins/view/PluginTabContent'));
 // Imported by concrete path rather than through the package barrels: the
 // task-master barrel also re-exports TaskMasterProvider, which App mounts
@@ -213,14 +212,6 @@ function MainContent({
                   showHeader={false}
                   isActive={activeTab === 'shell'}
                 />
-              </LazyPanel>
-            </div>
-          )}
-
-          {activeTab === 'git' && (
-            <div className="h-full overflow-hidden">
-              <LazyPanel label={t('tabs.git')}>
-                <GitPanel selectedProject={selectedProject} isMobile={isMobile} onFileOpen={handleFileOpen} />
               </LazyPanel>
             </div>
           )}

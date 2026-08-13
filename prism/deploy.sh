@@ -32,9 +32,12 @@ if [ -f .env ]; then
 else
   cp .env.example .env
   echo "  已从 .env.example 生成 .env —— 下面这几项**必须**过一遍:"
-  echo "     SERVER_PORT     后端端口(默认 3001);若要走网关反代,与反代目标保持一致"
+  echo "     SERVER_PORT     后端端口(默认 8080);若要走网关反代,与反代目标保持一致"
   echo "     HOST            监听地址。对外有反代时建议 127.0.0.1,别直接 0.0.0.0 裸奔"
   echo "     JWT_SECRET      不设会自动生成并存库;多实例/要可迁移就显式设一个长随机串"
+  echo "     PRISM_ROOT_USERS  管理员用户名(逗号分隔)。**不配就没有人是 root**,"
+  echo "                       设置页看不到「账号」标签,新注册的人永远卡在待审"
+  echo "     PRISM_APPROVAL_REQUIRED=0   逃生开关:先设 0 验证零破坏,再去掉开审批"
   echo "   可选(要一起跑营销诊断服务时才需要):"
   echo "     PRISM_MA_API_TARGET / PRISM_MA_API_AUTOSTART / PRISM_MA_API_PYTHON"
   echo "     PRISM_ALLOW_QUERY_TOKEN=1   浏览器 WebSocket 只能用 ?token= 传凭据,不开则对话/shell 全挂"
@@ -46,13 +49,15 @@ npm run build || { echo "  !! 构建失败"; exit 1; }
 
 echo
 echo "=== 装完了。 ==="
-echo "启动:"
-echo "  npm run server              # 前台跑,先这样验一次"
-echo "  # 或后台:nohup env -u API_KEY npm run server > prism.log 2>&1 &"
-echo "  #   env -u API_KEY 是为了去掉 pod 继承的模型凭据,防 REST 401"
+echo "启动(用 prism.sh,别手敲 nohup —— 它会处理端口释放、绑定地址和健康等待):"
+echo "  bash prism.sh start         # 启动"
+echo "  bash prism.sh restart       # 以后每次改完 .env 或升级,用这个"
+echo "  bash prism.sh status        # 看进程/端口/健康"
+echo "  bash prism.sh logs          # 跟日志"
 echo
 echo "冒烟验证:"
-echo "  curl -s localhost:\${SERVER_PORT:-3001}/health   # 应返回健康信息"
+echo "  bash prism.sh status        # 健康那一行有内容就算起来了"
+echo "  # 注意:HOST 绑了具体网卡地址时,curl localhost 是连不上的,status 会按 .env 里的 HOST 查"
 echo "  浏览器打开页面 → 注册/登录 → 新建项目 → 发一条消息"
 echo "  上传:先传 <15MB 的文件,再传 ~20MB 的(走分片,F12 Network 应看到多个 chunk 请求)"
 echo

@@ -22,7 +22,12 @@ const initialState: LoginFormState = {
  * Handles credential input with browser autofill support (`autocomplete`
  * attributes) so that password managers can offer to fill saved credentials.
  */
-export default function LoginForm() {
+type LoginFormProps = {
+  /** Omitted when there is nowhere to register (e.g. first-run setup). */
+  onRegister?: () => void;
+};
+
+export default function LoginForm({ onRegister }: LoginFormProps = {}) {
   const { t } = useTranslation('auth');
   const { login } = useAuth();
 
@@ -101,6 +106,16 @@ export default function LoginForm() {
             t('login.submit')
           )}
         </button>
+
+        {onRegister && (
+          <button
+            type="button"
+            onClick={onRegister}
+            className="w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {t('login.registerPrompt', '还没有账号?申请一个')}
+          </button>
+        )}
       </form>
     </AuthScreenLayout>
   );

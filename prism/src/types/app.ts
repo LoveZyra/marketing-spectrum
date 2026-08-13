@@ -33,7 +33,7 @@ export type ProviderModelsCacheInfo = {
   source: 'memory' | 'disk' | 'fresh';
 };
 
-export type AppTab = 'chat' | 'files' | 'shell' | 'git' | 'tasks' | 'browser' | `plugin:${string}`;
+export type AppTab = 'chat' | 'files' | 'shell' | 'tasks' | 'browser' | `plugin:${string}`;
 
 export interface ProjectSession {
   id: string;
@@ -76,6 +76,11 @@ export interface Project {
   fullPath: string;
   path?: string;
   isStarred?: boolean;
+  /**
+   * Owning account id; `null` marks a public project that everyone sees.
+   * Undefined on payloads produced before ownership existed.
+   */
+  ownerUserId?: number | null;
   sessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;

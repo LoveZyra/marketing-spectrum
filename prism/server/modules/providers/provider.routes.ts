@@ -381,6 +381,23 @@ router.get(
   }),
 );
 
+/**
+ * The session's effective model.
+ *
+ * Exists so the composer can show which model is actually running. Until this
+ * route, the only way to find out was to run /models and read the modal, which
+ * meant a switch had no visible effect anywhere once that modal closed.
+ */
+router.get(
+  '/:provider/sessions/:sessionId/active-model',
+  asyncHandler(async (req: Request, res: Response) => {
+    const provider = parseProvider(req.params.provider);
+    const sessionId = parseSessionId(req.params.sessionId);
+    const active = await providerModelsService.getCurrentActiveModel(provider, sessionId);
+    res.json(createApiSuccessResponse({ provider, sessionId, model: active.model }));
+  }),
+);
+
 router.post(
   '/:provider/sessions/:sessionId/active-model',
   asyncHandler(async (req: Request, res: Response) => {

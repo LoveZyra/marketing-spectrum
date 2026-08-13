@@ -105,6 +105,8 @@ export default function SidebarProjectItem({
   const sessionCountLabel = `${sessionCountDisplay} session${totalSessionCount === 1 ? '' : 's'}`;
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
 
+  const isPublicProject = project.ownerUserId === null;
+
   const toggleProject = () => onToggleProject(project.projectId);
   const toggleStarProject = () => onToggleStarProject(project.projectId);
 
@@ -189,6 +191,11 @@ export default function SidebarProjectItem({
                     <>
                       <div className="flex min-w-0 flex-1 items-center justify-between">
                         <h3 className="truncate text-sm font-normal text-foreground">{project.displayName}</h3>
+                        {isPublicProject && (
+                          <span className="shrink-0 rounded bg-muted px-1 py-px text-[10px] text-muted-foreground">
+                            {t('project.public', { defaultValue: '公共' })}
+                          </span>
+                        )}
                         {tasksEnabled && (
                           <TaskIndicator
                             status={taskStatus}
@@ -320,8 +327,18 @@ export default function SidebarProjectItem({
                 </div>
               ) : (
                 <div>
-                  <div className="truncate text-sm font-normal text-foreground" title={project.displayName}>
-                    {project.displayName}
+                  <div className="flex items-center gap-1.5">
+                    <div className="truncate text-sm font-normal text-foreground" title={project.displayName}>
+                      {project.displayName}
+                    </div>
+                    {/* Only public projects get a marker. Everything else in
+                        the list is already the viewer's own — root aside, the
+                        server never sends anyone another account's projects. */}
+                    {isPublicProject && (
+                      <span className="shrink-0 rounded bg-muted px-1 py-px text-[10px] text-muted-foreground">
+                        {t('project.public', { defaultValue: '公共' })}
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {sessionCountDisplay}

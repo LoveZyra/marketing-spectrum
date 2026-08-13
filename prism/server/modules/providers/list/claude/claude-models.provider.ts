@@ -11,6 +11,7 @@ import type {
 } from '@/shared/types.js';
 import {
   buildDefaultProviderCurrentActiveModel,
+  readProviderSessionActiveModelChange,
   writeProviderSessionActiveModelChange,
 } from '@/shared/utils.js';
 
@@ -250,10 +251,32 @@ export class ClaudeProviderModels implements IProviderModels {
       return buildDefaultProviderCurrentActiveModel(await this.getSupportedModels());
     }
 
+    // A model picked through /models applies on the NEXT turn, so it is not in
+    // the transcript yet. Report it anyway: answering with the previous model
+    // immediately after someone switched reads as "the switch did nothing".
     try {
-      const jsonlPath = sessionsDb.getSessionById(sessionId)?.jsonl_path;
+      const pending = await readProviderSessionActiveModelChange('claude', sessionId);
+      if (pending.changed && pending.model?.trim()) {
+        return { model: pending.model.trim() };
+      }
+    } catch {
+      // Fall through to reading the transcript below.
+    }
+
+    try {
+      const session = sessionsDb.getSessionById(sessionId);
+      const jsonlPath = session?.jsonl_path;
+      // The transcript is Claude's own file and every event in it carries
+      // CLAUDE's session id, never the app-side id Prism allocates before the
+      // run starts. Reading it with the app id made the per-event guard in
+      // extractClaudeEventModel reject every line, so this always fell through
+      // to the default and /models reported "default" for every session started
+      // inside Prism. Sessions discovered on disk happened to work because for
+      // those the two ids are equal — which is why it looked intermittent.
+      // Falling back to the given id preserves that case.
+      const transcriptSessionId = session?.provider_session_id?.trim() || sessionId;
       const activeModel = jsonlPath
-        ? await readClaudeSessionModelFromJsonl(sessionId, jsonlPath)
+        ? await readClaudeSessionModelFromJsonl(transcriptSessionId, jsonlPath)
         : null;
       if (activeModel?.model) {
         return activeModel;

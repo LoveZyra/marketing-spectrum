@@ -130,7 +130,10 @@
       "newFolder": "Neuer Ordner",
       "refresh": "Aktualisieren",
       "menuLabel": "Datei-Kontextmenü",
-      "loading": "Lädt..."
+      "loading": "Lädt...",
+      "publish": "Share Link",
+      "unpublish": "Stop Sharing",
+      "copyPublicLink": "Copy Share Link"
     },
     "goUp": "Eine Ebene höher",
     "goUpTo": "Nach oben zu {{path}}",
@@ -139,7 +142,16 @@
     "backToProjectShort": "Projekt",
     "outsideProjectCopied": "Außerhalb des Projektordners – Pfad stattdessen kopiert",
     "outsideProject": "Diese Datei liegt außerhalb des Projektordners und kann hier nicht geöffnet werden",
-    "uploadInProjectOnly": "Uploads landen im Projektordner – kehre dorthin zurück, um hochzuladen"
+    "uploadInProjectOnly": "Uploads landen im Projektordner – kehre dorthin zurück, um hochzuladen",
+    "toast": {
+      "published": "Share link copied to clipboard",
+      "publishedNoCopy": "Shared. Copy the link from the menu.",
+      "unpublished": "Share link revoked",
+      "linkCopied": "Share link copied to clipboard",
+      "publishOutsideProject": "Only files inside the project can be shared",
+      "pathCopied": "Path copied to clipboard",
+      "copyFailed": "Failed to copy path"
+    }
   },
   "projectWizard": {
     "title": "Neues Projekt erstellen",

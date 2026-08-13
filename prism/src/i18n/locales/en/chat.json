@@ -123,7 +123,8 @@
       "edit": "Edit queued message",
       "delete": "Delete queued message"
     },
-    "attachmentPath": "path"
+    "attachmentPath": "path",
+    "modelHint": "Current model: {{model}} · type /models to switch"
   },
   "providerSelection": {
     "title": "Choose Your AI Assistant",
@@ -131,7 +132,8 @@
     "readyPrompt": {
       "claude": "Ready to use Claude with {{model}}. Start typing your message below."
     },
-    "pressToSearch": "Press <kbd>{{shortcut}}</kbd> to search sessions, files, and commits"
+    "pressToSearch": "Press <kbd>{{shortcut}}</kbd> to search sessions, files, and commits",
+    "useModelsCommand": "Switch models with /models"
   },
   "session": {
     "continue": {
@@ -250,5 +252,13 @@
   },
   "attachments": {
     "truncated": "truncated"
+  },
+  "executionModes": {
+    "title": "Execution mode",
+    "default": "Asks before every tool it has not been granted.",
+    "plan": "Investigates and proposes a plan. Changes nothing.",
+    "acceptEdits": "Edits files without asking. Still asks before running commands.",
+    "auto": "Decides routine calls itself; asks about the rest.",
+    "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
   }
 }

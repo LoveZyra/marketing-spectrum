@@ -84,7 +84,7 @@
   },
   "permissionModes": {
     "default": "默认模式",
-    "auto": "Auto Mode",
+    "auto": "自动模式",
     "acceptEdits": "编辑模式",
     "bypassPermissions": "无限制模式",
     "plan": "计划模式"
@@ -105,7 +105,8 @@
     "showAllCommands": "显示所有命令",
     "clearInput": "清空输入",
     "scrollToBottom": "滚动到底部",
-    "attachmentPath": "路径"
+    "attachmentPath": "路径",
+    "modelHint": "当前模型：{{model}} · 输入 /models 切换"
   },
   "providerSelection": {
     "title": "选择您的 AI 助手",
@@ -113,7 +114,8 @@
     "readyPrompt": {
       "claude": "准备好使用带有 {{model}} 的 Claude。请在下方开始输入您的消息。"
     },
-    "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜索会话、文件和提交"
+    "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜索会话、文件和提交",
+    "useModelsCommand": "输入 /models 切换模型"
   },
   "session": {
     "continue": {
@@ -231,5 +233,13 @@
   },
   "attachments": {
     "truncated": "已截断"
+  },
+  "executionModes": {
+    "title": "执行模式",
+    "default": "每个未授权的工具都先问过你。",
+    "plan": "只调研并给出方案,不动任何文件。",
+    "acceptEdits": "改文件不再询问,执行命令仍然要确认。",
+    "auto": "常规调用自行决定,其余仍会询问。",
+    "bypassPermissions": "全部放行,不再询问。只在可丢弃的工作上用。"
   }
 }

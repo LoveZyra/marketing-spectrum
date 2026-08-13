@@ -18,6 +18,15 @@ const getApiError = (payload: { error?: string } | undefined, fallback: string) 
   payload?.error || fallback
 );
 
+/**
+ * API keys and GitHub tokens, both stored through `/api/settings/credentials`.
+ *
+ * The GitHub half survived the git removal on purpose. Nothing in Prism's own
+ * UI does version control any more, but the external `/api/agent` endpoint
+ * still clones repositories and opens pull requests, and it reads its token
+ * from here when the caller does not pass one in the request body. This screen
+ * is the only way to put one there.
+ */
 export function useCredentialsSettings({
   confirmDeleteApiKeyText,
   confirmDeleteGithubCredentialText,

@@ -1,12 +1,9 @@
-import express, { type RequestHandler, type Router } from 'express';
-// cross-spawn is a drop-in for child_process.spawn that resolves .cmd
-// shims/PATHEXT on Windows and delegates to the native spawn elsewhere.
-import spawn from 'cross-spawn';
+import express, { type Router } from 'express';
 
 import { getConnection } from '@/modules/database/index.js';
 
 type SystemPublicRouterDependencies = {
-  /** 'git' | 'npm' — computed once at startup by the composition root. */
+  /** 安装方式,固定为 'npm'(tar 包部署)。 */
   installMode: string;
   /** Version of the running code, captured at process start (may be null). */
   runningVersion: string | null;
@@ -17,14 +14,6 @@ type SystemPublicRouterDependencies = {
    * watcher is treated as optional and reported as 'unknown'.
    */
   isWatcherReady?: () => boolean;
-};
-
-type SystemUpdateRouterDependencies = {
-  authenticateToken: RequestHandler;
-  isPlatform: boolean;
-  installMode: string;
-  /** Absolute app root (repo root for git installs). */
-  appRoot: string;
 };
 
 /**
@@ -76,97 +65,6 @@ export function createSystemPublicRouter(dependencies: SystemPublicRouterDepende
       db: dbState,
       watcher: watcherState,
     });
-  });
-
-  return router;
-}
-
-/**
- * POST /api/system/update — moved verbatim from server/index.js. Mounted at
- * its original position (after the static middleware) with the same
- * authenticateToken gate.
- */
-export function createSystemUpdateRouter(dependencies: SystemUpdateRouterDependencies): Router {
-  const { authenticateToken, isPlatform, installMode, appRoot } = dependencies;
-  const router = express.Router();
-
-  // System update endpoint
-  router.post('/api/system/update', authenticateToken, async (req, res) => {
-    try {
-      // Get the project root directory (parent of server directory)
-      const projectRoot = appRoot;
-
-      console.log('Starting system update from directory:', projectRoot);
-
-      // Prism updates from source only; the upstream npm-registry self-update
-      // path was removed with the web-only refactor.
-      if (!isPlatform && installMode !== 'git') {
-        return res.status(501).json({
-          success: false,
-          error: 'Self-update is only supported for git installations. Update Prism from source and restart the server.'
-        });
-      }
-
-      // Platform deployments use their own update workflow from the project root.
-      const updateCommand = isPlatform
-      // In platform, husky and dev dependencies are not needed
-        ? 'npm run update:platform'
-        : 'git checkout main && git pull && npm install';
-
-      const updateCwd = projectRoot;
-
-      const child = spawn('sh', ['-c', updateCommand], {
-        cwd: updateCwd,
-        env: process.env
-      });
-
-      let output = '';
-      let errorOutput = '';
-
-      child.stdout?.on('data', (data) => {
-        const text = data.toString();
-        output += text;
-        console.log('Update output:', text);
-      });
-
-      child.stderr?.on('data', (data) => {
-        const text = data.toString();
-        errorOutput += text;
-        console.error('Update error:', text);
-      });
-
-      child.on('close', (code) => {
-        if (code === 0) {
-          res.json({
-            success: true,
-            output: output || 'Update completed successfully',
-            message: 'Update completed. Please restart the server to apply changes.'
-          });
-        } else {
-          res.status(500).json({
-            success: false,
-            error: 'Update command failed',
-            output: output,
-            errorOutput: errorOutput
-          });
-        }
-      });
-
-      child.on('error', (error) => {
-        console.error('Update process error:', error);
-        res.status(500).json({
-          success: false,
-          error: error.message
-        });
-      });
-
-    } catch (error) {
-      console.error('System update error:', error);
-      res.status(500).json({
-        success: false,
-        error: (error as Error).message
-      });
-    }
   });
 
   return router;

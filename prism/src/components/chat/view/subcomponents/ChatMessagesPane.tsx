@@ -32,9 +32,7 @@ interface ChatMessagesPaneProps {
   provider: LLMProvider;
   textareaRef: RefObject<HTMLTextAreaElement>;
   claudeModel: string;
-  setClaudeModel: (model: string) => void;
   providerModelCatalog: Partial<Record<LLMProvider, ProviderModelsDefinition>>;
-  providerModelsLoading: boolean;
   tasksEnabled: boolean;
   isTaskMasterInstalled: boolean | null;
   onShowAllTasks?: (() => void) | null;
@@ -75,9 +73,7 @@ function ChatMessagesPane({
   provider,
   textareaRef,
   claudeModel,
-  setClaudeModel,
   providerModelCatalog,
-  providerModelsLoading,
   tasksEnabled,
   isTaskMasterInstalled,
   onShowAllTasks,
@@ -168,9 +164,7 @@ function ChatMessagesPane({
           provider={provider}
           textareaRef={textareaRef}
           claudeModel={claudeModel}
-          setClaudeModel={setClaudeModel}
           providerModelCatalog={providerModelCatalog}
-          providerModelsLoading={providerModelsLoading}
           tasksEnabled={tasksEnabled}
           isTaskMasterInstalled={isTaskMasterInstalled}
           onShowAllTasks={onShowAllTasks}

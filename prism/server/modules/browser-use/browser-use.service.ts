@@ -199,7 +199,7 @@ function getMcpCommand(): { command: string; args: string[] } {
 }
 
 function getMcpApiUrl(): string {
-  const port = process.env.SERVER_PORT || process.env.PORT || '3001';
+  const port = process.env.SERVER_PORT || process.env.PORT || '8080';
   return `http://127.0.0.1:${port}/api/browser-use-mcp`;
 }
 

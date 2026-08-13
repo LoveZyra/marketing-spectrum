@@ -77,6 +77,9 @@ function ChatInterface({
     pendingPermissionRequests,
     setPendingPermissionRequests,
     cyclePermissionMode,
+    selectPermissionMode,
+    availablePermissionModes,
+    activeSessionModel,
     providerModelCatalog,
     providerModelCacheCatalog,
     providerModelsLoading,
@@ -348,9 +351,7 @@ function ChatInterface({
           provider={provider}
           textareaRef={textareaRef}
           claudeModel={claudeModel}
-          setClaudeModel={setClaudeModel}
           providerModelCatalog={providerModelCatalog}
-          providerModelsLoading={providerModelsLoading}
           tasksEnabled={tasksEnabled}
           isTaskMasterInstalled={isTaskMasterInstalled}
           onShowAllTasks={onShowAllTasks}
@@ -410,8 +411,10 @@ function ChatInterface({
           activity={sessionActivity}
           isLoading={isProcessing}
           onAbortSession={handleAbortSession}
+          activeModel={activeSessionModel ?? claudeModel}
           permissionMode={permissionMode}
-          onModeSwitch={cyclePermissionMode}
+          onSelectMode={selectPermissionMode}
+          availablePermissionModes={availablePermissionModes}
           effort={currentProviderEffort}
           availableEffortOptions={currentProviderEffortOptions}
           onSelectEffort={(nextEffort) => setStoredProviderEffort(provider, nextEffort)}

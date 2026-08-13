@@ -10,6 +10,7 @@ const projectRow = {
   custom_project_name: 'my-project',
   isStarred: 0,
   isArchived: 0,
+  owner_user_id: null,
 };
 
 test('createProject throws when project path is missing', async () => {
@@ -106,6 +107,7 @@ test('createProject returns archived reuse outcome when archived row is reused',
         project: {
           ...projectRow,
           isArchived: 1,
+          owner_user_id: null,
         },
       }),
       getProjectByPath: () => projectRow,

@@ -11,7 +11,7 @@ services:
       # only. That closes the port to your LAN, so phones and other machines
       # can no longer reach the UI — only do it if you front Prism with a
       # reverse proxy on the same host, or genuinely only use it locally.
-      - "3001:3001"
+      - "8080:8080"
 
     # Everything tunable comes from `.env` next to this file — see
     # .env.docker.example for the full list with defaults. Variables absent
@@ -27,7 +27,7 @@ services:
     # published port forwards to, and the workspace bind mount below. Entries
     # here override `.env`, so setting them there has no effect.
     environment:
-      SERVER_PORT: "3001"
+      SERVER_PORT: "8080"
       HOST: "0.0.0.0"
       WORKSPACES_ROOT: /workspace
 

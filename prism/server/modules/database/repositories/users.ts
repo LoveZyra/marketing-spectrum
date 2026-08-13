@@ -1,9 +1,10 @@
 /**
  * User repository.
  *
- * Provides typed CRUD operations for the `users` table.
- * This is a single-user system, but the schema supports multiple
- * users for forward compatibility.
+ * Prism used to be single-user; it now holds one account per colleague, each
+ * gated by an approval status a root account sets. Root itself is never stored
+ * here — it is computed from `PRISM_ROOT_USERS` (see server/shared/root-users.js)
+ * so there is one source of truth and no drift between env and database.
  */
 
 import { getConnection } from '@/modules/database/connection.js';
@@ -19,11 +20,29 @@ type UserRow = {
   git_email: string | null;
   has_completed_onboarding: number;
   token_version: number;
+  approval_status: ApprovalStatus;
+  approved_at: string | null;
+  reviewed_by: number | null;
+};
+
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+/** One row of the root-only account list. Never carries the password hash. */
+export type UserAdminRow = {
+  id: number;
+  username: string;
+  created_at: string;
+  last_login: string | null;
+  is_active: number;
+  approval_status: ApprovalStatus;
+  approved_at: string | null;
+  reviewed_by: number | null;
+  reviewed_by_username: string | null;
 };
 
 type UserPublicRow = Pick<
   UserRow,
-  'id' | 'username' | 'created_at' | 'last_login' | 'token_version'
+  'id' | 'username' | 'created_at' | 'last_login' | 'token_version' | 'approval_status'
 >;
 
 type UserGitConfig = {
@@ -50,12 +69,29 @@ export const userDb = {
     return row.count > 0;
   },
 
-  /** Inserts a new user and returns the created ID + username. */
-  createUser(username: string, passwordHash: string): CreateUserResult {
+  /**
+   * Inserts a new user and returns the created ID + username.
+   *
+   * `approvalStatus` is explicit rather than defaulted so the caller has to
+   * decide: self-registration passes 'pending', the root account and the
+   * first-run setup pass 'approved'.
+   */
+  createUser(
+    username: string,
+    passwordHash: string,
+    approvalStatus: ApprovalStatus = 'approved'
+  ): CreateUserResult {
     const db = getConnection();
     const result = db
-      .prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
-      .run(username, passwordHash);
+      .prepare(
+        'INSERT INTO users (username, password_hash, approval_status, approved_at) VALUES (?, ?, ?, ?)'
+      )
+      .run(
+        username,
+        passwordHash,
+        approvalStatus,
+        approvalStatus === 'approved' ? new Date().toISOString() : null
+      );
     return { id: result.lastInsertRowid, username };
   },
 
@@ -88,17 +124,79 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, token_version FROM users WHERE id = ? AND is_active = 1'
+        'SELECT id, username, created_at, last_login, token_version, approval_status FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
   },
 
-  /** Returns the first active user. Used for single-user mode lookups. */
+  /**
+   * Every account, newest first, for the root-only approval panel.
+   * Left-joins the reviewer so the panel can show who approved whom.
+   */
+  listUsersForAdmin(): UserAdminRow[] {
+    const db = getConnection();
+    return db
+      .prepare(
+        `SELECT u.id, u.username, u.created_at, u.last_login, u.is_active,
+                u.approval_status, u.approved_at, u.reviewed_by,
+                r.username AS reviewed_by_username
+         FROM users u
+         LEFT JOIN users r ON r.id = u.reviewed_by
+         ORDER BY
+           CASE u.approval_status WHEN 'pending' THEN 0 ELSE 1 END,
+           u.created_at DESC`
+      )
+      .all() as UserAdminRow[];
+  },
+
+  /**
+   * Records an approval decision and stamps who made it.
+   *
+   * Returns false when the id matches no row, so the route can answer 404
+   * instead of silently reporting success on a typo'd id.
+   */
+  setApprovalStatus(
+    userId: number,
+    status: ApprovalStatus,
+    reviewedBy: number | null
+  ): boolean {
+    const db = getConnection();
+    const result = db
+      .prepare(
+        `UPDATE users
+         SET approval_status = ?,
+             approved_at = CASE WHEN ? = 'approved' THEN CURRENT_TIMESTAMP ELSE NULL END,
+             reviewed_by = ?
+         WHERE id = ?`
+      )
+      .run(status, status, reviewedBy, userId);
+    return result.changes > 0;
+  },
+
+  /** Approval status by id, or undefined when the user is gone. */
+  getApprovalStatus(userId: number): ApprovalStatus | undefined {
+    const db = getConnection();
+    const row = db
+      .prepare('SELECT approval_status FROM users WHERE id = ?')
+      .get(userId) as { approval_status: ApprovalStatus } | undefined;
+    return row?.approval_status;
+  },
+
+  /** Resolves a username to its id, case-insensitively. Used by the owner backfill. */
+  findIdByUsername(username: string): number | undefined {
+    const db = getConnection();
+    const row = db
+      .prepare('SELECT id FROM users WHERE lower(username) = lower(?)')
+      .get(username) as { id: number } | undefined;
+    return row?.id;
+  },
+
+  /** Returns the first active user. Used for platform-mode lookups. */
   getFirstUser(): UserPublicRow | undefined {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login, token_version FROM users WHERE is_active = 1 LIMIT 1'
+        'SELECT id, username, created_at, last_login, token_version, approval_status FROM users WHERE is_active = 1 LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
   },

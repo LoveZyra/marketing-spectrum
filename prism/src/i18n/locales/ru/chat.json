@@ -105,7 +105,8 @@
     "showAllCommands": "Показать все команды",
     "clearInput": "Очистить ввод",
     "scrollToBottom": "Прокрутить вниз",
-    "attachmentPath": "путь"
+    "attachmentPath": "путь",
+    "modelHint": "Current model: {{model}} · type /models to switch"
   },
   "providerSelection": {
     "title": "Выберите вашего AI-ассистента",
@@ -113,7 +114,8 @@
     "readyPrompt": {
       "claude": "Готов использовать Claude с {{model}}. Начните вводить сообщение ниже."
     },
-    "pressToSearch": "Нажмите <kbd>{{shortcut}}</kbd>, чтобы искать сессии, файлы и коммиты"
+    "pressToSearch": "Нажмите <kbd>{{shortcut}}</kbd>, чтобы искать сессии, файлы и коммиты",
+    "useModelsCommand": "Switch models with /models"
   },
   "session": {
     "continue": {
@@ -196,5 +198,13 @@
   },
   "attachments": {
     "truncated": "усечено"
+  },
+  "executionModes": {
+    "title": "Execution mode",
+    "default": "Asks before every tool it has not been granted.",
+    "plan": "Investigates and proposes a plan. Changes nothing.",
+    "acceptEdits": "Edits files without asking. Still asks before running commands.",
+    "auto": "Decides routine calls itself; asks about the rest.",
+    "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
   }
 }

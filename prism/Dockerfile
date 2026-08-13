@@ -31,7 +31,7 @@ RUN npm run build && npm prune --omit=dev
 FROM node:22-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \
-    SERVER_PORT=3001 \
+    SERVER_PORT=8080 \
     HOST=0.0.0.0 \
     HOME=/data \
     WORKSPACES_ROOT=/workspace
@@ -67,7 +67,7 @@ USER prism
 # /workspace -> the code projects the agent operates on
 VOLUME ["/data", "/workspace"]
 
-EXPOSE 3001
+EXPOSE 8080
 
 # Probes /api/ready rather than /health. Both are mounted before the API-key
 # gate so neither needs credentials, but /health is pure liveness and answers
@@ -78,7 +78,7 @@ EXPOSE 3001
 # slim base image carries neither, and node is the one binary guaranteed here.
 # start-period covers first-boot schema setup and the legacy data-dir migration.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
-    CMD node -e "fetch('http://127.0.0.1:'+(process.env.SERVER_PORT||3001)+'/api/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+    CMD node -e "fetch('http://127.0.0.1:'+(process.env.SERVER_PORT||8080)+'/api/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["tini", "--"]
 CMD ["node", "dist-server/server/index.js"]

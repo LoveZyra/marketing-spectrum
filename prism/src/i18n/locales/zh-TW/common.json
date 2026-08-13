@@ -130,7 +130,10 @@
       "newFolder": "新增資料夾",
       "refresh": "重新整理",
       "menuLabel": "檔案右鍵選單",
-      "loading": "載入中..."
+      "loading": "載入中...",
+      "publish": "產生分享連結",
+      "unpublish": "停止分享",
+      "copyPublicLink": "複製分享連結"
     },
     "goUp": "返回上層目錄",
     "goUpTo": "上層目錄：{{path}}",
@@ -139,7 +142,16 @@
     "backToProjectShort": "專案",
     "outsideProjectCopied": "此檔案在專案目錄之外，已複製路徑",
     "outsideProject": "此檔案在專案目錄之外，無法在此開啟",
-    "uploadInProjectOnly": "上傳只會寫入專案目錄，請先回到專案目錄再上傳"
+    "uploadInProjectOnly": "上傳只會寫入專案目錄，請先回到專案目錄再上傳",
+    "toast": {
+      "published": "分享連結已複製到剪貼簿",
+      "publishedNoCopy": "已開啟分享,可從右鍵選單複製連結。",
+      "unpublished": "分享連結已失效",
+      "linkCopied": "分享連結已複製到剪貼簿",
+      "publishOutsideProject": "只有專案目錄內的檔案可以分享",
+      "pathCopied": "路徑已複製到剪貼簿",
+      "copyFailed": "複製失敗"
+    }
   },
   "projectWizard": {
     "title": "建立新專案",

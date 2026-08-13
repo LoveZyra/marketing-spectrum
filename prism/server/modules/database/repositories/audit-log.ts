@@ -23,7 +23,12 @@ export type AuditEvent =
   | 'api_key_toggled'
   | 'credential_created'
   | 'credential_deleted'
-  | 'ws_ticket_issued';
+  | 'ws_ticket_issued'
+  | 'register_pending'
+  | 'login_unapproved'
+  | 'user_approved'
+  | 'user_rejected'
+  | 'project_owner_changed';
 
 export type AuditOutcome = 'success' | 'failure';
 

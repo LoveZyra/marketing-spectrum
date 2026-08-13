@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 
 import { userDb, appConfigDb } from '../modules/database/index.js';
 import { IS_PLATFORM } from '../constants/config.js';
+import { isRootUser } from '../shared/root-users.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
@@ -56,7 +57,7 @@ const authenticateToken = async (req, res, next) => {
       if (!user) {
         return res.status(500).json({ error: 'Platform mode: No user found in database' });
       }
-      req.user = user;
+      req.user = withRootFlag(user);
       return next();
     } catch (error) {
       console.error('Platform mode error:', error);
@@ -109,13 +110,30 @@ const authenticateToken = async (req, res, next) => {
       }
     }
 
-    req.user = user;
+    req.user = withRootFlag(user);
     next();
   } catch (error) {
     console.error('Token verification error:', error);
     return res.status(403).json({ error: 'Invalid token' });
   }
 };
+
+// Gate for root-only routes. Kept next to authenticateToken because it is only
+// meaningful after it has run — mounting requireRoot on its own would read an
+// undefined req.user and reject everyone, which looks like a config problem
+// rather than a wiring mistake.
+const requireRoot = (req, res, next) => {
+  if (req.user?.isRoot) {
+    return next();
+  }
+
+  return res.status(403).json({ error: 'Administrator access required' });
+};
+
+// Rootness is computed per request from PRISM_ROOT_USERS, never read from a
+// column. One source of truth: changing the env and restarting is the whole of
+// granting or revoking admin rights, with no stale row to reconcile.
+const withRootFlag = (user) => ({ ...user, isRoot: isRootUser(user.username) });
 
 // Generate JWT token
 //
@@ -184,6 +202,7 @@ const authenticateWebSocket = (token) => {
 export {
   validateApiKey,
   authenticateToken,
+  requireRoot,
   generateToken,
   authenticateWebSocket,
   JWT_SECRET

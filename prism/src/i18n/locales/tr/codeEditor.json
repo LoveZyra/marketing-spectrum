@@ -22,7 +22,10 @@
     "fullscreen": "Tam ekran",
     "close": "Kapat",
     "previewMarkdown": "Markdown önizle",
-    "editMarkdown": "Markdown düzenle"
+    "editMarkdown": "Markdown düzenle",
+    "reloadPreview": "Reload",
+    "editHtml": "Back to source",
+    "previewHtml": "Preview rendered HTML"
   },
   "footer": {
     "lines": "Satır:",
@@ -32,5 +35,8 @@
   "binaryFile": {
     "title": "Binary Dosya",
     "message": "\"{{fileName}}\" dosyası binary olduğu için metin editöründe gösterilemez."
+  },
+  "filePreview": {
+    "unsavedNotice": "Preview shows the saved file. Save to see your latest edits."
   }
 }

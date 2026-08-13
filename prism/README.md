@@ -33,7 +33,7 @@ Prism 是一个 Claude Code 的 Web UI，基于 [claudecodeui (CloudCLI)](https:
 
 ```bash
 npm install
-npm run dev        # 开发模式（后端 :3001 + Vite :5173）
+npm run dev        # 开发模式（后端 :8080 + Vite :5173）
 # 或
 npm run build && npm run server   # 生产模式
 ```
@@ -82,7 +82,7 @@ VITE_PRISM_API_KEY=<同一个值>  # 前端构建时打进 bundle
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `SERVER_PORT` | `3001` | 后端端口（`PORT` 是兼容别名） |
+| `SERVER_PORT` | `8080` | 后端端口（`PORT` 是兼容别名） |
 | `HOST` | `0.0.0.0` | 监听地址，见上面的安全须知 |
 | `PRISM_CORS_ORIGINS` | 不限 | 允许的 CORS 源，逗号分隔 |
 | `PRISM_TRUST_PROXY` | `0` | 置 `1` 让限流器读 `X-Forwarded-For`，仅在自己控制的代理后面开 |

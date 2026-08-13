@@ -86,7 +86,7 @@ type ChangeActiveModelApiResponse = {
   };
 };
 
-export function useChatProviderState({ selectedSession, selectedProject: _selectedProject }: UseChatProviderStateArgs) {
+export function useChatProviderState({ selectedSession, selectedProject }: UseChatProviderStateArgs) {
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
   const [pendingPermissionRequests, setPendingPermissionRequests] = useState<PendingPermissionRequest[]>([]);
   const [claudeModel, setClaudeModel] = useState<string>(() => {
@@ -116,6 +116,17 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   const [providerModelCacheCatalog, setProviderModelCacheCatalog] = useState<
     Partial<Record<LLMProvider, ProviderModelsCacheInfo>>
   >({});
+  /**
+   * The model this conversation is actually running, as the server sees it.
+   *
+   * Kept separately from `claudeModel` because they answer different
+   * questions: `claudeModel` is the client-side default for the NEXT new chat,
+   * while this is what the current session resolves to (a /models override if
+   * one exists, otherwise what the transcript shows). Before this existed the
+   * composer had no way to display the running model at all, so switching had
+   * no visible effect once the /models modal closed.
+   */
+  const [activeSessionModel, setActiveSessionModel] = useState<string | null>(null);
   const [providerModelsLoading, setProviderModelsLoading] = useState(true);
   const [providerModelsRefreshing, setProviderModelsRefreshing] = useState(false);
 
@@ -124,6 +135,25 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   const setStoredProviderModel = useCallback((model: string) => {
     setClaudeModel(model);
     localStorage.setItem('claude-model', model);
+  }, []);
+
+  const refreshActiveSessionModel = useCallback(async (sessionId?: string | null) => {
+    const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!normalizedSessionId) {
+      setActiveSessionModel(null);
+      return;
+    }
+
+    try {
+      const response = await authenticatedFetch(
+        `/api/providers/${PROVIDER}/sessions/${encodeURIComponent(normalizedSessionId)}/active-model`,
+      );
+      const body = (await response.json()) as { success?: boolean; data?: { model?: string } };
+      setActiveSessionModel(response.ok && body.data?.model ? body.data.model : null);
+    } catch {
+      // A missing indicator is better than a wrong one.
+      setActiveSessionModel(null);
+    }
   }, []);
 
   const setStoredProviderEffort = useCallback((targetProvider: LLMProvider, effort: string) => {
@@ -360,6 +390,58 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   }, [providerEfforts, providerModels, reconcileStoredEffort]);
 
   useEffect(() => {
+    void refreshActiveSessionModel(selectedSession?.id);
+  }, [selectedSession?.id, refreshActiveSessionModel]);
+
+  /**
+   * Warm this conversation's runtime as soon as it is opened.
+   *
+   * Prism builds the Claude subprocess lazily inside the first send, so its
+   * launch, the SDK handshake and any MCP servers all land on the user's first
+   * message. Running `claude` in a terminal costs exactly the same, but you
+   * watch it boot before you type — which is why the chat felt slower than the
+   * shell for identical work. Asking the server to build it while the user is
+   * still reading or typing moves the wait off the first turn.
+   *
+   * Fire-and-forget: the endpoint never fails a request, and if this never
+   * runs the send path builds the runtime exactly as it always did.
+   *
+   * The payload has to match what the first send will pass, because the
+   * runtime is keyed by a signature over cwd, effort and permission mode — a
+   * mismatch throws the warmed runtime away and rebuilds it, which is slower
+   * than not warming at all. Changing the execution-mode gear afterwards
+   * re-runs this for the same reason.
+   */
+  useEffect(() => {
+    const sessionId = selectedSession?.id;
+    if (!sessionId) return;
+
+    const controller = new AbortController();
+    // A short delay keeps a fast scroll through the session list from spawning
+    // a subprocess per conversation the user merely passed over.
+    const timer = window.setTimeout(() => {
+      void authenticatedFetch(`/api/providers/${PROVIDER}/sessions/${encodeURIComponent(sessionId)}/prewarm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          permissionMode,
+          model: claudeModel,
+          effort: providerEfforts[PROVIDER] ?? DEFAULT_EFFORT_VALUE,
+          cwd: selectedProject?.fullPath || selectedProject?.path || undefined,
+        }),
+        signal: controller.signal,
+      }).catch(() => {
+        // Warming is an optimisation; a failure must stay invisible.
+      });
+    }, 400);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [selectedSession?.id, selectedProject?.fullPath, selectedProject?.path, permissionMode, claudeModel, providerEfforts]);
+
+  useEffect(() => {
     const validModes = getPermissionModesForProvider(PROVIDER);
     const sessionSavedMode = selectedSession?.id
       ? (localStorage.getItem(`permissionMode-${selectedSession.id}`) as PermissionMode | null)
@@ -383,12 +465,16 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     );
   }, [selectedSession?.id]);
 
-  const cyclePermissionMode = useCallback(() => {
+  /**
+   * Switch gear and remember it. The single write path for both the dropdown
+   * and the Tab shortcut — the persistence below is easy to forget when adding
+   * a second entry point, and forgetting it means the mode silently resets on
+   * the next render.
+   */
+  const selectPermissionMode = useCallback((nextMode: PermissionMode) => {
     const modes = getPermissionModesForProvider(PROVIDER);
+    if (!modes.includes(nextMode)) return;
 
-    const currentIndex = modes.indexOf(permissionMode);
-    const nextIndex = (currentIndex + 1) % modes.length;
-    const nextMode = modes[nextIndex];
     setPermissionMode(nextMode);
 
     // Persist per provider as well as per session: a brand-new chat has no
@@ -398,7 +484,15 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     if (selectedSession?.id) {
       localStorage.setItem(`permissionMode-${selectedSession.id}`, nextMode);
     }
-  }, [permissionMode, selectedSession?.id, getPermissionModesForProvider]);
+  }, [selectedSession?.id, getPermissionModesForProvider]);
+
+  const cyclePermissionMode = useCallback(() => {
+    const modes = getPermissionModesForProvider(PROVIDER);
+
+    const currentIndex = modes.indexOf(permissionMode);
+    const nextIndex = (currentIndex + 1) % modes.length;
+    selectPermissionMode(modes[nextIndex]);
+  }, [permissionMode, getPermissionModesForProvider, selectPermissionMode]);
 
   const resolvePermissionModeForProvider = useCallback((
     targetProvider: LLMProvider,
@@ -438,6 +532,15 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
       throw new Error('Unable to change the active model for this session.');
     }
 
+    // Also move the stored default. /models is the only model control now — the
+    // picker on the new-chat screen was removed because the two wrote to
+    // different places and whichever ran last silently won. Without this the
+    // last model you chose would apply to the current conversation and every
+    // new chat would still open on whatever the default was months ago, with
+    // no way left to change it.
+    setStoredProviderModel(model);
+    setActiveSessionModel(body.data.model || model);
+
     return {
       scope: 'session' as const,
       changed: body.data.changed === true,
@@ -462,8 +565,12 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     setClaudeModel: setStoredProviderModel,
     currentProviderEffort,
     currentProviderEffortOptions,
+    activeSessionModel,
+    refreshActiveSessionModel,
     permissionMode,
     setPermissionMode,
+    selectPermissionMode,
+    availablePermissionModes: getPermissionModesForProvider(PROVIDER),
     pendingPermissionRequests,
     setPendingPermissionRequests,
     cyclePermissionMode,

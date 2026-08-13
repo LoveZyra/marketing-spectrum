@@ -22,7 +22,10 @@
     "fullscreen": "Полноэкранный режим",
     "close": "Закрыть",
     "previewMarkdown": "Предпросмотр markdown",
-    "editMarkdown": "Редактировать markdown"
+    "editMarkdown": "Редактировать markdown",
+    "reloadPreview": "Reload",
+    "editHtml": "Back to source",
+    "previewHtml": "Preview rendered HTML"
   },
   "footer": {
     "lines": "Строк:",
@@ -32,5 +35,8 @@
   "binaryFile": {
     "title": "Бинарный файл",
     "message": "Файл \"{{fileName}}\" не может быть отображен в текстовом редакторе, так как это бинарный файл."
+  },
+  "filePreview": {
+    "unsavedNotice": "Preview shows the saved file. Save to see your latest edits."
   }
 }

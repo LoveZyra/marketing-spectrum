@@ -20,7 +20,10 @@
     "saved": "저장됨!",
     "exitFullscreen": "전체화면 종료",
     "fullscreen": "전체화면",
-    "close": "닫기"
+    "close": "닫기",
+    "reloadPreview": "Reload",
+    "editHtml": "Back to source",
+    "previewHtml": "Preview rendered HTML"
   },
   "footer": {
     "lines": "줄:",
@@ -30,5 +33,8 @@
   "binaryFile": {
     "title": "바이너리 파일",
     "message": "파일 \"{{fileName}}\"은(는) 바이너리 파일이므로 텍스트 편집기에서 표시할 수 없습니다."
+  },
+  "filePreview": {
+    "unsavedNotice": "Preview shows the saved file. Save to see your latest edits."
   }
 }

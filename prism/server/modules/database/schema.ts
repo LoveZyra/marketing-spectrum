@@ -11,7 +11,13 @@ CREATE TABLE IF NOT EXISTS users (
     has_completed_onboarding BOOLEAN DEFAULT 0,
     -- Bumped on logout-everywhere and password change. Tokens carry the value
     -- they were minted with; a mismatch invalidates them without a blocklist.
-    token_version INTEGER NOT NULL DEFAULT 0
+    token_version INTEGER NOT NULL DEFAULT 0,
+    -- Registration approval. DEFAULT 'approved' is load-bearing: every account
+    -- that existed before this column keeps logging in untouched. Only rows
+    -- written by /auth/register after this change start out 'pending'.
+    approval_status TEXT NOT NULL DEFAULT 'approved',   -- pending|approved|rejected
+    approved_at DATETIME,
+    reviewed_by INTEGER                                 -- reviewer's user id, for the trail
 );
 `;
 
@@ -79,7 +85,11 @@ CREATE TABLE IF NOT EXISTS projects (
     project_path TEXT NOT NULL UNIQUE,
     custom_project_name TEXT DEFAULT NULL,
     isStarred BOOLEAN DEFAULT 0,
-    isArchived BOOLEAN DEFAULT 0
+    isArchived BOOLEAN DEFAULT 0,
+    -- Owner. NULL means public: visible to everyone. This is a tidiness
+    -- boundary, not a security one — see the spec doc; project-level routes
+    -- deliberately do not check it.
+    owner_user_id INTEGER
 );
 `;
 
@@ -110,6 +120,27 @@ export const LAST_SCANNED_AT_SQL = `
 CREATE TABLE IF NOT EXISTS scan_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   last_scanned_at TIMESTAMP NULL
+);
+`;
+
+/**
+ * Published static pages.
+ *
+ * Stores a *reference* to a workspace path, never a copy of the bytes: the
+ * public route reads the file live, so editing it and refreshing the browser is
+ * the whole of "republishing". The UNIQUE on (project_id, rel_path) is what
+ * makes re-publishing idempotent and keeps an already-shared URL working.
+ */
+export const PUBLISHED_PAGES_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS published_pages (
+    id TEXT PRIMARY KEY NOT NULL,
+    token TEXT UNIQUE NOT NULL,
+    project_id TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'file',   -- file | folder
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id, rel_path)
 );
 `;
 
@@ -161,4 +192,7 @@ CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id);
 ${LAST_SCANNED_AT_SQL}
 
 ${APP_CONFIG_TABLE_SCHEMA_SQL}
+
+${PUBLISHED_PAGES_TABLE_SCHEMA_SQL}
+CREATE INDEX IF NOT EXISTS idx_published_pages_project ON published_pages(project_id);
 `;

@@ -1,11 +1,13 @@
-import { Check, GitBranch, LogIn } from 'lucide-react';
+import { Check, LogIn } from 'lucide-react';
 
 type OnboardingStepProgressProps = {
   currentStep: number;
 };
 
+// Git identity used to be step 1 of 2. It configured `git config --global
+// user.name/user.email` for a git surface that no longer exists, so onboarding
+// is a single step now.
 const onboardingSteps = [
-  { title: 'Git Configuration', icon: GitBranch, required: true },
   { title: 'Connect Agents', icon: LogIn, required: false },
 ];
 
@@ -24,26 +26,22 @@ export default function OnboardingStepProgress({ currentStep }: OnboardingStepPr
                 <div
                   className={`flex h-10 w-10 items-center justify-center rounded-full border-2 transition-all duration-200 ${
                     isCompleted
-                      ? 'border-emerald-500 bg-emerald-500 text-white shadow-lg shadow-emerald-500/25'
+                      ? 'border-emerald-500 bg-emerald-500 text-white'
                       : isActive
-                        ? 'border-primary bg-primary text-primary-foreground shadow-lg shadow-primary/25'
+                        ? 'border-primary bg-primary text-primary-foreground'
                         : 'border-border bg-card text-muted-foreground'
                   }`}
                 >
                   {isCompleted ? <Check className="h-5 w-5" /> : <Icon className="h-5 w-5" />}
                 </div>
-
-                <div className="mt-1.5 text-center">
-                  <p className={`text-sm font-medium ${isActive ? 'text-foreground' : 'text-muted-foreground'}`}>
-                    {step.title}
-                  </p>
-                  {step.required && <span className="text-xs text-red-500">Required</span>}
-                </div>
+                <span
+                  className={`mt-2 text-xs font-medium ${
+                    isActive ? 'text-foreground' : 'text-muted-foreground'
+                  }`}
+                >
+                  {step.title}
+                </span>
               </div>
-
-              {index < onboardingSteps.length - 1 && (
-                <div className={`mx-2 h-0.5 flex-1 transition-colors duration-200 ${isCompleted ? 'bg-emerald-500' : 'bg-border'}`} />
-              )}
             </div>
           );
         })}

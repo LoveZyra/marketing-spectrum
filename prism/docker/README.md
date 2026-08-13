@@ -15,7 +15,7 @@ cp .env.docker.example .env      # 至少填 ANTHROPIC_API_KEY、JWT_SECRET
 docker compose up -d --build
 ```
 
-打开 `http://<服务器IP>:3001`，首次访问设置登录密码即可。
+打开 `http://<服务器IP>:8080`，首次访问设置登录密码即可。
 
 查看日志 / 状态 / 停止：
 
@@ -32,7 +32,7 @@ docker compose down              # 停止（数据卷保留）
 ```bash
 docker build -t prism:latest .
 
-docker run -d --name prism -p 3001:3001 \
+docker run -d --name prism -p 8080:8080 \
   -e ANTHROPIC_API_KEY=sk-ant-... \
   -e JWT_SECRET=$(openssl rand -hex 32) \
   -v prism-data:/data \
@@ -40,7 +40,7 @@ docker run -d --name prism -p 3001:3001 \
   prism:latest
 ```
 
-`SERVER_PORT` / `HOST` / `WORKSPACES_ROOT` 已经写在镜像的 `ENV` 里（`3001` / `0.0.0.0` / `/workspace`），不传也是对的。要传更多变量时用 `--env-file .env`，效果和 compose 的 `env_file` 一致。
+`SERVER_PORT` / `HOST` / `WORKSPACES_ROOT` 已经写在镜像的 `ENV` 里（`8080` / `0.0.0.0` / `/workspace`），不传也是对的。要传更多变量时用 `--env-file .env`，效果和 compose 的 `env_file` 一致。
 
 ---
 
@@ -72,11 +72,11 @@ docker run -d --name prism -p 3001:3001 \
 
 | 变量 | 值 | 必须和谁一致 |
 |---|---|---|
-| `SERVER_PORT` | `3001` | `ports:` 里发布的端口 |
+| `SERVER_PORT` | `8080` | `ports:` 里发布的端口 |
 | `HOST` | `0.0.0.0` | 不绑全部接口，发布出去的端口就是死的 |
 | `WORKSPACES_ROOT` | `/workspace` | `/workspace` 那条绑定挂载 |
 
-容器内 `HOST=0.0.0.0` **不是**暴露面的决策点，compose 的 `ports:` 映射才是。要收紧就改那里（`"127.0.0.1:3001:3001"`，代价是手机和局域网其他设备访问不了）、加防火墙，或者前面挂反向代理 + TLS。
+容器内 `HOST=0.0.0.0` **不是**暴露面的决策点，compose 的 `ports:` 映射才是。要收紧就改那里（`"127.0.0.1:8080:8080"`，代价是手机和局域网其他设备访问不了）、加防火墙，或者前面挂反向代理 + TLS。
 
 > `env_file` 用的是长语法（`path:` + `required: false`），需要 Compose **v2.24 以上**（`docker compose version` 可查）。旧版本会直接报解析错误，改成短语法 `env_file: [.env]` 即可，区别只是 `.env` 必须存在。
 
@@ -88,7 +88,7 @@ docker run -d --name prism -p 3001:3001 \
 
 ```bash
 docker inspect --format '{{.State.Health.Status}}' prism
-curl -fsS http://127.0.0.1:3001/api/ready
+curl -fsS http://127.0.0.1:8080/api/ready
 ```
 
 探针用的是 node 内置的 `fetch`——slim 基础镜像里既没有 `curl` 也没有 `wget`，node 是唯一保证存在的二进制。`--start-period=45s` 是留给首次启动建表和老数据目录迁移的时间，这段时间内探测失败不计入重启判定。
@@ -97,7 +97,7 @@ curl -fsS http://127.0.0.1:3001/api/ready
 
 ## 反向代理（可选）
 
-生产环境建议在前面挂 Nginx/Caddy 终止 TLS，转发到 `127.0.0.1:3001`（此时可以把 compose 的 `ports:` 收成 `"127.0.0.1:3001:3001"`，只让代理能连）。
+生产环境建议在前面挂 Nginx/Caddy 终止 TLS，转发到 `127.0.0.1:8080`（此时可以把 compose 的 `ports:` 收成 `"127.0.0.1:8080:8080"`，只让代理能连）。
 
 WebSocket 必须放行 `Upgrade` / `Connection` 头，且需要覆盖三条路径：`/ws`（主会话）、`/shell`（终端）、`/plugin-ws/`（插件自带的 websocket）。漏掉最后一条的症状是插件能加载、面板却一直不出数据。
 

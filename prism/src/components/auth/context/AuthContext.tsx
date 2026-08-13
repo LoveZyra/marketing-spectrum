@@ -161,6 +161,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
         const response = await api.auth.register(username, password);
         const payload = await parseJsonSafely<AuthSessionPayload>(response);
 
+        // A pending account is a successful registration with no session
+        // attached. Treating the missing token as a failure would tell someone
+        // who just signed up correctly that registration failed.
+        if (response.ok && payload?.pendingApproval) {
+          return {
+            success: true,
+            pendingApproval: true,
+            message: payload.message ?? AUTH_ERROR_MESSAGES.pendingApproval,
+          };
+        }
+
         if (!response.ok || !payload?.token || !payload.user) {
           const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.registrationFailed);
           setError(message);

@@ -1,5 +1,6 @@
-import { GitBranch, Info, Key, Puzzle } from 'lucide-react';
+import { Info, Key, Puzzle, Users, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useAuth } from '../../auth/context/AuthContext';
 import type { SettingsMainTab } from '../types/types';
 
 type SettingsMainTabsProps = {
@@ -11,27 +12,29 @@ type MainTabConfig = {
   id: SettingsMainTab;
   labelKey?: string;
   label?: string;
-  icon?: typeof GitBranch;
+  icon?: LucideIcon;
+  rootOnly?: boolean;
 };
 
 const TAB_CONFIG: MainTabConfig[] = [
   { id: 'agents', labelKey: 'mainTabs.agents' },
   { id: 'appearance', labelKey: 'mainTabs.appearance' },
-  { id: 'git', labelKey: 'mainTabs.git', icon: GitBranch },
   { id: 'api', labelKey: 'mainTabs.apiTokens', icon: Key },
   { id: 'tasks', labelKey: 'mainTabs.tasks' },
   { id: 'notifications', labelKey: 'mainTabs.notifications' },
   { id: 'plugins', labelKey: 'mainTabs.plugins', icon: Puzzle },
+  { id: 'accounts', labelKey: 'mainTabs.accounts', icon: Users, rootOnly: true },
   { id: 'about', labelKey: 'mainTabs.about', icon: Info },
 ];
 
 export default function SettingsMainTabs({ activeTab, onChange }: SettingsMainTabsProps) {
   const { t } = useTranslation('settings');
+  const isRoot = Boolean(useAuth().user?.isRoot);
 
   return (
     <div className="border-b border-border">
        <div className="flex px-4 md:px-6 overflow-x-auto scrollbar-hide" role="tablist" aria-label={t('mainTabs.label', { defaultValue: 'Settings' })}>
-        {TAB_CONFIG.map((tab) => {
+        {TAB_CONFIG.filter((tab) => !tab.rootOnly || isRoot).map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
 

@@ -105,7 +105,8 @@
     "showAllCommands": "顯示所有指令",
     "clearInput": "清空輸入",
     "scrollToBottom": "捲動到底部",
-    "attachmentPath": "路徑"
+    "attachmentPath": "路徑",
+    "modelHint": "目前模型：{{model}} · 輸入 /models 切換"
   },
   "thinkingMode": {
     "selector": {
@@ -149,7 +150,8 @@
     "readyPrompt": {
       "claude": "準備好使用 {{model}} 的 Claude。請在下方開始輸入您的訊息。"
     },
-    "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜尋工作階段、檔案和提交"
+    "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜尋工作階段、檔案和提交",
+    "useModelsCommand": "輸入 /models 切換模型"
   },
   "session": {
     "continue": {
@@ -232,5 +234,13 @@
   },
   "attachments": {
     "truncated": "已截斷"
+  },
+  "executionModes": {
+    "title": "執行模式",
+    "default": "每個未授權的工具都先問過你。",
+    "plan": "只調研並給出方案,不動任何檔案。",
+    "acceptEdits": "改檔案不再詢問,執行指令仍然要確認。",
+    "auto": "常規呼叫自行決定,其餘仍會詢問。",
+    "bypassPermissions": "全部放行,不再詢問。只在可丟棄的工作上用。"
   }
 }

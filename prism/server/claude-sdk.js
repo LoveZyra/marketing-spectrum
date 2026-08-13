@@ -2140,8 +2140,55 @@ async function getClaudeSlashCommands(sessionId) {
 }
 
 // Export public API
+/**
+ * Build this conversation's resident runtime ahead of the first message.
+ *
+ * The runtime is otherwise created lazily inside the first send, so launching
+ * the Claude subprocess, initialising the SDK and starting any configured MCP
+ * servers all land on the user's first turn. Running `claude` in a terminal
+ * pays exactly the same cost, but pays it while you watch it boot and before
+ * you start typing — which is why the chat felt slower than the shell for the
+ * same work.
+ *
+ * Deliberately best-effort and silent: a failed pre-warm must leave the lazy
+ * path untouched, because the only thing worse than a slow first turn is a
+ * first turn that fails for a reason the user never asked for. A turn already
+ * in flight is left alone (runtimeForSend throws on that) and so is an
+ * already-resident runtime, which returns immediately.
+ *
+ * The options must match what the first real send will pass: the runtime is
+ * keyed by a signature over cwd, effort and bypass, so a mismatch just
+ * disposes this runtime and builds another, wasting the work.
+ */
+async function prewarmClaudeSession(options = {}) {
+  if (!PERSISTENT_ENABLED) return { warmed: false, reason: 'persistent_disabled' };
+  if (!options.sessionId) return { warmed: false, reason: 'no_session_id' };
+
+  const existing = claudeRuntimes.get(options.sessionId);
+  if (existing && !existing.disposed) return { warmed: true, reason: 'already_resident' };
+
+  try {
+    let effortModels = CLAUDE_FALLBACK_MODELS;
+    try {
+      effortModels = (await providerModelsService.getProviderModels('claude')).models;
+    } catch {
+      // static fallback
+    }
+    const model = (await providerModelsService.resolveResumeModel('claude', options.sessionId, options.model))
+      || options.model;
+    const resolvedEffort = resolveClaudeEffort(model, options.effort, effortModels);
+
+    await runtimeForSend({ ...options, model, resolvedEffort });
+    return { warmed: true, reason: 'created' };
+  } catch (error) {
+    console.warn('[Claude SDK] Pre-warm skipped:', error?.message || error);
+    return { warmed: false, reason: 'error' };
+  }
+}
+
 export {
   queryClaudeSDK,
+  prewarmClaudeSession,
   queryClaudeSDKOnce,
   abortClaudeSDKSession,
   abortClaudeSDKRun,

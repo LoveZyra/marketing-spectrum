@@ -130,7 +130,10 @@
       "newFolder": "새 폴더",
       "refresh": "새로 고침",
       "menuLabel": "파일 컨텍스트 메뉴",
-      "loading": "로딩 중..."
+      "loading": "로딩 중...",
+      "publish": "Share Link",
+      "unpublish": "Stop Sharing",
+      "copyPublicLink": "Copy Share Link"
     },
     "goUp": "상위 폴더로",
     "goUpTo": "상위 폴더: {{path}}",
@@ -139,7 +142,16 @@
     "backToProjectShort": "프로젝트",
     "outsideProjectCopied": "프로젝트 폴더 밖이라 경로를 복사했습니다",
     "outsideProject": "이 파일은 프로젝트 폴더 밖이라 여기서 열 수 없습니다",
-    "uploadInProjectOnly": "업로드는 프로젝트 폴더로만 됩니다. 먼저 프로젝트 폴더로 돌아가세요"
+    "uploadInProjectOnly": "업로드는 프로젝트 폴더로만 됩니다. 먼저 프로젝트 폴더로 돌아가세요",
+    "toast": {
+      "published": "Share link copied to clipboard",
+      "publishedNoCopy": "Shared. Copy the link from the menu.",
+      "unpublished": "Share link revoked",
+      "linkCopied": "Share link copied to clipboard",
+      "publishOutsideProject": "Only files inside the project can be shared",
+      "pathCopied": "Path copied to clipboard",
+      "copyFailed": "Failed to copy path"
+    }
   },
   "projectWizard": {
     "title": "새 프로젝트 생성",

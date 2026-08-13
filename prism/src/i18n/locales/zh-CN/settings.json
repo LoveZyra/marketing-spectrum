@@ -94,7 +94,8 @@
     "computer": "计算机使用",
     "notifications": "通知",
     "plugins": "插件",
-    "about": "关于"
+    "about": "关于",
+    "accounts": "账号"
   },
   "notifications": {
     "title": "通知",
@@ -438,5 +439,30 @@
     "installAriaLabel": "插件 git 仓库 URL",
     "tab": "标签",
     "runningStatus": "运行中"
+  },
+  "accounts": {
+    "title": "账号审批",
+    "description": "新注册的账号需要审批后才能登录。root 账号由服务端 PRISM_ROOT_USERS 指定。",
+    "refresh": "刷新",
+    "loading": "加载中…",
+    "empty": "暂无账号",
+    "pendingCount": "{{count}} 个账号待审批",
+    "status": {
+      "pending": "待审批",
+      "approved": "已通过",
+      "rejected": "已驳回"
+    },
+    "columns": {
+      "username": "用户名",
+      "status": "状态",
+      "registered": "注册时间",
+      "reviewer": "审批人",
+      "actions": "操作"
+    },
+    "actions": {
+      "approve": "通过",
+      "reject": "驳回"
+    },
+    "notIsolationNotice": "说明:账号区分只用于界面隔离(各人只看到自己的项目和公共项目),不是越权防护 —— 知道项目 id 的人仍然可以直接调用接口。"
   }
 }

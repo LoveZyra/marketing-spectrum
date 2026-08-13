@@ -130,7 +130,10 @@
       "newFolder": "新建文件夹",
       "refresh": "刷新",
       "menuLabel": "文件上下文菜单",
-      "loading": "加载中..."
+      "loading": "加载中...",
+      "publish": "生成分享链接",
+      "unpublish": "停止分享",
+      "copyPublicLink": "复制分享链接"
     },
     "goUp": "返回上级目录",
     "goUpTo": "上级目录：{{path}}",
@@ -139,7 +142,16 @@
     "backToProjectShort": "项目",
     "outsideProjectCopied": "该文件在项目目录之外，已复制路径",
     "outsideProject": "该文件在项目目录之外，无法在此打开",
-    "uploadInProjectOnly": "上传只会写入项目目录，请先回到项目目录再上传"
+    "uploadInProjectOnly": "上传只会写入项目目录，请先回到项目目录再上传",
+    "toast": {
+      "published": "分享链接已复制到剪贴板",
+      "publishedNoCopy": "已开启分享,可从右键菜单复制链接。",
+      "unpublished": "分享链接已失效",
+      "linkCopied": "分享链接已复制到剪贴板",
+      "publishOutsideProject": "只有项目目录内的文件可以分享",
+      "pathCopied": "路径已复制到剪贴板",
+      "copyFailed": "复制失败"
+    }
   },
   "projectWizard": {
     "title": "创建新项目",

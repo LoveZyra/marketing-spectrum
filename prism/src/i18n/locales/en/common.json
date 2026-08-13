@@ -130,7 +130,10 @@
       "newFolder": "New Folder",
       "refresh": "Refresh",
       "menuLabel": "File context menu",
-      "loading": "Loading..."
+      "loading": "Loading...",
+      "publish": "Share Link",
+      "unpublish": "Stop Sharing",
+      "copyPublicLink": "Copy Share Link"
     },
     "goUp": "Up one level",
     "goUpTo": "Up to {{path}}",
@@ -139,7 +142,16 @@
     "backToProjectShort": "Project",
     "outsideProjectCopied": "Outside the project folder — path copied instead",
     "outsideProject": "This file is outside the project folder and cannot be opened here",
-    "uploadInProjectOnly": "Uploads go to the project folder — go back to it to upload"
+    "uploadInProjectOnly": "Uploads go to the project folder — go back to it to upload",
+    "toast": {
+      "published": "Share link copied to clipboard",
+      "publishedNoCopy": "Shared. Copy the link from the menu.",
+      "unpublished": "Share link revoked",
+      "linkCopied": "Share link copied to clipboard",
+      "publishOutsideProject": "Only files inside the project can be shared",
+      "pathCopied": "Path copied to clipboard",
+      "copyFailed": "Failed to copy path"
+    }
   },
   "projectWizard": {
     "title": "Create New Project",

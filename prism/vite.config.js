@@ -16,7 +16,7 @@ export default defineConfig(({ mode }) => {
   
   const proxyHost = getConnectableHost(configuredHost)
   // TODO: Remove support for legacy PORT variables in all locations in a future major release, leaving only SERVER_PORT.
-  const serverPort = env.SERVER_PORT || env.PORT || 3001
+  const serverPort = env.SERVER_PORT || env.PORT || 8080
 
   return {
     plugins: [react()],
