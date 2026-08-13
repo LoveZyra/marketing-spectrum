@@ -1,0 +1,21 @@
+prism/Prism四项优化_总体方案_20260812.md
+  s_7e2c7082d4823d::t_2cd20d5b52bcce 1-69
+prism/server/shared/root-users.js
+  s_7e2c7082d4823d::t_df23772808f6f0 1-10,12-19,22-30,32-39,41-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "18795616f37dfab03788ef90298a018e2b6c7e81",
+  "prompts": {},
+  "sessions": {
+    "s_7e2c7082d4823d": {
+      "agent_id": {
+        "tool": "windsurf",
+        "id": "e151e9b4-14ce-425b-b385-6ac8363a6f12",
+        "model": "GLM-5.2 High"
+      },
+      "human_author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
