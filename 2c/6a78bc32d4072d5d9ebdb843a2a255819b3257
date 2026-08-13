@@ -1,0 +1,14 @@
+platform-foundation/.gitignore
+  h_4e3a4dcdcf415f 1-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "2c6a78bc32d4072d5d9ebdb843a2a255819b3257",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
