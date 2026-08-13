@@ -1,0 +1,2089 @@
+# 特征注册表 — 用户-活动粒度特征宽表
+# 数据粒度：mapid + activity_name + activity_id + activity_channel
+# 来源文档：features/v3/user_activity_features_v2.md
+#
+# 字段说明
+# --------
+# name              : 字段名（与 df 列名完全一致）
+# type              : count | rate | ordinal | binary | text | timestamp | category
+# dimension         : 所属分析维度（对应 FeatureLoader.fields_for_dimension()）
+# description       : 字段含义（中文）
+# threshold_method  : percentile | optimal_split | none
+#   - percentile    : 按分位数计算阈值（适用于 count/rate/ordinal 类型）
+#   - optimal_split : Youden's J 最优切分（需要 is_converted；转化率<1% 降级为 percentile）
+#   - none          : binary/text/timestamp 不需要阈值
+# threshold_percentiles: 仅 percentile 方法使用，计算哪些分位数
+# diagnostic_rules  : 关联的诊断规则 ID（来自 diagnostic_rules.yaml）
+# fallback          : 字段缺失时的降级填充值（null 表示不填充，保留 NaN）
+
+features:
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 0：活动触达信息（activity_info）
+  # ─────────────────────────────────────────────────────────
+
+  - name: mapid
+    type: category
+    dimension: activity_info
+    description: 用户主ID（联合主键之一）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: deviceid
+    type: category
+    dimension: activity_info
+    description: 设备ID
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: unionid
+    type: category
+    dimension: activity_info
+    description: 微信 Union ID
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: activity_name
+    type: category
+    dimension: activity_info
+    description: 活动名称（majorname）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: activity_id
+    type: category
+    dimension: activity_info
+    description: 活动ID（id）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: activity_channel
+    type: category
+    dimension: activity_info
+    description: 推送方式原始值（detailname，如弹屏/Push/短信）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: activity_channel_std
+    type: category
+    dimension: activity_info
+    description: 推送方式标准化（popup/push/sms/ads/insite_msg/activity）
+    threshold_method: none
+    diagnostic_rules: [3, 35, 39]
+    fallback: null
+
+  - name: activity_product_name
+    type: category
+    dimension: activity_info
+    description: 活动投放品类（用于转化标签匹配的 product_name）
+    threshold_method: none
+    diagnostic_rules: [11, 13]
+    fallback: null
+
+  - name: touch_date
+    type: timestamp
+    dimension: activity_info
+    description: 触达日期
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: last_touch_time
+    type: timestamp
+    dimension: activity_info
+    description: 最后一次触达时刻（特征截止点）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: first_touch_time
+    type: timestamp
+    dimension: activity_info
+    description: 首次触达时刻
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: touch_hour
+    type: ordinal
+    dimension: activity_info
+    description: 最后触达的小时（0-23）
+    threshold_method: none
+    diagnostic_rules: [6]
+    fallback: null
+
+  - name: touch_period
+    type: category
+    dimension: activity_info
+    description: 最后触达时段（上午/下午/晚上/深夜）
+    threshold_method: none
+    diagnostic_rules: [6]
+    fallback: null
+
+  - name: activity_touch_cnt
+    type: count
+    dimension: activity_info
+    description: 近1天触达该用户的次数（单日数据）
+    threshold_method: percentile
+    threshold_percentiles: [75, 90, 95]
+    diagnostic_rules: [1, 2, 20, 33]
+    fallback: 0
+
+  - name: activity_click_cnt
+    type: count
+    dimension: activity_info
+    description: 近1天触达中用户点击次数（action=点击）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: is_activity_clicked
+    type: binary
+    dimension: activity_info
+    description: 近1天是否有任意点击（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: activity_over_touch_flag
+    type: binary
+    dimension: activity_info
+    description: 近1天触达≥5次，疑似过度触达（0/1）
+    threshold_method: none
+    diagnostic_rules: [2]
+    fallback: 0
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 1：核心标签（label）
+  # ─────────────────────────────────────────────────────────
+
+  - name: is_converted
+    type: binary
+    dimension: label
+    description: 近1天触达、product_name 匹配的创单（0/1）
+    threshold_method: none
+    diagnostic_rules: [19, 20, 21, 23, 25, 41]
+    fallback: null
+
+  - name: is_paid
+    type: binary
+    dimension: label
+    description: 近1天触达、product_name 匹配的成单（0/1，区分创单未付，目标变量）
+    threshold_method: none
+    diagnostic_rules: [41]
+    fallback: null
+
+  - name: convert_product
+    type: category
+    dimension: label
+    description: 转化的品类名称（NULL 表示未转化）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: convert_time
+    type: timestamp
+    dimension: label
+    description: 首次转化时刻（NULL 表示未转化）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 2：营销时机匹配（timing）
+  # ─────────────────────────────────────────────────────────
+
+  - name: period_mismatch_flag
+    type: binary
+    dimension: timing
+    description: 触达时段与用户历史活跃主时段不一致（0/1）
+    threshold_method: none
+    diagnostic_rules: [6]
+    fallback: 0
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 3：触达前决策周期（decision_cycle）
+  # ─────────────────────────────────────────────────────────
+
+  - name: pre_first_expose_to_touch_min
+    type: count
+    dimension: decision_cycle
+    description: 近1天触达前首条行为到最后触达时刻的时间差（分钟），反映用户活跃时长
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90, 95]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_mainflow_to_touch_min
+    type: count
+    dimension: decision_cycle
+    description: 近1天最近一次主流程行为到最后触达时刻的时间差，意向活跃度指示
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75, 90]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_mkt_to_touch_min
+    type: count
+    dimension: decision_cycle
+    description: 近1天上一次营销到本次触达的时间差，反映营销频率
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75, 90]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_order_to_touch_min
+    type: count
+    dimension: decision_cycle
+    description: 近1天最近成单到本次触达的时间差（分钟）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75, 90]
+    diagnostic_rules: [7]
+    fallback: null
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 4：触达前漏斗（funnel）
+  # ─────────────────────────────────────────────────────────
+
+  - name: pre_max_funnel_depth
+    type: ordinal
+    dimension: funnel
+    description: 近1天最深漏斗阶段（1=首页 2=列表 3=详情 4=填写 5=支付，跨品类）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75]
+    diagnostic_rules: [27]
+    fallback: 0
+
+  - name: pre_target_product_funnel_depth
+    type: ordinal
+    dimension: funnel
+    description: 近1天活动目标品类的最深漏斗阶段（漏斗维度）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_funnel_pages_cnt
+    type: count
+    dimension: funnel
+    description: 近1天访问过的不同主流程页面数（去重）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_mainflow_event_cnt
+    type: count
+    dimension: funnel
+    description: 近1天主流程行为总次数
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75, 90]
+    diagnostic_rules: [1, 5, 43, 45]
+    fallback: 0
+
+  - name: pre_reached_homepage
+    type: binary
+    dimension: funnel
+    description: 近1天是否曾到达项目首页（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_reached_list
+    type: binary
+    dimension: funnel
+    description: 近1天是否曾到达列表页（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_reached_detail
+    type: binary
+    dimension: funnel
+    description: 近1天是否曾到达详情页（0/1）
+    threshold_method: none
+    diagnostic_rules: [23]
+    fallback: 0
+
+  - name: pre_reached_booking
+    type: binary
+    dimension: funnel
+    description: 近1天是否曾到达填写页（0/1）
+    threshold_method: none
+    diagnostic_rules: [39]
+    fallback: 0
+
+  - name: pre_reached_payment
+    type: binary
+    dimension: funnel
+    description: 近1天是否曾到达支付页（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_back_to_list_cnt
+    type: count
+    dimension: funnel
+    description: 近1天从详情页返回列表页的次数（犹豫/比价信号）
+    threshold_method: percentile
+    threshold_percentiles: [75, 90, 95]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_back_to_booking_cnt
+    type: count
+    dimension: funnel
+    description: 近1天从填写页返回详情页的次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90, 95]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_skip_detail_flag
+    type: binary
+    dimension: funnel
+    description: 近1天是否有跳过详情页直接进入填写页（熟客快速购买信号，0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_total_touch_cnt
+    type: count
+    dimension: funnel
+    description: 近1天触达前总行为次数（含全类型事件）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75, 90]
+    diagnostic_rules: [5]
+    fallback: 0
+
+  - name: pre_browse_target_product
+    type: binary
+    dimension: funnel
+    description: 近1天是否浏览过活动目标品类（0/1）
+    threshold_method: none
+    diagnostic_rules: [11, 43]
+    fallback: 0
+
+  - name: pre_target_product_visit_cnt
+    type: count
+    dimension: funnel
+    description: 近1天活动目标品类的访问次数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: [11, 43]
+    fallback: 0
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 5：触达前历史营销行为（pre_marketing）
+  # ─────────────────────────────────────────────────────────
+
+  - name: pre_mkt_touch_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天触达前营销总触达次数（含本活动中间触达）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90, 95]
+    diagnostic_rules: [27]
+    fallback: 0
+
+  - name: pre_mkt_channel_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天触达前被几种不同营销渠道触达
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: [34]
+    fallback: 0
+
+  - name: pre_touched_popup
+    type: binary
+    dimension: pre_marketing
+    description: 近1天是否有弹屏触达（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_touched_push
+    type: binary
+    dimension: pre_marketing
+    description: 近1天是否有Push触达（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_touched_sms
+    type: binary
+    dimension: pre_marketing
+    description: 近1天是否有短信触达（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_touched_ads
+    type: binary
+    dimension: pre_marketing
+    description: 近1天是否有广告触达（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_touched_insite_msg
+    type: binary
+    dimension: pre_marketing
+    description: 近1天是否有站内信触达（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_touched_activity
+    type: binary
+    dimension: pre_marketing
+    description: 近1天是否有活动营销触达（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_popup_touch_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天弹屏触达次数（用于"创单前弹屏过多"阈值判断）
+    threshold_method: percentile
+    threshold_percentiles: [75, 90, 95]
+    diagnostic_rules: [35, 45]
+    fallback: 0
+
+  - name: pre_push_touch_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天Push 触达次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90, 95]
+    diagnostic_rules: [45]
+    fallback: 0
+
+  - name: pre_sms_touch_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天短信触达次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90, 95]
+    diagnostic_rules: [45]
+    fallback: 0
+
+  - name: pre_ads_touch_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天广告触达次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90, 95]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_insite_msg_touch_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天站内信触达次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90, 95]
+    diagnostic_rules: [45]
+    fallback: 0
+
+  - name: pre_activity_touch_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天活动营销触达次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90, 95]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_mkt_click_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天营销点击总次数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_has_mkt_click
+    type: binary
+    dimension: pre_marketing
+    description: 近1天是否有任意营销点击（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_popup_click_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天弹屏点击次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_push_click_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天Push点击次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_popup_click_rate
+    type: rate
+    dimension: pre_marketing
+    description: 近1天弹屏点击率（NULL=无弹屏触达）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_push_click_rate
+    type: rate
+    dimension: pre_marketing
+    description: 近1天Push点击率（NULL=无Push触达）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_mkt_fatigue_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天营销后5分钟内离开的次数（营销疲劳信号）
+    threshold_method: percentile
+    threshold_percentiles: [75, 90, 95]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_mkt_direct_exit_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天营销后直接退出（5分钟内无行为）的次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_popup_reject_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天弹屏10秒内即离开的次数（强拒绝信号）
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: [3, 39]
+    fallback: 0
+
+  - name: pre_funnel_regression_after_mkt
+    type: count
+    dimension: pre_marketing
+    description: 近1天营销后漏斗倒退次数（营销干扰购买流程）
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_mkt_trigger_mainflow_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天营销5分钟内触发主流程的次数（营销有效导流）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: [20]
+    fallback: 0
+
+  - name: pre_over_mkt_flag
+    type: binary
+    dimension: pre_marketing
+    description: 近1天触达前营销≥5次（过度触达标记，0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_min_mkt_response_sec
+    type: count
+    dimension: pre_marketing
+    description: 近1天最短营销响应时间（秒）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75, 90]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_unique_activity_cnt
+    type: count
+    dimension: pre_marketing
+    description: 近1天触达前被触达的不同活动数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: [38]
+    fallback: 0
+
+  - name: pre_mkt_touched_target_product
+    type: binary
+    dimension: pre_marketing
+    description: 近1天是否有推过同一 product_name 的营销（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 6：触达前产品偏好（product_preference）
+  # ─────────────────────────────────────────────────────────
+
+  - name: pre_browse_hotel
+    type: binary
+    dimension: product_preference
+    description: 近1天是否有酒店主流程浏览（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_browse_flight
+    type: binary
+    dimension: product_preference
+    description: 近1天是否有机票主流程浏览（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_browse_train
+    type: binary
+    dimension: product_preference
+    description: 近1天是否有火车票主流程浏览（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_browse_scenic
+    type: binary
+    dimension: product_preference
+    description: 近1天是否有景区主流程浏览（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_browse_car
+    type: binary
+    dimension: product_preference
+    description: 近1天是否有用车主流程浏览（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_browse_bus
+    type: binary
+    dimension: product_preference
+    description: 近1天是否有汽车票主流程浏览（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_browse_intl
+    type: binary
+    dimension: product_preference
+    description: 近1天是否有国际业务主流程浏览（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_hotel_depth
+    type: ordinal
+    dimension: product_preference
+    description: 近1天酒店最深漏斗阶段（1-5）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_flight_depth
+    type: ordinal
+    dimension: product_preference
+    description: 近1天机票最深漏斗阶段（1-5）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_train_depth
+    type: ordinal
+    dimension: product_preference
+    description: 近1天火车票最深漏斗阶段（1-5）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_scenic_depth
+    type: ordinal
+    dimension: product_preference
+    description: 近1天景区最深漏斗阶段（1-5）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_hotel_visit_cnt
+    type: count
+    dimension: product_preference
+    description: 近1天酒店主流程访问次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_flight_visit_cnt
+    type: count
+    dimension: product_preference
+    description: 近1天机票主流程访问次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_train_visit_cnt
+    type: count
+    dimension: product_preference
+    description: 近1天火车票主流程访问次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_scenic_visit_cnt
+    type: count
+    dimension: product_preference
+    description: 近1天景区主流程访问次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_car_visit_cnt
+    type: count
+    dimension: product_preference
+    description: 近1天用车主流程访问次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_bus_visit_cnt
+    type: count
+    dimension: product_preference
+    description: 近1天汽车票主流程访问次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_product_category_cnt
+    type: count
+    dimension: product_preference
+    description: 近1天浏览过的不同品类数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_is_cross_category
+    type: binary
+    dimension: product_preference
+    description: 近1天是否有跨品类浏览（0/1）
+    threshold_method: none
+    diagnostic_rules: [23]
+    fallback: 0
+
+  - name: pre_target_product_depth
+    type: ordinal
+    dimension: product_preference
+    description: 近1天活动目标品类的最深漏斗阶段（产品偏好维度）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_top_interest_product
+    type: category
+    dimension: product_preference
+    description: 近1天浏览最深的品类（酒店/机票/火车票/景区/用车/汽车票/无浏览）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: "无浏览"
+
+  - name: pre_mkt_product_browse_match
+    type: binary
+    dimension: product_preference
+    description: 近1天活动目标品类是否与用户兴趣最深品类一致（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_has_search
+    type: binary
+    dimension: product_preference
+    description: 近1天是否有搜索行为（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_search_cnt
+    type: count
+    dimension: product_preference
+    description: 近1天搜索行为次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_search_hotel
+    type: binary
+    dimension: product_preference
+    description: 近1天是否搜索过酒店入口（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_search_flight
+    type: binary
+    dimension: product_preference
+    description: 近1天是否搜索过机票入口（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_search_train
+    type: binary
+    dimension: product_preference
+    description: 近1天是否搜索过火车票入口（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_search_scenic
+    type: binary
+    dimension: product_preference
+    description: 近1天是否搜索过景区入口（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_search_target_product
+    type: binary
+    dimension: product_preference
+    description: 近1天是否搜索过活动目标品类（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 7：触达前红包偏好（coupon）
+  # ─────────────────────────────────────────────────────────
+
+  - name: pre_coupon_collect_cnt
+    type: count
+    dimension: coupon
+    description: 近1天红包/优惠领取总次数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_has_coupon
+    type: binary
+    dimension: coupon
+    description: 近1天是否有领券行为（0/1）
+    threshold_method: none
+    diagnostic_rules: [19, 21]
+    fallback: 0
+
+  - name: pre_unique_coupon_cnt
+    type: count
+    dimension: coupon
+    description: 近1天领取的不同红包品类数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_has_blackwhale
+    type: binary
+    dimension: coupon
+    description: 近1天是否领取过黑鲸相关优惠（高价值会员信号，0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_rp_hotel
+    type: binary
+    dimension: coupon
+    description: 近1天是否领取过酒店红包（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_rp_flight
+    type: binary
+    dimension: coupon
+    description: 近1天是否领取过机票红包（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_rp_train
+    type: binary
+    dimension: coupon
+    description: 近1天是否领取过火车票红包（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_rp_scenic
+    type: binary
+    dimension: coupon
+    description: 近1天是否领取过景区红包（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_rp_car
+    type: binary
+    dimension: coupon
+    description: 近1天是否领取过用车红包（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_rp_bus
+    type: binary
+    dimension: coupon
+    description: 近1天是否领取过汽车票红包（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_rp_vacation
+    type: binary
+    dimension: coupon
+    description: 近1天是否领取过度假红包（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_rp_payment
+    type: binary
+    dimension: coupon
+    description: 近1天是否领取过支付优惠券（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_rp_blackwhale_card
+    type: binary
+    dimension: coupon
+    description: 近1天是否领取过黑鲸卡优惠（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_rp_target_product
+    type: binary
+    dimension: coupon
+    description: 近1天是否领取过活动目标品类的红包（先领券再被触达，价格驱动信号，0/1）
+    threshold_method: none
+    diagnostic_rules: [21]
+    fallback: 0
+
+  - name: pre_unique_coupon_product_cnt
+    type: count
+    dimension: coupon
+    description: 近1天领取的不同红包 product_name 数量
+    threshold_method: percentile
+    threshold_percentiles: [50, 75]
+    diagnostic_rules: []
+    fallback: 0
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 8：触达前平台/活跃度/首页/会员（platform_engagement）
+  # ─────────────────────────────────────────────────────────
+
+  - name: pre_total_event_cnt
+    type: count
+    dimension: platform_engagement
+    description: 近1天触达前总行为次数
+    threshold_method: percentile
+    threshold_percentiles: [10, 25, 50, 75, 90]
+    diagnostic_rules: [5]
+    fallback: 0
+
+  - name: pre_first_event_time
+    type: timestamp
+    dimension: platform_engagement
+    description: 近1天触达前首条行为时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_event_time
+    type: timestamp
+    dimension: platform_engagement
+    description: 近1天触达前末条行为时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_active_span_min
+    type: count
+    dimension: platform_engagement
+    description: 近1天首末行为时间跨度（分钟）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_first_active_hour
+    type: ordinal
+    dimension: platform_engagement
+    description: 近1天首条行为的小时（0-23）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_active_period
+    type: category
+    dimension: platform_engagement
+    description: 近1天首条行为时段（上午/下午/晚上/深夜）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_user_active_period
+    type: category
+    dimension: platform_engagement
+    description: 近1天行为量最多的时段（用于时机匹配诊断）
+    threshold_method: none
+    diagnostic_rules: [6]
+    fallback: null
+
+  - name: pre_model_diversity
+    type: count
+    dimension: platform_engagement
+    description: 近1天行为涉及的不同 modelname 数量
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_unique_touchpoints
+    type: count
+    dimension: platform_engagement
+    description: 近1天不同行为组合数（营销/主流程/公共页面范围内）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_app_event_cnt
+    type: count
+    dimension: platform_engagement
+    description: 近1天同程APP行为次数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_wechat_event_cnt
+    type: count
+    dimension: platform_engagement
+    description: 近1天微信行为次数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_yilong_event_cnt
+    type: count
+    dimension: platform_engagement
+    description: 近1天艺龙APP行为次数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_is_cross_platform
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否跨平台使用（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_primary_platform
+    type: category
+    dimension: platform_engagement
+    description: 近1天行为最多的平台（同程APP/微信/艺龙APP）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_morning_cnt
+    type: count
+    dimension: platform_engagement
+    description: 近1天上午时段行为次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_afternoon_cnt
+    type: count
+    dimension: platform_engagement
+    description: 近1天下午时段行为次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_evening_cnt
+    type: count
+    dimension: platform_engagement
+    description: 近1天晚上时段行为次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_night_cnt
+    type: count
+    dimension: platform_engagement
+    description: 近1天深夜时段行为次数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_events_per_hour
+    type: rate
+    dimension: platform_engagement
+    description: 近1天每小时平均行为密度
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_homepage_event_cnt
+    type: count
+    dimension: platform_engagement
+    description: 近1天大首页行为次数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_homepage_module_cnt
+    type: count
+    dimension: platform_engagement
+    description: 近1天曝光过的不同首页模块数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_banner_exposed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否曝光过 Banner（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_new_user_zone_exposed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否曝光过新人专区（新客信号，0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_big_promo_exposed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否曝光过大促/S级活动（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_kongfu_area_exposed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否曝光过金刚区（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_waterfall_exposed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否曝光过瀑布流（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_tile_area_exposed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否曝光过瓷片区（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_pending_pay_viewed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否查看过待支付卡片（遗单召回信号，0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_pending_trip_viewed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否查看过待出行卡片（老客复购信号，0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_ai_entry_exposed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否触发过顶部 AI 入口（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_add_to_desktop_exposed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否曝光过加桌入口（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_viewed_member_assets
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否查看过会员资产/权益入口（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_black_whale_interest
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否有黑鲸相关行为（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_checkin_triggered
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否触发过签到（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_activity_nav_viewed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否访问过活动导航（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_highlight_activity_viewed
+    type: binary
+    dimension: platform_engagement
+    description: 近1天是否访问过精彩活动（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_is_dormant_user
+    type: binary
+    dimension: platform_engagement
+    description: 近1天触达前是否完全无行为（沉默用户被唤醒，0/1）
+    threshold_method: none
+    diagnostic_rules: [5]
+    fallback: 0
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 9：触达前行为路径（path）
+  # ─────────────────────────────────────────────────────────
+
+  - name: pre_first_touch_model
+    type: category
+    dimension: path
+    description: 近1天触达前第一个行为的 modelname（营销/主流程/公共页面）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_touch_detail
+    type: category
+    dimension: path
+    description: 近1天触达前第一个行为的 detailname
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_touch_platform
+    type: category
+    dimension: path
+    description: 近1天触达前第一个行为所在平台
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_touch_majorname
+    type: category
+    dimension: path
+    description: 近1天触达前第一个行为的 majorname
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_touch_model
+    type: category
+    dimension: path
+    description: 近1天触达前最后一个行为的 modelname（营销/主流程/公共页面）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_touch_detail
+    type: category
+    dimension: path
+    description: 近1天触达前最后一个行为的 detailname
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_touch_platform
+    type: category
+    dimension: path
+    description: 近1天触达前最后一个行为所在平台
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_touch_majorname
+    type: category
+    dimension: path
+    description: 近1天触达前最后一个行为的 majorname
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_is_marketing_first
+    type: binary
+    dimension: path
+    description: 近1天触达前首个行为是否为营销（被动流量进入，0/1）
+    threshold_method: none
+    diagnostic_rules: [19]
+    fallback: 0
+
+  - name: pre_is_marketing_last
+    type: binary
+    dimension: path
+    description: 近1天触达前末个行为是否为营销（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_first_mkt_time
+    type: timestamp
+    dimension: path
+    description: 近1天触达前首次营销的时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_mkt_channel
+    type: category
+    dimension: path
+    description: 近1天触达前首次营销的渠道
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_mkt_activity_name
+    type: category
+    dimension: path
+    description: 近1天触达前首次营销的活动名
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_mkt_platform
+    type: category
+    dimension: path
+    description: 近1天触达前首次营销所在平台
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_mkt_time
+    type: timestamp
+    dimension: path
+    description: 近1天触达前末次营销的时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_mkt_channel
+    type: category
+    dimension: path
+    description: 近1天触达前末次营销的渠道
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_mkt_activity_name
+    type: category
+    dimension: path
+    description: 近1天触达前末次营销的活动名
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_mkt_platform
+    type: category
+    dimension: path
+    description: 近1天触达前末次营销所在平台
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_mainflow_time
+    type: timestamp
+    dimension: path
+    description: 近1天触达前首次进入主流程的时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_mainflow_detail
+    type: category
+    dimension: path
+    description: 近1天触达前首次进入主流程的页面
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_mainflow_product
+    type: category
+    dimension: path
+    description: 近1天触达前首次进入主流程的品类
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_mainflow_platform
+    type: category
+    dimension: path
+    description: 近1天触达前首次进入主流程的时间/页面/品类/平台
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_mainflow_time
+    type: timestamp
+    dimension: path
+    description: 近1天触达前末次主流程行为的时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_mainflow_detail
+    type: category
+    dimension: path
+    description: 近1天触达前末次主流程行为的页面
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_mainflow_product
+    type: category
+    dimension: path
+    description: 近1天触达前末次主流程行为的品类
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_mainflow_platform
+    type: category
+    dimension: path
+    description: 近1天触达前末次主流程行为所在平台
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_coupon_time
+    type: timestamp
+    dimension: path
+    description: 近1天触达前首次领券的时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_coupon_product
+    type: category
+    dimension: path
+    description: 近1天触达前首次领券的品类
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_coupon_platform
+    type: category
+    dimension: path
+    description: 近1天触达前首次领券的时间/品类/平台
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_coupon_time
+    type: timestamp
+    dimension: path
+    description: 近1天触达前末次领券的时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_coupon_product
+    type: category
+    dimension: path
+    description: 近1天触达前末次领券的品类
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_coupon_platform
+    type: category
+    dimension: path
+    description: 近1天触达前末次领券的时间/品类/平台
+    threshold_method: none
+    diagnostic_rules: [42]
+    fallback: null
+
+  - name: pre_first_search_time
+    type: timestamp
+    dimension: path
+    description: 近1天触达前首次搜索行为的时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_search_detail
+    type: category
+    dimension: path
+    description: 近1天触达前首次搜索行为的入口
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_search_product
+    type: category
+    dimension: path
+    description: 近1天触达前首次搜索行为的品类
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_first_search_platform
+    type: category
+    dimension: path
+    description: 近1天触达前首次搜索行为的时间/入口/品类/平台
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_search_time
+    type: timestamp
+    dimension: path
+    description: 近1天触达前末次搜索行为的时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_search_detail
+    type: category
+    dimension: path
+    description: 近1天触达前末次搜索行为的入口
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_search_product
+    type: category
+    dimension: path
+    description: 近1天触达前末次搜索行为的品类
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_search_platform
+    type: category
+    dimension: path
+    description: 近1天触达前末次搜索行为的时间/入口/品类/平台
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_search_match_target
+    type: binary
+    dimension: path
+    description: 近1天末次搜索品类是否与活动目标品类一致（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_path_model_seq
+    type: text
+    dimension: path
+    description: 近1天按时间顺序拼接的 modelname 序列，如 "营销->公共页面->主流程"
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: ""
+
+  - name: pre_path_detail_seq
+    type: text
+    dimension: path
+    description: 近1天按时间顺序拼接的 detailname 序列
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: ""
+
+  - name: pre_path_major_seq
+    type: text
+    dimension: path
+    description: 近1天按时间顺序拼接的 majorname 序列（全量事件）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: ""
+
+  - name: pre_path_product_seq
+    type: text
+    dimension: path
+    description: 近1天主流程品类序列（标准化 product_category，仅主流程行）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: ""
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 10：触达前历史订单（order_context）
+  # ─────────────────────────────────────────────────────────
+
+  - name: pre_create_order_cnt
+    type: count
+    dimension: order_context
+    description: 近1天创单次数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: [25]
+    fallback: 0
+
+  - name: pre_complete_order_cnt
+    type: count
+    dimension: order_context
+    description: 近1天成单次数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_has_create_order
+    type: binary
+    dimension: order_context
+    description: 近1天是否有创单（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_has_complete_order
+    type: binary
+    dimension: order_context
+    description: 近1天是否有成单（0/1）
+    threshold_method: none
+    diagnostic_rules: [7]
+    fallback: 0
+
+  - name: pre_complete_product_cnt
+    type: count
+    dimension: order_context
+    description: 近1天成单涉及的品类数（去重）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75]
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_has_target_product_order
+    type: binary
+    dimension: order_context
+    description: 近1天是否有活动目标品类的成单（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_has_target_product_create
+    type: binary
+    dimension: order_context
+    description: 近1天是否有活动目标品类的创单（含遗单，0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_is_repurchase
+    type: binary
+    dimension: order_context
+    description: 近1天是否有多次成单（复购用户，0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_is_target_product_repurchase
+    type: binary
+    dimension: order_context
+    description: 近1天是否有活动目标品类的复购（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: pre_last_order_product
+    type: category
+    dimension: order_context
+    description: 近1天最近一次成单的品类
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_last_order_time
+    type: timestamp
+    dimension: order_context
+    description: 近1天最近一次成单时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: pre_create_not_complete
+    type: binary
+    dimension: order_context
+    description: 近1天是否有创单未成单（遗单用户，0/1）
+    threshold_method: none
+    diagnostic_rules: [21, 25]
+    fallback: 0
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 11：跨渠道衔接（cross_channel）
+  # ─────────────────────────────────────────────────────────
+
+  - name: has_ads_touch
+    type: binary
+    dimension: cross_channel
+    description: 近1天是否有站外广告（ads）触达（0/1）
+    threshold_method: none
+    diagnostic_rules: [13, 14]
+    fallback: 0
+
+  - name: ads_product_name
+    type: category
+    dimension: cross_channel
+    description: 近1天站外广告推送的品类（activity_product_name）
+    threshold_method: none
+    diagnostic_rules: [13]
+    fallback: null
+
+  - name: has_insite_touch
+    type: binary
+    dimension: cross_channel
+    description: 近1天广告触达之后，是否有任意站内渠道跟进（0/1）
+    threshold_method: none
+    diagnostic_rules: [14]
+    fallback: 0
+
+  - name: first_insite_product_name
+    type: category
+    dimension: cross_channel
+    description: 近1天广告之后首个站内营销活动的品类
+    threshold_method: none
+    diagnostic_rules: [13]
+    fallback: null
+
+  - name: ads_no_insite_flag
+    type: binary
+    dimension: cross_channel
+    description: "近1天有站外广告但广告后无任何站内承接（0/1，诊断 #14）"
+    threshold_method: none
+    diagnostic_rules: [14]
+    fallback: 0
+
+  - name: ads_insite_match_flag
+    type: binary
+    dimension: cross_channel
+    description: "近1天站外广告与站内首个营销品类是否一致（1=匹配 0=不匹配 NULL=不适用，诊断 #13）"
+    threshold_method: none
+    diagnostic_rules: [13]
+    fallback: null
+
+  - name: insite_multi_channel_match_flag
+    type: binary
+    dimension: cross_channel
+    description: "近1天站内多渠道推送品类是否一致（1=一致 0=不一致 NULL=站内不足2种渠道，诊断 #12）"
+    threshold_method: none
+    diagnostic_rules: [12]
+    fallback: null
+
+  - name: insite_channel_cnt
+    type: count
+    dimension: cross_channel
+    description: 近1天站内营销渠道种数（辅助判断多渠道冲突程度）
+    threshold_method: youden
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: [37]
+    fallback: 0
+
+  - name: insite_product_cnt
+    type: count
+    dimension: cross_channel
+    description: 近1天站内营销涉及的不同品类数
+    threshold_method: percentile
+    threshold_percentiles: [75, 90]
+    diagnostic_rules: []
+    fallback: 0
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 12：用户画像（user_profile）
+  #   来源表：app_da.public_marketing_detail_mapid_add（mapid 粒度，活动无关的静态用户属性）
+  #   含人口属性、会员/私域标识、消费价值（近1年）、活跃与风险标签。
+  #   value 类数值字段给 percentile 阈值，便于后续按 CVR 切分高/低价值人群。
+  # ─────────────────────────────────────────────────────────
+
+  - name: intotime
+    type: timestamp
+    dimension: user_profile
+    description: 数据快照/进入时间（与历史首单时间比较判定集团新老客）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: age
+    type: count
+    dimension: user_profile
+    description: 用户年龄（岁）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75, 90]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: gender
+    type: category
+    dimension: user_profile
+    description: 性别
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: member_level
+    type: ordinal
+    dimension: user_profile
+    description: 会员等级（数值越大等级越高）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: resident_city_level
+    type: ordinal
+    dimension: user_profile
+    description: 常住地城市等级（如一线/新一线/二线…）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: type
+    type: category
+    dimension: user_profile
+    description: 主题人群（运营圈定的用户主题标签）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: label001
+    type: timestamp
+    dimension: user_profile
+    description: 注册时间
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: is_blackwhale_user
+    type: binary
+    dimension: user_profile
+    description: 是否黑鲸会员用户（高价值会员标识，0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: is_private_domain
+    type: binary
+    dimension: user_profile
+    description: 是否私域用户（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: type_mem
+    type: category
+    dimension: user_profile
+    description: 集团新老客（集团老客/集团新客，由 intotime 与历史首单时间比较得出）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: risk_type
+    type: category
+    dimension: user_profile
+    description: 风险用户类型（风控标签）
+    threshold_method: none
+    diagnostic_rules: [4]
+    fallback: null
+
+  - name: visit_days
+    type: count
+    dimension: user_profile
+    description: 近90天访问天数（活跃度）
+    threshold_method: percentile
+    threshold_percentiles: [25, 50, 75, 90]
+    diagnostic_rules: [5]
+    fallback: null
+
+  - name: timediff
+    type: count
+    dimension: user_profile
+    description: 当天停留时长（秒）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: [4]
+    fallback: null
+
+  - name: gmv
+    type: count
+    dimension: user_profile
+    description: 近1年客单价（元，消费价值）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: finance_revenue_after
+    type: count
+    dimension: user_profile
+    description: 近1年消费营收（元）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: [4]
+    fallback: null
+
+  - name: order_pc
+    type: count
+    dimension: user_profile
+    description: 近1年消费频次
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: "360d_create_order_count"
+    type: count
+    dimension: user_profile
+    description: 近1年消费订单数
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: []
+    fallback: null
+
+  - name: order_cross
+    type: binary
+    dimension: user_profile
+    description: 是否跨品类交叉消费（0/1）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: 0
+
+  - name: serialid_bonus
+    type: rate
+    dimension: user_profile
+    description: 促销订单占比（近1年促销/带券订单比例，价格敏感度）
+    threshold_method: percentile
+    threshold_percentiles: [50, 75, 90]
+    diagnostic_rules: [21]
+    fallback: null
+
+  - name: last_create_order_time
+    type: timestamp
+    dimension: user_profile
+    description: 最近一次消费时间（用于计算最近消费间隔）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  # ─────────────────────────────────────────────────────────
+  # 维度 13：活动静态信息与先知场景（marketing_scene）
+  #   来源表：tmp_da.public_marketing_all_scene（activity_id 粒度的活动/场景元数据，按 activity_id 关联）
+  #   先知人群包编号、场景节点名、实时/离线属性。activity_id 已在维度 0 注册。
+  #   注意：scene 表的 type（是否存在离线节点）与维度 12 的 type（主题人群）同名，
+  #         JOIN 进宽表时须重命名消歧，此处登记为 scene_has_offline_node。
+  # ─────────────────────────────────────────────────────────
+
+  - name: sceneid
+    type: category
+    dimension: marketing_scene
+    description: 先知场景/人群包编号（scene id）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: scene_name
+    type: category
+    dimension: marketing_scene
+    description: 先知节点名称（场景名）
+    threshold_method: none
+    diagnostic_rules: []
+    fallback: null
+
+  - name: is_today
+    type: binary
+    dimension: marketing_scene
+    description: 是否实时场景（1=实时 0=离线）
+    threshold_method: none
+    diagnostic_rules: [44]
+    fallback: null
+
+  - name: scene_has_offline_node
+    type: binary
+    dimension: marketing_scene
+    description: 该活动是否存在离线节点（源自 scene 表 type 字段，join 时由 type 重命名而来）
+    threshold_method: none
+    diagnostic_rules: [44]
+    fallback: null

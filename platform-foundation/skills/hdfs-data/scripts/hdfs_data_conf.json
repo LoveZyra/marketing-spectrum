@@ -1,0 +1,11 @@
+{
+  "hdfs_tmp_dir_map": {
+    "tmp_dm": "/ns-dcbi/dm/tmp/ctj",
+    "app_dm": "/ns-dcbi/dm/app/",
+    "app_da": "/ns-common/data_analysis/app/"
+  },
+  "hdfs_tmp_dir": "/ns-dcbi/dm/tmp/ctj",
+  "work_dir": "./_hdfs_get_tmp",
+  "output_dir": "./dataset",
+  "chunk_size": 500000
+}

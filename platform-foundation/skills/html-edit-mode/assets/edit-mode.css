@@ -1,0 +1,282 @@
+/* ================================================================ */
+/*  EDIT MODE STYLES — inject into target HTML before closing style tag */
+/* ================================================================ */
+.edit-toolbar {
+  position: fixed; top: 16px; right: 20px; z-index: 10001;
+  display: flex; gap: 10px; align-items: center;
+  background: #fff; border-radius: 8px;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.12);
+  padding: 8px 16px;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+.edit-toolbar .btn {
+  padding: 7px 16px; border-radius: 5px;
+  border: 1.5px solid #ddd; background: #f7f7f7;
+  cursor: pointer; font-size: 13px; font-weight: 600;
+  transition: all 0.2s; white-space: nowrap;
+  outline: none;
+}
+.edit-toolbar .btn:hover { background: #eaeaea; border-color: #bbb; }
+.edit-toolbar .btn.toggle-btn {
+  font-size: 13px; min-width: 110px;
+}
+.edit-toolbar .btn.toggle-btn.active {
+  background: #c41e3a; color: #fff; border-color: #c41e3a;
+  animation: pulse-edit 2s infinite;
+}
+@keyframes pulse-edit {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(196,30,58,0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(196,30,58,0); }
+}
+.edit-toolbar .btn.save-btn {
+  background: #27ae60; color: #fff; border-color: #27ae60;
+  display: none;
+}
+.edit-toolbar .btn.save-btn:hover { background: #219a52; }
+.edit-toolbar .btn.export-btn {
+  background: #2980b9; color: #fff; border-color: #2980b9;
+  display: none;
+}
+.edit-toolbar .btn.export-btn:hover { background: #2471a3; }
+.edit-toolbar .hint-text {
+  font-size: 11px; color: #999; display: none; margin-left: 4px;
+}
+.edit-toolbar .changed-count {
+  font-size: 11px; color: #c41e3a; font-weight: 700; display: none;
+  background: #fef5f5; padding: 2px 8px; border-radius: 10px;
+}
+
+/* Hover highlight in edit mode — dashed amber outline */
+body.edit-mode .masthead [data-editable]:hover:not(canvas),
+body.edit-mode .container [data-editable]:hover:not(canvas) {
+  outline: 1.5px dashed #f39c12;
+  outline-offset: 2px;
+  cursor: text;
+}
+
+/* Edited elements: subtle red background tint */
+body.edit-mode [data-edited] {
+  background-color: rgba(231,76,60,0.08);
+  border-radius: 2px;
+}
+
+/* Active editing — solid blue ring */
+body.edit-mode [contenteditable="true"] {
+  outline: 2.5px solid #2980b9 !important;
+  outline-offset: 3px;
+  background-color: rgba(41,128,185,0.04);
+  cursor: text !important;
+}
+
+/* Exclude from edit */
+body.edit-mode .sidebar *,
+body.edit-mode .sidebar *:hover,
+body.edit-mode .edit-toolbar *,
+body.edit-mode .edit-toolbar *:hover,
+body.edit-mode canvas,
+body.edit-mode canvas:hover,
+body.edit-mode script,
+body.edit-mode style,
+body.edit-mode .chart-canvas,
+body.edit-mode .chart-canvas *:hover {
+  outline: none !important;
+  cursor: default !important;
+}
+
+/* Saved-feedback flash */
+@keyframes saved-flash {
+  0% { background-color: rgba(39,174,96,0.3); }
+  100% { background-color: transparent; }
+}
+.edited-saved {
+  animation: saved-flash 0.8s ease-out;
+}
+
+/* Per-element undo button (appears on hover in edit mode) */
+.undo-one {
+  display: none;
+  position: absolute;
+  right: -28px; top: 50%;
+  transform: translateY(-50%);
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: #c41e3a; color: #fff;
+  font-size: 12px; line-height: 22px;
+  text-align: center;
+  cursor: pointer;
+  border: none;
+  z-index: 10;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+body.edit-mode [data-orig]:hover {
+  position: relative;
+}
+body.edit-mode [data-orig]:hover > .undo-one,
+body.edit-mode [data-orig]:hover .undo-one {
+  display: block;
+}
+body.edit-mode [data-editable][data-orig] {
+  position: relative;
+}
+body.edit-mode [data-editable][data-orig]:hover::after {
+  content: "↩";
+  position: absolute;
+  right: -26px; top: 2px;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: #c41e3a; color: #fff;
+  font-size: 13px; line-height: 22px;
+  text-align: center;
+  cursor: pointer;
+  z-index: 100;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+}
+
+/* Download link (replaces export button after click) */
+.edit-toolbar .btn.download-link {
+  background: #27ae60; color: #fff; border-color: #219a52;
+  text-decoration: none;
+  animation: pulse-dl 1s infinite;
+}
+@keyframes pulse-dl {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(39,174,96,0.5); }
+  50% { box-shadow: 0 0 0 8px rgba(39,174,96,0); }
+}
+.edit-toolbar .btn.undo-all-btn {
+  background: #e74c3c; color: #fff; border-color: #c0392b;
+}
+.edit-toolbar .btn.undo-all-btn:hover { background: #c0392b; }
+
+/* Toast notification */
+.edit-toast {
+  position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+  background: #1c1c1c; color: #fff; padding: 10px 24px; border-radius: 6px;
+  font-size: 13px; z-index: 99999; opacity: 0; transition: opacity 0.3s;
+  pointer-events: none;
+}
+.edit-toast.show { opacity: 1; }
+
+/* ---- Floating Text Format Bar ---- */
+.edit-float-bar {
+  position: fixed; z-index: 10002; display: none;
+  gap: 6px; align-items: center;
+  background: #fff; border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  padding: 6px 10px; border: 1px solid #e0e0e0;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+.edit-float-bar.visible { display: flex; }
+.edit-float-bar .fmt-btn {
+  width: 30px; height: 30px; border-radius: 4px;
+  border: 1px solid transparent; background: #f5f5f5;
+  cursor: pointer; font-size: 13px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s; outline: none; color: #555;
+}
+.edit-float-bar .fmt-btn:hover { background: #e8e8e8; border-color: #ccc; }
+.edit-float-bar .fmt-btn.active { background: #c41e3a; color: #fff; border-color: #c41e3a; }
+.edit-float-bar .fmt-select {
+  height: 30px; border-radius: 4px; border: 1px solid #ddd;
+  background: #f5f5f5; font-size: 12px; padding: 0 6px;
+  cursor: pointer; outline: none; color: #555; min-width: 64px;
+}
+.edit-float-bar .fmt-select:hover { border-color: #bbb; }
+.edit-float-bar .fmt-sep {
+  width: 1px; height: 20px; background: #e0e0e0; margin: 0 2px;
+}
+.edit-float-bar .fmt-swatch-row { display: flex; gap: 3px; align-items: center; }
+.edit-float-bar .fmt-swatch {
+  width: 22px; height: 22px; border-radius: 50%;
+  cursor: pointer; border: 1.5px solid rgba(0,0,0,0.12);
+  transition: transform 0.15s; flex-shrink: 0;
+}
+.edit-float-bar .fmt-swatch:hover { transform: scale(1.25); }
+.edit-float-bar .fmt-swatch.sel { border: 2.5px solid #1a1a1a; }
+.edit-float-bar .fmt-color-native {
+  width: 28px; height: 28px; border: none; cursor: pointer;
+  padding: 0; background: none; border-radius: 4px; flex-shrink: 0;
+}
+
+/* ---- Block Style Panel ---- */
+.edit-style-panel {
+  position: fixed; right: 24px; top: 72px; z-index: 10003;
+  width: 272px; background: #fff; border-radius: 10px;
+  box-shadow: 0 6px 30px rgba(0,0,0,0.18);
+  border: 1px solid #e0e0e0; padding: 20px;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+  display: none; max-height: calc(100vh - 120px); overflow-y: auto;
+}
+.edit-style-panel.visible { display: block; }
+.edit-style-panel .esp-title {
+  font-size: 14px; font-weight: 700; color: #1a1a1a;
+  margin-bottom: 14px; padding-bottom: 10px;
+  border-bottom: 1px solid #eee;
+}
+.edit-style-panel .esp-field { margin-bottom: 10px; }
+.edit-style-panel .esp-label {
+  font-size: 11px; font-weight: 600; color: #888;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 4px; display: block;
+}
+.edit-style-panel .esp-input {
+  width: 100%; height: 30px; border-radius: 4px;
+  border: 1px solid #ddd; padding: 4px 8px;
+  font-size: 12px; outline: none;
+}
+.edit-style-panel .esp-input:focus { border-color: #c41e3a; }
+.edit-style-panel .esp-row { display: flex; gap: 8px; }
+.edit-style-panel .esp-row > * { flex: 1; }
+.edit-style-panel .esp-select {
+  height: 30px; border-radius: 4px; border: 1px solid #ddd;
+  font-size: 12px; padding: 0 6px; cursor: pointer; outline: none;
+  background: #fff;
+}
+.edit-style-panel .esp-color-input {
+  width: 100%; height: 32px; border-radius: 4px;
+  border: 1px solid #ddd; padding: 2px 4px; cursor: pointer; outline: none;
+}
+.edit-style-panel .esp-swatch-row { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.edit-style-panel .esp-swatch {
+  width: 22px; height: 22px; border-radius: 4px;
+  cursor: pointer; border: 1.5px solid rgba(0,0,0,0.12);
+  flex-shrink: 0; transition: transform 0.15s;
+}
+.edit-style-panel .esp-swatch:hover { transform: scale(1.2); }
+.edit-style-panel .esp-swatch.sel { border: 2.5px solid #1a1a1a; }
+.edit-style-panel .esp-action-row {
+  display: flex; gap: 8px; margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid #eee;
+}
+.edit-style-panel .esp-reset-btn {
+  flex: 1; padding: 7px 0; border-radius: 4px;
+  border: 1px solid #ddd; background: #f5f5f5;
+  cursor: pointer; font-size: 12px; font-weight: 600; color: #555;
+}
+.edit-style-panel .esp-reset-btn:hover { background: #e8e8e8; }
+.edit-style-panel .esp-done-btn {
+  flex: 1; padding: 7px 0; border-radius: 4px;
+  border: 1px solid #c41e3a; background: #c41e3a;
+  cursor: pointer; font-size: 12px; font-weight: 600; color: #fff;
+}
+.edit-style-panel .esp-done-btn:hover { background: #a01830; }
+
+/* ---- Style Mode Button ---- */
+.edit-toolbar .btn.style-btn {
+  background: #7b2d8e; color: #fff; border-color: #7b2d8e;
+  display: none;
+}
+.edit-toolbar .btn.style-btn:hover { background: #6a247a; }
+.edit-toolbar .btn.style-btn.active {
+  background: #5a1a6a; border-color: #4a0a5a;
+}
+
+/* ---- Block Hover / Select in Style Mode ---- */
+body.edit-mode.style-mode-active .block-stylable { cursor: pointer; }
+body.edit-mode.style-mode-active .block-stylable:hover {
+  outline: 2px dashed #7b2d8e; outline-offset: 2px;
+}
+body.edit-mode .block-selected {
+  outline: 3px solid #7b2d8e !important;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgba(123,45,142,0.12);
+}

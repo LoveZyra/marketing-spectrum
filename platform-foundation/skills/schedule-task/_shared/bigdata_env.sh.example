@@ -1,0 +1,47 @@
+#!/bin/bash
+# =============================================================================
+# _shared/bigdata_env.sh —— 手工兜底/覆盖（可选）
+#
+# 用法：`cp bigdata_env.sh.example bigdata_env.sh` 再按实际路径改。
+#
+# 加载顺序（见 claude_env.sh）：
+#     runtime_env.sh（capture_env.sh 的快照，广而全）
+#  →  bigdata_env.sh（这份，窄而准，覆盖前者）
+#  →  PATH 合并去重
+#
+# 什么时候需要它：
+#   · 快照取不到（没有能跑通 Spark 的交互终端可用）
+#   · 快照里某个值不适合 cron（比如 PYSPARK_PYTHON 指向了相对路径）
+#   · 想给 cron 单独调小 Spark 资源，别和交互任务抢
+#
+# ⚠ 只写路径和参数，**不要把任何凭据写进来** —— 这个文件是明文的。
+# =============================================================================
+
+export JAVA_HOME="${JAVA_HOME:-/usr/local/java}"
+export HADOOP_HOME="${HADOOP_HOME:-/usr/local/hadoop}"
+export HADOOP_CONF_DIR="${HADOOP_CONF_DIR:-/usr/local/hadoop/etc/hadoop}"
+export YARN_CONF_DIR="${YARN_CONF_DIR:-$HADOOP_CONF_DIR}"
+export SPARK_HOME="${SPARK_HOME:-/usr/local/spark}"
+export HIVE_HOME="${HIVE_HOME:-/usr/local/hive}"
+export HIVE_CONF_DIR="${HIVE_CONF_DIR:-/usr/local/hive/conf}"
+
+# Spark 的 driver 和 worker 都要能找到同一个 python。**必须绝对路径** ——
+# 相对路径在 cron 的 cwd 下解析不出来，报错还很隐晦（worker 侧才炸）。
+export PYSPARK_PYTHON="${PYSPARK_PYTHON:-/opt/python3env/pyspark/bin/python}"
+export PYSPARK_DRIVER_PYTHON="${PYSPARK_DRIVER_PYTHON:-$PYSPARK_PYTHON}"
+
+# py4j 的 zip 带版本号，最容易写死之后随升级失效 —— 这里用通配自动取，
+# 取不到就不动 PYTHONPATH（让快照里的值生效）。
+if [ -d "$SPARK_HOME/python" ]; then
+    _PY4J="$(ls "$SPARK_HOME"/python/lib/py4j-*-src.zip 2>/dev/null | head -1)"
+    export PYTHONPATH="$SPARK_HOME/python${_PY4J:+:$_PY4J}${PYTHONPATH:+:$PYTHONPATH}"
+    unset _PY4J
+fi
+
+# 这些目录会被 claude_env.sh 合并进 PATH（去重，claude 自己的目录仍排最前）
+SCHEDULE_TASK_EXTRA_PATH="$JAVA_HOME/bin:$HADOOP_HOME/bin:$SPARK_HOME/bin:$HIVE_HOME/bin"
+
+# 可选：给 cron 任务单独的 Spark 资源口径，别和交互任务抢。
+# export SPARK_SUBMIT_OPTS="-Dfile.encoding=UTF-8"
+# export HADOOP_USER_NAME="jovyan"
+# export HADOOP_PROXY_USER="data_ming"    # HDFS 代理用户(cron 缺这个会写表失败)
