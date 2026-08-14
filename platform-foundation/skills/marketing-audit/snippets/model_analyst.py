@@ -9,12 +9,25 @@
 """
 from __future__ import annotations
 
+import logging
+import os
+import re
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+# 模型 seg 是否把缺失值人群圈进交付条件(2026-08-14 业务定夺:默认不圈)。
+# 树的真实行为里缺失行确实会落进某些叶子(叶子 oracle 用真实形态逐条验证解析
+# 正确性,不受此开关影响);但交付给业务的推送人群不要"画像/行为为空"的部分 ——
+# 交付形态在 oracle 之后按本开关重渲染,并用交付形态重算命中数,人数与条件严格
+# 一致。要恢复"照树的原样圈(含空值)":export MA_MODEL_SEG_NULL=1。
+MODEL_SEG_INCLUDE_NULL = (os.environ.get("MA_MODEL_SEG_NULL", "0").strip()
+                          in ("1", "true", "yes", "on"))
 
 warnings.filterwarnings("ignore")
 
@@ -97,6 +110,7 @@ class DecisionRule:
     recall: float = 0.0             # 命中规则的转化样本占全部转化样本的比例
     n_converted: int = 0            # 命中规则的真实转化数（审计用）
     rule_sql: str = ""              # 可执行 Spark SQL WHERE（分类切分用 cat_maps 还原 code→name）
+    rule_pandas: str = ""           # 可执行 pandas 布尔表达式（与 rule_sql 同源渲染,叶子 oracle 自检/本地计数用）
     # fix19:训练采样(正样本全保留、只采负样本)后的全量外推口径。
     # sample_count 会被回填为全量估计,原始评估集命中数保留在 sample_count_raw;
     # precision_population/lift_population 用分类别采样率无偏还原真实 CVR 口径。
@@ -166,6 +180,7 @@ class ModelAnalysisResult:
             ],
             "decision_rules": [
                 {"rule": r.rule_text, "rule_sql": r.rule_sql,
+                 "rule_pandas": r.rule_pandas,
                  "predicted_cvr": round(r.predicted_cvr, 4),
                  "lift": round(r.lift, 2), "sample_count": r.sample_count,
                  "precision": round(r.precision, 4),
@@ -416,12 +431,16 @@ def _extract_rules_lgb(model, overall_cvr: float, top_n: int,
     y_arr = y.values if y is not None else None
     n_positives = int(y_arr.sum()) if y_arr is not None else 0
 
+    _int_feat = _make_int_feat_checker(X)
+    _has_na = _make_has_na_checker(X)
     rules: list[DecisionRule] = []
     for _, leaf in leaves.iterrows():
-        path, sql_path = _trace_path_lgb(trees_df, leaf["tree_index"], leaf["node_index"], cat_maps)
+        path, sql_path, pd_path = _trace_path_lgb(trees_df, leaf["tree_index"], leaf["node_index"],
+                                                  cat_maps, is_int_feat=_int_feat, _has_na=_has_na)
         if not path:
             continue
         pred_cvr = 1 / (1 + np.exp(-leaf["value"]))
+        rule_pandas = " & ".join(pd_path)
 
         precision = recall = 0.0
         n_converted = 0
@@ -432,7 +451,32 @@ def _extract_rules_lgb(model, overall_cvr: float, top_n: int,
             leaf_id = _lgb_leaf_id(str(leaf["node_index"]))
             if leaf_id is not None and tree_idx < pred_leaves.shape[1]:
                 mask = pred_leaves[:, tree_idx] == leaf_id
+                # 叶子 oracle 自检:渲染出的条件圈的行必须与树真实送进该叶子的行
+                # 逐行一致。不一致 = 解析/渲染有 bug,该规则不可信,剔除(fail-closed)。
+                if not _oracle_check(rule_pandas, X, mask,
+                                     "lgb tree={} leaf={}".format(tree_idx, leaf["node_index"])):
+                    continue
+                # 交付形态:业务不圈空值人群 → oracle 通过后按剔空值重渲染,
+                # 统计(命中/转化/精确率)一并用交付形态重算,人数与条件严格一致。
+                if not MODEL_SEG_INCLUDE_NULL:
+                    path, sql_path, pd_path = _trace_path_lgb(
+                        trees_df, leaf["tree_index"], leaf["node_index"], cat_maps,
+                        is_int_feat=_int_feat, _has_na=_has_na, drop_null=True)
+                    rule_pandas = " & ".join(pd_path)
+                    if "1 = 0" in " ".join(sql_path):
+                        continue            # 该叶子人群全是空值行,剔空值后无交付意义
+                    m2 = None
+                    try:
+                        from .diagnostic_engine import eval_condition as _ev
+                    except ImportError:
+                        from diagnostic_engine import eval_condition as _ev
+                    m2 = _ev(rule_pandas, X)
+                    if m2 is None:
+                        continue
+                    mask = np.asarray(m2, dtype=bool)
                 hits = int(mask.sum())
+                if hits <= 0:
+                    continue                # 剔空值后没人了,不出这条
                 if hits > 0:
                     sample_count = hits  # 使用真实命中数（含 val 集）
                     n_converted = int(y_arr[mask].sum())
@@ -442,6 +486,7 @@ def _extract_rules_lgb(model, overall_cvr: float, top_n: int,
         rules.append(DecisionRule(
             rule_text=" AND ".join(path),
             rule_sql=" AND ".join(sql_path),
+            rule_pandas=rule_pandas,
             predicted_cvr=float(pred_cvr),
             sample_count=sample_count,
             lift=float(pred_cvr / overall_cvr) if overall_cvr > 0 else 0,
@@ -452,6 +497,85 @@ def _extract_rules_lgb(model, overall_cvr: float, top_n: int,
 
     rules.sort(key=lambda r: r.predicted_cvr, reverse=True)
     return _dedup_rules(rules, top_n)
+
+
+def _make_has_na_checker(X):
+    """列在本单数据里是否真的存在缺失值。按列缓存。
+
+    数据事实门:一列在本活动数据里根本没有空值,渲染出的任何 IS NULL 都是
+    空话(本地/线上查询同一批行,永远匹配不到),只添噪声 —— 一律不输出。
+    列里真有空值时才如实渲染空值路由。"""
+    cache: dict = {}
+
+    def check(feat: str) -> bool:
+        if X is None or feat not in getattr(X, "columns", ()):
+            return False
+        if feat not in cache:
+            try:
+                cache[feat] = bool(X[feat].isna().any())
+            except Exception:  # noqa: BLE001
+                cache[feat] = False
+        return cache[feat]
+
+    return check
+
+
+def _make_int_feat_checker(X):
+    """列是否整数域(int dtype,或 float 但非空值全是整数)。按列缓存,只算一次。"""
+    cache: dict = {}
+
+    def check(feat: str) -> bool:
+        if X is None or feat not in getattr(X, "columns", ()):
+            return False
+        if feat not in cache:
+            s = X[feat]
+            k = s.dtype.kind
+            if k in ("i", "u"):
+                cache[feat] = True
+            elif k == "f":
+                sv = s.dropna()
+                try:
+                    cache[feat] = bool(len(sv)) and bool((sv == sv.astype("int64")).all())
+                except Exception:  # noqa: BLE001
+                    cache[feat] = False
+            else:
+                cache[feat] = False
+        return cache[feat]
+
+    return check
+
+
+def _oracle_check(rule_pandas: str, X, mask_oracle, where: str) -> bool:
+    """叶子 oracle 自检:树模型自己就是标准答案。
+
+    渲染出的 pandas 条件在训练数据 X 上圈出的行集合,必须与
+    predict(pred_leaf=True) 给出的"真实落入该叶子"的行集合完全一致。
+    一致 ⟹ 解析(路径回溯/NaN 路由/code→name/合并/渲染)整条链无错;
+    不一致 ⟹ 某环有 bug,调用方应剔除该规则(fail-closed:宁缺勿错)。
+    失败率是解析器质量的线上监控指标,应恒为 0。
+    """
+    if not rule_pandas or X is None or mask_oracle is None:
+        return True     # 无 oracle 数据(离线裸调)时不拦,保持旧行为
+    try:
+        try:
+            from .diagnostic_engine import eval_condition
+        except ImportError:            # 平铺引用时的兜底
+            from diagnostic_engine import eval_condition
+        mask = eval_condition(rule_pandas, X)
+        if mask is None:
+            logger.warning("规则 oracle 自检(%s):条件求值失败,剔除。cond=%s", where, rule_pandas)
+            return False
+        got = np.asarray(mask, dtype=bool)
+        exp = np.asarray(mask_oracle, dtype=bool)
+        if got.shape != exp.shape or not np.array_equal(got, exp):
+            logger.warning(
+                "规则 oracle 自检失败(%s):条件命中 %d 行,叶子实际 %d 行,剔除。cond=%s",
+                where, int(got.sum()), int(exp.sum()), rule_pandas)
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001 —— 自检自身出错也按不通过处理,绝不放行存疑规则
+        logger.warning("规则 oracle 自检(%s)异常:%s,剔除。cond=%s", where, exc, rule_pandas)
+        return False
 
 
 def _lgb_leaf_id(node_index: str) -> int | None:
@@ -536,112 +660,232 @@ def _fmt_threshold(v: float) -> str:
     return "0"
 
 
-def _merge_render_clauses(steps: list, cat_maps: dict | None = None) -> tuple[list[str], list[str]]:
-    """fix19:LGB/XGB 共用的"结构化路径子句 → (display, SQL)"合并渲染器。
+def _fmt_threshold_exact(v: float) -> str:
+    """执行形态(SQL/pandas)的阈值:全精度位置计数,无科学计数法、不四舍五入。
 
-    steps 为根→叶顺序的切分步骤列表:
-      ("num", feat, lo, hi)      lo/hi = (阈值, 是否闭边界) 或 None,每步恰有一侧;
-      ("cat", feat, names, is_in) names 为已还原的类别名集合(str)。
-    两个后端统一享受三件事:
-      1) 同特征多次切分合并:数值取最紧上下界(同值时开边界更紧);分类 IN 求交、
-         NOT IN 求并,再按 AND 语义 pos-neg 相减 —— 规则更短,圈人 SQL 无冗余;
-      2) __NA__ 哨兵不外泄:display 写「空值」,SQL 翻译为 IS NULL / IS NOT NULL 组合
-         (哨兵字面量在线上表匹配不到真实 NULL);
-      3) 反选清单若补集更小(≤8 且不大于清单),改写为等价 IN(补集),长清单 NOT IN
-         可读可执行(注:补集写法对训练中未见过的新类别更保守)。
-    边界写法由步骤自带的开闭标记决定:LGB 只产生 <=/>,XGB 只产生 </>=,各保原味。
+    display 的 _fmt_threshold 只留 4 位小数是给人看的;拿它进 SQL 会把边界挪动
+    (oracle 实测:XGB 阈值 598.19793701...,美化成 598.1979 后恰有一行翻转)。
+    执行形态必须逐位保真 —— 树怎么比,SQL/pandas 就怎么比。
     """
-    num_bounds: dict = {}   # feat -> [lo(值,闭)|None, hi(值,闭)|None]
-    cat_sets: dict = {}     # feat -> {"pos": set|None, "neg": set}
+    f = float(v)
+    if f == int(f):
+        return str(int(f))
+    return np.format_float_positional(f, trim="-")
+
+
+def _merge_render_clauses(steps: list, cat_maps: dict | None = None,
+                          is_int_feat=None, drop_null: bool = False) -> tuple[list[str], list[str], list[str]]:
+    """LGB/XGB 共用的"结构化路径子句 → (display, SQL, pandas)"三形态同源渲染器。
+
+    steps 为根→叶顺序的切分步骤列表(第 5 元 na_included 可省,省略视为 False):
+      ("num", feat, lo, hi, na_included)   lo/hi = (阈值, 是否闭边界) 或 None,每步恰有一侧;
+      ("cat", feat, names, is_in, na_included)  names 为已还原的类别名集合(str)。
+    na_included = 树把缺失值(NaN/NULL)送进了本分支(LGB missing_direction /
+    XGB dump 的 missing=)。同特征多步合并时取 AND —— 缺失行要属于合并后的区间,
+    必须在每一次切分上都走了缺失方向。
+
+    三形态出自同一循环、共用同一份阈值与空值语义,这是"解析对 ⟹ SQL 对"的根基:
+      · display   报告展示(允许取整美化,不参与执行);
+      · SQL       出参 push_sql / filter_zh 直译的输入,Hive 方言;
+      · pandas    叶子 oracle 自检与 ma-api 本地计数的可执行形态。
+    pandas 与 SQL 的空值行为已逐类对齐(pandas 比较对 NaN 为 False ≡ SQL NULL 比较不命中;
+    NOT IN 在 pandas 侧显式补 notna,对齐 SQL NOT IN 天然排 NULL 的行为)。
+
+    is_int_feat(feat)->bool(可选):整数域字段的非整阈值钉到 floor+0.5 中点 ——
+    1.5000000000000002 → 1.5。整数域上二者对**任何**取值(含采样未见过的)严格等价,
+    出参不再冒长尾小数;连续值字段不动(全精度是保真的代价,且极少出现)。
+
+    继承 fix19 的三件事:同特征合并取紧边界/分类交并、__NA__ 哨兵不外泄、
+    反选清单补集改写(≤8 且不大于原清单)。
+    """
+    num_bounds: dict = {}   # feat -> [lo|None, hi|None, na_included]
+    cat_sets: dict = {}     # feat -> {"pos": set|None, "neg": set, "na": bool|None}
     order: list[str] = []
 
     for step in steps:
         kind, feat = step[0], step[1]
+        na_inc = (bool(step[4]) if len(step) > 4 else False) and not drop_null
         if feat not in order:
             order.append(feat)
         if kind == "num":
             lo, hi = step[2], step[3]
-            slot = num_bounds.setdefault(feat, [None, None])
+            slot = num_bounds.setdefault(feat, [None, None, None])
             if lo is not None and (slot[0] is None or lo[0] > slot[0][0]
                                    or (lo[0] == slot[0][0] and not lo[1])):
                 slot[0] = lo    # 下界取更大;同值时开边界(>)比闭边界(>=)更紧
             if hi is not None and (slot[1] is None or hi[0] < slot[1][0]
                                    or (hi[0] == slot[1][0] and not hi[1])):
                 slot[1] = hi    # 上界取更小;同值时开边界(<)更紧
+            slot[2] = na_inc if slot[2] is None else (slot[2] and na_inc)
         else:
-            names, is_in = set(step[2]), step[3]
-            slot = cat_sets.setdefault(feat, {"pos": None, "neg": set()})
-            if is_in:
-                slot["pos"] = names if slot["pos"] is None else (slot["pos"] & names)
+            names, is_in = set(str(v) for v in step[2]), step[3]
+            real_names = names - {"__NA__"}
+            # 空值归属:'__NA__' 在类别全集里(哨兵填充惯例)时由集合逻辑决定 ——
+            # IN 含哨兵 ⟹ 空值行属于本分支;NOT IN 不含哨兵 ⟹ 空值行属于本分支
+            # (它不在被排除的清单里)。全集无哨兵(真 NaN)时由缺失路由(na_inc)决定。
+            universe = {str(c) for c in ((cat_maps or {}).get(feat) or [])}
+            if drop_null:
+                step_null = False
+            elif "__NA__" in universe or "__NA__" in names:
+                step_null = ("__NA__" in names) if is_in else ("__NA__" not in names)
             else:
-                slot["neg"] |= names
+                step_null = na_inc
+            slot = cat_sets.setdefault(feat, {"pos": None, "neg": set(), "null": None})
+            if is_in:
+                slot["pos"] = real_names if slot["pos"] is None else (slot["pos"] & real_names)
+            else:
+                slot["neg"] |= real_names
+            slot["null"] = step_null if slot["null"] is None else (slot["null"] and step_null)
 
     path: list[str] = []
     sql_path: list[str] = []
+    pd_path: list[str] = []
 
-    def _render_cat(feat: str, values: set, negated: bool) -> None:
-        vals = sorted(str(v) for v in values)
-        disp = ",".join("空值" if v == "__NA__" else v for v in vals)
-        real = [v for v in vals if v != "__NA__"]
-        has_na = len(real) != len(vals)
-        quoted = ",".join("'{}'".format(v.replace("'", "''")) for v in real)
-        if not negated:
-            path.append(f"{feat} in [{disp}]")
-        else:
-            path.append(f"{feat} not in [{disp}]")
-        if not negated:
-            if has_na and real:
-                sql_path.append(f"({feat} IS NULL OR {feat} IN ({quoted}))")
-            elif has_na:
-                sql_path.append(f"{feat} IS NULL")
+    _IDENT_OK = re.compile(r"^[A-Za-z_]\w*$")
+
+    def _fs(feat: str) -> str:
+        """SQL 端字段引用:合法标识符裸写;数字开头等非法名(如 360d_create_order_count)
+        加 Hive/Spark 反引号 —— 裸写在线上就是语法错(2026-08-14 生产实锤:该列的
+        模型规则全部求值失败被剔)。"""
+        return feat if _IDENT_OK.match(feat) else "`{}`".format(feat)
+
+    def _fp(feat: str) -> str:
+        """pandas 端字段引用:非法标识符走 _df['col'] 取列(eval 命名空间由
+        diagnostic_engine.eval_condition 提供 _df)。"""
+        return feat if _IDENT_OK.match(feat) else "_df[{!r}]".format(feat)
+
+    def _pq(v: str) -> str:
+        """pandas 字面量(repr 转义,单双引号都安全)。"""
+        return repr(str(v))
+
+    def _sq(v: str) -> str:
+        return "'{}'".format(str(v).replace("'", "''"))
+
+    def _render_cat(feat: str, pos, neg: set, null_in: bool) -> None:
+        """分类子句渲染:值谓词(只含真实类别)与空值门(null_in)解耦。
+
+        null_in = 空值表示行(raw 帧的 NaN/NULL、填充帧的 '__NA__' 类别)属于本分支。
+        pandas 侧空值门同时认两种表示(同一份数据里两者互斥,OR/AND 起来在任一帧上
+        都恰好正确);SQL 只认 NULL(线上表不会有 '__NA__' 字面量)。
+        SQL 侧 IN/NOT IN 天然排 NULL,所以 null_in=False 时值谓词裸用即可。
+        """
+        fs, fp = _fs(feat), _fp(feat)
+
+        def _in(vals):
+            vs = sorted(vals)
+            return ("{} IN ({})".format(fs, ",".join(_sq(v) for v in vs)),
+                    "{}.isin([{}])".format(fp, ", ".join(_pq(v) for v in vs)),
+                    vs)
+
+        def _notin(vals):
+            vs = sorted(vals)
+            return ("{} NOT IN ({})".format(fs, ",".join(_sq(v) for v in vs)),
+                    "~{}.isin([{}])".format(fp, ", ".join(_pq(v) for v in vs)),
+                    vs)
+
+        sql_parts, pd_parts, disp_in, disp_out = [], [], [], []
+        if pos is not None:
+            merged = pos - neg
+            if merged:
+                s, p, vs = _in(merged)
+                sql_parts.append(s); pd_parts.append(p); disp_in = vs
             else:
-                sql_path.append(f"{feat} IN ({quoted})")
+                # 正类别集为空(IN 清单只剩哨兵,或与反选完全抵消):非空行无解。
+                # 真实树不会产生这种路径(子节点区域非空),但渲染必须仍然正确 ——
+                # 空集谓词显式写死,空值行归属交给下面的空值门,语义一行不差。
+                sql_parts.append("1 = 0")
+                pd_parts.append("{}.isin([])".format(fp))
         else:
-            if has_na and real:
-                sql_path.append(f"({feat} IS NOT NULL AND {feat} NOT IN ({quoted}))")
-            elif has_na:
-                sql_path.append(f"{feat} IS NOT NULL")
+            cm_real = {str(c) for c in ((cat_maps or {}).get(feat) or [])} - {"__NA__"}
+            comp = cm_real - neg
+            if cm_real and comp and len(comp) <= min(8, len(neg)):
+                s, p, vs = _in(comp)     # 补集更小:改写为等价 IN(空值另走空值门)
+                sql_parts.append(s); pd_parts.append(p); disp_in = vs
+            elif neg:
+                s, p, vs = _notin(neg)
+                sql_parts.append(s); pd_parts.append(p); disp_out = vs
+
+        # display:沿用旧样式,空值并进清单展示
+        if disp_in or not disp_out:
+            path.append("{} in [{}]".format(
+                feat, ",".join((["空值"] if null_in else []) + disp_in)))
+        if disp_out:
+            path.append("{} not in [{}]".format(
+                feat, ",".join(([] if null_in else ["空值"]) + disp_out))
+                + ("(含空值)" if null_in else ""))
+
+        val_sql = " AND ".join(sql_parts)
+        val_pd = " & ".join(pd_parts)
+        if null_in:
+            if val_sql:
+                sql_path.append("({} IS NULL OR {})".format(
+                    fs, val_sql if len(sql_parts) == 1 else "({})".format(val_sql)))
+                pd_path.append("({}.isna() | ({} == '__NA__') | {})".format(
+                    fp, fp, val_pd if len(pd_parts) == 1 else "({})".format(val_pd)))
             else:
-                sql_path.append(f"{feat} NOT IN ({quoted})")
+                sql_path.append("{} IS NULL".format(fs))
+                pd_path.append("({}.isna() | ({} == '__NA__'))".format(fp, fp))
+        else:
+            if val_sql:
+                # SQL 的 IN/NOT IN 对 NULL 行天然不命中;pandas 侧 ~isin 会把
+                # NaN/'__NA__' 放进来,必须显式关空值门对齐
+                sql_path.append(val_sql if len(sql_parts) == 1
+                                else "({})".format(val_sql))
+                pd_path.append("({}.notna() & ({} != '__NA__') & {})".format(
+                    fp, fp, val_pd))
+            else:
+                sql_path.append("{} IS NOT NULL".format(fs))
+                pd_path.append("({}.notna() & ({} != '__NA__'))".format(fp, fp))
 
     for feat in order:
         if feat in num_bounds:
-            lo, hi = num_bounds[feat]
+            lo, hi, na_inc = num_bounds[feat]
+            if is_int_feat is not None and is_int_feat(feat):
+                import math as _math
+                if lo is not None and float(lo[0]) != int(lo[0]):
+                    lo = (_math.floor(float(lo[0])) + 0.5, lo[1])
+                if hi is not None and float(hi[0]) != int(hi[0]):
+                    hi = (_math.floor(float(hi[0])) + 0.5, hi[1])
+            disp_parts, sql_parts, pd_parts = [], [], []
+            fs, fp = _fs(feat), _fp(feat)
             if lo is not None:
                 op = ">=" if lo[1] else ">"
-                vs = _fmt_threshold(lo[0])
-                path.append(f"{feat}{op}{vs}")
-                sql_path.append(f"{feat} {op} {vs}")
+                ve = _fmt_threshold_exact(lo[0])
+                disp_parts.append(f"{feat}{op}{_fmt_threshold(lo[0])}")
+                sql_parts.append(f"{fs} {op} {ve}")
+                pd_parts.append(f"({fp} {op} {ve})")
             if hi is not None:
                 op = "<=" if hi[1] else "<"
-                vs = _fmt_threshold(hi[0])
-                path.append(f"{feat}{op}{vs}")
-                sql_path.append(f"{feat} {op} {vs}")
+                ve = _fmt_threshold_exact(hi[0])
+                disp_parts.append(f"{feat}{op}{_fmt_threshold(hi[0])}")
+                sql_parts.append(f"{fs} {op} {ve}")
+                pd_parts.append(f"({fp} {op} {ve})")
+            if na_inc and sql_parts:
+                # 缺失行属于本分支:整特征的界合成一个子句再 OR IS NULL
+                path.append(" AND ".join(disp_parts) + "(含空值)")
+                inner_sql = " AND ".join(sql_parts)
+                if len(sql_parts) > 1:
+                    inner_sql = f"({inner_sql})"
+                sql_path.append(f"({inner_sql} OR {fs} IS NULL)")
+                inner_pd = " & ".join(pd_parts)
+                if len(pd_parts) > 1:
+                    inner_pd = f"({inner_pd})"
+                pd_path.append(f"({inner_pd} | {fp}.isna())")
+            else:
+                # 缺失行不属于本分支:pandas 比较对 NaN 天然 False,与 SQL 一致,逐界分列
+                path.extend(disp_parts)
+                sql_path.extend(sql_parts)
+                pd_path.extend(pd_parts)
             continue
         slot = cat_sets[feat]
-        pos, neg = slot["pos"], slot["neg"]
-        cm = (cat_maps or {}).get(feat)
-        if pos is not None:
-            merged = pos - neg          # AND 语义:命中集合剔除反选集合
-            if merged:
-                _render_cat(feat, merged, False)
-            else:                        # 极端矛盾路径,退回不合并的两段(保守)
-                _render_cat(feat, pos, False)
-                if neg:
-                    _render_cat(feat, neg, True)
-        else:
-            if cm:
-                comp = {str(c) for c in cm} - {str(v) for v in neg}
-                if comp and len(comp) <= min(8, len(neg)):
-                    _render_cat(feat, comp, False)
-                    continue
-            _render_cat(feat, neg, True)
+        _render_cat(feat, slot["pos"], slot["neg"], bool(slot["null"]))
 
-    return path, sql_path
+    return path, sql_path, pd_path
 
 
-def _trace_path_lgb(trees_df, tree_idx, node_idx, cat_maps=None) -> tuple[list[str], list[str]]:
-    """返回 (display_path, sql_path)。
+def _trace_path_lgb(trees_df, tree_idx, node_idx, cat_maps=None,
+                    is_int_feat=None, _has_na=None, drop_null=False) -> tuple[list[str], list[str], list[str]]:
+    """返回 (display_path, sql_path, pandas_path)。
 
     LightGBM 分类切分的 threshold 形如 "1||8||9"（category code 集合，走向 left 子节点）；
     用 cat_maps 把 code 还原为真实品类名。数值切分：哨兵阈值（<1e-20，二值特征）在源头
@@ -662,18 +906,41 @@ def _trace_path_lgb(trees_df, tree_idx, node_idx, cat_maps=None) -> tuple[list[s
         feat = parent["split_feature"]
         thresh = parent["threshold"]
         went_left = parent["left_child"] == current
-        is_cat = isinstance(thresh, str) and "||" in str(thresh)
+        # 分类切分判定必须看 decision_type=='=='(LGB 的权威标志)。老写法只认
+        # threshold 里的 "||" —— 单类别切分的 threshold 就是裸编码("2"),会被
+        # 误判成数值比较渲染出 `cat <= 2`(拿类别编码当数字,fix19 起的存量错圈;
+        # 2026-08-14 被叶子 oracle 全量拦出后修正)。
+        is_cat = (str(parent.get("decision_type") or "") == "==") \
+            or (isinstance(thresh, str) and "||" in str(thresh))
+        # 缺失值路由(2026-08-14 沙箱实验逐条证实,勿凭直觉改):
+        #   missing_type='NaN'/'Zero' → 训练见过缺失,预测时 NaN 走 missing_direction;
+        #   missing_type='None'(训练没见过缺失)→ LGB 对 missing_direction 照样填
+        #     'left',但那是摆设 —— 预测时 NaN 被当作 0(NaN 行与 0 行逐树同叶),
+        #     缺失行归属 = 0 走的那一边;分类切分按"不包含"保守处理。
+        # 最后过数据事实门(has_na):列里没有空值就绝不渲染 IS NULL(纯噪声)。
+        side = "left" if went_left else "right"
+        _mt = str(parent.get("missing_type") or "")
+        if _mt in ("NaN", "Zero"):
+            na_route = str(parent.get("missing_direction") or "") == side
+        elif is_cat:
+            na_route = False
+        else:
+            try:
+                na_route = ((0.0 <= float(thresh)) == went_left)   # 0 走左 ⟺ 0<=阈值
+            except (TypeError, ValueError):
+                na_route = False
+        na_inc = na_route and (_has_na is None or _has_na(feat))
         if is_cat:
             codes = [c for c in str(thresh).split("||") if c != ""]
             cm = (cat_maps or {}).get(feat)
             names = set()
             for c in codes:
                 try:
-                    names.add(str(cm[int(c)]) if cm else str(c))
+                    names.add(str(cm[int(float(c))]) if cm else str(c))
                 except (ValueError, IndexError):
                     names.add(str(c))
             # LightGBM：threshold 列出的是走向 left 子节点的类别集合
-            steps_rev.append(("cat", feat, names, went_left))
+            steps_rev.append(("cat", feat, names, went_left, na_inc))
         else:
             if isinstance(thresh, (int, float)) and 0 < thresh < _SENTINEL_EPS:
                 # 二值 0/1 特征的哨兵切分（约 1e-35）：左 ≡ <=0，右 ≡ >0
@@ -682,10 +949,11 @@ def _trace_path_lgb(trees_df, tree_idx, node_idx, cat_maps=None) -> tuple[list[s
                 lo, hi = None, (float(thresh), True)     # 左:feat <= thresh
             else:
                 lo, hi = (float(thresh), False), None    # 右:feat > thresh
-            steps_rev.append(("num", feat, lo, hi))
+            steps_rev.append(("num", feat, lo, hi, na_inc))
         current = parent["node_index"]
 
-    return _merge_render_clauses(list(reversed(steps_rev)), cat_maps)
+    return _merge_render_clauses(list(reversed(steps_rev)), cat_maps,
+                                 is_int_feat=is_int_feat, drop_null=drop_null)
 
 
 def _extract_rules_xgb(model, overall_cvr: float, top_n: int,
@@ -714,12 +982,23 @@ def _extract_rules_xgb(model, overall_cvr: float, top_n: int,
             if str(X[col].dtype) == "category":
                 cat_maps[col] = list(X[col].cat.categories)
 
+    # oracle 求值用的特征帧要镜像 XGB 的内部量化:它把特征 cast 成 float32 再比阈值,
+    # 半个 ULP 内的边界行在 float64 原值上会翻转,好规则被错杀(实测每 seed 都有)。
+    # cast 后的 float32 值在 float64 里可精确表示,比较结果与 XGB 内部逐行一致。
+    X_oracle = None
+    if X is not None:
+        X_oracle = X.copy()
+        for col in X_oracle.columns:
+            if X_oracle[col].dtype.kind == "f":
+                X_oracle[col] = X_oracle[col].astype(np.float32)
+
+    _int_feat = _make_int_feat_checker(X)
     rules: list[DecisionRule] = []
     for tree_idx, tree_str in enumerate(dump):
         rules.extend(_parse_xgb_tree(
             tree_str, overall_cvr, tree_idx,
             pred_leaves=pred_leaves, y_arr=y_arr, n_positives=n_positives,
-            cat_maps=cat_maps))
+            cat_maps=cat_maps, X_oracle=X_oracle, is_int_feat=_int_feat))
     rules.sort(key=lambda r: r.predicted_cvr, reverse=True)
     return _dedup_rules(rules, top_n)
 
@@ -728,7 +1007,9 @@ def _parse_xgb_tree(tree_str: str, overall_cvr: float, tree_idx: int = 0,
                     pred_leaves: np.ndarray | None = None,
                     y_arr: np.ndarray | None = None,
                     n_positives: int = 0,
-                    cat_maps: dict[str, list] | None = None) -> list[DecisionRule]:
+                    cat_maps: dict[str, list] | None = None,
+                    X_oracle: pd.DataFrame | None = None,
+                    is_int_feat=None) -> list[DecisionRule]:
     """解析 XGBoost get_dump 文本树。
 
     切分语法（实测 xgboost 3.x，enable_categorical=True + tree_method="hist"）:
@@ -738,6 +1019,7 @@ def _parse_xgb_tree(tree_str: str, overall_cvr: float, tree_idx: int = 0,
     fix19:DFS 收集结构化步骤,叶节点处交给 _merge_render_clauses 渲染 ——
     与 LightGBM 路径共用 __NA__→空值/IS NULL、NOT IN 补集改写、同特征合并逻辑。
     """
+    _hn = _make_has_na_checker(X_oracle)
     lines = tree_str.strip().split("\n")
     node_info: dict[str, dict] = {}
     for line in lines:
@@ -754,7 +1036,10 @@ def _parse_xgb_tree(tree_str: str, overall_cvr: float, tree_idx: int = 0,
             cond = line.split("[", 1)[1].split("]", 1)[0]
             if "<" in cond:
                 feat, _, thresh_str = cond.partition("<")
-                thresh = float(thresh_str)
+                # XGB 内部用 float32 比较,dump 的十进制只是它的近似打印。
+                # 过一遍 float32 再展开成精确 float64 —— 树用哪个值比,我们就用哪个值,
+                # 否则边界上的行会翻转(oracle 实测:612.107361 vs 612.10736083984375 差一行)。
+                thresh = float(np.float32(float(thresh_str)))
                 kind = "numeric"
             elif ":" in cond:
                 feat, _, cats = cond.partition(":")
@@ -766,8 +1051,11 @@ def _parse_xgb_tree(tree_str: str, overall_cvr: float, tree_idx: int = 0,
                 continue
             yes = line.split("yes=")[1].split(",")[0]
             no = line.split("no=")[1].split(",")[0]
+            # 缺失值路由:dump 的 missing= 指明 NaN 行走哪个子节点(通常与 yes 同)
+            missing = line.split("missing=")[1].split(",")[0] if "missing=" in line else None
             node_info[node_id] = {"type": "split", "feat": feat, "thresh": thresh,
-                                  "kind": kind, "yes": yes, "no": no, "depth": depth}
+                                  "kind": kind, "yes": yes, "no": no, "missing": missing,
+                                  "depth": depth}
 
     rules: list[DecisionRule] = []
 
@@ -796,10 +1084,47 @@ def _parse_xgb_tree(tree_str: str, overall_cvr: float, tree_idx: int = 0,
                             n_converted = int(y_arr[mask].sum())
                             precision = n_converted / hits
                             recall = (n_converted / n_positives) if n_positives > 0 else 0.0
-                path, sql_path = _merge_render_clauses(steps, cat_maps)
+                path, sql_path, pd_path = _merge_render_clauses(steps, cat_maps,
+                                                                 is_int_feat=is_int_feat)
+                rule_pandas = " & ".join(pd_path)
+                if (pred_leaves is not None and y_arr is not None
+                        and tree_idx < pred_leaves.shape[1]):
+                    try:
+                        _lid = int(nid)
+                    except ValueError:
+                        _lid = None
+                    if _lid is not None and not _oracle_check(
+                            rule_pandas, X_oracle, pred_leaves[:, tree_idx] == _lid,
+                            "xgb tree={} leaf={}".format(tree_idx, nid)):
+                        return
+                # 交付形态:剔空值人群(与 LGB 同一策略,oracle 之后做,统计重算)
+                if not MODEL_SEG_INCLUDE_NULL:
+                    path, sql_path, pd_path = _merge_render_clauses(
+                        steps, cat_maps, is_int_feat=is_int_feat, drop_null=True)
+                    rule_pandas = " & ".join(pd_path)
+                    if "1 = 0" in " ".join(sql_path):
+                        return
+                    if X_oracle is not None:
+                        try:
+                            from .diagnostic_engine import eval_condition as _ev
+                        except ImportError:
+                            from diagnostic_engine import eval_condition as _ev
+                        _m2 = _ev(rule_pandas, X_oracle)
+                        if _m2 is None:
+                            return
+                        _m2 = np.asarray(_m2, dtype=bool)
+                        hits2 = int(_m2.sum())
+                        if hits2 <= 0:
+                            return
+                        sample_count = hits2
+                        if y_arr is not None:
+                            n_converted = int(y_arr[_m2].sum())
+                            precision = n_converted / hits2
+                            recall = (n_converted / n_positives) if n_positives > 0 else 0.0
                 rules.append(DecisionRule(
                     rule_text=" AND ".join(path) or "(root leaf)",
                     rule_sql=" AND ".join(sql_path),
+                    rule_pandas=rule_pandas,
                     predicted_cvr=float(pred),
                     sample_count=sample_count,
                     lift=float(pred / overall_cvr) if overall_cvr > 0 else 0,
@@ -825,17 +1150,20 @@ def _parse_xgb_tree(tree_str: str, overall_cvr: float, tree_idx: int = 0,
                         names.add(str(cm[int(c)]) if cm else c)
                     except (ValueError, IndexError):
                         names.add(c)
-                dfs(info["yes"], steps + [("cat", feat, names, True)])
-                dfs(info["no"], steps + [("cat", feat, names, False)])
+                na_yes = info.get("missing") == info["yes"] and _hn(feat)
+                dfs(info["yes"], steps + [("cat", feat, names, True, na_yes)])
+                dfs(info["no"], steps + [("cat", feat, names, False, not na_yes and info.get("missing") == info["no"] and _hn(feat))])
             elif 0 < thresh < _SENTINEL_EPS:
                 # 哨兵切分（二值特征）：yes(<哨兵)≡<=0，no(>=哨兵)≡>0；源头消掉科学计数法
-                dfs(info["yes"], steps + [("num", feat, None, (0.0, True))])
-                dfs(info["no"], steps + [("num", feat, (0.0, False), None)])
+                na_yes = info.get("missing") == info["yes"] and _hn(feat)
+                dfs(info["yes"], steps + [("num", feat, None, (0.0, True), na_yes)])
+                dfs(info["no"], steps + [("num", feat, (0.0, False), None, not na_yes and info.get("missing") == info["no"] and _hn(feat))])
             else:
                 # XGBoost 数值切分 [feat<thresh]：yes=feat<thresh，no=feat>=thresh。
                 # 必须是开上界/闭下界（`<`/`>=`），否则二值/计数特征产生 ">1" 这类空条件。
-                dfs(info["yes"], steps + [("num", feat, None, (float(thresh), False))])
-                dfs(info["no"], steps + [("num", feat, (float(thresh), True), None)])
+                na_yes = info.get("missing") == info["yes"] and _hn(feat)
+                dfs(info["yes"], steps + [("num", feat, None, (float(thresh), False), na_yes)])
+                dfs(info["no"], steps + [("num", feat, (float(thresh), True), None, not na_yes and info.get("missing") == info["no"] and _hn(feat))])
 
     dfs("0", [])
     return rules

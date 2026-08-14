@@ -192,31 +192,91 @@ def _suggestion_for(seg: dict, direction: str, direction_raw: "str | None") -> s
     return text
 
 
-def filter_zh(cond: str) -> str:
-    """条件的中文口径 —— 纯附加字段，与报告附录「筛选条件（中文）」同一套翻译。
+# —— SQL → 中文:逐 token 直译 —————————————————————————————————————————
+# 输入是本仓库自己两个生成器产出的 SQL(模型侧 _merge_render_clauses 同源渲染 /
+# 规则库侧 pandas_to_sql 白名单翻译),语法闭合、情况可穷尽 —— 这是直译能
+# "一定正确"的前提。只做四件事:字段名查表、固定谓词/连接词映射、值与数字
+# 原样、其余一律不动。不做任何语义优化(二值不转「已/未」,句式不改写)。
+# 遇到闭合语法之外的结构 token 直接返回空串(fail-closed):语法认不出说明
+# 生成器改了而映射表没跟上,黄金快照/CI 会当场红,绝不静默吐半翻译的句子。
 
-    三条约束，与报告侧一致：
-      · 只做展示层投影，`pandas_filter` / `sql_filter` 一个字不改，下游执行仍以它们为准；
-      · 翻不动就给空串（`humanize_condition` 翻不出时会**原样回显**输入，
-        那种情况等于没翻，回显英文只会让调用方以为这是中文口径）；
-      · 任何异常都吞掉 —— 圈人链路不能因为渲染层的翻译出问题而挂掉，
-        所以 report_renderer 是**延迟导入**的，import 失败也只是少一个字段。
+_SQL_LIT = re.compile(r"'(?:[^']|'')*'")            # SQL 字符串字面量('' 转义)
+_SQL_FOREIGN = re.compile(                           # 闭合语法之外的结构关键字 → fail
+    r"\b(BETWEEN|CASE|WHEN|THEN|ELSE|END|CAST|RLIKE|REGEXP|EXISTS|SELECT|FROM|"
+    r"WHERE|UNION|JOIN|GROUP|ORDER|HAVING|LIMIT|DISTINCT)\b", re.I)
+# 字面量之外不该出现的字符。注意 + * / 是放行的 —— 规则库有字段算术
+# ((a + b) >= 3.5、a > b * 1.3),它们在 pandas/SQL 里语义一致,原样直译即可。
+_SQL_BADCHAR = re.compile(r"[~&|!{}\[\];:#@$^\\?%]")
+_SQL_IDENT = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+
+
+def sql_to_zh(sql: str, label_map=None) -> str:
+    """英文 SQL 条件 → 中文口径,逐 token 直译。
+
+    字段名查 feature_labels(与报告同一份表,两处叫法一致;查不到保留英文 ——
+    未翻译可见可补,绝不猜);AND→且、OR→或、NOT(→非(、IN→属于、NOT IN→不属于、
+    IS NULL→为空、IS NOT NULL→不为空、LIKE '%x%'→包含「x」;比较符/括号/数字/
+    字符串值原样。字段对字段比较(如 a <> b)两侧都翻。
+    翻不动(闭合语法之外的 token)返回空串,调用方按"没有中文口径"处理。
     """
-    cond = (cond or "").strip()
-    if not cond:
+    sql = (sql or "").strip()
+    if not sql:
         return ""
     try:
-        from .report_renderer import humanize_condition
-    except Exception:                                # noqa: BLE001
-        try:
-            from report_renderer import humanize_condition   # 平铺引用时的兜底
-        except Exception:                            # noqa: BLE001
+        if label_map is None:
+            try:
+                from .feature_labels import feature_label as label_map
+            except ImportError:
+                from feature_labels import feature_label as label_map
+
+        # ① 摘走字符串字面量(值绝不参与翻译:中文值本来就是中文,英文值是代码)
+        lits: "list[str]" = []
+
+        def _stash(m: "re.Match[str]") -> str:
+            lits.append(m.group(0))
+            return "\x00{}\x00".format(len(lits) - 1)
+
+        t = _SQL_LIT.sub(_stash, sql)
+
+        # ② 闭合语法守卫:结构认不出 → fail(不给 best-effort)
+        if _SQL_FOREIGN.search(t) or _SQL_BADCHAR.search(t):
+            print("[sql_to_zh] ✗ 闭合语法之外的 token,拒绝翻译: {}".format(sql[:120]))
             return ""
-    try:
-        zh = (humanize_condition(cond) or "").strip()
-    except Exception:                                # noqa: BLE001
+
+        # ③ LIKE '%x%' → 包含「x」(固定 token 映射:剥引号与首尾 %,值本身不动)
+        def _like(m: "re.Match[str]") -> str:
+            i = int(m.group(1))
+            inner = lits[i][1:-1].replace("''", "'")
+            # 只剥 pandas_to_sql 包上去的首尾各一个通配符;值自带的 % 是字面量,不动
+            if inner.startswith("%"):
+                inner = inner[1:]
+            if inner.endswith("%"):
+                inner = inner[:-1]
+            return " 包含「{}」".format(inner)
+
+        t = re.sub(r"\s*\bLIKE\b\s*\x00(\d+)\x00", _like, t, flags=re.I)
+
+        # ④ 固定谓词/连接词(多词先于单词,NOT IN 先于 IN)
+        t = re.sub(r"\bIS\s+NOT\s+NULL\b", " 不为空", t, flags=re.I)
+        t = re.sub(r"\bIS\s+NULL\b", " 为空", t, flags=re.I)
+        t = re.sub(r"\bNOT\s+IN\b", " 不属于", t, flags=re.I)
+        t = re.sub(r"\bIN\b", " 属于", t, flags=re.I)
+        t = re.sub(r"\bAND\b", " 且 ", t, flags=re.I)
+        t = re.sub(r"\bOR\b", " 或 ", t, flags=re.I)
+        t = re.sub(r"\bNOT\s*\(", "非(", t, flags=re.I)
+
+        # ⑤ 反引号字段(数字开头等非法裸标识符,如 `360d_create_order_count`)先翻 ——
+        #    去引号查表;再翻剩余裸标识符。查不到都原样保留(可见的未翻译)。
+        t = re.sub(r"`([^`]+)`", lambda m: label_map(m.group(1)), t)
+        t = _SQL_IDENT.sub(lambda m: label_map(m.group(0)), t)
+
+        # ⑥ 收拾空白,放回字面量
+        t = re.sub(r"\s{2,}", " ", t).strip()
+        t = re.sub(r"\x00(\d+)\x00", lambda m: lits[int(m.group(1))], t)
+        return t
+    except Exception as exc:                          # noqa: BLE001 —— 圈人链路不能因翻译挂掉
+        print("[sql_to_zh] ✗ 翻译异常({}),该条无中文口径: {}".format(exc, sql[:120]))
         return ""
-    return "" if zh == cond else zh
 
 
 def build_crowd_rules(report: dict) -> list[dict]:
@@ -229,6 +289,7 @@ def build_crowd_rules(report: dict) -> list[dict]:
         if not r.get("effective_signal"):
             continue
         cond = r.get("condition") or ""
+        sql = pandas_to_sql(cond)
         rules.append({
             "source": "diagnostic_rule",
             "rule_id": r.get("rule_id"),
@@ -236,9 +297,16 @@ def build_crowd_rules(report: dict) -> list[dict]:
             "direction": signal_to_direction(r.get("_signal_type")),
             "_signal_type": r.get("_signal_type"),
             "pandas_filter": cond,
-            "sql_filter": pandas_to_sql(cond),
-            "filter_zh": filter_zh(cond),
+            "sql_filter": sql,
+            # fix30:中文口径改为对最终 SQL 逐 token 直译(sql_to_zh)。SQL 已被
+            # 白名单+黄金快照保证正确,翻译只查表不猜,两来源(规则库/模型)同一条路。
+            "filter_zh": sql_to_zh(sql),
             "estimated_size": int(r.get("trigger_cnt") or 0),
+            # fix30:trigger_cnt 是在 scope∩channel 子集上算的(diagnostic_engine
+            # 先过这两道门再评估 condition)。把口径一起带走,下游(ma-api crowd_push
+            # 一致性自检)才能在同一子集上复算出同一个数;不带就只能全量数,必然对不上。
+            "scope_filter": r.get("scope_filter") or "",
+            "channel_filter": (r.get("channel_filter") or "all"),
             "cvr_triggered": r.get("cvr_triggered"),
             "cvr_not_triggered": r.get("cvr_not_triggered"),
             "cvr_gap": r.get("cvr_gap"),
@@ -266,9 +334,10 @@ def build_crowd_rules(report: dict) -> list[dict]:
             **({"direction_raw": direction_raw} if direction_raw else {}),
             "pandas_filter": cond,
             "sql_filter": sql,
-            # fix29：中文口径。翻的是 pandas 条件（原始口径），不是翻译过的 SQL —— 
-            # 模型 seg 自带 filter_conditions_sql 时两者可能不同源，翻原始条件才不会走样。
-            "filter_zh": filter_zh(cond),
+            # fix30:改翻最终 SQL(sql_to_zh 逐 token 直译)。fix29 时代 SQL 与 pandas
+            # 可能不同源、翻 SQL 会走样;模型侧三形态同源渲染(rule_pandas/rule_sql
+            # 同循环产出+叶子 oracle 逐条自检)落地后,SQL 就是唯一权威形态,翻它。
+            "filter_zh": sql_to_zh(sql),
             "estimated_size": int(s.get("estimated_size") or 0),
             "baseline_cvr": s.get("baseline_cvr"),
             "expected_cvr_mid": s.get("expected_cvr_mid"),

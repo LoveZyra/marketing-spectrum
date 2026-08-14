@@ -657,11 +657,13 @@ rules:
   required_fields:
   - pre_last_coupon_platform
   - pre_primary_platform
-  condition_template: (pre_last_coupon_platform.notna()) & (pre_last_coupon_platform != pre_primary_platform)
+  condition_template: (pre_last_coupon_platform.notna()) & (pre_primary_platform.notna()) & (pre_last_coupon_platform != pre_primary_platform)
   threshold_fields: []
   handling: row_level
   severity_base: low
   description: 历史领券平台与主要使用平台不一致，可能存在跨平台券使用障碍，影响转化体验。
+  data_note: 2026-08-14 补 pre_primary_platform.notna() 守卫——主平台为空时 pandas(NaN!=x 为真)与
+    SQL(NULL<>x 为 NULL)对空值行的归属相反,estimated_size 会数进 push_sql 取不出的人;主平台未知也谈不上"平台不符"。
   is_positive_signal: true
   positive_signal_reason: 红包与下单平台不符用户CVR略高，跨平台用户购买意愿强
   execution_difficulty: easy

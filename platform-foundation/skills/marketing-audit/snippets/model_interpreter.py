@@ -627,7 +627,10 @@ def _interpret_decision_rules(ma: dict, t: dict, out: dict) -> None:
     for i, (lift, n_sample, _ri, rule) in enumerate(qualified):
         pred_cvr = float(rule.get("predicted_cvr") or 0)
         rule_text = rule.get("rule") or rule.get("rule_text") or ""
-        filter_cond = _rule_to_filter(rule_text)
+        # 2026-08-14:filter_conditions 改取 model_analyst 三形态同源渲染的 rule_pandas
+        # (与 rule_sql 出自同一循环,叶子 oracle 已逐条自检)。老 state 没有该字段时
+        # 退回 _rule_to_filter 反解析 —— 仅为兼容历史 job 的重渲染,新链路不会走到。
+        filter_cond = rule.get("rule_pandas") or _rule_to_filter(rule_text)
         # 人群名去重：同名（关键特征相同）追加「·变体N」区分
         seg_name = seg_names[i] if i < len(seg_names) else _seg_name_from_rule(rule_text, i)
         # ·变体N 仅作最后防线:fix20 的按区分度命名正常不会撞名,撞了说明两条规则

@@ -20,7 +20,7 @@
 
 后端拆成正交的两轴,而不是三个写死的档位:
 
-  数据源(MA_DATA)   hive  —— hdfs_get 拉特征,Spark 在人群池上校验/计数(ma_server)
+  数据源(MA_DATA)   hive  —— hdfs_get 拉特征落 data.parquet,校验/计数在本地 pandas 做(ma_server)
                      csv   —— 本地一份 CSV 顶替人群池,装进内存 sqlite 后照样跑校验/计数
                      synth —— 合成数据,谁都不依赖,只验证状态机
   诊断步骤(MA_SKILL) skill —— 真调 marketing-audit 的 cli.py
@@ -54,9 +54,14 @@ MA_RUNTIME 只是这两轴的预设名:
   MA_SKILL_PY         调 cli.py 用的解释器,默认 python3
   MA_FEAT_TABLE       特征表,默认 app_dm.tmp_ctj_marketing_audit_sample_hebo(固定表、无分区)
   MA_FILTER_COL       特征表里活动 ID 的过滤列,默认 activity_id(老表是 task_id)
-  MA_POP_TABLE        人群池表,默认 app_dm.tmp_ctj_marketing_audit_sample_hebo(与特征表同表)
-                      (圈人 dry-run/计数/push_sql 的 FROM 都用它;主键列不叫
-                       mapid/unionid 的话用 MA_ID_COL / MA_UNION_COL 调)
+  MA_REQUIRE_RULES    1(默认)=候选规则全部未通过本地校验时整单失败(E_NO_VALID_RULES),
+                      不再出 push_sql=None 的"成功"单;0=保留旧行为
+  MA_RULE_CHECK       strict(默认)=规则库规则本地复算数与上游 trigger_cnt 不等即剔除;
+                      lenient=只告警不剔(离线对拍期用)
+                      (2026-08-14 起「人群池」概念取消:MA_POP_TABLE / MA_POP_FILTER
+                       作废,校验/计数全部在 pull 落地的 data.parquet 上用 pandas 做,
+                       出参 push_sql 的 FROM 仍是特征表;主键列不叫 mapid/unionid
+                       的话用 MA_ID_COL / MA_UNION_COL 调)
   MA_PUBLIC_DIR       HTML 发布目录,默认按 runtime 取(real=/home/jovyan/prism/public)
   MA_URL_BASE         报告 URL 前缀
   MA_STEP_TIMEOUT     单个子命令超时秒数,默认 1800
@@ -113,20 +118,18 @@ FEAT_TABLE = _env("MA_FEAT_TABLE", "app_dm.tmp_ctj_marketing_audit_sample_hebo")
 # 换表时列名对不上,pull 不报错、只捞回 0 行,然后一路"顺利"产出一份空报告 ——
 # 所以列名必须跟表一起配,MA_FILTER_COL 就是那个口子。
 FILTER_COL = _env("MA_FILTER_COL", "activity_id").strip() or "activity_id"
-# 人群池表:圈人 dry-run/计数/push_sql 的 FROM 都用它。
-# fix14(2026-08-03):与特征表统一改为 app_dm.tmp_ctj_marketing_audit_sample_hebo。
-# 背景:fix10 落定的 app_dm.long_ctj_marketing_audit_sample 在 metastore 里一直没建出来 ——
-# 1000344 单 prepare 被杀降级后,骨架查它取列名,AnalysisException 无人接,整单崩
-# (详见 诊断_20260803_activity1000344.md)。换表用 MA_FEAT_TABLE/MA_POP_TABLE,代码不用动;
-# 换表必查 MA_FILTER_COL(过滤列配错不报错,只捞 0 行出空报告)。
-# 老表是 tmp_dm.tmp_ctj_mktv2_sy_sample;主键/联合列若与老表不同,用 MA_ID_COL/MA_UNION_COL 调。
-POP_TABLE = _env("MA_POP_TABLE", "app_dm.tmp_ctj_marketing_audit_sample_hebo")
-# fix15:两表合一(POP_TABLE == FEAT_TABLE)时,人群池侧查询默认限定在本活动 ——
-# quantile / count_rules / count_push_total 与出参 push_sql 统一前置 {FILTER_COL}='{activity_id}'。
-# 好处:表按 activity_id 分区后,这些查询吃到分区剪裁,不再全表扫;
-# 口径上人数只算本活动的特征行(两表合一后不过滤,会把所有活动的行混进计数)。
-# MA_POP_FILTER: auto(默认,仅两表同名时启用)/ 1(强制启用)/ 0(关闭,回到全表口径)。
-POP_FILTER = (_env("MA_POP_FILTER", "auto")).strip().lower()
+# 「人群池」概念已取消(2026-08-14)。它假设 ma-api 要在一张全量池上真的圈人 ——
+# 实际上不是:ma-api 交付的是筛选条件,人群由业务方拿 push_sql 去线上跑;而筛选
+# 条件本身,在 pull 已经落地的 data.parquet(本活动全量特征数据,上游诊断/建模
+# 全跑在它上面)就能校验和计数。MA_POP_TABLE / MA_POP_FILTER 两个环境变量作废。
+# POP_TABLE 这个名字暂留为 FEAT_TABLE 的别名,只为不惊动 ma_api_b.py 的引用,不再可配。
+POP_TABLE = FEAT_TABLE
+# 候选规则全部未通过本地校验时:1(默认)整单失败 E_NO_VALID_RULES;0 保留旧行为
+# (出一个 push_sql=None 的"成功"单 —— 调用方分辨不出来,不建议)。
+REQUIRE_RULES = _env_int("MA_REQUIRE_RULES", 1)
+# 规则库规则一致性自检:strict(默认)本地复算数 != 上游 trigger_cnt 即剔除(fail-closed,
+# 这不该发生,发生即链路 bug);lenient 只告警不剔,离线对拍期临时用。
+RULE_CHECK = (_env("MA_RULE_CHECK", "strict")).strip().lower()
 STEP_TIMEOUT = _env_int("MA_STEP_TIMEOUT", 1800)
 # fix17:降级骨架构建的硬上限(秒,0=不限)。骨架要摸 Hive 取真列名+分位数(十几个查询,
 # 全程无日志)——1011270 单(2026-08-04)prepare 超时降级后就冻死在这里,任务停在
@@ -547,14 +550,311 @@ class _NoSource(BaseSource):
         return []
 
 
-class HiveSource(BaseSource):
-    """ma_server 上的真数据源:hdfs_get 拉特征,Spark 在人群池上校验/计数。"""
+def _eval_condition_local(condition, df):
+    """pandas 布尔条件求值(与 skill 侧 diagnostic_engine.eval_condition 同算法的
+    本地等价实现,做 import 兜底用):df.eval 快路径,含 pandas 方法调用的表达式
+    退回受限 eval。失败返回 None。"""
+    import re as _re
+    import warnings as _w
+    import numpy as np
+    import pandas as pd
+    if not condition:
+        return None
+    if not _re.search(r"\.(isin|isna|notna|str\.|fillna|dt\.)", condition, _re.I):
+        try:
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                mask = df.eval(condition)
+            if isinstance(mask, pd.Series) and mask.dtype == bool:
+                return mask.fillna(False)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        ns = {c: df[c] for c in df.columns}
+        ns["pd"] = pd
+        ns["np"] = np
+        ns["_df"] = df      # 数字开头列(如 360d_*)的 _df['col'] 引用靠它接住
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            out = eval(condition, {"__builtins__": {}}, ns)  # noqa: S307
+        if isinstance(out, pd.Series):
+            return out.fillna(False).astype(bool)
+        if isinstance(out, (bool,)) or type(out).__name__ == "bool_":
+            return pd.Series(bool(out), index=df.index)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
-    name = "hive"
+
+def _get_condition_evaluator():
+    """条件执行器:优先 skill 侧 diagnostic_engine.eval_condition —— 上游算
+    trigger_cnt 用的就是它,同引擎同语义,本地复算数与上游数才严格可比。
+    skill import 不到(目录缺/依赖缺)退回本地等价实现,并由调用方记 warning。
+    返回 (fn, 来源说明)。"""
+    skill_root = os.path.dirname(SKILL_DIR.rstrip("/"))
+    for p in (SKILL_DIR, skill_root):
+        if p and os.path.isdir(p) and p not in sys.path:
+            sys.path.insert(0, p)
+    try:
+        from snippets.diagnostic_engine import eval_condition  # noqa: PLC0415
+        return eval_condition, "skill:diagnostic_engine.eval_condition"
+    except Exception as exc:  # noqa: BLE001
+        return _eval_condition_local, "local 等价实现(skill import 失败:{})".format(
+            str(exc).splitlines()[0][:120])
+
+
+class LocalRuleCheck(BaseSource):
+    """在 pull 落地的 data.parquet 上做筛选条件校验与计数(pandas,零 Spark)。
+
+    定位(2026-08-14 定稿):crowd_push 是校验关卡,不出人群 —— ma-api 交付筛选
+    条件,人群由业务方拿 push_sql 去线上跑。data.parquet 是 pull 按 activity_id
+    全量落地的本活动数据(hdfs_get --where 直写,无采样无 limit),上游诊断/建模
+    全跑在它上面 —— 在同一份数据上校验,数才互相可比。
+
+    分流(按 finding_id 前缀,与 pick_push_rules 同一套口径):
+      · 模型 seg(fnd_model_*):直通,不校验不剔除 —— 正确性已由 model_analyst
+        的叶子 oracle 在源头逐条证明(渲染条件命中行 ≡ 树真实叶子行)。这里只
+        顺手数 population_size(算数不是校验,也是 size.push 并集去重所必需);
+        求值异常(理论不应发生)fail-open:保留规则,回退上游 estimated_size。
+      · 规则库规则(其余):一致性自检 —— 能进 crowd_rules 的规则必是
+        effective_signal,即上游已在同一份数据上算出 trigger_cnt(>0)。本地用
+        同一个执行器、在同一 scope∩channel 子集上复算,数必须相等;跑不通/
+        取不出人/数不等 → 上游链路有 bug,剔除+告警(fail-closed,修 bug 而不是
+        带病出厂)。自检失败率应恒为 0,是链路健康度的线上监控指标。
+
+    进程内不再有任何 Spark —— 并发下 SparkContext 被误 stop(setCallSite
+    NoneType)/抢构造(SPARK-2243)的问题从根上消失,无需任何并发治理。
+    """
 
     def __init__(self):
-        self._spark = None
-        self.label = POP_TABLE
+        self._pdf = None            # pandas DataFrame(data.parquet)
+        self._eval = None
+        self._eval_src = ""
+        self._masks = {}            # _seg_index -> bool ndarray(count_push_total 并集用)
+        self.label = "parquet:data.parquet"
+
+    # ---- 数据装载 ----
+
+    def _data_path(self, ctx):
+        p = ctx.path("data.parquet")
+        if not os.path.exists(p):
+            raise StepError("E_NO_LOCAL_DATA",
+                            "筛选条件校验需要 pull 落地的 data.parquet,但它不存在:{}".format(p))
+        return p
+
+    def _data(self, ctx):
+        if self._pdf is not None:
+            return self._pdf
+        try:
+            import pandas as pd
+        except ImportError as exc:
+            raise StepError("E_NO_PANDAS", "本地校验需要 pandas: {}".format(exc))
+        path = self._data_path(ctx)
+        # Spark 写出的 parquet 是目录不是单文件(hdfs_get 的 --where 路径),
+        # pd.read_parquet 两种形态都认。
+        self._pdf = pd.read_parquet(path)
+        self._eval, self._eval_src = _get_condition_evaluator()
+        if not self._eval_src.startswith("skill:"):
+            ctx.warn("条件执行器降级:{} —— 与上游 trigger_cnt 非同一实现,"
+                     "一致性自检结果仅供参考".format(self._eval_src))
+        self._resolve_keys(ctx)
+        ctx.log("本地校验数据装载:{} 行 x {} 列,执行器 {};主键 {} 去重后 {} 人".format(
+            len(self._pdf), len(self._pdf.columns), self._eval_src,
+            self.id_col, int(self._pdf[self.id_col].nunique())))
+        return self._pdf
+
+    def _resolve_keys(self, ctx):
+        names = list(self._pdf.columns)
+        lower = dict((n.lower(), n) for n in names)
+
+        def pick(env_name, cands, what):
+            want = os.environ.get(env_name)
+            if want:
+                if want in names:
+                    return want
+                if want.lower() in lower:
+                    return lower[want.lower()]
+                raise StepError("E_BAD_COLUMN", "{} 指定的列 {} 不在数据里;可用列:{}".format(
+                    env_name, want, ",".join(names[:30])))
+            for c in cands:
+                if c in lower:
+                    return lower[c]
+            for c in cands:
+                for nm in names:
+                    if c in nm.lower():
+                        ctx.warn("没找到{}列,按名字近似选用 {}".format(what, nm))
+                        return nm
+            return None
+
+        self.id_col = pick("MA_ID_COL", ["mapid", "map_id", "memberid", "member_id",
+                                         "unionid", "openid", "uid", "user_id"], "主键")
+        if not self.id_col:
+            self.id_col = names[0]
+            ctx.warn("数据里没有 mapid 之类的主键列,退而用第一列 {} 当去重键;"
+                     "如不正确请用 MA_ID_COL 指定".format(self.id_col))
+        self.union_col = pick("MA_UNION_COL",
+                              ["unionid", "union_id", "wx_unionid", "openid"], "unionid")
+        if not self.union_col:
+            self.union_col = self.id_col
+            ctx.warn("数据里没有 unionid 列,出参的 unionid 用 {} 顶替".format(self.id_col))
+
+    def _mask(self, ctx, cond):
+        """条件 → bool ndarray;失败返回 None。"""
+        if not cond:
+            return None
+        df = self._data(ctx)
+        try:
+            m = self._eval(cond, df)
+        except Exception:  # noqa: BLE001
+            return None
+        if m is None:
+            return None
+        try:
+            import numpy as np
+            return np.asarray(m, dtype=bool)
+        except Exception:  # noqa: BLE001
+            return None
+
+    # ---- 骨架兜底要用的取列/分位数(以前是隐藏的 Spark 入口,现全本地) ----
+
+    def describe_columns(self, ctx):
+        df = self._data(ctx)
+        out = []
+        for n in df.columns:
+            k = df[n].dtype.kind
+            out.append({"name": n, "type": str(df[n].dtype),
+                        "numeric": k in ("i", "u", "f")})
+        return out
+
+    def quantile(self, ctx, col, q):
+        df = self._data(ctx)
+        s = df[col].dropna()
+        if not len(s):
+            return None
+        try:
+            v = s.quantile(q, interpolation="lower")
+        except Exception:  # noqa: BLE001
+            v = s.quantile(q)
+        try:
+            return v.item()
+        except AttributeError:
+            return v
+
+    def row_count(self, ctx):
+        return int(len(self._data(ctx)))
+
+    def base_where(self, ctx):
+        """只给出参 push_sql 用:业务方在线上全表跑,必须限定本活动。
+        本地校验/计数不走这里 —— data.parquet 本身已经是本活动的数据,再加是重复。"""
+        col = (ctx.params or {}).get("filter_col") or FILTER_COL
+        return "{}='{}'".format(col, ctx.activity_id)
+
+    # ---- 校验与计数 ----
+
+    def _subset_count(self, ctx, r, mask):
+        """在与上游 trigger_cnt 相同的 scope∩channel 子集上数命中行。
+        子集条件求值失败按"无该门"处理并告警 —— 宁可对拍口径退化,不误杀规则。"""
+        sub = mask
+        for key in ("scope_filter", "channel_filter"):
+            f = (r.get(key) or "").strip()
+            if not f or f == "all":
+                continue
+            fm = self._mask(ctx, f)
+            if fm is None:
+                ctx.warn("规则 {} 的 {}「{}」本地求值失败,一致性对拍退化为全量口径".format(
+                    r.get("name"), key, f[:60]))
+                continue
+            sub = sub & fm
+        return int(sub.sum())
+
+    def validate_rules(self, ctx, rules):
+        ok, dropped = [], []
+        for r in rules:
+            name = r.get("name")
+            cond = r.get("pandas_filter") or ""
+            fid = str(r.get("finding_id") or "")
+            mask = self._mask(ctx, cond)
+
+            if fid.startswith("fnd_model"):
+                # 模型 seg:直通(oracle 已在源头证明),只数数。fail-open。
+                if mask is None:
+                    ctx.warn("模型人群 {} 本地求值失败(理论不应发生,源头有叶子 oracle);"
+                             "population_size 回退上游估计,size.push 并集不含本条".format(name))
+                    r["population_size"] = int(r.get("estimated_size") or 0)
+                else:
+                    r["population_size"] = int(mask.sum())
+                    self._masks[r.get("_seg_index")] = mask
+                ok.append(r)
+                continue
+
+            # 规则库规则:一致性自检(fail-closed)
+            if mask is None:
+                dropped.append({"name": name, "sql_filter": r.get("sql_filter"),
+                                "reason": "筛选条件本地跑不通(上游产出即有问题):{}".format(
+                                    (cond or "")[:120])})
+                continue
+            n_full = int(mask.sum())
+            est = r.get("estimated_size")
+            if r.get("source") == "diagnostic_rule" and est not in (None, ""):
+                n_sub = self._subset_count(ctx, r, mask)
+                if n_sub != int(est):
+                    msg = ("一致性自检不过:本地复算 {}(子集口径)vs 上游 trigger_cnt {}"
+                           .format(n_sub, est))
+                    if RULE_CHECK != "lenient":
+                        dropped.append({"name": name, "sql_filter": r.get("sql_filter"),
+                                        "reason": msg})
+                        continue
+                    ctx.warn("规则 {}:{}(MA_RULE_CHECK=lenient,保留)".format(name, msg))
+            if n_full == 0:
+                dropped.append({"name": name, "sql_filter": r.get("sql_filter"),
+                                "reason": "条件跑得通,但本活动数据上一个人都取不出(命中 0)"})
+                continue
+            r["population_size"] = n_full
+            self._masks[r.get("_seg_index")] = mask
+            ok.append(r)
+        return ok, dropped
+
+    def count_rules(self, ctx, rules):
+        """validate 时每条已数过,这里只补漏(理论上不会有)。"""
+        for r in rules or []:
+            if r.get("population_size") is None:
+                m = self._mask(ctx, r.get("pandas_filter") or "")
+                r["population_size"] = int(m.sum()) if m is not None else 0
+
+    def count_push_total(self, ctx, rules):
+        """去重后的推送人数:各规则命中行取并集,再按主键去重。
+        与旧 Spark 版 COUNT(DISTINCT id) WHERE (r1) OR (r2)... 同口径。"""
+        if not rules:
+            return 0
+        df = self._data(ctx)
+        import numpy as np
+        union = np.zeros(len(df), dtype=bool)
+        misses = 0
+        for r in rules:
+            m = self._masks.get(r.get("_seg_index"))
+            if m is None:
+                m = self._mask(ctx, r.get("pandas_filter") or "")
+            if m is None:
+                misses += 1
+                continue
+            union |= m
+        if misses:
+            ctx.warn("size.push 并集缺 {} 条规则(本地求值失败),口径偏小".format(misses))
+        return int(df.loc[union, self.id_col].nunique())
+
+    def close(self):
+        self._pdf = None
+        self._masks = {}
+
+
+class HiveSource(LocalRuleCheck):
+    """ma_server 上的真数据源:pull 走 hdfs_get 子进程(独立 JVM)按 activity_id
+    全量落 data.parquet;筛选条件校验/计数全部在这份本地数据上做(LocalRuleCheck)。
+    进程内不再连 Hive、不再起 Spark。出参 push_sql 的 FROM 仍写线上特征表
+    (sql_table),并由 base_where 带上活动过滤 —— 校验在哪跑和 SQL 写哪张表,
+    从来是两件事(csv 模式的 label/sql_table 分离就是先例)。"""
+
+    name = "hive"
 
     def pull(self, ctx):
         data_path = ctx.path("data.parquet")
@@ -570,93 +870,6 @@ class HiveSource(BaseSource):
                "--output", data_path]
         run_cmd(ctx, cmd, code="E_PULL_FAILED")
         return data_path
-
-    def _get_spark(self):
-        if self._spark is None:
-            try:
-                import findspark
-                findspark.init()
-                from pyspark.sql import SparkSession
-            except ImportError as exc:
-                raise StepError("E_NO_SPARK", "hive 数据源需要 pyspark/findspark: {}".format(exc))
-            self._spark = SparkSession.builder.appName("ma_api_push").enableHiveSupport().getOrCreate()
-            self._spark.conf.set("spark.sql.shuffle.partitions", "64")
-        return self._spark
-
-    def describe_columns(self, ctx):
-        spark = self._get_spark()
-        out = []
-        for n, t in spark.table(POP_TABLE).dtypes:
-            out.append({"name": n, "type": t,
-                        "numeric": t.split("(")[0] in ("int", "bigint", "smallint", "tinyint",
-                                                       "double", "float", "decimal", "long")})
-        return out
-
-    def base_where(self, ctx):
-        """两表合一时,人群池查询限定本活动:{FILTER_COL}='{activity_id}'(见 MA_POP_FILTER)。"""
-        if POP_FILTER in ("0", "false", "no", "off"):
-            return None
-        if POP_FILTER in ("1", "true", "yes", "on") or POP_TABLE == FEAT_TABLE:
-            col = (ctx.params or {}).get("filter_col") or FILTER_COL
-            return "{}='{}'".format(col, ctx.activity_id)
-        return None
-
-    def quantile(self, ctx, col, q):
-        spark = self._get_spark()
-        sql = "SELECT percentile_approx({}, {}) AS v FROM {}".format(col, q, POP_TABLE)
-        bw = self.base_where(ctx)
-        if bw:
-            sql += " WHERE {}".format(bw)
-        row = spark.sql(sql).collect()[0]
-        return row["v"]
-
-    def validate_rules(self, ctx, rules):
-        """LIMIT 0 dry-run:缺列/语法错一次拿到,单条失败只跳过该条。"""
-        spark = self._get_spark()
-        ok, dropped = [], []
-        for r in rules:
-            try:
-                spark.sql("SELECT 1 FROM {} WHERE ({}) LIMIT 0".format(POP_TABLE, r["sql_filter"]))
-                ok.append(r)
-            except Exception as exc:  # noqa: BLE001 —— Spark 抛的是 Py4J 包装异常,类型不稳定
-                dropped.append({"name": r.get("name"), "reason": str(exc).splitlines()[0][:200]})
-        return ok, dropped
-
-    def count_rules(self, ctx, rules):
-        """一趟 SUM(CASE WHEN) 拿到每条规则在人群池上的实际命中数。"""
-        if not rules:
-            return
-        spark = self._get_spark()
-        agg = ", ".join("SUM(CASE WHEN ({}) THEN 1 ELSE 0 END) AS c{}".format(r["sql_filter"], i)
-                        for i, r in enumerate(rules))
-        sql = "SELECT {} FROM {}".format(agg, POP_TABLE)
-        bw = self.base_where(ctx)
-        if bw:
-            sql += " WHERE {}".format(bw)
-        row = spark.sql(sql).collect()[0]
-        for i, r in enumerate(rules):
-            r["population_size"] = int(row["c{}".format(i)] or 0)
-
-    def count_push_total(self, ctx, rules):
-        """去重后的推送人数 —— 出参里唯一权威的那个数。"""
-        if not rules:
-            return 0
-        spark = self._get_spark()
-        pred = " OR ".join("({})".format(r["sql_filter"]) for r in rules)
-        bw = self.base_where(ctx)
-        if bw:
-            pred = "{} AND ({})".format(bw, pred)
-        row = spark.sql("SELECT COUNT(DISTINCT {}) AS n FROM {} WHERE {}".format(
-            self.id_col, POP_TABLE, pred)).collect()[0]
-        return int(row["n"] or 0)
-
-    def close(self):
-        if self._spark is not None:
-            try:
-                self._spark.stop()
-            except Exception:  # noqa: BLE001
-                pass
-            self._spark = None
 
 
 # ---- 本地 sqlite 数据源(csv / synth 共用同一套校验计数) ----
@@ -3822,7 +4035,9 @@ def build_notes(ctx, backend, dropped, degraded_polish, has_rules, excluded=None
     idc, unc = src.id_col, src.union_col
     notes = [
         "本接口只输出需要推送的人群,排除人群不在出参内,也不做任何表写入",
-        "population_size 之间互相重叠,不可相加;权威人数以 size.push 为准",
+        "population_size 之间互相重叠,不可相加;size.push 是各规则在本活动特征数据"
+        "(pull 落地快照)上的并集去重人数,用于校验规则口径 —— 实际推送人数以 push_sql"
+        " 在线上执行的结果为准",
         "{} 在样本池中不唯一,取数必须按 {} 去重".format(idc, idc),
         "一个 {} 命中多个 {} 时保留哪一条是不确定的,{} 不可作主键".format(idc, unc, unc),
         "push_sql 用 GROUP BY {} + MIN({}) 做确定性去重;原离线流程用 dropDuplicates,"
@@ -3837,7 +4052,7 @@ def build_notes(ctx, backend, dropped, degraded_polish, has_rules, excluded=None
     _bw = getattr(src, "base_where", None)
     _bw = _bw(ctx) if callable(_bw) else None
     if _bw:
-        notes.insert(0, "人群池口径(fix15):两表合一,计数与 push_sql 已限定 {} —— "
+        notes.insert(0, "活动口径:计数在本活动特征数据上进行,push_sql 已限定 {} —— "
                         "人数=该活动特征行内命中,不含其他活动".format(_bw))
     if src.name == "synth":
         notes.insert(0, "⚠ 人群池是本地合成的假数据,人数与 SQL 结果不可用于生产决策")
@@ -3869,7 +4084,8 @@ def build_notes(ctx, backend, dropped, degraded_polish, has_rules, excluded=None
         notes.append("有 {} 条 direction=exclude 的人群规则未参与推送(只在 excluded_rules 里留名备查,"
                      "不含 sql_filter,不计入 size.push)".format(len(excluded)))
     if dropped:
-        notes.append("有 {} 条规则未通过人群表 dry-run 校验,已剔除且不计入人数(见 dropped_rules)".format(len(dropped)))
+        notes.append("有 {} 条规则未通过本地数据校验(跑不通/取不出人/与上游计数不一致),"
+                     "已剔除且不计入人数(见 dropped_rules)".format(len(dropped)))
     if degraded_polish:
         notes.append("本次报告润色未完成(模型环节降级),报告正文可能仍含 [待润色]")
     _cq = getattr(ctx, "critique", None)
@@ -3954,6 +4170,12 @@ def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extrac
             ok, dropped = src.validate_rules(ctx, picked)
             for d in dropped:
                 ctx.warn("剔除规则 {}: {}".format(d.get("name"), d.get("reason")))
+            # 候选非空、却一条都没通过本地校验 —— 这单交付不出任何可用的圈人条件。
+            # 以前会出一个 push_sql=None 的"成功"单,调用方分辨不出来;现在默认显式失败。
+            if picked and not ok and REQUIRE_RULES:
+                raise StepError("E_NO_VALID_RULES",
+                                "{} 条候选规则全部未通过本地校验(明细见 warnings/dropped);"
+                                "确要放行残缺单请置 MA_REQUIRE_RULES=0".format(len(picked)))
             src.count_rules(ctx, ok)
             for r in ok:
                 ctx.log("规则命中 {} → {}".format(r.get("name"), r.get("population_size")))

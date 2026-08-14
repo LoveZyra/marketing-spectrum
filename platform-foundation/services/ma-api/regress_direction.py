@@ -167,13 +167,37 @@ if real_rules is not None:
                 print("      ! {}".format(fx))
             names = {r.get("finding_id") for r in picked}
             check("真实数据:fnd_r41 被认回 push", "fnd_r41" in names)
-            check("真实数据:fnd_r37 挡在包外", "fnd_r37" not in names)
-            check("真实数据:fnd_r11 挡在包外", "fnd_r11" not in names)
+            # fix20(2026-08-14 部署实证):「fnd_r37/fnd_r11 挡在包外」是按 20260728
+            # 存档里它们是 exclude 写死的。重放优先取服务器上最新真实 job,而方向是
+            # **数据的事实** —— 某活动把 #37 判成显著正向(positive→push)完全合法,
+            # 写死 id 会把"数据变了"误报成"代码坏了"。真正的不变量与 id 无关:
+            # 数据里非 push 方向、又不是促付回收(direction_raw=促付)的条目,
+            # 一个都不许进推送包;它们的谓词也不许出现在 push_sql 里。
+            blocked = {r.get("finding_id") for r in real_rules
+                       if isinstance(r, dict)
+                       and (r.get("direction") or "") != "push"
+                       and (r.get("direction_raw") or "") != "促付"}
+            leaked = names & blocked
+            check("真实数据:非 push 方向条目一个都没进包(#37/#11 老断言的一般化)",
+                  not leaked, str(leaked or ""))
             sql = P.build_push_sql(picked, "tmp_dm.t", "mapid", "unionid")
-            check("push_sql 不含疲劳谓词 insite_channel_cnt",
-                  "insite_channel_cnt" not in sql)
-            check("push_sql 不含错配谓词 pre_mkt_product_browse_match = 0",
-                  "pre_mkt_product_browse_match = 0" not in sql)
+            if isinstance(sql, tuple):          # build_push_sql 返回 (push_sql, count_sql)
+                sql = (sql[0] or "") + (sql[1] or "")
+            # 谓词哨兵按「被排除条目自己的完整 sql_filter」查,不按字段片段 ——
+            # insite_channel_cnt 这类片段是多条规则共用的,某条含它的规则合法转正
+            # (如 #37 判显著正向)后,片段哨兵会把合法进包误报成泄漏。
+            # 同一谓词可能同时挂在"进包条目"和"排除条目"上(diagnostic_rule 与
+            # audience_segment 双轨产出),那不算泄漏 —— 谓词在包里是因为进包的那条。
+            _picked_filters = {(r.get("sql_filter") or "").strip() for r in picked}
+            _leak_sql = []
+            for _r in real_rules:
+                if not isinstance(_r, dict) or _r.get("finding_id") not in blocked:
+                    continue
+                _f = (_r.get("sql_filter") or "").strip()
+                if _f and _f in (sql or "") and _f not in _picked_filters:
+                    _leak_sql.append("{}:{}".format(_r.get("finding_id"), _f[:40]))
+            check("push_sql 不含仅属于被排除条目的谓词",
+                  not _leak_sql, str(_leak_sql or ""))
 else:
     print("  (跳过:找不到含 fnd_r41 的真实 crowd_rules.json;最近的候选是 {})".format(REAL))
 

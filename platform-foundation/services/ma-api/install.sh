@@ -1,6 +1,30 @@
 #!/usr/bin/env bash
 # 营销诊断 API 服务安装脚本。先备份、再覆盖、最后自检。
 # 累积包:装这一个就够了,不用再装之前的 fix / fix2 / … / fix9 / fix10。
+# fix20(2026-08-14):crowd_push 去 Spark,改本地 data.parquet 校验(修 8/14 并发炸单)——
+#   背景:job_20260814_143039 / 144153 两单 crowd_push 并发下炸(SPARK-2243 抢构造 /
+#   setCallSite NoneType 被兄弟单 stop 误杀)。根因是进程内共享 SparkContext 的生命周期,
+#   修法不是治 Spark,是**不再用 Spark**:
+#   ① ma_pipeline.py:HiveSource 去 Spark —— 校验/计数改在 pull 落地的 data.parquet
+#      上用 pandas 做(上游诊断/建模本就跑在这份数据上,同数据同执行器,数才可比);
+#      并发问题从根上消失,无需降 MA_MAX_CONCURRENCY。
+#   ② 「人群池」概念取消:MA_POP_TABLE / MA_POP_FILTER 作废(POP_TABLE 留作 FEAT_TABLE
+#      别名);出参 push_sql 的 FROM 仍是特征表 + activity 过滤,业务方用法不变。
+#   ③ 分流:模型人群(fnd_model_*)直通(正确性由 skill 侧叶子 oracle 在源头逐条证明);
+#      规则库人群做一致性自检 —— 本地按 scope∩channel 子集复算,数必须等于上游
+#      trigger_cnt,不等即剔除+告警(MA_RULE_CHECK=lenient 可临时只警不剔)。
+#   ④ 候选规则全部未通过校验时整单 E_NO_VALID_RULES(MA_REQUIRE_RULES=0 可关),
+#      不再出 push_sql=None 的"成功"单。
+#   ⑤ notes 文案改口径:size.push 是本活动特征数据上的并集去重人数(校验口径),
+#      实际推送人数以 push_sql 线上执行为准。
+#   ⑥ regress_direction.py:真实数据重放的断言从"写死 fnd_r37/fnd_r11 挡在包外"
+#      改为方向不变量(非 push 且非促付的条目不进包、其独有谓词不进 push_sql)——
+#      重放优先取服务器最新真实 job,#37 被某单数据判成显著正向(→push)是合法产出,
+#      写死 id 会把"数据变了"误报成"代码坏了"(20260814 首装实证,30过/1挂即此)。
+#   ⚠ 必须配套装 ma-skill-fix30(叶子 oracle/三形态渲染/sql_to_zh/eval_condition 都在
+#      skill 侧),否则:模型人群 pandas 条件仍是老的反解析产物(含分类切分的跑不通,
+#      会全部 fail-open 回退 estimated_size)、一致性自检因缺 scope/channel 字段而全部
+#      退化为全量口径。两包一起装,顺序无所谓,装完一起重启。
 # fix19(2026-08-12):人群规则出参新增中文口径 filter_zh ——
 #   ⓐ ma_core.py:/result 的公开投影加第六个字段 filter_zh(该人群筛选条件的中文说法,
 #      与报告附录「筛选条件（中文）」同源)。**执行仍以 sql_filter 为准** —— 中文只给人看,
@@ -172,6 +196,18 @@ if [ "$FAIL" -ne 0 ]; then
 fi
 
 echo "=== 装完了,回归全过。 ==="
+echo
+echo "fix20:crowd_push 去 Spark,改本地 data.parquet 校验 ——"
+echo "  - 8/14 两单并发炸(SPARK-2243 / setCallSite)从根上消失:进程内不再有 Spark。"
+echo "  - MA_POP_TABLE / MA_POP_FILTER 作废;push_sql 口径不变(特征表 + activity 过滤)。"
+echo "  - 新增 env:MA_RULE_CHECK=strict|lenient(默认 strict)、MA_REQUIRE_RULES=1|0(默认 1)。"
+echo "  - ⚠ 必须配套装 ma-skill-fix30:"
+echo "      bash ~/.claude/skills/marketing-audit/scripts/install_skill.sh ma-skill-fix30.tar.gz"
+echo "  - 首跑建议 export MA_RULE_CHECK=lenient 观察 2~3 单:job warnings 里如出现"
+echo "    「一致性自检不过」需先查口径(如训练采样),确认后去掉该 env 回 strict。"
+echo "  - 上线后盯两个应恒为 0 的量:skill 日志的 oracle 自检 WARNING、job 的自检剔除。"
+echo "  - 抽查一单 /result:rules[].filter_zh 应为逐 token 直译口径(字段中文+且/或/属于);"
+echo "    meta 里 data_source=parquet:data.parquet 即新链路生效。"
 echo
 echo "fix19:人群规则出参新增中文口径 ——"
 echo "  - /result 出参 rules 逐条现在是六个字段:name/finding_id/sql_filter/filter_zh/direction/suggestion。"

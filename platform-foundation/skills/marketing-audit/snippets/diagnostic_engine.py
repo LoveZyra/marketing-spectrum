@@ -97,6 +97,70 @@ def _is_nan(v) -> bool:
         return False
 
 
+def eval_condition(condition: str, df: pd.DataFrame) -> "pd.Series | None":
+    """将 pandas 布尔条件字符串在 df 上求值为布尔 Series;失败返回 None。
+
+    全链路唯一的条件执行器(2026-08-14 从 DiagnosticEngine 提到模块级):
+    诊断规则打分(trigger_cnt)、模型规则叶子 oracle 自检、ma-api crowd_push
+    本地一致性自检,三处跑的是同一个函数 —— 同引擎同语义,数才可比。
+
+    使用 df.eval() 优先，对含 .str.contains / .isna() 等 pandas 方法的表达式
+    退回到 Python eval()。
+    """
+    # 方法 1：尝试 df.eval()（不支持 pandas 方法调用）
+    # 如果条件包含 .isin / .isna / .notna / .str 等方法，直接走方法 2
+    _pandas_method_pattern = re.compile(
+        r"\.(isin|isna|notna|str\.|fillna|dt\.)", re.IGNORECASE
+    )
+    if not _pandas_method_pattern.search(condition):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                mask = df.eval(condition)
+            if isinstance(mask, pd.Series) and mask.dtype == bool:
+                return mask.fillna(False)
+        except Exception:
+            pass
+
+    # 方法 2：在包含 df 列名的局部命名空间中 eval（允许 pandas 方法调用）
+    try:
+        # 检测条件中涉及 datetime 运算的列（如 convert_time - last_touch_time）并预转换
+        # 模式：对象类型列在 condition 里出现且 condition 含 .dt. 操作符
+        _dt_hint = re.compile(r"\.dt\.", re.IGNORECASE)
+        _needs_dt_parse = _dt_hint.search(condition) is not None
+        local_ns: dict[str, Any] = {}
+        for col in df.columns:
+            series = df[col]
+            if (
+                _needs_dt_parse
+                and col in condition
+                and series.dtype == object
+                and series.notna().sum() > 0
+            ):
+                # 尝试解析为 datetime；失败则保留原列
+                try:
+                    series = pd.to_datetime(series, errors="coerce")
+                except Exception:
+                    pass
+            local_ns[col] = series
+        local_ns["pd"] = pd
+        local_ns["np"] = np
+        # 数字开头等非法 Python 标识符的列(如 360d_create_order_count)没法在表达式里
+        # 裸引用,渲染器会写成 _df['360d_...'] —— 这里把整个 df 也放进命名空间接住。
+        local_ns["_df"] = df
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = eval(condition, {"__builtins__": {}}, local_ns)  # noqa: S307
+        if isinstance(result, pd.Series):
+            return result.fillna(False).astype(bool)
+        if isinstance(result, (bool, np.bool_)):
+            return pd.Series(bool(result), index=df.index)
+    except Exception as e:
+        logger.debug("DiagnosticEngine: 条件求值失败: %s → %s", condition, e)
+
+    return None
+
+
 class DiagnosticEngine:
     """规则驱动的诊断评估引擎。
 
@@ -657,60 +721,8 @@ class DiagnosticEngine:
         return self._eval_mask_from_condition(resolved, df)
 
     def _eval_mask_from_condition(self, condition: str, df: pd.DataFrame) -> pd.Series | None:
-        """将条件字符串求值为布尔 Series。
-
-        使用 df.eval() 优先，对含 .str.contains / .isna() 等 pandas 方法的表达式
-        退回到 Python eval()。
-        """
-        # 方法 1：尝试 df.eval()（不支持 pandas 方法调用）
-        # 如果条件包含 .isin / .isna / .notna / .str 等方法，直接走方法 2
-        _pandas_method_pattern = re.compile(
-            r"\.(isin|isna|notna|str\.|fillna|dt\.)", re.IGNORECASE
-        )
-        if not _pandas_method_pattern.search(condition):
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    mask = df.eval(condition)
-                if isinstance(mask, pd.Series) and mask.dtype == bool:
-                    return mask.fillna(False)
-            except Exception:
-                pass
-
-        # 方法 2：在包含 df 列名的局部命名空间中 eval（允许 pandas 方法调用）
-        try:
-            # 检测条件中涉及 datetime 运算的列（如 convert_time - last_touch_time）并预转换
-            # 模式：对象类型列在 condition 里出现且 condition 含 .dt. 操作符
-            _dt_hint = re.compile(r"\.dt\.", re.IGNORECASE)
-            _needs_dt_parse = _dt_hint.search(condition) is not None
-            local_ns: dict[str, Any] = {}
-            for col in df.columns:
-                series = df[col]
-                if (
-                    _needs_dt_parse
-                    and col in condition
-                    and series.dtype == object
-                    and series.notna().sum() > 0
-                ):
-                    # 尝试解析为 datetime；失败则保留原列
-                    try:
-                        series = pd.to_datetime(series, errors="coerce")
-                    except Exception:
-                        pass
-                local_ns[col] = series
-            local_ns["pd"] = pd
-            local_ns["np"] = np
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                result = eval(condition, {"__builtins__": {}}, local_ns)  # noqa: S307
-            if isinstance(result, pd.Series):
-                return result.fillna(False).astype(bool)
-            if isinstance(result, (bool, np.bool_)):
-                return pd.Series(bool(result), index=df.index)
-        except Exception as e:
-            logger.debug("DiagnosticEngine: 条件求值失败: %s → %s", condition, e)
-
-        return None
+        """委托模块级 eval_condition(为老调用点保留的方法壳)。"""
+        return eval_condition(condition, df)
 
     # ── 报告生成 ─────────────────────────────────────────────────────────
 
