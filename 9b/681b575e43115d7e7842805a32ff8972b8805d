@@ -1,0 +1,344 @@
+.gitignore
+  h_4e3a4dcdcf415f 22
+manifest-20260814.txt
+  h_4e3a4dcdcf415f 1-560
+prism/.env.docker.example
+  h_4e3a4dcdcf415f 32-44,99,110-118
+prism/.env.example
+  h_4e3a4dcdcf415f 20,22-26,158-159,238,240-252,255,257-265,267-280,282-289
+prism/.gitignore
+  h_4e3a4dcdcf415f 154-166
+prism/deploy.sh
+  h_4e3a4dcdcf415f 38-40
+prism/docs/nginx-subpath-template.conf
+  h_4e3a4dcdcf415f 29-31,82-87,90-94,135-140,142-145,229
+prism/eslint.config.js
+  h_4e3a4dcdcf415f 197-198
+prism/index.html
+  h_4e3a4dcdcf415f 2
+prism/package-lock.json
+  h_4e3a4dcdcf415f 38,115-117,6907-6960,13770-13778
+prism/package.json
+  h_4e3a4dcdcf415f 83,114
+prism/server/claude-sdk.js
+  h_4e3a4dcdcf415f 55-134,138-214,287-299,341,350-354,685,712,774-778,791-795,799-800,810,936-937,956,1042-1063,1066,1071,1073,1087-1094,1113-1124,1238-1239,1327-1331,1352-1353,1363,1453-1457,1496-1499,1602-1605,1666-1670,2184-2197,2262-2263,2265-2269,2285,2290-2291,2424-2452,2482,2488
+prism/server/index.js
+  h_4e3a4dcdcf415f 11,31,34,58-60,107,118,123-125,161-170,254-255,260-272,292
+prism/server/modules/assets/assets.routes.ts
+  h_4e3a4dcdcf415f 9,11,28-30,85-88,90-92
+prism/server/modules/assets/services/image-assets.service.ts
+  h_4e3a4dcdcf415f 41-79
+prism/server/modules/database/index.ts
+  h_4e3a4dcdcf415f 3
+prism/server/modules/database/migrations.ts
+  h_4e3a4dcdcf415f 427-444,563
+prism/server/modules/database/repositories/audit-log.ts
+  h_4e3a4dcdcf415f 92-101,105-112,114-115,118-119,121-123
+prism/server/modules/database/repositories/sessions.db.ts
+  h_4e3a4dcdcf415f 149-154,158-161
+prism/server/modules/database/repositories/users.ts
+  h_4e3a4dcdcf415f 159-164,170-171,174,242-254
+prism/server/modules/database/session-visibility.ts
+  h_4e3a4dcdcf415f 1-26,30-40,42-47
+prism/server/modules/database/tests/session-visibility.test.ts
+  h_4e3a4dcdcf415f 1-115
+prism/server/modules/preview/preview.routes.ts
+  h_4e3a4dcdcf415f 8-12,20-23,87-89
+prism/server/modules/preview/services/static-content.service.ts
+  h_4e3a4dcdcf415f 4,7-11,13,15-20,64,100-102
+prism/server/modules/preview/tests/static-content.service.test.ts
+  h_4e3a4dcdcf415f 8-19
+prism/server/modules/projects/services/projects-with-sessions-fetch.service.ts
+  h_4e3a4dcdcf415f 7,90-128,136-139,215-224,231-241,277,308
+prism/server/modules/providers/list/claude/claude-session-synchronizer.provider.ts
+  h_4e3a4dcdcf415f 3,47,92,159-187,193-213
+prism/server/modules/providers/list/claude/claude-sessions.provider.ts
+  h_4e3a4dcdcf415f 41-44,64,69-73,84,162-170,308-315
+prism/server/modules/providers/list/claude/history-cache.ts
+  h_4e3a4dcdcf415f 59-69,71-73,96
+prism/server/modules/providers/provider.routes.ts
+  h_4e3a4dcdcf415f 19,527-530,537-538,545-546,555,570,580,591,646-647,652-654
+prism/server/modules/providers/services/session-conversations-search.service.ts
+  h_4e3a4dcdcf415f 9,49-53,59-64,912-953,959,974-981,1120
+prism/server/modules/providers/services/sessions-watcher.service.ts
+  h_4e3a4dcdcf415f 10,202-204,217,238-239,263,272-275,277-285
+prism/server/modules/providers/services/sessions.service.ts
+  h_4e3a4dcdcf415f 5,13,95-118,124-126,149-153,163,227-230
+prism/server/modules/providers/tests/history-cache-entry-cap.test.ts
+  h_4e3a4dcdcf415f 5,7-10,12-27,30-35,38-45
+prism/server/modules/websocket/services/chat-run-registry.service.ts
+  h_4e3a4dcdcf415f 7,37-38,59-78,123-126,128-135,188-204,278,356,358-366,374,378-389
+prism/server/modules/websocket/services/chat-session-writer.service.ts
+  h_4e3a4dcdcf415f 1-4,57-72,84,137-158,178-204,206-220
+prism/server/modules/websocket/services/chat-websocket.service.ts
+  h_4e3a4dcdcf415f 5,8,10,78-82,92-98,185-211,279-297,314-317,378-383,393-410,438-442,447-462,494-499,528,544-547
+prism/server/modules/websocket/services/conversation-ownership.service.ts
+  h_4e3a4dcdcf415f 2-11,13-15,17-19,21,23-36,38-41,43-46,48-50
+prism/server/modules/websocket/services/shell-websocket.service.ts
+  h_4e3a4dcdcf415f 8-11,16-17,37-47,55-59,106-115,119,125,136-142,145,148,154-163,166,169,171,175-176,178-180,244,249-254,287-289,294-309,315-317,324,364-382,389-421,423-425,451-452,556,559-564,567-573,621-628,630-649
+prism/server/modules/websocket/services/websocket-server.service.ts
+  h_4e3a4dcdcf415f 13,69
+prism/server/modules/websocket/services/websocket-state.service.ts
+  h_4e3a4dcdcf415f 11-18
+prism/server/modules/websocket/tests/chat-run-registry.test.ts
+  h_4e3a4dcdcf415f 225-237,256-258,263-316
+prism/server/modules/websocket/tests/chat-send-visibility.test.ts
+  h_4e3a4dcdcf415f 1-15,18,20-22,24-28,30-32,35-43,45-60,63-72,74-81,85-106,109-113,116-118,120-185
+prism/server/modules/websocket/tests/chat-stream-fanout.test.ts
+  h_4e3a4dcdcf415f 1-3,6-52,55-56,59-61,64-66,70-73,75-78,80-90,94-169,171-226,228-229
+prism/server/modules/websocket/tests/conversation-ownership.test.ts
+  h_4e3a4dcdcf415f 3,5-17,20-21,23-27,30-32,35-38,41-43,45-48,50-59
+prism/server/routes/agent.js
+  h_4e3a4dcdcf415f 14,18-53,934-944
+prism/server/routes/auth.js
+  h_4e3a4dcdcf415f 64-76,79,82,86-87,89-92,356-359,361-362
+prism/server/routes/checkpoints.js
+  h_4e3a4dcdcf415f 29-30,34-79,128-130,143-146,156-159,170-173,211-214
+prism/server/routes/tests/agent-workspace-containment.test.js
+  h_4e3a4dcdcf415f 1-84
+prism/server/shared/express-user.d.ts
+  h_4e3a4dcdcf415f 1,4,6-14,16-24,26,29
+prism/server/shared/preview-tickets.js
+  h_4e3a4dcdcf415f 1,3-5,7-10,12-13,16-17,19,21,23-26,29,32-34,37,44,50-51,54,56
+prism/server/shared/project-visibility.js
+  h_4e3a4dcdcf415f 1-86
+prism/server/shared/tests/project-visibility.test.js
+  h_4e3a4dcdcf415f 1-52
+prism/server/shared/tests/ticket-store.test.js
+  h_4e3a4dcdcf415f 1-80
+prism/server/shared/ticket-store.js
+  h_4e3a4dcdcf415f 1,4-11,13-17,19-29,31-33,35-51,53-68,71-74,77-81,83-88,91
+prism/server/shared/types.ts
+  h_4e3a4dcdcf415f 35-41,67-80
+prism/server/shared/ws-tickets.js
+  h_4e3a4dcdcf415f 1,3-12,14,16,19,21-22,28,32,34-35,38-40,42-44
+prism/server/tests/bypass-under-root.test.js
+  h_4e3a4dcdcf415f 1-105
+prism/server/tests/pending-approval-lookup.test.js
+  h_4e3a4dcdcf415f 5-21,24-26,29-35,38-41,45-47,49-54
+prism/server/tsconfig.json
+  h_4e3a4dcdcf415f 34
+prism/src/App.tsx
+  h_4e3a4dcdcf415f 1,7,9-13,119-128
+prism/src/components/auth/context/AuthContext.tsx
+  h_4e3a4dcdcf415f 93,99,104,128,164
+prism/src/components/auth/view/AuthLoadingScreen.tsx
+  h_4e3a4dcdcf415f 1-2,8-9,29
+prism/src/components/auth/view/AuthScreenLayout.tsx
+  h_4e3a4dcdcf415f 7-12,53-61
+prism/src/components/auth/view/LoginForm.tsx
+  h_4e3a4dcdcf415f 67,116
+prism/src/components/auth/view/ProtectedRoute.tsx
+  h_4e3a4dcdcf415f 1,13-22,24
+prism/src/components/auth/view/RegisterForm.tsx
+  h_4e3a4dcdcf415f 46,71-72,85,94-95,134,143
+prism/src/components/auth/view/SetupForm.tsx
+  h_4e3a4dcdcf415f 3,24-30,34,38,42,46,59,77,88,93-94,100,103,112,115,125,128,137,150,153
+prism/src/components/chat/hooks/replay-cursor.test.ts
+  h_4e3a4dcdcf415f 3,5,8-16,18-22,25-27,30-34
+prism/src/components/chat/hooks/useChatRealtimeHandlers.ts
+  h_4e3a4dcdcf415f 16-27,118-119
+prism/src/components/chat/tools/ToolRenderer.tsx
+  h_4e3a4dcdcf415f 49-56,62
+prism/src/components/chat/view/subcomponents/ChatComposer.tsx
+  h_4e3a4dcdcf415f 853,855,860
+prism/src/components/chat/view/subcomponents/ChatEmptyState.tsx
+  h_4e3a4dcdcf415f 1,4,12,19,24,32,39-50
+prism/src/components/chat/view/subcomponents/ChatMessagesPane.tsx
+  h_4e3a4dcdcf415f 15,148
+prism/src/components/file-tree/view/FileContextMenu.tsx
+  h_4e3a4dcdcf415f 3,190
+prism/src/components/main-content/view/subcomponents/MainContentTabSwitcher.tsx
+  h_4e3a4dcdcf415f 20,40,46,55
+prism/src/components/main-content/view/subcomponents/MainContentTitle.tsx
+  h_4e3a4dcdcf415f 12,37,66
+prism/src/components/mcp/view/McpServers.tsx
+  h_4e3a4dcdcf415f 49-52,138
+prism/src/components/quick-settings-panel/constants.ts
+  h_4e3a4dcdcf415f 5
+prism/src/components/quick-settings-panel/types.ts
+  h_4e3a4dcdcf415f 7
+prism/src/components/quick-settings-panel/view/QuickSettingsContent.tsx
+  h_4e3a4dcdcf415f 32
+prism/src/components/settings/constants/constants.ts
+  h_4e3a4dcdcf415f 2,18-19,23-30,32-37,40-42
+prism/src/components/settings/constants/settings-tabs.test.ts
+  h_4e3a4dcdcf415f 1,3,5-6,8-22,26-27,30-31,34-35,38-40,42
+prism/src/components/settings/hooks/useSettingsController.ts
+  h_4e3a4dcdcf415f 7,41-43
+prism/src/components/settings/types/types.ts
+  h_4e3a4dcdcf415f 6
+prism/src/components/settings/view/SettingsSidebar.tsx
+  h_4e3a4dcdcf415f 1-2,16-19,21-23
+prism/src/components/settings/view/tabs/AboutTab.tsx
+  h_4e3a4dcdcf415f 2
+prism/src/components/shell/hooks/useShellConnection.ts
+  h_4e3a4dcdcf415f 21,46,157,192
+prism/src/components/shell/hooks/useShellRuntime.ts
+  h_4e3a4dcdcf415f 1,32-38,78,120-134,144-145
+prism/src/components/shell/types/types.ts
+  h_4e3a4dcdcf415f 17-22,77-80
+prism/src/components/shell/view/Shell.tsx
+  h_4e3a4dcdcf415f 64-65,292-298
+prism/src/components/shell/view/subcomponents/ShellHeader.tsx
+  h_4e3a4dcdcf415f 1,19-25,44-48,65-66,70-83
+prism/src/components/sidebar/hooks/useSidebarController.ts
+  h_4e3a4dcdcf415f 803
+prism/src/components/sidebar/types/types.ts
+  h_4e3a4dcdcf415f 46-47
+prism/src/components/sidebar/view/Sidebar.tsx
+  h_4e3a4dcdcf415f 1-4,25,44-49,159,285
+prism/src/components/sidebar/view/subcomponents/SidebarContent.tsx
+  h_4e3a4dcdcf415f 143,176,547
+prism/src/components/sidebar/view/subcomponents/SidebarFooter.tsx
+  h_4e3a4dcdcf415f 1,6-7,11-28,36,52,66
+prism/src/components/sidebar/view/subcomponents/SidebarHeader.tsx
+  h_4e3a4dcdcf415f 86,236
+prism/src/components/sidebar/view/subcomponents/SidebarProjectItem.tsx
+  h_4e3a4dcdcf415f 45,87,410
+prism/src/components/sidebar/view/subcomponents/SidebarProjectList.tsx
+  h_4e3a4dcdcf415f 31,77,154
+prism/src/components/sidebar/view/subcomponents/SidebarProjectSessions.tsx
+  h_4e3a4dcdcf415f 21,70,132
+prism/src/components/sidebar/view/subcomponents/SidebarSessionItem.tsx
+  h_4e3a4dcdcf415f 18-25,78,96-101,139,142-146,151-155,158-161
+prism/src/contexts/WebSocketContext.tsx
+  h_4e3a4dcdcf415f 60-64,66-67,331,335,339
+prism/src/hooks/usePendingApprovalCount.test.ts
+  h_4e3a4dcdcf415f 1-34
+prism/src/hooks/usePendingApprovalCount.ts
+  h_4e3a4dcdcf415f 3,5-17,19,21,23-24,26-28,33-39,41,44-47,49-59
+prism/src/hooks/useProjectsState.ts
+  h_4e3a4dcdcf415f 363-375,466-489,702-717,824,1075,1093
+prism/src/i18n/config.js
+  h_4e3a4dcdcf415f 16-24,27-116,165,190-197,200-201,206-213,223-226
+prism/src/i18n/i18n-wiring.test.ts
+  h_4e3a4dcdcf415f 5,9,42-54,71-75,77,79-83,85,196-302
+prism/src/i18n/locales/de/auth.json
+  h_4e3a4dcdcf415f 10
+prism/src/i18n/locales/de/chat.json
+  h_4e3a4dcdcf415f 20,28,58,76,87-88,96-98,119
+prism/src/i18n/locales/de/common.json
+  h_4e3a4dcdcf415f 5,10,13,16,62,85,90,97,101
+prism/src/i18n/locales/de/settings.json
+  h_4e3a4dcdcf415f 6,11,14,37,126,137,180
+prism/src/i18n/locales/de/sidebar.json
+  h_4e3a4dcdcf415f 15,22,39-40,46,50,72,78
+prism/src/i18n/locales/en/auth.json
+  h_4e3a4dcdcf415f 2-22,26,32,51
+prism/src/i18n/locales/en/chat.json
+  h_4e3a4dcdcf415f 20,28,68,86,97-98,106-108,129,131
+prism/src/i18n/locales/en/common.json
+  h_4e3a4dcdcf415f 5,10,13,16,62,85,90,97,101
+prism/src/i18n/locales/en/settings.json
+  h_4e3a4dcdcf415f 7,12,15,38,127,138,181
+prism/src/i18n/locales/en/sidebar.json
+  h_4e3a4dcdcf415f 15,22,39-40,46,50,72,78
+prism/src/i18n/locales/fr/auth.json
+  h_4e3a4dcdcf415f 10
+prism/src/i18n/locales/fr/chat.json
+  h_4e3a4dcdcf415f 20,28,58,76,87-88,96-98,119
+prism/src/i18n/locales/fr/common.json
+  h_4e3a4dcdcf415f 5,10,13,16,62,85,90,97,101
+prism/src/i18n/locales/fr/settings.json
+  h_4e3a4dcdcf415f 6,11,14,37,126,137,180
+prism/src/i18n/locales/fr/sidebar.json
+  h_4e3a4dcdcf415f 15,22,39-40,46,50,72,78
+prism/src/i18n/locales/it/auth.json
+  h_4e3a4dcdcf415f 10
+prism/src/i18n/locales/it/chat.json
+  h_4e3a4dcdcf415f 20,28,58,76,87-88,96-98,119
+prism/src/i18n/locales/it/common.json
+  h_4e3a4dcdcf415f 5,10,13,16,62,85,90,97,101
+prism/src/i18n/locales/it/settings.json
+  h_4e3a4dcdcf415f 6,11,14,37,126,137,180
+prism/src/i18n/locales/it/sidebar.json
+  h_4e3a4dcdcf415f 15,22,39-40,46,50,72,78
+prism/src/i18n/locales/ja/auth.json
+  h_4e3a4dcdcf415f 10
+prism/src/i18n/locales/ja/chat.json
+  h_4e3a4dcdcf415f 20,28,56,82-83,91-93,114
+prism/src/i18n/locales/ja/common.json
+  h_4e3a4dcdcf415f 5,10,13,16,62,85,90,97,101
+prism/src/i18n/locales/ja/settings.json
+  h_4e3a4dcdcf415f 6,11,14,37,126,137,180
+prism/src/i18n/locales/ja/sidebar.json
+  h_4e3a4dcdcf415f 15,22,38-39,45,49,70
+prism/src/i18n/locales/ko/auth.json
+  h_4e3a4dcdcf415f 10
+prism/src/i18n/locales/ko/chat.json
+  h_4e3a4dcdcf415f 20,28,58,76,87-88,96-98,119
+prism/src/i18n/locales/ko/common.json
+  h_4e3a4dcdcf415f 5,10,13,16,62,85,90,97,101
+prism/src/i18n/locales/ko/settings.json
+  h_4e3a4dcdcf415f 6,11,14,37,126,137,180
+prism/src/i18n/locales/ko/sidebar.json
+  h_4e3a4dcdcf415f 15,22,38-39,45,49,69
+prism/src/i18n/locales/ru/auth.json
+  h_4e3a4dcdcf415f 10
+prism/src/i18n/locales/ru/chat.json
+  h_4e3a4dcdcf415f 20,28,58,76,87-88,96-98,119
+prism/src/i18n/locales/ru/common.json
+  h_4e3a4dcdcf415f 5,10,13,16,62,85,90,97,101
+prism/src/i18n/locales/ru/settings.json
+  h_4e3a4dcdcf415f 6,11,14,37,126,137,180
+prism/src/i18n/locales/ru/sidebar.json
+  h_4e3a4dcdcf415f 15,22,39-40,46,50,76,84
+prism/src/i18n/locales/tr/auth.json
+  h_4e3a4dcdcf415f 10
+prism/src/i18n/locales/tr/chat.json
+  h_4e3a4dcdcf415f 20,28,58,76,87-88,96-98,119
+prism/src/i18n/locales/tr/common.json
+  h_4e3a4dcdcf415f 5,10,13,16,62,85,90,97,101
+prism/src/i18n/locales/tr/settings.json
+  h_4e3a4dcdcf415f 6,11,14,37,127,138,181
+prism/src/i18n/locales/tr/sidebar.json
+  h_4e3a4dcdcf415f 15,22,39-40,46,50,72,78
+prism/src/i18n/locales/zh-CN/auth.json
+  h_4e3a4dcdcf415f 2-22,26,32,51
+prism/src/i18n/locales/zh-CN/chat.json
+  h_4e3a4dcdcf415f 20,28,48-50,56-63,68,86,97-98,106-108,129,131
+prism/src/i18n/locales/zh-CN/codeEditor.json
+  h_4e3a4dcdcf415f 24-25,40-42
+prism/src/i18n/locales/zh-CN/common.json
+  h_4e3a4dcdcf415f 5,10,13,16,62,85,90,97,101,133-138
+prism/src/i18n/locales/zh-CN/settings.json
+  h_4e3a4dcdcf415f 7,12,15,38,127,138,181,255-258
+prism/src/i18n/locales/zh-CN/sidebar.json
+  h_4e3a4dcdcf415f 15,22,39-40,46,50,72,78
+prism/src/i18n/locales/zh-TW/auth.json
+  h_4e3a4dcdcf415f 10
+prism/src/i18n/locales/zh-TW/chat.json
+  h_4e3a4dcdcf415f 20,28,94,112,123-124,132-134,155
+prism/src/i18n/locales/zh-TW/common.json
+  h_4e3a4dcdcf415f 5,10,13,16,62,85,90,97,101
+prism/src/i18n/locales/zh-TW/settings.json
+  h_4e3a4dcdcf415f 6,11,14,37,127,138,181
+prism/src/i18n/locales/zh-TW/sidebar.json
+  h_4e3a4dcdcf415f 15,22,38-39,45,49,71,77
+prism/src/shared/view/SyntaxHighlighterImpl.tsx
+  h_4e3a4dcdcf415f 2-10
+prism/src/shared/view/ui/LanguageSelector.tsx
+  h_4e3a4dcdcf415f 6,26-29
+prism/src/stores/useSessionStore.ts
+  h_4e3a4dcdcf415f 155-164,166-169,171-173,218-223,228-231,290,297,365-375,386,393,464-466,666-677
+prism/src/types/app.ts
+  h_4e3a4dcdcf415f 36
+prism/src/types/react-syntax-highlighter.d.ts
+  h_4e3a4dcdcf415f 3-5
+prism/vite.config.js
+  h_4e3a4dcdcf415f 65-73
+prism/新服务器部署说明.md
+  h_4e3a4dcdcf415f 14-19,48-55,71-76,100-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "9b681b575e43115d7e7842805a32ff8972b8805d",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
