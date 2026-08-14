@@ -1,0 +1,38 @@
+platform-foundation/services/ma-api/install.sh
+  h_4e3a4dcdcf415f 4-27,200-211
+platform-foundation/services/ma-api/ma_pipeline.py
+  h_4e3a4dcdcf415f 23,57-64,121-132,553-627,630-643,645-664,666-718,721,723-726,729-732,734-741,743-768,773-786,788-814,818-822,825-826,829-843,846-872,4038-4040,4055,4087-4088,4173-4178
+platform-foundation/services/ma-api/regress_direction.py
+  h_4e3a4dcdcf415f 170-182,184-200
+platform-foundation/skills/marketing-audit/feature_schema/diagnostic_rules.yaml
+  h_4e3a4dcdcf415f 660,665-666
+platform-foundation/skills/marketing-audit/snippets/crowd_translator.py
+  h_4e3a4dcdcf415f 195-220,222-223,226-243,245-278,292,300-303,305-309,337-340
+platform-foundation/skills/marketing-audit/snippets/diagnostic_engine.py
+  h_4e3a4dcdcf415f 100-163,724-725
+platform-foundation/skills/marketing-audit/snippets/feature_labels.py
+  h_4e3a4dcdcf415f 1-111
+platform-foundation/skills/marketing-audit/snippets/model_analyst.py
+  h_4e3a4dcdcf415f 12-14,22-31,113,183,434-435,438-439,443,454-476,478-479,489,502-580,663-699,701-702,707,712,719,721-733,735,737-738,742-797,799-824,826-827,829-835,837-838,842-850,853-856,859-878,881,883,886-888,909-932,939,943,952,955-956,985-995,1001,1010-1012,1022,1039-1042,1054-1055,1057-1058,1087-1123,1127,1153-1155,1158-1160,1164-1166
+platform-foundation/skills/marketing-audit/snippets/model_interpreter.py
+  h_4e3a4dcdcf415f 630-633
+platform-foundation/skills/marketing-audit/snippets/report_renderer.py
+  h_4e3a4dcdcf415f 620-629,1768-1776,1780-1791
+platform-foundation/skills/marketing-audit/tests/golden_filter_zh.json
+  h_4e3a4dcdcf415f 1-41
+platform-foundation/skills/marketing-audit/tests/test_crowd_filter_zh.py
+  h_4e3a4dcdcf415f 3-14,26,40,42,48-80,82-84,86-87,91,93,97-98,107
+platform-foundation/skills/marketing-audit/tests/test_rule_chain_fix30.py
+  h_4e3a4dcdcf415f 1-400
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "af5629bd6e96c1e70c4d5c3264a676f02756e3c1",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
