@@ -14,6 +14,12 @@ export type ShellInitMessage = {
   rows: number;
   initialCommand: string | null | undefined;
   isPlainShell: boolean;
+  /**
+   * 显式在终端里接管这段对话。默认 false —— Shell 面板默认是项目目录下的普通
+   * 终端,不再自动 `claude --resume`(那会和 chat 的常驻运行时同时持有同一段
+   * 对话,两个进程互相覆盖)。
+   */
+  takeover?: boolean;
   forceRestart?: boolean;
 };
 
@@ -68,4 +74,8 @@ export type UseShellRuntimeResult = {
   isConnecting: boolean;
   connectToShell: (options?: { forceRestart?: boolean }) => void;
   disconnectFromShell: (options?: { suppressAutoConnect?: boolean }) => void;
+  /** 终端是否已接管当前对话。 */
+  isTakenOver: boolean;
+  /** 在终端里接管当前对话(会重连,并释放 chat 侧运行时)。 */
+  takeOverConversation: () => void;
 };

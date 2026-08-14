@@ -1,96 +1,45 @@
-// Single-use, short-lived WebSocket auth tickets.
-//
-// Flow: an authenticated HTTP client calls POST /api/auth/ws-ticket (see
-// server/routes/auth.js), which calls `issueTicket(userId)` and returns the
-// opaque ticket string. The browser then opens the WebSocket with
-// `?ticket=<value>` and the upgrade handler calls `consumeTicket()` exactly
-// once. This keeps long-lived JWTs out of query strings (where they leak into
-// proxy/access logs); the legacy `?token=` JWT path is only honored when
-// PRISM_ALLOW_QUERY_TOKEN === '1'.
-//
-// Contract (other modules import these exact names — do not rename):
-//   issueTicket(userId)  -> 64-char hex string, valid for 60s, single use
-//   consumeTicket(ticket) -> { userId } | null
-import crypto from 'crypto';
+import { createTicketStore } from './ticket-store.js';
+
+/**
+ * WebSocket 升级用的一次性票据。
+ *
+ * 浏览器发起 WebSocket 时设不了 Authorization 头,只能把凭据放进查询串 —— 而
+ * 查询串会进代理日志和浏览器历史。所以这里发的是短命、一次性的票据而不是 JWT:
+ * 日志里留下的那一份,拿到手也已经用过了。
+ *
+ * 存储与清扫逻辑在 `ticket-store.js`,与预览票据共用一份实现 —— 两边曾经是逐字
+ * 相同的两份代码,改过一次之后开始漂。
+ */
 
 export const WS_TICKET_TTL_MS = 60_000;
 
-// ticket (hex string) -> { userId, expiresAt }
-const tickets = new Map();
-
-let sweepTimer = null;
-
-function sweepExpiredTickets(now = Date.now()) {
-  for (const [ticket, entry] of tickets) {
-    if (entry.expiresAt <= now) {
-      tickets.delete(ticket);
-    }
-  }
-
-  if (tickets.size === 0 && sweepTimer) {
-    clearInterval(sweepTimer);
-    sweepTimer = null;
-  }
-}
-
-function ensureSweepTimer() {
-  if (sweepTimer) return;
-  sweepTimer = setInterval(() => sweepExpiredTickets(), WS_TICKET_TTL_MS);
-  // Never keep the process alive just to expire tickets.
-  if (typeof sweepTimer.unref === 'function') {
-    sweepTimer.unref();
-  }
-}
+const store = createTicketStore({ ttlMs: WS_TICKET_TTL_MS });
 
 /**
- * Issues a single-use WebSocket auth ticket for the given user.
+ * 为指定用户签发一张一次性 WebSocket 票据。
  *
- * @param {string|number} userId - Authenticated user id the ticket represents.
- * @returns {string} 32 random bytes as a 64-char hex string.
+ * @param {string|number} userId
+ * @returns {string} 32 字节随机数的 64 位十六进制串
  */
 export function issueTicket(userId) {
   if (userId === undefined || userId === null || userId === '') {
     throw new Error('issueTicket requires a userId');
   }
-
-  // Opportunistic cleanup keeps the map bounded even if the timer was unref'd
-  // away in short-lived processes.
-  sweepExpiredTickets();
-
-  const ticket = crypto.randomBytes(32).toString('hex');
-  tickets.set(ticket, {
-    userId,
-    expiresAt: Date.now() + WS_TICKET_TTL_MS,
-  });
-  ensureSweepTimer();
-
-  return ticket;
+  return store.issue({ userId });
 }
 
 /**
- * Consumes a ticket. A ticket is valid exactly once and only within its TTL.
+ * 消费一张票据。有效期内且只能用一次。
  *
- * @param {unknown} ticket - Value received from the client.
- * @returns {{ userId: string|number } | null} The owning user id, or null when
- *   the ticket is unknown, already used, or expired.
+ * @param {unknown} ticket
+ * @returns {{ userId: string|number } | null} 未知、已用过或已过期都返回 null
  */
 export function consumeTicket(ticket) {
-  if (typeof ticket !== 'string' || ticket.length === 0) {
-    return null;
-  }
+  const payload = store.consume(ticket);
+  return payload ? { userId: payload.userId } : null;
+}
 
-  const entry = tickets.get(ticket);
-  if (!entry) {
-    return null;
-  }
-
-  // Single use: remove before the expiry check so an expired ticket can never
-  // be replayed either.
-  tickets.delete(ticket);
-
-  if (entry.expiresAt <= Date.now()) {
-    return null;
-  }
-
-  return { userId: entry.userId };
+/** 仅供测试。 */
+export function __resetTicketsForTest() {
+  store.reset();
 }

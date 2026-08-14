@@ -3,51 +3,15 @@
   "tabs": {
     "account": "Account",
     "permissions": "Permessi",
-    "mcpServers": "Server MCP",
-    "appearance": "Aspetto"
+    "mcpServers": "Server MCP"
   },
   "account": {
-    "title": "Account",
     "language": "Lingua",
     "languageLabel": "Lingua dell'interfaccia",
-    "languageDescription": "Scegli la lingua preferita per l'interfaccia",
-    "username": "Nome utente",
-    "email": "Email",
-    "profile": "Profilo",
-    "changePassword": "Cambia password"
-  },
-  "mcp": {
-    "title": "Server MCP",
-    "addServer": "Aggiungi server",
-    "editServer": "Modifica server",
-    "deleteServer": "Elimina server",
-    "serverName": "Nome server",
-    "serverType": "Tipo server",
-    "config": "Configurazione",
-    "testConnection": "Testa connessione",
-    "status": "Stato",
-    "connected": "Connesso",
-    "disconnected": "Disconnesso",
-    "scope": {
-      "label": "Ambito",
-      "user": "Utente",
-      "project": "Progetto"
-    }
+    "languageDescription": "Scegli la lingua preferita per l'interfaccia"
   },
   "appearance": {
-    "title": "Aspetto",
-    "theme": "Tema",
-    "codeEditor": "Editor codice",
-    "editorTheme": "Tema editor",
-    "wordWrap": "A capo automatico",
-    "showMinimap": "Mostra minimappa",
-    "lineNumbers": "Numeri di riga",
-    "fontSize": "Dimensione carattere"
-  },
-  "actions": {
-    "saveChanges": "Salva modifiche",
-    "resetToDefaults": "Ripristina predefiniti",
-    "cancelChanges": "Annulla modifiche"
+    "theme": "Tema"
   },
   "quickSettings": {
     "title": "Impostazioni rapide",
@@ -70,44 +34,19 @@
     }
   },
   "terminalShortcuts": {
-    "title": "Scorciatoie terminale",
-    "sectionKeys": "Tasti",
-    "sectionNavigation": "Navigazione",
-    "escape": "Escape",
-    "tab": "Tab",
-    "shiftTab": "Shift+Tab",
-    "arrowUp": "Freccia su",
-    "arrowDown": "Freccia giù",
-    "scrollDown": "Scorri giù",
-    "handle": {
-      "closePanel": "Chiudi pannello scorciatoie",
-      "openPanel": "Apri pannello scorciatoie"
-    }
+    "scrollDown": "Scorri giù"
   },
   "mainTabs": {
-    "label": "Impostazioni",
     "agents": "Agenti",
     "appearance": "Aspetto",
-    "git": "Git",
     "apiTokens": "API e Token",
-    "tasks": "Attività",
     "notifications": "Notifiche",
-    "plugins": "Plugin",
     "about": "Informazioni",
     "accounts": "Accounts"
   },
   "notifications": {
     "title": "Notifiche",
     "description": "Controlla quali notifiche ricevere.",
-    "webPush": {
-      "title": "Notifiche push web",
-      "enable": "Abilita notifiche push",
-      "disable": "Disabilita notifiche push",
-      "enabled": "Le notifiche push sono abilitate",
-      "loading": "Aggiornamento...",
-      "unsupported": "Le notifiche push non sono supportate in questo browser.",
-      "denied": "Le notifiche push sono bloccate. Abilitale nelle impostazioni del browser."
-    },
     "sound": {
       "title": "Suono",
       "description": "Riproduci un breve tono quando termina un'esecuzione della chat.",
@@ -134,10 +73,6 @@
     },
     "codeEditor": {
       "title": "Editor codice",
-      "theme": {
-        "label": "Tema editor",
-        "description": "Tema predefinito per l'editor di codice"
-      },
       "wordWrap": {
         "label": "A capo automatico",
         "description": "Abilita il ritorno a capo automatico nell'editor"
@@ -167,10 +102,6 @@
     },
     "scope": {
       "label": "Ambito",
-      "userGlobal": "Utente (globale)",
-      "projectLocal": "Progetto (locale)",
-      "userDescription": "Ambito utente: disponibile in tutti i progetti sulla tua macchina",
-      "projectDescription": "Ambito locale: disponibile solo nel progetto selezionato",
       "cannotChange": "L'ambito non può essere modificato quando si modifica un server esistente"
     },
     "fields": {
@@ -192,11 +123,8 @@
       "stdioRequiresCommand": "Il tipo stdio richiede un campo command",
       "httpRequiresUrl": "Il tipo {{type}} richiede un campo url",
       "invalidJson": "Formato JSON non valido",
-      "jsonHelp": "Incolla la configurazione del server MCP in formato JSON. Esempi di formato:",
-      "jsonExampleStdio": "• stdio: {\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"@upstash/context7-mcp\"]}",
-      "jsonExampleHttp": "• http/sse: {\"type\":\"http\",\"url\":\"https://api.example.com/mcp\"}"
+      "jsonHelp": "Incolla la configurazione del server MCP in formato JSON. Esempi di formato:"
     },
-    "configDetails": "Dettagli configurazione (da {{configFile}})",
     "projectPath": "Percorso: {{path}}",
     "actions": {
       "cancel": "Annulla",
@@ -206,32 +134,7 @@
     }
   },
   "saveStatus": {
-    "success": "Impostazioni salvate con successo!",
-    "error": "Impossibile salvare le impostazioni",
-    "saving": "Salvataggio..."
-  },
-  "footerActions": {
-    "save": "Salva impostazioni",
-    "cancel": "Annulla"
-  },
-  "git": {
-    "title": "Configurazione Git",
-    "description": "Configura la tua identità git per i commit. Queste impostazioni verranno applicate globalmente tramite git config --global",
-    "name": {
-      "label": "Nome Git",
-      "help": "Il tuo nome per i commit git"
-    },
-    "email": {
-      "label": "Email Git",
-      "help": "La tua email per i commit git"
-    },
-    "actions": {
-      "save": "Salva configurazione",
-      "saving": "Salvataggio..."
-    },
-    "status": {
-      "success": "Salvato con successo"
-    }
+    "success": "Impostazioni salvate con successo!"
   },
   "apiKeys": {
     "title": "Chiavi API",
@@ -259,7 +162,6 @@
     },
     "github": {
       "title": "Token GitHub",
-      "description": "Aggiungi token di accesso personale GitHub per clonare repository privati tramite l'API esterna.",
       "descriptionAlt": "Aggiungi token di accesso personale GitHub per clonare repository privati. Puoi anche passare i token direttamente nelle richieste API senza salvarli.",
       "addButton": "Aggiungi token",
       "form": {
@@ -275,29 +177,7 @@
       "confirmDelete": "Sei sicuro di voler eliminare questo token GitHub?"
     },
     "apiDocsLink": "Documentazione API",
-    "loading": "Caricamento...",
-    "version": {
-      "updateAvailable": "Aggiornamento disponibile: v{{version}}"
-    }
-  },
-  "tasks": {
-    "checking": "Verifica installazione TaskMaster...",
-    "notInstalled": {
-      "title": "TaskMaster AI CLI non installato",
-      "description": "TaskMaster CLI è necessario per usare le funzionalità di gestione attività. Installalo per iniziare:",
-      "installCommand": "npm install -g task-master-ai",
-      "viewOnGitHub": "Vedi su GitHub",
-      "afterInstallation": "Dopo l'installazione:",
-      "steps": {
-        "restart": "Riavvia questa applicazione",
-        "autoAvailable": "Le funzionalità TaskMaster saranno automaticamente disponibili",
-        "initCommand": "Usa task-master init nella directory del tuo progetto"
-      }
-    },
-    "settings": {
-      "enableLabel": "Abilita integrazione TaskMaster",
-      "enableDescription": "Mostra attività TaskMaster, banner e indicatori nella barra laterale nell'interfaccia"
-    }
+    "loading": "Caricamento..."
   },
   "agents": {
     "authStatus": {
@@ -344,32 +224,12 @@
       "placeholder": "es. \"Bash(rm:*)\"",
       "empty": "Nessuno strumento bloccato configurato"
     },
-    "allowedCommands": {
-      "title": "Comandi shell consentiti",
-      "description": "Comandi shell automaticamente consentiti senza richiedere permesso",
-      "placeholder": "es. \"Shell(ls)\" o \"Shell(git status)\"",
-      "quickAdd": "Aggiunta rapida comandi comuni:",
-      "empty": "Nessun comando consentito configurato"
-    },
-    "blockedCommands": {
-      "title": "Comandi shell bloccati",
-      "description": "Comandi shell automaticamente bloccati",
-      "placeholder": "es. \"Shell(rm -rf)\" o \"Shell(sudo)\"",
-      "empty": "Nessun comando bloccato configurato"
-    },
     "toolExamples": {
       "title": "Esempi pattern strumenti:",
       "bashGitLog": "- Consenti tutti i comandi git log",
       "bashGitDiff": "- Consenti tutti i comandi git diff",
       "write": "- Consenti tutti gli utilizzi dello strumento Write",
       "bashRm": "- Blocca tutti i comandi rm (pericoloso)"
-    },
-    "shellExamples": {
-      "title": "Esempi comandi shell:",
-      "ls": "- Consenti comando ls",
-      "gitStatus": "- Consenti git status",
-      "npmInstall": "- Consenti npm install",
-      "rmRf": "- Blocca eliminazione ricorsiva"
     },
     "actions": {
       "add": "Aggiungi"
@@ -380,70 +240,17 @@
     "description": {
       "claude": "I server Model Context Protocol forniscono strumenti e fonti dati aggiuntive a Claude"
     },
-    "addButton": "Aggiungi server MCP",
     "empty": "Nessun server MCP configurato",
-    "serverType": "Tipo",
-    "scope": {
-      "local": "locale",
-      "user": "utente"
-    },
     "config": {
       "command": "Comando",
       "url": "URL",
       "args": "Argomenti",
       "environment": "Ambiente"
     },
-    "tools": {
-      "title": "Strumenti",
-      "count": "({{count}}):",
-      "more": "+{{count}} altri"
-    },
     "actions": {
       "edit": "Modifica server",
       "delete": "Elimina server"
     }
-  },
-  "pluginSettings": {
-    "title": "Plugin",
-    "description": "Estendi l'interfaccia con plugin personalizzati. Installa da git o inserisci una cartella in ~/.claude-code-ui/plugins/",
-    "installPlaceholder": "https://github.com/utente/mio-plugin",
-    "installButton": "Installa",
-    "installing": "Installazione…",
-    "securityWarning": "Installa solo plugin di cui hai verificato il codice sorgente o di autori di cui ti fidi.",
-    "scanningPlugins": "Scansione plugin…",
-    "noPluginsInstalled": "Nessun plugin installato",
-    "pullLatest": "Aggiorna da git",
-    "noGitRemote": "Nessun remote git — aggiornamento non disponibile",
-    "uninstallPlugin": "Disinstalla plugin",
-    "confirmUninstall": "Clicca di nuovo per confermare",
-    "confirmUninstallMessage": "Rimuovere {{name}}? Questa azione non può essere annullata.",
-    "cancel": "Annulla",
-    "remove": "Rimuovi",
-    "updateFailed": "Aggiornamento fallito",
-    "installFailed": "Installazione fallita",
-    "uninstallFailed": "Disinstallazione fallita",
-    "toggleFailed": "Attivazione/disattivazione fallita",
-    "starterPluginLabel": "Plugin iniziale",
-    "starter": "Iniziale",
-    "docs": "Documentazione",
-    "starterPlugin": {
-      "name": "Statistiche progetto",
-      "badge": "iniziale",
-      "description": "Conteggio file, righe di codice, ripartizione per tipo di file e attività recente per il tuo progetto.",
-      "install": "Installa"
-    },
-    "terminalPlugin": {
-      "name": "Terminale",
-      "badge": "ufficiale",
-      "description": "Terminale integrato con accesso completo alla shell direttamente nell'interfaccia.",
-      "install": "Installa"
-    },
-    "morePlugins": "Altri",
-    "enable": "Abilita",
-    "disable": "Disabilita",
-    "installAriaLabel": "URL repository git del plugin",
-    "tab": "scheda",
-    "runningStatus": "in esecuzione"
   },
   "accounts": {
     "title": "Account approval",

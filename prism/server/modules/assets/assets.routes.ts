@@ -6,7 +6,9 @@ import multer from 'multer';
 
 import {
   buildStoredImageRecords,
+  canonicalExtensionForMimeType,
   ensureImageAssetsDir,
+  inlineContentTypeForFile,
   isAllowedImageMimeType,
   resolveImageAssetFile,
 } from '@/modules/assets/services/image-assets.service.js';
@@ -23,8 +25,9 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
-    cb(null, `${uniqueSuffix}-${sanitizedName}`);
+    // 扩展名只由已校验的 MIME 决定,上传方给的文件名一个字符都不进磁盘名。
+    // 原始文件名仍会作为展示名返回(buildStoredImageRecords 用 originalname)。
+    cb(null, `${uniqueSuffix}${canonicalExtensionForMimeType(file.mimetype)}`);
   },
 });
 
@@ -79,8 +82,14 @@ router.get('/images/:filename', async (req, res) => {
     return res.status(404).json({ error: 'Asset not found' });
   }
 
-  const contentType = mime.lookup(resolved) || 'application/octet-stream';
+  // 类型来自白名单,不来自 `mime.lookup(任意扩展名)`。白名单之外的一律按
+  // 二进制附件下发 —— 本次加固之前落盘的历史文件可能仍带着上传方选定的扩展名。
+  const inlineType = inlineContentTypeForFile(resolved);
+  const contentType = inlineType ?? 'application/octet-stream';
   res.setHeader('Content-Type', contentType);
+  if (!inlineType) {
+    res.setHeader('Content-Disposition', 'attachment');
+  }
   // Stored-XSS hardening: never let the browser sniff a different type, and
   // force SVGs (which can carry scripts when rendered as a document) to
   // download instead of rendering inline. The chat UI is unaffected — it

@@ -57,16 +57,15 @@ type WebSocketContextType = {
  */
 const WebSocketContext = createContext<WebSocketContextType | null>(null);
 
-/**
- * The most recent frame, in a context of its own.
+/*
+ * 曾经这里还有一个 `LatestServerEventContext`,把"最近一帧"单独放一个 context,
+ * 目的是不让只用 sendMessage 的组件跟着每一帧重渲染。但它自己那一半仍然每帧都变,
+ * 而唯一的消费者是 TaskMaster —— 那个功能整体移除之后,它变成了纯粹的开销:
+ * 流式输出时以 30–60 Hz 触发一次顶层 setState,没有任何人读。
  *
- * Separate because it changes on *every* frame. While these lived in one
- * context value, a streaming assistant response re-rendered every consumer of
- * `useWebSocket()` — including the ones that only ever call `sendMessage` —
- * hundreds of times per response. Splitting the contexts means a component
- * that does not read the latest frame does not re-render for it.
+ * 现在只保留 `subscribe`:回调式、不进 React state,天然不引发重渲染,而且不会像
+ * state 那样在批处理里丢帧。
  */
-const LatestServerEventContext = createContext<ServerEvent | null>(null);
 
 export const useWebSocket = () => {
   const context = useContext(WebSocketContext);
@@ -84,7 +83,6 @@ export const useWebSocket = () => {
  * updates, so consecutive frames can overwrite each other here before anything
  * renders, which makes this API lossy under load by construction.
  */
-export const useLatestServerEvent = () => useContext(LatestServerEventContext);
 
 
 const useWebSocketProviderState = () => {
@@ -97,7 +95,6 @@ const useWebSocketProviderState = () => {
    * re-renders of the provider tree.
    */
   const listenersRef = useRef(new Set<ServerEventListener>());
-  const [latestMessage, setLatestMessage] = useState<ServerEvent | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Consecutive failed attempts; reset on a successful open. */
@@ -130,7 +127,6 @@ const useWebSocketProviderState = () => {
         console.error('WebSocket listener error:', error);
       }
     }
-    setLatestMessage(event);
   }, []);
 
   /**
@@ -332,17 +328,15 @@ const useWebSocketProviderState = () => {
     [sendMessage, subscribe, isConnected],
   );
 
-  return { connection, latestMessage };
+  return { connection };
 };
 
 export const WebSocketProvider = ({ children }: { children: React.ReactNode }) => {
-  const { connection, latestMessage } = useWebSocketProviderState();
+  const { connection } = useWebSocketProviderState();
 
   return (
     <WebSocketContext.Provider value={connection}>
-      <LatestServerEventContext.Provider value={latestMessage}>
-        {children}
-      </LatestServerEventContext.Provider>
+      {children}
     </WebSocketContext.Provider>
   );
 };

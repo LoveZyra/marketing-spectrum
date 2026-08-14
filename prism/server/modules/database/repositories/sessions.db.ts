@@ -146,11 +146,19 @@ export const sessionsDb = {
    * stays NULL until the provider runtime announces its own id and
    * `assignProviderSessionId` records the mapping.
    */
-  createAppSession(sessionId: string, provider: string, projectPath: string): string {
+  createAppSession(
+    sessionId: string,
+    provider: string,
+    projectPath: string,
+    ownerUserId: number | null = null,
+  ): string {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
 
-    projectsDb.createProjectPath(normalizedProjectPath);
+    // owner 必须在这里落下去。`createProjectPath` 的第三参默认 null,而 null 在
+    // 归属判定里的含义是"公共项目,所有人可见" —— 所以少传这一个参数,等于每个
+    // 新建的项目都对全服务器公开。已存在的项目走 ON CONFLICT,owner 不会被改。
+    projectsDb.createProjectPath(normalizedProjectPath, null, ownerUserId);
 
     db.prepare(
       `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)

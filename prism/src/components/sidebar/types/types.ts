@@ -43,6 +43,8 @@ export type SidebarProps = {
   selectedSession: ProjectSession | null;
   activeSessions: SessionActivityMap;
   attentionSessionIds: ReadonlySet<string>;
+  /** 正在等工具审批的会话 —— 侧栏红点。见 useProjectsState 里的说明。 */
+  awaitingApprovalSessionIds: ReadonlySet<string>;
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: ProjectSession) => void;
   onNewSession: (project: Project) => void;

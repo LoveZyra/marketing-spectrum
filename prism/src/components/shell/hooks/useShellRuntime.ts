@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 
@@ -29,6 +29,13 @@ export function useShellRuntime({
   const isPlainShellRef = useRef(isPlainShell);
   const onProcessCompleteRef = useRef(onProcessComplete);
   const lastSessionIdRef = useRef<string | null>(selectedSession?.id ?? null);
+  /**
+   * 是否在终端里接管当前会话。默认 false —— Shell 面板现在默认是普通终端。
+   * 用 ref 而不是 state 传给 socket 处理器,和这里其它可变值的做法一致:处理器
+   * 是长期存活的闭包,读 state 会读到建立连接那一刻的旧值。
+   */
+  const takeoverRef = useRef(false);
+  const [isTakenOver, setIsTakenOver] = useState(false);
 
   // Keep mutable values in refs so websocket handlers always read current data.
   useEffect(() => {
@@ -68,6 +75,7 @@ export function useShellRuntime({
 
   const { isConnected, isConnecting, connectToShell, disconnectFromShell } = useShellConnection({
     wsRef,
+    takeoverRef,
     terminalRef,
     fitAddonRef,
     selectedProjectRef,
@@ -109,6 +117,21 @@ export function useShellRuntime({
     lastSessionIdRef.current = currentSessionId;
   }, [disconnectFromShell, isInitialized, selectedSession?.id]);
 
+  /**
+   * 在终端里接管当前对话。
+   *
+   * 需要重连:接管与否是在 `init` 那一刻决定命令行的(普通 shell 还是
+   * `claude --resume`),连上之后改不了。所以这里断开再连,让服务端按新标志
+   * 重新起进程 —— 顺带它会先释放 chat 侧的常驻运行时。
+   */
+  const takeOverConversation = useCallback(() => {
+    takeoverRef.current = true;
+    setIsTakenOver(true);
+    disconnectFromShell();
+    // 让上面的断开先落定,再发起新连接。
+    setTimeout(() => connectToShell(), 0);
+  }, [connectToShell, disconnectFromShell]);
+
   return {
     terminalContainerRef,
     terminalRef,
@@ -118,5 +141,7 @@ export function useShellRuntime({
     isConnecting,
     connectToShell,
     disconnectFromShell,
+    isTakenOver,
+    takeOverConversation,
   };
 }

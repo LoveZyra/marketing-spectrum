@@ -9,6 +9,14 @@ import type { RealtimeClientConnection } from '@/shared/types.js';
 export const WS_OPEN_STATE = 1;
 
 /**
+ * Numeric readyState for a connection still completing its handshake.
+ *
+ * Distinguished from CLOSED/CLOSING because a CONNECTING socket is still going
+ * to become usable — anything pruning dead connections must not drop it.
+ */
+export const WS_CONNECTING_STATE = 0;
+
+/**
  * Shared registry of active chat WebSocket connections.
  *
  * Project/session services publish realtime updates by iterating this set.

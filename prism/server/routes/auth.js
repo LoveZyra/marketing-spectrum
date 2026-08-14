@@ -61,28 +61,35 @@ router.post('/register', authRateLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Username must be at least 3 characters, password at least 6 characters' });
     }
 
-    // Use a transaction to prevent race conditions
-    db.prepare('BEGIN').run();
+    // 先算哈希,再开事务。
+    //
+    // 原来的顺序是 BEGIN → await bcrypt.hash(~300ms) → COMMIT。better-sqlite3 是
+    // 单连接同步的,这 300ms 内其它请求的写会并进这个事务:用户名重复回滚时会把
+    // 无关的写一起丢掉;两个注册重叠时第二个 BEGIN 直接抛
+    // "cannot start a transaction within a transaction",它的 catch 执行 ROLLBACK
+    // 又杀掉第一个的事务,两边都 500。
+    //
+    // bcrypt 不碰数据库,没有任何理由待在事务里。挪出来之后事务体全同步,
+    // better-sqlite3 的单连接语义下它本身就是原子的。
+    const saltRounds = 12;
+    const passwordHash = await bcrypt.hash(password, saltRounds);
+
     let user;
     let approvalStatus;
-    try {
+    const createAccount = db.transaction(() => {
       // The first account on a fresh install is the setup account.
       const isFirstAccount = !userDb.hasUsers();
-      approvalStatus =
+      const status =
         isFirstAccount || isRootUser(username) || !isApprovalRequired()
           ? 'approved'
           : 'pending';
+      return { created: userDb.createUser(username, passwordHash, status), status };
+    });
 
-      // Hash password
-      const saltRounds = 12;
-      const passwordHash = await bcrypt.hash(password, saltRounds);
-
-      user = userDb.createUser(username, passwordHash, approvalStatus);
-
-      db.prepare('COMMIT').run();
-    } catch (error) {
-      db.prepare('ROLLBACK').run();
-      throw error;
+    {
+      const outcome = createAccount();
+      user = outcome.created;
+      approvalStatus = outcome.status;
     }
 
     if (approvalStatus !== 'approved') {
@@ -346,9 +353,13 @@ router.get('/audit-log', authenticateToken, (req, res) => {
   try {
     const limit = Number.parseInt(req.query.limit ?? '', 10) || 100;
     const offset = Number.parseInt(req.query.offset ?? '', 10) || 0;
+    // Root reads the whole log; everyone else reads only their own rows.
+    // Unscoped, this endpoint is an account directory: usernames, login times
+    // and IPs for every colleague on the server, readable by any account.
+    const scopeUserId = req.user?.isRoot ? null : (req.user?.id ?? -1);
     res.json({
-      entries: auditLogDb.list(limit, offset),
-      total: auditLogDb.count(),
+      entries: auditLogDb.list(limit, offset, scopeUserId),
+      total: auditLogDb.count(scopeUserId),
     });
   } catch (error) {
     console.error('Audit log error:', error);

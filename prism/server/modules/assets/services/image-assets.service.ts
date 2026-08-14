@@ -38,6 +38,45 @@ export function isAllowedImageMimeType(mimeType: string): boolean {
   return ALLOWED_IMAGE_MIME_TYPES.has(mimeType);
 }
 
+/**
+ * 每种放行 MIME 对应的规范扩展名。
+ *
+ * 落盘文件名的扩展名必须由这张表决定,**不能沿用上传方给的文件名**。原先的清洗
+ * 规则是 `originalname.replace(/[^a-zA-Z0-9.-]/g, '_')` —— 点号被保留,于是扩展名
+ * 完全由上传方决定;而取文件的路由用 `mime.lookup(扩展名)` 定 Content-Type。
+ * 两件事合起来:带一个 `Content-Type: image/png` 的分片、文件名写成 `x.html`,
+ * 就能在应用同源下拿到一个 inline 的 HTML 文档,而 JWT 就存在 localStorage 里。
+ * `nosniff` 挡不住这个 —— 声明出去的类型本身就是 text/html。
+ */
+const CANONICAL_EXTENSION_BY_MIME_TYPE: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/svg+xml': '.svg',
+};
+
+/** 放行 MIME 对应的扩展名;未知类型回落到 `.bin`(取文件时会被当附件下载)。 */
+export function canonicalExtensionForMimeType(mimeType: string): string {
+  return CANONICAL_EXTENSION_BY_MIME_TYPE[mimeType] ?? '.bin';
+}
+
+/**
+ * 允许 inline 呈现的扩展名 → Content-Type。取文件的路由据此定类型,而不是让
+ * `mime.lookup` 从任意扩展名里猜 —— 早于本次加固上传的历史文件可能仍带着
+ * 攻击者选定的扩展名,那些必须走附件下载而不是 inline 渲染。
+ */
+export function inlineContentTypeForFile(fileName: string): string | null {
+  const ext = path.extname(fileName).toLowerCase();
+  for (const [mimeType, canonical] of Object.entries(CANONICAL_EXTENSION_BY_MIME_TYPE)) {
+    if (canonical === ext) {
+      return mimeType;
+    }
+  }
+  // .jpeg 与 .jpg 同义,单独收一下。
+  return ext === '.jpeg' ? 'image/jpeg' : null;
+}
+
 /** Creates the global `~/.prism/assets` folder if needed and returns it. */
 export async function ensureImageAssetsDir(): Promise<string> {
   const assetsDir = getGlobalImageAssetsDir();

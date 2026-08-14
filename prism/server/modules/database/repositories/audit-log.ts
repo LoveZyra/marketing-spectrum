@@ -89,25 +89,38 @@ export const auditLogDb = {
     }
   },
 
-  /** Most recent entries first. `limit` is clamped to 500. */
-  list(limit = 100, offset = 0): AuditRow[] {
+  /**
+   * Most recent entries first. `limit` is clamped to 500.
+   *
+   * `userId` scopes the result to one account. The route passes it for
+   * everyone except root: these rows carry usernames, login times and client
+   * IPs, so an unscoped read lets any account enumerate who else exists on the
+   * server and when they work. Root still sees everything — that is the point
+   * of an audit log.
+   */
+  list(limit = 100, offset = 0, userId: number | null = null): AuditRow[] {
     const db = getConnection();
     const safeLimit = Math.min(Math.max(1, limit), 500);
     const safeOffset = Math.max(0, offset);
+    const columns = 'id, user_id, username, event, outcome, ip, user_agent, detail, created_at';
+
+    if (userId === null) {
+      return db
+        .prepare(`SELECT ${columns} FROM audit_log ORDER BY id DESC LIMIT ? OFFSET ?`)
+        .all(safeLimit, safeOffset) as AuditRow[];
+    }
+
     return db
-      .prepare(
-        `SELECT id, user_id, username, event, outcome, ip, user_agent, detail, created_at
-         FROM audit_log ORDER BY id DESC LIMIT ? OFFSET ?`
-      )
-      .all(safeLimit, safeOffset) as AuditRow[];
+      .prepare(`SELECT ${columns} FROM audit_log WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?`)
+      .all(userId, safeLimit, safeOffset) as AuditRow[];
   },
 
-  /** Total row count, for pagination. */
-  count(): number {
+  /** Total row count, for pagination. Same scoping contract as `list`. */
+  count(userId: number | null = null): number {
     const db = getConnection();
-    const row = db.prepare('SELECT COUNT(*) as count FROM audit_log').get() as {
-      count: number;
-    };
+    const row = userId === null
+      ? db.prepare('SELECT COUNT(*) as count FROM audit_log').get() as { count: number }
+      : db.prepare('SELECT COUNT(*) as count FROM audit_log WHERE user_id = ?').get(userId) as { count: number };
     return row.count;
   },
 

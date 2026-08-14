@@ -52,9 +52,165 @@ const pendingToolApprovals = new Map();
 // emit a second one when its generator winds down.
 const abortedSessionIds = new Set();
 
-const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
+/**
+ * 审批请求等多久。
+ *
+ * **0 = 一直等**,这是现在的默认值,而且是有意的。
+ *
+ * 原来这里是 55 秒,到点返回 `{ behavior: 'deny' }`。问题不在于 55 秒短,而在于
+ * 这个钟是从「把帧 send 出去」开始走的,而 send 到底有没有送达**没有人知道** ——
+ * `ChatSessionWriter.forward()` 在 socket 不是 OPEN 时静默丢弃。于是掉线、切标签页、
+ * 或者审批帧发到了另一个抢走 writer 的浏览器时,55 秒后系统**替用户拒绝了一个
+ * 用户从来没看见过的请求**,而聊天里只留下一句 "Permission request timed out"。
+ *
+ * 更糟的是时间对不上:客户端要沉默 60 秒才开始重连,服务端心跳 30 秒一轮、
+ * 通常两轮才判定 socket 是僵的 —— **两个恢复机制都比 55 秒长**,补发这条路
+ * 结构上就赢不了这场竞速。
+ *
+ * 所以改成一直等。中止的责任回到本来就该负责的地方:用户点停止(turn 的
+ * AbortSignal)、turn 看门狗(PRISM_TURN_TIMEOUT_MS,默认 1 小时)、以及会话被
+ * 销毁。这三条都会走 `signal` 分支返回 `{ cancelled: true }`,和超时不同的是
+ * **它们都是有人真的做了决定**。
+ *
+ * 想退回旧行为就设 CLAUDE_TOOL_APPROVAL_TIMEOUT_MS=55000。
+ */
+const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 0;
+
+/**
+ * 一次性路径上的审批上限。
+ *
+ * 常驻 runtime 有 turn 看门狗兜底(`PRISM_TURN_TIMEOUT_MS`),所以那边可以真的
+ * 一直等 —— 卡死的那一轮会被看门狗以**取消**的形式收掉,而不是被悄悄拒绝。
+ * 一次性路径没有看门狗,真无限等会把 SDK 进程和它占的 one-shot 名额永久钉住,
+ * 所以这里保留一个上限,并且刻意取同一个值,免得两条路的行为悄悄分叉。
+ */
+const ONESHOT_APPROVAL_TIMEOUT_MS = (() => {
+  const parsed = parseInt(process.env.PRISM_TURN_TIMEOUT_MS, 10);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  if (Number.isFinite(parsed) && parsed === 0) return 0; // 看门狗关掉了,这里也跟着不限
+  return 3600000; // 1 小时,与 TURN_TIMEOUT_MS 的默认值一致
+})();
+
+/**
+ * 「跳过权限」档位在 root 下会被 CLI 拒掉 —— 提前说清楚,而不是让它 exit 1。
+ *
+ * CLI 里的硬检查逐字是这样的:
+ *
+ * ```js
+ * if (mode === "bypassPermissions" || flag) {
+ *   if (process.getuid?.() === 0 && process.env.IS_SANDBOX !== "1" && !CLAUDE_CODE_BUBBLEWRAP) {
+ *     console.error("--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons");
+ *     process.exit(1);
+ *   }
+ * }
+ * ```
+ *
+ * 也就是说:**只有这一个档位受影响**,其余四个档位在 root 下照常工作。
+ * 而它失败的方式是子进程立刻退出,退出码 1,没有任何其它信息 —— 在接上 stderr
+ * 回调之前,这在服务端看起来和"CLI 没装""认证过期""磁盘满"完全一样。
+ *
+ * 返回一段人话说明,或者 null(表示没问题)。
+ *
+ * @param {string} permissionMode 本轮实际生效的权限模式
+ * @returns {string|null}
+ */
+export function describeBypassUnderRoot(permissionMode) {
+  if (permissionMode !== 'bypassPermissions') return null;
+  if (typeof process.getuid !== 'function' || process.getuid() !== 0) return null;
+  if (process.env.IS_SANDBOX === '1' || process.env.CLAUDE_CODE_BUBBLEWRAP) return null;
+
+  return '当前服务以 root 运行，而「跳过权限」这个执行档位被 Claude CLI 拒绝'
+    + '（原话：--dangerously-skip-permissions cannot be used with root/sudo privileges）。\n\n'
+    + '两个办法：\n'
+    + '· 换一个执行档位 —— 默认 / 计划 / 接受编辑 / 自动 这四个在 root 下都正常。\n'
+    + '· 或者让运维在 Prism 的 .env 里设 `IS_SANDBOX=1` 后重启，'
+    + '这会放行该档位（代价见 .env.example 里的说明）。';
+}
+
+/** 审批没等到回答时的说法 —— 说清楚是"没人回答",而不是含糊的"超时"。 */
+const APPROVAL_UNANSWERED_MESSAGE =
+  '这条工具权限请求一直没有人回应，已按拒绝处理。'
+  + '（如果你从没见过这个确认框：它只在你正**在看**该会话时才会弹出，'
+  + '侧栏该会话左侧的红点就是它在等你的提示。）';
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
+
+/**
+ * 发一条审批请求,并说清楚它到底送到了几个浏览器。
+ *
+ * 审批请求和普通内容帧不一样:内容帧丢了有补发游标兜底,审批请求没有第二次机会
+ * —— 它是一个**在等人回答的问题**。所以这里要知道有没有人收到。
+ *
+ * 送到 0 个人不再是灾难(超时已经改成"一直等",不会再替用户拒绝),但它是一个
+ * 值得记一笔的事实:用户当下看不到这个框,要等他重连或切回这个会话,由
+ * `chat_subscribed` 的 pendingPermissions 补上。日志里有这一行,下次再有人问
+ * "为什么没弹窗"时就不用靠猜。
+ *
+ * @returns {number} 送达的订阅者数量;拿不到投递信息时返回 -1(未知)
+ */
+function sendPermissionRequest(writer, message, { toolName, sessionId }) {
+  if (typeof writer?.sendAndCountDelivered === 'function') {
+    const delivered = writer.sendAndCountDelivered(message);
+    if (delivered === 0) {
+      console.warn(
+        `[Claude SDK] 审批请求没有送达任何浏览器 (tool=${toolName}, session=${sessionId || 'none'}) —— `
+        + '会一直挂着,等用户重连或切回该会话时由 pendingPermissions 补上。',
+      );
+    }
+    return delivered;
+  }
+
+  // 内部路径(prewarm、agent loop)拿到的可能是别的 writer,退回即发即忘。
+  writer.send(message);
+  return -1;
+}
+
+/** claude CLI stderr 只留最后这么多行。 */
+const STDERR_TAIL_LINES = 40;
+
+/**
+ * 收集 claude CLI 子进程的 stderr。
+ *
+ * SDK 起的是一个子进程。子进程一起来就失败时,SDK 抛的是
+ * `Claude Code process exited with code 1` —— 一个退出码,没有原因。而真正的原因
+ * (CLI 没装、认证过期、`~/.claude/settings.json` 语法坏了、磁盘满、CLI 自动升级
+ * 到了和 SDK 不兼容的版本)**全都在 stderr 里**。SDK 提供了 `stderr` 回调,
+ * 不接就直接进黑洞。
+ *
+ * 这一条空着的代价是实打实的:线上所有人都发不出消息,而服务端日志里除了那句
+ * 退出码什么都没有,只能靠绕开 Prism 手动跑一次 CLI 才能看到真实报错。
+ *
+ * 只留最后几十行 —— CLI 在 debug 模式下会往 stderr 刷大量内容,全量转发会淹掉
+ * 日志,而失败原因总在最后几行。
+ */
+function createStderrTail() {
+  /** @type {string[]} */
+  const lines = [];
+
+  const onData = (chunk) => {
+    const text = typeof chunk === 'string' ? chunk : String(chunk ?? '');
+    if (!text) return;
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      lines.push(line);
+      if (lines.length > STDERR_TAIL_LINES) lines.shift();
+    }
+  };
+
+  return {
+    onData,
+    text: () => lines.join('\n'),
+    /**
+     * 把 stderr 尾巴贴到错误消息后面。聊天里的那条 error 是用户唯一看得到的
+     * 地方,让它带上真实原因,而不是只有一个退出码。
+     */
+    describe(error) {
+      const base = error instanceof Error ? error.message : String(error);
+      if (!lines.length) return base;
+      return `${base}\n\n--- claude CLI stderr(最后 ${lines.length} 行)---\n${lines.join('\n')}`;
+    },
+  };
+}
 
 function resolveClaudeEffort(model, effort, modelsDefinition = CLAUDE_FALLBACK_MODELS) {
   const selectedModel = modelsDefinition?.OPTIONS?.find((option) => option.value === model) || null;
@@ -128,6 +284,19 @@ function waitForToolApproval(requestId, options = {}) {
   });
 }
 
+/**
+ * 某个待批准请求挂在哪个 provider 会话上。
+ *
+ * 存在的理由是鉴权:`chat.permission-response` 只带一个 requestId,不带会话,
+ * 所以在没有这个反查之前,任何已登录的 socket 都能替别人的会话点"允许"。
+ * 返回 null 表示这个 requestId 已经不在(超时/已回答/根本没有过)。
+ */
+function getToolApprovalSessionId(requestId) {
+  const resolver = pendingToolApprovals.get(requestId);
+  if (!resolver) return null;
+  return typeof resolver._sessionId === 'string' ? resolver._sessionId : null;
+}
+
 function resolveToolApproval(requestId, decision) {
   const resolver = pendingToolApprovals.get(requestId);
   if (resolver) {
@@ -169,7 +338,7 @@ function matchesToolPermission(entry, toolName, input) {
   return false;
 }
 
-function mapCliOptionsToSDK(options = {}) {
+function mapCliOptionsToSDK(options = {}, stderrTail = null) {
   const { sessionId, cwd, toolsSettings, permissionMode, effort } = options;
 
   const sdkOptions = {};
@@ -177,6 +346,11 @@ function mapCliOptionsToSDK(options = {}) {
   // Forward all host env vars (e.g. ANTHROPIC_BASE_URL) to the subprocess.
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
   sdkOptions.env = { ...process.env };
+
+  // 子进程的 stderr —— 不接这个回调,CLI 起不来时就只剩一个退出码。
+  if (stderrTail) {
+    sdkOptions.stderr = stderrTail.onData;
+  }
 
   // Resolve the executable eagerly on Windows because the SDK uses raw child_process.spawn,
   // which does not reliably follow npm's shell wrappers like cross-spawn does.
@@ -508,6 +682,7 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
   const { sessionId, sessionSummary } = options;
   let capturedSessionId = sessionId;
   let sessionCreatedSent = false;
+  const stderrTail = createStderrTail();
 
   const emitNotification = (event) => {
     notifyUserIfEnabled({
@@ -534,7 +709,7 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
       ...options,
       model: resolvedModel || options.model,
       effortModels,
-    });
+    }, stderrTail);
 
     const mcpServers = await loadMcpConfig(options.cwd);
     if (mcpServers) {
@@ -596,7 +771,11 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
       }
 
       const requestId = createRequestId();
-      ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+      sendPermissionRequest(
+        ws,
+        createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }),
+        { toolName, sessionId: capturedSessionId || sessionId || null },
+      );
       emitNotification(createNotificationEvent({
         provider: 'claude',
         sessionId: capturedSessionId || sessionId || null,
@@ -609,10 +788,16 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
       }));
 
       const decision = await waitForToolApproval(requestId, {
-        timeoutMs: requiresInteraction ? 0 : undefined,
+        // 一次性路径没有 turn 看门狗(常驻 runtime 那边有),所以这里不能真的
+        // 无限等 —— 一个永远没人回答的审批会把这个 SDK 进程和它占的
+        // one-shot 名额永久钉住。用和看门狗同一个上限兜底:够长到任何重连、
+        // 切页、午休都赢得了这场竞速,又不会真的泄漏。
+        timeoutMs: requiresInteraction ? 0 : ONESHOT_APPROVAL_TIMEOUT_MS,
         signal: context?.signal,
         metadata: {
           _sessionId: capturedSessionId || sessionId || null,
+          // app 会话 id —— 补发时用它兜底,provider 原生 id 开局是 null。
+          _appSessionId: typeof options.runId === 'string' ? options.runId : null,
           _toolName: toolName,
           _input: input,
           _receivedAt: new Date(),
@@ -622,7 +807,7 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
         }
       });
       if (!decision) {
-        return { behavior: 'deny', message: 'Permission request timed out' };
+        return { behavior: 'deny', message: APPROVAL_UNANSWERED_MESSAGE };
       }
 
       if (decision.cancelled) {
@@ -748,7 +933,8 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
     // Complete
 
   } catch (error) {
-    console.error('SDK query error:', error);
+    // stderr 一起打出来 —— 单独一句 "exited with code 1" 在日志里定位不了任何东西。
+    console.error('SDK query error:', stderrTail.describe(error));
 
     // Clean up session on error
     if (capturedSessionId) {
@@ -767,7 +953,7 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
     const installed = await providerAuthService.isProviderInstalled('claude');
     const errorContent = !installed
       ? 'Claude Code is not installed. Please install it first: https://docs.anthropic.com/en/docs/claude-code'
-      : error.message;
+      : stderrTail.describe(error);
 
     // Send error to WebSocket, then the terminal complete
     ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
@@ -854,14 +1040,37 @@ function getActiveClaudeSDKSessions() {
 }
 
 /**
+ * 一条待批审批算不算挂在这个会话上。
+ *
+ * provider 原生 id **或** app 会话 id 命中都算。
+ *
+ * 原来只比 `_sessionId`(provider 原生 id),而那个 id 在一轮对话的开头是 null ——
+ * `canUseTool` 可能在流里第一条消息回来之前就触发,于是这条待批请求被永久打上
+ * `_sessionId: null`,而查询方永远拿着一个非空 id 来问。结果是这条请求
+ * **再也不可能被补发**:刷新、重连、切走再切回来,全都捞不出来,用户只能等到超时。
+ * app 会话 id 从第一轮开始就存在,拿它兜底就没有这个空窗。
+ *
+ * 空的 sessionId 一律不命中 —— 否则 `null === null` 会让一条还没拿到任何 id 的
+ * 请求被当成"属于每一个还没拿到 id 的会话"。
+ *
+ * @param {{_sessionId?: unknown, _appSessionId?: unknown}} resolver
+ * @param {string} sessionId provider 原生 id 或 app 会话 id
+ */
+export function approvalBelongsToSession(resolver, sessionId) {
+  if (!sessionId || !resolver) return false;
+  return resolver._sessionId === sessionId || resolver._appSessionId === sessionId;
+}
+
+/**
  * Get pending tool approvals for a specific session.
- * @param {string} sessionId - The session ID
+ * @param {string} sessionId - app 会话 id 或 provider 原生 id
  * @returns {Array} Array of pending permission request objects
  */
 function getPendingApprovalsForSession(sessionId) {
   const pending = [];
+  if (!sessionId) return pending;
   for (const [requestId, resolver] of pendingToolApprovals.entries()) {
-    if (resolver._sessionId === sessionId) {
+    if (approvalBelongsToSession(resolver, sessionId)) {
       pending.push({
         requestId,
         toolName: resolver._toolName || 'UnknownTool',
@@ -875,20 +1084,15 @@ function getPendingApprovalsForSession(sessionId) {
   return pending;
 }
 
-/**
- * Reconnect a session's WebSocketWriter to a new raw WebSocket.
- * Called when client reconnects (e.g. page refresh) while SDK is still running.
- * @param {string} sessionId - The session ID
- * @param {Object} newRawWs - The new raw WebSocket connection
- * @returns {boolean} True if writer was successfully reconnected
+/*
+ * `reconnectSessionWriter` 删掉了。
+ *
+ * 它是"重连时把 writer 换到新 socket 上"的旧实现,而这件事早已由网关侧的
+ * `chatRunRegistry.attachConnection` 接管,整个 server/ 里没有任何地方 import
+ * 过它。留着的实际危害是它依赖 `writer.updateWebSocket` —— 而那个方法本身就是
+ * 抢流问题的来源,现在已经被 `addConnection` 取代。留着一个调用不存在方法的
+ * 死函数,只会在下一个人照着它写重连逻辑时把问题带回来。
  */
-function reconnectSessionWriter(sessionId, newRawWs) {
-  const session = getSession(sessionId);
-  if (!session?.writer?.updateWebSocket) return false;
-  session.writer.updateWebSocket(newRawWs);
-  console.log(`[RECONNECT] Writer swapped for session ${sessionId}`);
-  return true;
-}
 
 /* ===================================================================== */
 /*  Persistent runtime layer (ported from claude-web-ui 2.0 daemon.mjs)   */
@@ -906,7 +1110,18 @@ const AUTO_COMPACT_RATIO = (() => {
   const parsed = parseFloat(process.env.PRISM_AUTO_COMPACT_RATIO);
   return Number.isFinite(parsed) && parsed > 0 && parsed < 1 ? parsed : 0.8;
 })();
-const MAX_RUNTIMES = parseInt(process.env.PRISM_MAX_RUNTIMES, 10) || 8;
+/**
+ * 常驻运行时上限 —— **整台服务器**的,不是每人的。
+ *
+ * 一个常驻运行时就是一个 Claude SDK 进程。到顶之后 `enforceRuntimeLimit` 先淘汰
+ * 空闲的,淘不动就直接让这一轮失败。原来的 8 是单人使用时代的数,多人部署下它是
+ * 实打实的容量天花板:八个人各挂着一个活跃对话,第九个人发消息要么把别人的运行时
+ * 挤掉(那个人下一轮重建、变慢),要么直接收到 runtime limit 错误。
+ *
+ * 20 是按多人日常并发定的。内存是主要成本,每个进程的占用随上下文长度走,内存紧张
+ * 时用 PRISM_MAX_RUNTIMES 往下调。
+ */
+const MAX_RUNTIMES = parseInt(process.env.PRISM_MAX_RUNTIMES, 10) || 20;
 const IDLE_RUNTIME_MS = parseInt(process.env.PRISM_RUNTIME_IDLE_MS, 10) || 30 * 60 * 1000;
 const CONTEXT_USAGE_TIMEOUT_MS = 5000;
 /** Extra one-shot fallback slots beyond the resident pool (0 disables overflow). */
@@ -1020,6 +1235,8 @@ function buildPersistentSdkOptions(options, runtime) {
   const sdkOptions = {};
   sdkOptions.env = { ...process.env };
   sdkOptions.pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath(process.env.CLAUDE_CLI_PATH);
+  // 常驻 runtime 的子进程活很久,stderr 挂在 runtime 上,任何一轮出错都能拿到尾巴。
+  if (runtime?.stderrTail) sdkOptions.stderr = runtime.stderrTail.onData;
   if (options.cwd) sdkOptions.cwd = options.cwd;
 
   // Real cancellation handle: the SDK's `Options.abortController` ("Controller
@@ -1107,7 +1324,11 @@ function buildPersistentSdkOptions(options, runtime) {
 
     const requestId = createRequestId();
     const sid = runtime.sessionId || null;
-    turn.ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: sid, provider: 'claude' }));
+    sendPermissionRequest(
+      turn.ws,
+      createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: sid, provider: 'claude' }),
+      { toolName, sessionId: sid || runtime.appSessionId },
+    );
     notifyUserIfEnabled({
       userId: turn.ws?.userId || null,
       writer: turn.ws,
@@ -1128,6 +1349,8 @@ function buildPersistentSdkOptions(options, runtime) {
       signal: context?.signal,
       metadata: {
         _sessionId: sid,
+        // app 会话 id —— 补发时用它兜底,`runtime.sessionId` 在一轮对话开局是 null。
+        _appSessionId: runtime.appSessionId || null,
         _toolName: toolName,
         _input: input,
         _receivedAt: new Date(),
@@ -1137,7 +1360,7 @@ function buildPersistentSdkOptions(options, runtime) {
       }
     });
 
-    if (!decision) return { behavior: 'deny', message: 'Permission request timed out' };
+    if (!decision) return { behavior: 'deny', message: APPROVAL_UNANSWERED_MESSAGE };
     if (decision.cancelled) return { behavior: 'deny', message: 'Permission request cancelled' };
     if (decision.allow) {
       if (decision.rememberEntry && typeof decision.rememberEntry === 'string') {
@@ -1227,7 +1450,11 @@ async function readPersistentRuntime(runtime) {
   } catch (error) {
     failActiveTurn(runtime, error);
     if (!runtime.disposed) {
-      console.error(`[Claude SDK] Persistent runtime ${runtime.key} failed:`, error?.message || error);
+      // 带上 CLI 的 stderr —— 子进程起不来时,退出码本身说明不了任何问题。
+      console.error(
+        `[Claude SDK] Persistent runtime ${runtime.key} failed:`,
+        runtime.stderrTail ? runtime.stderrTail.describe(error) : (error?.message || error),
+      );
     }
   } finally {
     if (claudeRuntimes.get(runtime.key) === runtime) claudeRuntimes.delete(runtime.key);
@@ -1266,6 +1493,10 @@ function failActiveTurn(runtime, error) {
   // streamed yet (a replay after partial output would duplicate content).
   if (error && typeof error === 'object') {
     error.prismStreamed = Boolean(turn.streamed);
+    // 子进程的 stderr 跟着错误一起往上走 —— 分发器那边会把它拼进用户看到的
+    // 那条 error 里,否则用户只拿到一个退出码。
+    const tail = runtime.stderrTail?.text();
+    if (tail) error.prismStderr = tail;
   }
   turn.reject(error);
 }
@@ -1368,6 +1599,10 @@ async function createPersistentRuntime(key, options, settings) {
     contextBackfillStarted: false,
     query: null,
     abortController: null,
+    stderrTail: createStderrTail(),
+    // 网关侧的 app 会话 id。provider 原生 id 要等流里第一条消息才知道,而补发
+    // 待批审批需要一个**从第一轮开始就存在**的键。
+    appSessionId: typeof options.runId === 'string' ? options.runId : null,
   };
 
   const sdkOptions = buildPersistentSdkOptions(options, runtime);
@@ -1428,6 +1663,11 @@ async function runtimeForSend(options) {
       runtime.settings.permissionMode = settings.permissionMode;
       runtime.settings.allowedTools = settings.allowedTools;
       runtime.settings.disallowedTools = settings.disallowedTools;
+      // 复用已有 runtime 时也刷一下 —— 它对一段对话是稳定的,但第一次创建
+      // 若走的是没有 runId 的内部路径(prewarm、agent loop),这里是补上的机会。
+      if (typeof options.runId === 'string' && options.runId) {
+        runtime.appSessionId = options.runId;
+      }
 
       if (runtime.currentPermissionMode !== settings.permissionMode) {
         if (typeof runtime.query?.setPermissionMode === 'function') {
@@ -1941,6 +2181,20 @@ async function queryClaudeSDK(command, options = {}, ws) {
  * - Git checkpoints wrap every non-slash chat turn when the project is a repo.
  */
 async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
+  // 「跳过权限」+ root 的组合会被 CLI 直接拒掉。在这里拦,而不是让两条路径
+  // 各撞一次 —— 一次性回退会用同样的参数再试一遍,同样失败,只是多烧一次进程。
+  const bypassProblem = describeBypassUnderRoot(runtimeSettingsFromOptions(options).permissionMode);
+  if (bypassProblem) {
+    ws.send(createNormalizedMessage({
+      kind: 'error',
+      content: bypassProblem,
+      sessionId: options.sessionId || null,
+      provider: 'claude',
+    }));
+    ws.send(createCompleteMessage({ provider: 'claude', sessionId: options.sessionId || null, exitCode: 1 }));
+    return;
+  }
+
   const usePersistent = PERSISTENT_ENABLED && !options.oneShot;
 
   // /loop runs on the persistent runtime only.
@@ -2005,7 +2259,14 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
     try {
       turnOutcome = await queryClaudeSDKPersistent(command, options, ws, runEntry);
     } catch (error) {
+      // 分支判断只看原始 message —— stderr 里可能恰好出现 'already running'
+      // 之类的字样,拿拼接过的串去 includes 会把错误路由到错误的分支。
       const message = error?.message || String(error);
+      // 而用户在聊天里看到的是这条:把 CLI 的 stderr 拼进去,只有
+      // "exited with code 1" 的话,用户和运维都无从下手。
+      const displayMessage = error?.prismStderr
+        ? `${message}\n\n--- claude CLI stderr ---\n${error.prismStderr}`
+        : message;
       if (runEntry?.aborted) {
         // chat.abort already completed the run; the teardown throw is noise.
         // Never replay an aborted turn through the one-shot fallback.
@@ -2021,13 +2282,13 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
           stopReason: 'aborted',
         });
       } else if (message.includes('already running')) {
-        ws.send(createNormalizedMessage({ kind: 'error', content: message, sessionId: options.sessionId || null, provider: 'claude' }));
+        ws.send(createNormalizedMessage({ kind: 'error', content: displayMessage, sessionId: options.sessionId || null, provider: 'claude' }));
         ws.send(createCompleteMessage({ provider: 'claude', sessionId: options.sessionId || null, exitCode: 1 }));
       } else if (error?.prismStreamed || error?.prismTurnTimeout) {
         // Partial output already reached the client (or the watchdog killed
         // the turn after a long run) — do NOT replay the turn.
-        console.error('[Claude SDK] Persistent turn failed mid-stream:', message);
-        ws.send(createNormalizedMessage({ kind: 'error', content: message, sessionId: options.sessionId || null, provider: 'claude' }));
+        console.error('[Claude SDK] Persistent turn failed mid-stream:', displayMessage);
+        ws.send(createNormalizedMessage({ kind: 'error', content: displayMessage, sessionId: options.sessionId || null, provider: 'claude' }));
         ws.send(createCompleteMessage({ provider: 'claude', sessionId: options.sessionId || null, exitCode: 1 }));
         notifyRunFailed({
           userId: ws?.userId || null,
@@ -2160,6 +2421,35 @@ async function getClaudeSlashCommands(sessionId) {
  * keyed by a signature over cwd, effort and bypass, so a mismatch just
  * disposes this runtime and builds another, wasting the work.
  */
+/**
+ * 放开一段对话的常驻 runtime,把所有权让给别人(目前是终端接管)。
+ *
+ * 两件事同时发生:进程退出让出对 transcript 的写入权,dispose 的收尾让最后一轮
+ * 完整落盘 —— 终端随后 `claude --resume` 读到的才是完整记录。不 dispose 直接起
+ * 第二个进程,就是现在"shell 少一截"的成因。
+ *
+ * 正在跑的轮次不打断:那会丢掉用户已经等了半天的回答。调用方拿到 false 时应当
+ * 告诉用户"当前有对话正在进行,稍后再接管"。
+ *
+ * @param {string} sessionId provider-native session id(runtime map 的键)
+ * @returns {Promise<{released: boolean, reason: string}>}
+ */
+async function releaseClaudeSession(sessionId) {
+  if (!sessionId) return { released: true, reason: 'no_session' };
+
+  const runtime = claudeRuntimes.get(sessionId);
+  if (!runtime || runtime.disposed) return { released: true, reason: 'not_resident' };
+  if (runtime.turn) return { released: false, reason: 'turn_in_flight' };
+
+  try {
+    await disposePersistentRuntime(runtime);
+    return { released: true, reason: 'disposed' };
+  } catch (error) {
+    console.warn('[Claude SDK] Release failed:', error?.message || error);
+    return { released: false, reason: 'error' };
+  }
+}
+
 async function prewarmClaudeSession(options = {}) {
   if (!PERSISTENT_ENABLED) return { warmed: false, reason: 'persistent_disabled' };
   if (!options.sessionId) return { warmed: false, reason: 'no_session_id' };
@@ -2189,14 +2479,15 @@ async function prewarmClaudeSession(options = {}) {
 export {
   queryClaudeSDK,
   prewarmClaudeSession,
+  releaseClaudeSession,
   queryClaudeSDKOnce,
   abortClaudeSDKSession,
   abortClaudeSDKRun,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
+  getToolApprovalSessionId,
   resolveToolApproval,
   getPendingApprovalsForSession,
-  reconnectSessionWriter,
   getClaudeContextUsage,
   getClaudeSlashCommands,
   getPersistentRuntime

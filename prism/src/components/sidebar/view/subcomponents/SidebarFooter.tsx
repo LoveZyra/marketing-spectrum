@@ -1,17 +1,30 @@
-import { Settings, AlertTriangle } from 'lucide-react';
+import { Settings } from 'lucide-react';
 import type { TFunction } from 'i18next';
-import type { ReleaseInfo } from '../../../../types/sharedTypes';
 
 type SidebarFooterProps = {
-  updateAvailable: boolean;
-  restartRequired: boolean;
-  releaseInfo: ReleaseInfo | null;
-  latestVersion: string | null;
-  currentVersion: string;
-  onShowVersionModal: () => void;
   onShowSettings: () => void;
+  /** 待审批账号数;0 不显示。只有 root 会拿到非 0 值,见 usePendingApprovalCount。 */
+  notificationCount?: number;
   t: TFunction;
 };
+
+/**
+ * 红色计数:有多少个账号在等审批。
+ *
+ * 挂在设置入口上,因为审批队列就在设置 → 账号里。它反映的是真实待办,所以
+ * **不会因为"看过了"而清零** —— 批完或拒完自然归零。非 root 恒为 0。
+ */
+function NotificationBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span
+      className="ml-auto inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-none text-white"
+      aria-label={`${count} 个账号待审批`}
+    >
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+}
 
 /**
  * prism: trimmed footer — update banner, report-issue, community links and
@@ -19,25 +32,12 @@ type SidebarFooterProps = {
  * operational signal, not an update prompt) and Settings remain.
  */
 export default function SidebarFooter({
-  restartRequired,
   onShowSettings,
+  notificationCount = 0,
   t,
 }: SidebarFooterProps) {
   return (
     <div className="flex-shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
-      {restartRequired && (
-        <>
-          <div className="nav-divider" />
-          <div className="px-2 py-1.5 md:px-2 md:py-1.5">
-            <div className="flex items-center gap-2.5 rounded-lg border border-amber-300/60 bg-amber-50/80 px-2.5 py-2 dark:border-amber-700/40 dark:bg-amber-900/15">
-              <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500 dark:text-amber-400" />
-              <span className="min-w-0 flex-1 text-xs font-medium text-amber-700 dark:text-amber-300">
-                {t('version.restartRequired')}
-              </span>
-            </div>
-          </div>
-        </>
-      )}
 
       <div className="nav-divider" />
 
@@ -49,6 +49,7 @@ export default function SidebarFooter({
         >
           <Settings className="h-3.5 w-3.5" />
           <span className="text-sm">{t('actions.settings')}</span>
+          <NotificationBadge count={notificationCount} />
         </button>
       </div>
 
@@ -62,6 +63,7 @@ export default function SidebarFooter({
             <Settings className="h-4 w-4 text-muted-foreground" />
           </div>
           <span className="text-sm font-normal text-foreground">{t('actions.settings')}</span>
+          <NotificationBadge count={notificationCount} />
         </button>
       </div>
     </div>

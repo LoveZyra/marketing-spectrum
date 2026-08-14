@@ -7,6 +7,7 @@ import chokidar, { type ChokidarOptions, type FSWatcher } from 'chokidar';
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
+import { canViewerSeeProject } from '@/shared/project-visibility.js';
 import type { LLMProvider } from '@/shared/types.js';
 import { generateDisplayName } from '@/modules/projects/index.js';
 
@@ -198,7 +199,9 @@ function queuePendingWatcherUpdate(updatedSessionId: string | null): void {
  * project-list refetch when a transcript file changes on disk. Returns `null`
  * when the id cannot be resolved to an indexed session row.
  */
-async function buildSessionUpsertedEvent(updatedProviderSessionId: string): Promise<string | null> {
+type ScopedEvent = { payload: string; ownerUserId: number | null };
+
+async function buildSessionUpsertedEvent(updatedProviderSessionId: string): Promise<ScopedEvent | null> {
   const row = sessionsDb.getSessionByProviderSessionId(updatedProviderSessionId)
     ?? sessionsDb.getSessionById(updatedProviderSessionId);
   if (!row || row.isArchived) {
@@ -211,7 +214,7 @@ async function buildSessionUpsertedEvent(updatedProviderSessionId: string): Prom
     ? project.custom_project_name
     : await generateDisplayName(path.basename(projectPath ?? '') || (projectPath ?? ''), projectPath);
 
-  return JSON.stringify({
+  const payload = JSON.stringify({
     kind: 'session_upserted',
     sessionId: row.session_id,
     provider: row.provider,
@@ -232,6 +235,8 @@ async function buildSessionUpsertedEvent(updatedProviderSessionId: string): Prom
       : null,
     timestamp: new Date().toISOString(),
   });
+
+  return { payload, ownerUserId: project?.owner_user_id ?? null };
 }
 
 async function flushPendingWatcherUpdate(): Promise<void> {
@@ -255,7 +260,7 @@ async function flushPendingWatcherUpdate(): Promise<void> {
     // Per-session deltas instead of full project snapshots: an upsert of one
     // session can never clobber unrelated client state, so the frontend needs
     // no "suppress updates while a run is active" protection logic.
-    const events: string[] = [];
+    const events: ScopedEvent[] = [];
     for (const updatedSessionId of queuedUpdate.updatedSessionIds) {
       const event = await buildSessionUpsertedEvent(updatedSessionId);
       if (event) {
@@ -264,11 +269,20 @@ async function flushPendingWatcherUpdate(): Promise<void> {
     }
 
     if (events.length > 0) {
+      // Per-recipient, not a blanket fan-out: each event carries a project
+      // name and path, and the watcher fires for whoever happens to be
+      // working — so an unfiltered broadcast puts one colleague's project in
+      // everyone else's sidebar until the next refresh.
       connectedClients.forEach(client => {
-        if (client.readyState === WS_OPEN_STATE) {
-          for (const event of events) {
-            client.send(event);
-          }
+        if (client.readyState !== WS_OPEN_STATE) return;
+        for (const event of events) {
+          if (!canViewerSeeProject({
+            ownerUserId: event.ownerUserId,
+            viewerUserId: client.prismUserId,
+            viewerUsername: client.prismUsername,
+          })) continue;
+
+          client.send(event.payload);
         }
       });
     }

@@ -23,13 +23,12 @@ export type SidebarProjectListProps = {
   editingSession: string | null;
   editingSessionName: string;
   deletingProjects: Set<string>;
-  tasksEnabled: boolean;
-  mcpServerStatus: MCPServerStatus;
   getProjectSessions: (project: Project) => SessionWithProvider[];
   onLoadMoreSessions: (projectId: string) => void;
   loadingMoreProjects: Set<string>;
   activeSessions: SessionActivityMap;
   attentionSessionIds: ReadonlySet<string>;
+  awaitingApprovalSessionIds: ReadonlySet<string>;
   forceExpanded?: boolean;
   isProjectStarred: (projectName: string) => boolean;
   onEditingNameChange: (value: string) => void;
@@ -70,13 +69,12 @@ export default function SidebarProjectList({
   editingSession,
   editingSessionName,
   deletingProjects,
-  tasksEnabled,
-  mcpServerStatus,
   getProjectSessions,
   onLoadMoreSessions,
   loadingMoreProjects,
   activeSessions,
   attentionSessionIds,
+  awaitingApprovalSessionIds,
   forceExpanded = false,
   isProjectStarred,
   onEditingNameChange,
@@ -140,8 +138,6 @@ export default function SidebarProjectList({
               currentTime={currentTime}
               editingSession={editingSession}
               editingSessionName={editingSessionName}
-              tasksEnabled={tasksEnabled}
-              mcpServerStatus={mcpServerStatus}
               onEditingNameChange={onEditingNameChange}
               onToggleProject={onToggleProject}
               onProjectSelect={onProjectSelect}
@@ -155,6 +151,7 @@ export default function SidebarProjectList({
               onLoadMoreSessions={onLoadMoreSessions}
               activeSessions={activeSessions}
               attentionSessionIds={attentionSessionIds}
+              awaitingApprovalSessionIds={awaitingApprovalSessionIds}
               onNewSession={onNewSession}
               onEditingSessionNameChange={onEditingSessionNameChange}
               onStartEditingSession={onStartEditingSession}

@@ -360,6 +360,19 @@ export function useProjectsState({
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
   const [attentionSessionIds, setAttentionSessionIds] = useState<Set<string>>(new Set());
+  /**
+   * 正在等工具审批的会话。
+   *
+   * 和 `attentionSessionIds` 分开,因为这两件事的性质不一样:后者是"这边有动静"
+   * (一条流、一次 upsert 都算),而这一条是**这轮跑不下去了,在等你**。用同一个
+   * 琥珀点表示,等于把"有新消息"和"卡住了等你点确认"混成一个信号 —— 而恰恰是
+   * 后者,用户不去看就永远不会有进展。
+   *
+   * 之所以需要它:审批弹窗只在**当前正在看**那个会话时才渲染
+   * (`useChatRealtimeHandlers` 里的 `sid === activeViewSessionId`)。人在别的
+   * 会话里时,原来没有任何地方告诉他"那边有个框在等你"。
+   */
+  const [awaitingApprovalSessionIds, setAwaitingApprovalSessionIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<AppTab>(readPersistedTab);
 
   useEffect(() => {
@@ -446,6 +459,30 @@ export function useProjectsState({
 
       const next = new Set(previous);
       next.delete(targetSessionId);
+      return next;
+    });
+  }, []);
+
+  /**
+   * 标记/清除"这个会话在等审批"。
+   *
+   * 和 attention 不同,**当前正在看的会话也要标**:审批框本身是渲染在聊天区里的,
+   * 但用户可能滚上去了、或者窗口没在前台。侧栏这个点是个恒定的提示,而不是
+   * "你没看见的时候才亮"。
+   */
+  const setSessionAwaitingApproval = useCallback((targetSessionId: string | null | undefined, awaiting: boolean) => {
+    if (!targetSessionId) {
+      return;
+    }
+
+    setAwaitingApprovalSessionIds((previous) => {
+      if (previous.has(targetSessionId) === awaiting) {
+        return previous;
+      }
+
+      const next = new Set(previous);
+      if (awaiting) next.add(targetSessionId);
+      else next.delete(targetSessionId);
       return next;
     });
   }, []);
@@ -662,6 +699,22 @@ export function useProjectsState({
         markSessionAttention(eventSessionId);
       }
 
+      // 「这个会话在等审批」 —— 侧栏红点的数据源。
+      //
+      // `chat_subscribed` 是权威的一条:服务端在里面回当前所有待批请求,所以
+      // 它既能点亮也能熄灭。其余三条是增量信号 —— 用户点了允许/拒绝之后没有
+      // 专门的事件,靠下一次 subscribe 或本轮的 `complete` 来收尾。
+      if (event.kind === 'permission_request') {
+        setSessionAwaitingApproval(eventSessionId, true);
+      } else if (event.kind === 'permission_cancelled' || event.kind === 'complete') {
+        setSessionAwaitingApproval(eventSessionId, false);
+      } else if (event.kind === 'chat_subscribed') {
+        const pending = (event as { pendingPermissions?: unknown[] }).pendingPermissions;
+        if (Array.isArray(pending)) {
+          setSessionAwaitingApproval(eventSessionId, pending.length > 0);
+        }
+      }
+
       if (event.kind !== 'session_upserted') {
         return;
       }
@@ -768,7 +821,7 @@ export function useProjectsState({
     };
 
     return subscribe(handleEvent);
-  }, [markSessionAttention, navigate, sessionId, subscribe]);
+  }, [markSessionAttention, setSessionAwaitingApproval, navigate, sessionId, subscribe]);
 
   useEffect(() => {
     return () => {
@@ -850,10 +903,6 @@ export function useProjectsState({
     (session: ProjectSession) => {
       clearSessionAttention(session.id);
       setSelectedSession(session);
-
-      if (activeTab === 'tasks' || activeTab === 'browser') {
-        setActiveTab('chat');
-      }
 
       if (isMobile) {
         // Sessions are tagged with the owning project's DB `projectId` when
@@ -1023,6 +1072,7 @@ export function useProjectsState({
       selectedSession,
       activeSessions,
       attentionSessionIds,
+      awaitingApprovalSessionIds,
       onProjectSelect: handleProjectSelect,
       onSessionSelect: handleSessionSelect,
       onNewSession: handleNewSession,
@@ -1040,6 +1090,7 @@ export function useProjectsState({
     }),
     [
       attentionSessionIds,
+      awaitingApprovalSessionIds,
       handleNewSession,
       handleProjectDelete,
       handleProjectSelect,

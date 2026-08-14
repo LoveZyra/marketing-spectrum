@@ -6,6 +6,7 @@ import { spawn } from 'cross-spawn';
 import { rgPath } from '@vscode/ripgrep';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { canViewerSeeProject } from '@/shared/project-visibility.js';
 
 type AnyRecord = Record<string, any>;
 type SearchableProvider = 'claude';
@@ -45,11 +46,22 @@ export type SessionConversationSearchProgressUpdate = {
   totalProjects: number;
 };
 
+type SearchViewer = {
+  userId?: number | string | null;
+  username?: string | null;
+};
+
 type SearchSessionConversationsInput = {
   query: string;
   limit: number;
   signal?: AbortSignal;
   onProgress?: (update: SessionConversationSearchProgressUpdate) => void;
+  /**
+   * Who is searching. Omitted means unscoped — every session on the server.
+   * The route always passes it; the default exists for internal callers that
+   * legitimately need the full corpus.
+   */
+  viewer?: SearchViewer;
 };
 
 type SessionRepositoryRow = ReturnType<typeof sessionsDb.getAllSessions>[number];
@@ -897,11 +909,54 @@ async function parseSessionMatches(
   return null;
 }
 
+/**
+ * Drop sessions whose project this viewer cannot see.
+ *
+ * Ownership lives on the project, and a session points at a project *path*, so
+ * the owner is resolved through one lookup table built up front rather than a
+ * query per session — a search already walks every transcript on disk and does
+ * not need N more database round trips on top.
+ *
+ * A session with no project path is treated as public: those come from
+ * transcripts discovered on disk before any project row existed, and they are
+ * visible in the sidebar to everyone for the same reason.
+ */
+function restrictToViewer(
+  sessions: SearchableSessionRow[],
+  viewer: SearchViewer | null,
+): SearchableSessionRow[] {
+  if (!viewer) {
+    return sessions;
+  }
+
+  const ownerByPath = new Map<string, number | null>();
+  for (const project of projectsDb.getProjectPaths(null)) {
+    ownerByPath.set(normalizeComparablePath(project.project_path), project.owner_user_id ?? null);
+  }
+  for (const project of projectsDb.getArchivedProjectPaths(null)) {
+    ownerByPath.set(normalizeComparablePath(project.project_path), project.owner_user_id ?? null);
+  }
+
+  return sessions.filter((session) => {
+    const key = normalizeComparablePath(session.project_path ?? '');
+    if (!key || !ownerByPath.has(key)) {
+      return true;
+    }
+
+    return canViewerSeeProject({
+      ownerUserId: ownerByPath.get(key) ?? null,
+      viewerUserId: viewer.userId,
+      viewerUsername: viewer.username,
+    });
+  });
+}
+
 export async function searchConversations(
   query: string,
   limit = 50,
   onProjectResult: ((update: SessionConversationSearchProgressUpdate) => void) | null = null,
   signal: AbortSignal | null = null,
+  viewer: SearchViewer | null = null,
 ): Promise<{ results: ProjectConversationResult[]; totalMatches: number; query: string }> {
   const safeQuery = typeof query === 'string' ? query.trim() : '';
   const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? limit : 50, 200));
@@ -916,7 +971,14 @@ export async function searchConversations(
     return { results: [], totalMatches: 0, query: safeQuery };
   }
 
-  const searchableSessions = normalizeSearchableSessions(sessionsDb.getAllSessions());
+  // Scoped to what this account may see. Without it the search reads every
+  // session on the server and returns other people's conversation snippets —
+  // the same ownership gap the sidebar had, but leaking message text rather
+  // than a project name.
+  const searchableSessions = restrictToViewer(
+    normalizeSearchableSessions(sessionsDb.getAllSessions()),
+    viewer,
+  );
   if (searchableSessions.length === 0) {
     return { results: [], totalMatches: 0, query: safeQuery };
   }
@@ -1055,6 +1117,7 @@ export const sessionConversationsSearchService = {
       input.limit,
       input.onProgress ?? null,
       input.signal ?? null,
+      input.viewer ?? null,
     );
   },
 };

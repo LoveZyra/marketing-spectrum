@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 
 import { beforeAll, describe, test } from 'vitest';
 
-import i18n, { initI18n } from './config.js';
+import i18n, { initI18n, resolveInitialLanguage, setLanguagePreference } from './config.js';
 import { languagesIn, loadResource, namespacesIn, resourceIndex } from './resource-registry';
 
 const FALLBACK_LANGUAGE = 'en';
+const DEFAULT_LANGUAGE = 'zh-CN';
 
 type Bundle = Record<string, unknown>;
 
@@ -38,9 +39,20 @@ describe('i18next serves the translations that exist on disk', () => {
     await initI18n();
   });
 
-  test('the fallback language renders after init, with no key leaking through', async () => {
+  /**
+   * Two separate claims, and they used to be one: that init resolves a usable
+   * bundle, and that the bundle it resolves is the *default* language rather
+   * than the fallback. Collapsing them hid the interesting case — with no
+   * stored choice (which is what the runner has, having no localStorage at
+   * all) the app must open in Chinese, while English stays reachable as the
+   * per-key fallback for everything Chinese has not translated.
+   */
+  test('init opens in the default language, with no key leaking through', async () => {
+    assert.equal(i18n.language, DEFAULT_LANGUAGE);
+    assert.equal(i18n.t('common:buttons.save'), '保存');
+
+    await i18n.changeLanguage(FALLBACK_LANGUAGE);
     assert.equal(i18n.t('common:buttons.save'), 'Save');
-    assert.equal(i18n.t('tasks:notConfigured.title'), 'TaskMaster AI is not configured');
   });
 
   /**
@@ -56,25 +68,21 @@ describe('i18next serves the translations that exist on disk', () => {
   });
 
   /**
-   * `tasks` is the namespace three locales were missing: `ko` and `zh-CN` had
-   * no file at all, and `zh-TW`'s was translated but gitignored, so a fresh
-   * clone rendered the whole TaskMaster UI in English for all three. Asserting
-   * on the namespace list rather than on those three names keeps this honest
-   * when the eighth namespace arrives.
+   * 原来这里钉的是"每个语种都必须有 tasks.json" —— 那个 namespace 随任务功能
+   * 整体移除了。留下的这条守的是同一类问题的一般形式:任何一个 namespace 只要
+   * 在 en 里存在,就必须能在每个语种里被解析出来(缺文件时回退英文,而不是渲染
+   * 成 key 路径)。当年 `.gitignore` 把 tasks.json 一起忽略掉、七个语种整个
+   * namespace 静默丢失,就是这条要拦的。
    */
-  test('every language has the TaskMaster namespace', async () => {
+  test('每个 namespace 在每个语种下都能解析,不会渲染成 key 路径', async () => {
     for (const language of languagesIn(resourceIndex)) {
-      assert.ok(
-        namespacesIn(resourceIndex, language).includes('tasks'),
-        `${language} has no tasks.json, so the TaskMaster UI renders in English`,
-      );
+      await i18n.changeLanguage(language);
+      for (const namespace of namespacesIn(resourceIndex, FALLBACK_LANGUAGE)) {
+        const probe = `${namespace}:__definitely_missing_key__`;
+        assert.equal(i18n.t(probe), '__definitely_missing_key__', `${language}/${namespace} 解析异常`);
+      }
     }
-
-    await i18n.changeLanguage('ko');
-    assert.equal(i18n.t('tasks:views.kanban'), '칸반 보기');
-
-    await i18n.changeLanguage('zh-CN');
-    assert.equal(i18n.t('tasks:views.kanban'), '看板视图');
+    await i18n.changeLanguage(FALLBACK_LANGUAGE);
   });
 
   /**
@@ -183,5 +191,112 @@ describe('placeholders survive translation', () => {
     }
 
     assert.deepEqual(problems, [], `interpolation mismatches:\n  ${problems.join('\n  ')}`);
+  });
+});
+
+/**
+ * Which language a browser opens in.
+ *
+ * The rule looks trivial and is not: the app shipped an English default for
+ * long enough that every browser that ever loaded it holds
+ * `userLanguage: "en"` — written by i18next's own detector cache on the init
+ * that set the default in the first place. A default flip that keys off that
+ * value reaches nobody but a first-time visitor, and reads as broken to
+ * everyone else. Hence a second key that only a human click writes, and these
+ * tests pinning which key wins.
+ */
+describe('initial language resolution', () => {
+  const storageOf = (entries: Record<string, string>) => ({
+    getItem: (key: string) => (key in entries ? entries[key] : null),
+    setItem: (key: string, value: string) => {
+      entries[key] = value;
+    },
+  });
+
+  test('a browser with nothing stored opens in the default language', () => {
+    assert.equal(resolveInitialLanguage(storageOf({})), DEFAULT_LANGUAGE);
+  });
+
+  test('no storage at all — SSR, the test runner — still resolves the default', () => {
+    assert.equal(resolveInitialLanguage(null), DEFAULT_LANGUAGE);
+    assert.equal(resolveInitialLanguage(undefined), DEFAULT_LANGUAGE);
+  });
+
+  /**
+   * The regression this whole mechanism exists for. `userLanguage: "en"` is
+   * what an existing install carries, and it was never a choice — reading it
+   * would pin every current user to English through a default change they were
+   * supposed to receive.
+   */
+  test("i18next's own cache is not mistaken for a choice", () => {
+    assert.equal(
+      resolveInitialLanguage(storageOf({ userLanguage: FALLBACK_LANGUAGE })),
+      DEFAULT_LANGUAGE,
+    );
+  });
+
+  test('an explicit pick wins over the default, including picking English', () => {
+    assert.equal(
+      resolveInitialLanguage(storageOf({ userLanguageChoice: FALLBACK_LANGUAGE })),
+      FALLBACK_LANGUAGE,
+    );
+    assert.equal(resolveInitialLanguage(storageOf({ userLanguageChoice: 'ja' })), 'ja');
+  });
+
+  /**
+   * A locale can leave `languages` — it happened to none yet, but the picker
+   * list is the contract and a stale value must not become a language i18next
+   * has no bundles for, which renders every string as its key path.
+   */
+  test('a stored language that is no longer supported falls back to the default', () => {
+    assert.equal(resolveInitialLanguage(storageOf({ userLanguageChoice: 'kl' })), DEFAULT_LANGUAGE);
+    assert.equal(resolveInitialLanguage(storageOf({ userLanguageChoice: '' })), DEFAULT_LANGUAGE);
+  });
+
+  /** Safari private browsing throws on read, and must not white-screen boot. */
+  test('a storage that throws resolves the default instead of propagating', () => {
+    const hostile = {
+      getItem: () => {
+        throw new Error('SecurityError');
+      },
+      setItem: () => {},
+    };
+
+    assert.equal(resolveInitialLanguage(hostile), DEFAULT_LANGUAGE);
+  });
+
+  test('choosing from the picker records the choice, and the choice survives a reload', async () => {
+    if (!i18n.isInitialized) {
+      await initI18n();
+    }
+
+    const entries: Record<string, string> = { userLanguage: FALLBACK_LANGUAGE };
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: storageOf(entries),
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      await setLanguagePreference('ja');
+      assert.equal(i18n.language, 'ja');
+      assert.equal(entries.userLanguageChoice, 'ja');
+
+      // The reload, simulated: the same store, read back through the resolver.
+      assert.equal(resolveInitialLanguage(globalThis.localStorage), 'ja');
+
+      // A value outside the picker list is refused rather than persisted.
+      await setLanguagePreference('kl');
+      assert.equal(i18n.language, 'ja');
+      assert.equal(entries.userLanguageChoice, 'ja');
+    } finally {
+      if (original) {
+        Object.defineProperty(globalThis, 'localStorage', original);
+      } else {
+        delete (globalThis as { localStorage?: unknown }).localStorage;
+      }
+      await i18n.changeLanguage(FALLBACK_LANGUAGE);
+    }
   });
 });

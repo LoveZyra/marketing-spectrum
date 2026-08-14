@@ -11,9 +11,45 @@ import { Octokit } from '@octokit/rest';
 import { userDb, apiKeysDb, githubTokensDb, projectsDb } from '../modules/database/index.js';
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { IS_PLATFORM } from '../constants/config.js';
-import { normalizeProjectPath } from '../shared/utils.js';
+import { normalizeProjectPath, WORKSPACES_ROOT } from '../shared/utils.js';
 
 const router = express.Router();
+
+/**
+ * 要求路径落在工作区根之下,否则抛错。
+ *
+ * 先解析 realpath 再比,否则工作区里放一个指向 / 的符号链接就绕过去了。
+ * 路径尚不存在时(克隆目标目录)向上找到最近的已存在祖先来解析,与
+ * files 模块的 `realpathAllowingMissingLeaf` 同一思路。
+ */
+async function assertInsideWorkspaceRoot(candidatePath) {
+  const root = path.resolve(WORKSPACES_ROOT);
+
+  const realOf = async (target) => {
+    let current = path.resolve(target);
+    const suffix = [];
+    for (;;) {
+      try {
+        const real = await fs.realpath(current);
+        return suffix.length > 0 ? path.join(real, ...suffix) : real;
+      } catch (error) {
+        if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error;
+        const parent = path.dirname(current);
+        if (parent === current) return path.resolve(target);
+        suffix.unshift(path.basename(current));
+        current = parent;
+      }
+    }
+  };
+
+  const [realRoot, realTarget] = await Promise.all([realOf(root), realOf(candidatePath)]);
+  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) {
+    throw new Error(
+      `Project path must stay under the workspace root (${realRoot}); got ${realTarget}`,
+    );
+  }
+}
+
 
 /**
  * Middleware to authenticate agent API requests.
@@ -894,6 +930,17 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     } else {
       // Use existing project path
       finalProjectPath = normalizeProjectPath(path.resolve(projectPath));
+
+      // 必须落在工作区根之下。这个端点用 API key 鉴权,而任何登录用户都能自助
+      // 建一把 key(POST /api/settings/api-keys),下面又是以 bypassPermissions
+      // 起 Claude —— 少了这道校验,一把 key 就等于对服务进程能到达的任意路径的
+      // 读写权,项目边界与逐工具确认两层同时被绕过。
+      //
+      // 用的是 WORKSPACES_ROOT 包含判定,不是 `validateWorkspacePath`:后者除了
+      // 包含判定还会拒绝一批"系统关键目录",而 /root 正在那张表里。以 root 身份
+      // 部署时家目录就是 /root,工作区根本身就会被它拒掉,整个端点直接不可用。
+      // 根目录可用 WORKSPACES_ROOT 环境变量改。
+      await assertInsideWorkspaceRoot(finalProjectPath);
 
       // Verify the path exists
       try {

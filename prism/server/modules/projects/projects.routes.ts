@@ -2,7 +2,6 @@ import express from 'express';
 
 import { auditLogDb, projectsDb, userDb } from '@/modules/database/index.js';
 import { createProject, updateProjectDisplayName } from '@/modules/projects/services/project-management.service.js';
-import { getProjectTaskMaster } from '@/modules/projects/services/projects-has-taskmaster.service.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
 import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projects/services/project-delete.service.js';
@@ -161,15 +160,6 @@ router.post(
       : [];
     const { updated } = applyLegacyStarredProjectIds(projectIds);
     res.json({ success: true, updated });
-  }),
-);
-
-router.get(
-  '/:projectId/taskmaster',
-  asyncHandler(async (req, res) => {
-    const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
-    const taskMasterDetails = await getProjectTaskMaster(projectId);
-    res.json(taskMasterDetails);
   }),
 );
 

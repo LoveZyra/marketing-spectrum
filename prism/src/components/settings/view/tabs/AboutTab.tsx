@@ -1,5 +1,5 @@
 import { WORDMARK_FONT_FAMILY } from '../../../../constants/branding';
-import { useVersionCheck } from '../../../../hooks/useVersionCheck';
+import { version as currentVersion } from '../../../../../package.json';
 import PrismLogo from '../../../PrismLogo';
 
 /**
@@ -7,7 +7,6 @@ import PrismLogo from '../../../PrismLogo';
  * external links or upsells.
  */
 export default function AboutTab() {
-  const { currentVersion } = useVersionCheck('siteboon', 'claudecodeui');
 
   return (
     <div className="space-y-6">

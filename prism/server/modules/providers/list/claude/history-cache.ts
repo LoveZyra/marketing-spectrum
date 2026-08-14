@@ -56,8 +56,21 @@ export class FetchHistoryCache {
   private readonly entries = new Map<string, CacheEntry>();
   private totalBytes = 0;
 
-  constructor(options: { maxBytes?: number } = {}) {
+  /**
+   * 单个条目的上限,默认是总预算的 1/4。
+   *
+   * 原来只有总预算这一道闸:一个 24 MB 的会话能独占 3/4 的额度,把其他所有人的
+   * 条目挤出去。单人使用时无所谓,多用户下这是缓存抖动 —— 一个人打开长会话,
+   * 其余人的历史全部变冷。超过这个尺寸的会话干脆不缓存,让它每次都冷读,
+   * 好过让它把别人的都赶走。
+   */
+  private readonly maxEntryBytes: number;
+
+  constructor(options: { maxBytes?: number; maxEntryBytes?: number } = {}) {
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+    // 默认不额外限制:类的通用契约仍然是"只受总预算约束"。是否要给单条目再加
+    // 一道闸是部署策略,由构造点决定(见 claude-sessions.provider.ts)。
+    this.maxEntryBytes = options.maxEntryBytes ?? this.maxBytes;
   }
 
   get(key: string, fingerprint: string): CachedHistory | null {
@@ -80,7 +93,7 @@ export class FetchHistoryCache {
   set(key: string, fingerprint: string, bytes: number, value: CachedHistory): void {
     this.delete(key);
 
-    if (bytes > this.maxBytes) {
+    if (bytes > this.maxEntryBytes) {
       return;
     }
 

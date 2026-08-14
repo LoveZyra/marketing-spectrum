@@ -43,7 +43,7 @@ export default function RegisterForm({ onBackToLogin }: RegisterFormProps) {
       }
 
       if (username.trim().length < 3 || password.length < 6) {
-        setErrorMessage(t('register.errors.tooShort', '用户名至少 3 位,密码至少 6 位'));
+        setErrorMessage(t('register.errors.tooShort'));
         return;
       }
 
@@ -68,9 +68,8 @@ export default function RegisterForm({ onBackToLogin }: RegisterFormProps) {
   if (pendingMessage) {
     return (
       <AuthScreenLayout
-        title={t('register.pendingTitle', '申请已提交')}
-        description={t('register.pendingDescription', '管理员审批通过后即可登录')}
-        footerText=""
+        title={t('register.pendingTitle')}
+        description={t('register.pendingDescription')}
       >
         <div className="space-y-4">
           <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3.5 dark:border-emerald-900/40 dark:bg-emerald-900/20">
@@ -83,7 +82,7 @@ export default function RegisterForm({ onBackToLogin }: RegisterFormProps) {
             onClick={onBackToLogin}
             className="w-full rounded-xl border border-border px-4 py-2.5 text-sm font-medium transition-colors hover:bg-accent"
           >
-            {t('register.backToLogin', '返回登录')}
+            {t('register.backToLogin')}
           </button>
         </div>
       </AuthScreenLayout>
@@ -92,9 +91,8 @@ export default function RegisterForm({ onBackToLogin }: RegisterFormProps) {
 
   return (
     <AuthScreenLayout
-      title={t('register.title', '申请账号')}
-      description={t('register.description', '提交后由管理员审批')}
-      footerText=""
+      title={t('register.title')}
+      description={t('register.description')}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <AuthInputField
@@ -133,7 +131,7 @@ export default function RegisterForm({ onBackToLogin }: RegisterFormProps) {
               {t('login.loading')}
             </>
           ) : (
-            t('register.submit', '提交申请')
+            t('register.submit')
           )}
         </button>
 
@@ -142,7 +140,7 @@ export default function RegisterForm({ onBackToLogin }: RegisterFormProps) {
           onClick={onBackToLogin}
           className="w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
-          {t('register.backToLogin', '返回登录')}
+          {t('register.backToLogin')}
         </button>
       </form>
     </AuthScreenLayout>

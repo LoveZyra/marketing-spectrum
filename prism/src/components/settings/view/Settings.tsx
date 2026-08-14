@@ -8,11 +8,7 @@ import AccountsSettingsTab from '../view/tabs/accounts-settings/AccountsSettings
 import AgentsSettingsTab from '../view/tabs/agents-settings/AgentsSettingsTab';
 import AppearanceSettingsTab from '../view/tabs/AppearanceSettingsTab';
 import CredentialsSettingsTab from '../view/tabs/api-settings/CredentialsSettingsTab';
-import VoiceSettingsTab from '../view/tabs/VoiceSettingsTab';
-import BrowserUseSettingsTab from '../view/tabs/browser-use-settings/BrowserUseSettingsTab';
 import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
-import TasksSettingsTab from '../view/tabs/tasks-settings/TasksSettingsTab';
-import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
 import AboutTab from '../view/tabs/AboutTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import type { SettingsProps } from '../types/types';
@@ -96,9 +92,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                 />
               )}
 
-              {activeTab === 'tasks' && <TasksSettingsTab />}
 
-              {activeTab === 'browser' && <BrowserUseSettingsTab />}
 
               {activeTab === 'notifications' && (
                 <NotificationsSettingsTab
@@ -109,9 +103,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
               {activeTab === 'api' && <CredentialsSettingsTab />}
 
-              {activeTab === 'voice' && <VoiceSettingsTab />}
 
-              {activeTab === 'plugins' && <PluginSettingsTab />}
 
               {activeTab === 'accounts' && <AccountsSettingsTab />}
 

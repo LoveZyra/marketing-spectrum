@@ -3,9 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import ChatInterface from '../../chat/view/ChatInterface';
 import type { MainContentProps } from '../types/types';
-import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { usePaletteOpsRegister } from '../../../contexts/PaletteOpsContext';
-import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useFileOpenResolver } from '../../../hooks/useFileOpenResolver';
 import { authenticatedFetch } from '../../../utils/api';
@@ -28,24 +26,7 @@ import MainContentStateView from './subcomponents/MainContentStateView';
 // CodeMirror itself, since it returns null until a file is actually open.
 const FileTree = lazy(() => import('../../file-tree/view/FileTree'));
 const StandaloneShell = lazy(() => import('../../standalone-shell/view/StandaloneShell'));
-const PluginTabContent = lazy(() => import('../../plugins/view/PluginTabContent'));
 // Imported by concrete path rather than through the package barrels: the
-// task-master barrel also re-exports TaskMasterProvider, which App mounts
-// eagerly, and going through the barrel would drag the whole module graph of
-// both into whichever chunk loads first.
-const BrowserUsePanel = lazy(() => import('../../browser-use/view/BrowserUsePanel'));
-const TaskMasterPanel = lazy(() => import('../../task-master/view/TaskMasterPanel'));
-
-type TaskMasterContextValue = {
-  currentProject?: Project | null;
-  setCurrentProject?: ((project: Project) => void) | null;
-};
-
-type TasksSettingsContextValue = {
-  tasksEnabled: boolean;
-  isTaskMasterInstalled: boolean | null;
-  isTaskMasterReady: boolean | null;
-};
 
 function MainContent({
   selectedProject,
@@ -71,12 +52,7 @@ function MainContent({
   const { preferences } = useUiPreferences();
   const { showRawParameters, showThinking, sendByCtrlEnter } = preferences;
 
-  const { currentProject, setCurrentProject } = useTaskMaster() as TaskMasterContextValue;
-  const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings() as TasksSettingsContextValue;
-  const [browserUseEnabled, setBrowserUseEnabled] = useState(false);
 
-  const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
-  const shouldShowBrowserTab = browserUseEnabled;
 
   const {
     editingFile,
@@ -96,45 +72,6 @@ function MainContent({
   // Resolves bare/partial file references (e.g. links inside chat messages) to
   // real project files before opening them in the in-app editor.
   const resolvedFileOpen = useFileOpenResolver(selectedProject, handleFileOpen);
-
-  useEffect(() => {
-    // Identify projects by DB `projectId`; the TaskMaster context uses the
-    // same identifier to key its internal maps.
-    const selectedProjectId = selectedProject?.projectId;
-    const currentProjectId = currentProject?.projectId;
-
-    if (selectedProject && selectedProjectId !== currentProjectId) {
-      setCurrentProject?.(selectedProject);
-    }
-  }, [selectedProject, currentProject?.projectId, setCurrentProject]);
-
-  useEffect(() => {
-    if (!shouldShowTasksTab && activeTab === 'tasks') {
-      setActiveTab('chat');
-    }
-  }, [shouldShowTasksTab, activeTab, setActiveTab]);
-
-  const loadBrowserUseSettings = useCallback(async () => {
-    try {
-      const response = await authenticatedFetch('/api/browser-use/settings');
-      const data = await response.json();
-      setBrowserUseEnabled(Boolean(response.ok && data?.success !== false && data?.data?.settings?.enabled));
-    } catch {
-      setBrowserUseEnabled(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadBrowserUseSettings();
-    window.addEventListener('browserUseSettingsChanged', loadBrowserUseSettings);
-    return () => window.removeEventListener('browserUseSettingsChanged', loadBrowserUseSettings);
-  }, [loadBrowserUseSettings]);
-
-  useEffect(() => {
-    if (!shouldShowBrowserTab && activeTab === 'browser') {
-      setActiveTab('chat');
-    }
-  }, [shouldShowBrowserTab, activeTab, setActiveTab]);
 
   usePaletteOpsRegister({
     openFile: (filePath: string) => {
@@ -162,8 +99,6 @@ function MainContent({
         setActiveTab={setActiveTab}
         selectedProject={selectedProject}
         selectedSession={selectedSession}
-        shouldShowTasksTab={shouldShowTasksTab}
-        shouldShowBrowserTab={shouldShowBrowserTab}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
       />
@@ -190,7 +125,6 @@ function MainContent({
                 sendByCtrlEnter={sendByCtrlEnter}
                 externalMessageUpdate={externalMessageUpdate}
                 newSessionTrigger={newSessionTrigger}
-                onShowAllTasks={tasksEnabled ? () => setActiveTab('tasks') : null}
               />
             </ErrorBoundary>
           </div>
@@ -216,31 +150,6 @@ function MainContent({
             </div>
           )}
 
-          {shouldShowTasksTab && (
-            <LazyPanel label={t('tabs.tasks')} fullHeight={activeTab === 'tasks'}>
-              <TaskMasterPanel isVisible={activeTab === 'tasks'} />
-            </LazyPanel>
-          )}
-
-          {shouldShowBrowserTab && activeTab === 'browser' && (
-            <div className="h-full overflow-hidden">
-              <LazyPanel label={t('tabs.browser')}>
-                <BrowserUsePanel isVisible={activeTab === 'browser'} onShowSettings={onShowSettings} />
-              </LazyPanel>
-            </div>
-          )}
-
-          {activeTab.startsWith('plugin:') && (
-            <div className="h-full overflow-hidden">
-              <LazyPanel label={activeTab.replace('plugin:', '')}>
-                <PluginTabContent
-                  pluginName={activeTab.replace('plugin:', '')}
-                  selectedProject={selectedProject}
-                  selectedSession={selectedSession}
-                />
-              </LazyPanel>
-            </div>
-          )}
         </div>
 
         <EditorSidebar

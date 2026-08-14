@@ -5,7 +5,6 @@ import { Database } from 'better-sqlite3';
 
 import {
   APP_CONFIG_TABLE_SCHEMA_SQL,
-  PUBLISHED_PAGES_TABLE_SCHEMA_SQL,
   AUDIT_LOG_TABLE_SCHEMA_SQL,
   LAST_SCANNED_AT_SQL,
   PROJECTS_TABLE_SCHEMA_SQL,
@@ -425,6 +424,24 @@ const dropWebPushAndDesktopNotificationTables = (db: Database): void => {
   }
 };
 
+/**
+ * 发布功能移除后清掉它的表。
+ *
+ * 表里存的是"某个项目里的某个相对路径 + 一个 token",没有别处引用,功能没了之后
+ * 它就是一堆谁也不会再读的行。留着的坏处不只是占地方 —— 下一个人看到
+ * `published_pages` 会以为发布还在,然后去找那个不存在的路由。
+ *
+ * 不做数据迁移:发布行本来就只是**引用**,从不保存文件内容,所以丢的只是
+ * "曾经发出去过哪些链接"这条记录,文件一个都不会少。
+ */
+const dropPublishedPagesTable = (db: Database): void => {
+  if (tableExists(db, 'published_pages')) {
+    console.log('Running migration: Dropping published_pages (publishing feature removed)');
+  }
+  db.exec('DROP INDEX IF EXISTS idx_published_pages_project');
+  db.exec('DROP TABLE IF EXISTS published_pages');
+};
+
 const ensureProjectsForSessionPaths = (db: Database): void => {
   if (!tableExists(db, 'sessions')) {
     return;
@@ -540,11 +557,10 @@ export const runMigrations = (db: Database) => {
     db.exec('CREATE INDEX IF NOT EXISTS idx_audit_log_event ON audit_log(event)');
 
     db.exec(APP_CONFIG_TABLE_SCHEMA_SQL);
-    db.exec(PUBLISHED_PAGES_TABLE_SCHEMA_SQL);
-    db.exec('CREATE INDEX IF NOT EXISTS idx_published_pages_project ON published_pages(project_id)');
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL);
 
     dropWebPushAndDesktopNotificationTables(db);
+    dropPublishedPagesTable(db);
 
     db.exec(PROJECTS_TABLE_SCHEMA_SQL);
     rebuildProjectsTableWithPrimaryKeySchema(db);

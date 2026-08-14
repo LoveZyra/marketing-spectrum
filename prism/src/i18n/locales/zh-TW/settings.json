@@ -3,51 +3,15 @@
   "tabs": {
     "account": "帳戶",
     "permissions": "權限",
-    "mcpServers": "MCP 伺服器",
-    "appearance": "外觀"
+    "mcpServers": "MCP 伺服器"
   },
   "account": {
-    "title": "帳戶",
     "language": "語言",
     "languageLabel": "顯示語言",
-    "languageDescription": "選擇您偏好的介面語言",
-    "username": "使用者名稱",
-    "email": "電子郵件",
-    "profile": "個人檔案",
-    "changePassword": "變更密碼"
-  },
-  "mcp": {
-    "title": "MCP 伺服器",
-    "addServer": "新增伺服器",
-    "editServer": "編輯伺服器",
-    "deleteServer": "刪除伺服器",
-    "serverName": "伺服器名稱",
-    "serverType": "伺服器類型",
-    "config": "設定",
-    "testConnection": "測試連線",
-    "status": "狀態",
-    "connected": "已連線",
-    "disconnected": "未連線",
-    "scope": {
-      "label": "範圍",
-      "user": "使用者",
-      "project": "專案"
-    }
+    "languageDescription": "選擇您偏好的介面語言"
   },
   "appearance": {
-    "title": "外觀",
-    "theme": "佈景主題",
-    "codeEditor": "程式碼編輯器",
-    "editorTheme": "編輯器佈景主題",
-    "wordWrap": "自動換行",
-    "showMinimap": "顯示縮圖",
-    "lineNumbers": "行號",
-    "fontSize": "字型大小"
-  },
-  "actions": {
-    "saveChanges": "儲存變更",
-    "resetToDefaults": "重設為預設值",
-    "cancelChanges": "取消變更"
+    "theme": "佈景主題"
   },
   "quickSettings": {
     "title": "快速設定",
@@ -70,45 +34,20 @@
     }
   },
   "terminalShortcuts": {
-    "title": "終端機快速鍵",
-    "sectionKeys": "按鍵",
-    "sectionNavigation": "導覽",
-    "escape": "Escape",
-    "tab": "Tab",
-    "shiftTab": "Shift+Tab",
-    "arrowUp": "向上箭頭",
-    "arrowDown": "向下箭頭",
-    "scrollDown": "捲動到底部",
-    "handle": {
-      "closePanel": "關閉快速鍵面板",
-      "openPanel": "開啟快速鍵面板"
-    }
+    "scrollDown": "捲動到底部"
   },
   "mainTabs": {
-    "label": "設定",
     "agents": "智慧代理",
     "appearance": "外觀",
-    "git": "Git",
     "apiTokens": "API 和權杖",
-    "tasks": "任務",
     "computer": "電腦使用",
     "notifications": "通知",
-    "plugins": "外掛",
     "about": "關於",
     "accounts": "帳號"
   },
   "notifications": {
     "title": "通知",
     "description": "控制你希望接收的通知事件。",
-    "webPush": {
-      "title": "Web 推播通知",
-      "enable": "啟用推播通知",
-      "disable": "關閉推播通知",
-      "enabled": "推播通知已啟用",
-      "loading": "更新中...",
-      "unsupported": "此瀏覽器不支援推播通知。",
-      "denied": "推播通知已被封鎖，請在瀏覽器設定中允許。"
-    },
     "sound": {
       "title": "聲音",
       "description": "聊天執行完成時播放短提示音。",
@@ -135,10 +74,6 @@
     },
     "codeEditor": {
       "title": "程式碼編輯器",
-      "theme": {
-        "label": "編輯器佈景主題",
-        "description": "程式碼編輯器的預設佈景主題"
-      },
       "wordWrap": {
         "label": "自動換行",
         "description": "在編輯器中預設啟用自動換行"
@@ -168,10 +103,6 @@
     },
     "scope": {
       "label": "範圍",
-      "userGlobal": "使用者（全域）",
-      "projectLocal": "專案（本機）",
-      "userDescription": "使用者範圍：在您機器上的所有專案中可用",
-      "projectDescription": "本機範圍：僅在選定專案中可用",
       "cannotChange": "編輯現有伺服器時無法變更範圍"
     },
     "fields": {
@@ -193,11 +124,8 @@
       "stdioRequiresCommand": "stdio 類型需要 command 欄位",
       "httpRequiresUrl": "{{type}} 類型需要 url 欄位",
       "invalidJson": "無效的 JSON 格式",
-      "jsonHelp": "貼上您的 MCP 伺服器設定（JSON 格式）。範例格式：",
-      "jsonExampleStdio": "• stdio: {\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"@upstash/context7-mcp\"]}",
-      "jsonExampleHttp": "• http/sse: {\"type\":\"http\",\"url\":\"https://api.example.com/mcp\"}"
+      "jsonHelp": "貼上您的 MCP 伺服器設定（JSON 格式）。範例格式："
     },
-    "configDetails": "設定詳細資訊（來自 {{configFile}}）",
     "projectPath": "路徑：{{path}}",
     "actions": {
       "cancel": "取消",
@@ -207,32 +135,7 @@
     }
   },
   "saveStatus": {
-    "success": "設定儲存成功！",
-    "error": "儲存設定失敗",
-    "saving": "儲存中..."
-  },
-  "footerActions": {
-    "save": "儲存設定",
-    "cancel": "取消"
-  },
-  "git": {
-    "title": "Git 設定",
-    "description": "設定您的 git 提交身分。這些設定將透過 git config --global 全域套用",
-    "name": {
-      "label": "Git 名稱",
-      "help": "您的 git 提交名稱"
-    },
-    "email": {
-      "label": "Git 電子郵件",
-      "help": "您的 git 提交電子郵件"
-    },
-    "actions": {
-      "save": "儲存設定",
-      "saving": "儲存中..."
-    },
-    "status": {
-      "success": "儲存成功"
-    }
+    "success": "設定儲存成功！"
   },
   "apiKeys": {
     "title": "API 金鑰",
@@ -260,7 +163,6 @@
     },
     "github": {
       "title": "GitHub 權杖",
-      "description": "新增 GitHub 個人存取權杖以透過外部 API 複製私有儲存庫。",
       "descriptionAlt": "新增 GitHub 個人存取權杖以複製私有儲存庫。您也可以直接在 API 請求中傳遞權杖而無需儲存。",
       "addButton": "新增權杖",
       "form": {
@@ -276,29 +178,7 @@
       "confirmDelete": "確定要刪除此 GitHub 權杖嗎？"
     },
     "apiDocsLink": "API 文件",
-    "loading": "載入中...",
-    "version": {
-      "updateAvailable": "有可用更新：v{{version}}"
-    }
-  },
-  "tasks": {
-    "checking": "正在檢查 TaskMaster 安裝...",
-    "notInstalled": {
-      "title": "未安裝 TaskMaster AI CLI",
-      "description": "需要 TaskMaster CLI 才能使用任務管理功能。安裝它以開始使用：",
-      "installCommand": "npm install -g task-master-ai",
-      "viewOnGitHub": "在 GitHub 上查看",
-      "afterInstallation": "安裝後：",
-      "steps": {
-        "restart": "重新啟動此應用程式",
-        "autoAvailable": "TaskMaster 功能將自動啟用",
-        "initCommand": "在專案目錄中使用 task-master init"
-      }
-    },
-    "settings": {
-      "enableLabel": "啟用 TaskMaster 整合",
-      "enableDescription": "在整個介面中顯示 TaskMaster 任務、橫幅和側邊欄指示器"
-    }
+    "loading": "載入中..."
   },
   "agents": {
     "authStatus": {
@@ -345,32 +225,12 @@
       "placeholder": "例如：\"Bash(rm:*)\"",
       "empty": "未設定停用的工具"
     },
-    "allowedCommands": {
-      "title": "允許的 Shell 指令",
-      "description": "無需權限提示即可自動執行的 Shell 指令",
-      "placeholder": "例如：\"Shell(ls)\" 或 \"Shell(git status)\"",
-      "quickAdd": "快速新增常用指令：",
-      "empty": "未設定允許的指令"
-    },
-    "blockedCommands": {
-      "title": "封鎖的 Shell 指令",
-      "description": "自動封鎖的 Shell 指令",
-      "placeholder": "例如：\"Shell(rm -rf)\" 或 \"Shell(sudo)\"",
-      "empty": "未設定封鎖的指令"
-    },
     "toolExamples": {
       "title": "工具模式範例：",
       "bashGitLog": "- 允許所有 git log 指令",
       "bashGitDiff": "- 允許所有 git diff 指令",
       "write": "- 允許所有 Write 工具使用",
       "bashRm": "- 封鎖所有 rm 指令（危險）"
-    },
-    "shellExamples": {
-      "title": "Shell 指令範例：",
-      "ls": "- 允許 ls 指令",
-      "gitStatus": "- 允許 git status",
-      "npmInstall": "- 允許 npm install",
-      "rmRf": "- 封鎖遞迴刪除"
     },
     "actions": {
       "add": "新增"
@@ -381,64 +241,17 @@
     "description": {
       "claude": "Model Context Protocol 伺服器為 Claude 提供額外的工具和資料來源"
     },
-    "addButton": "新增 MCP 伺服器",
     "empty": "未設定 MCP 伺服器",
-    "serverType": "類型",
-    "scope": {
-      "local": "本機",
-      "user": "使用者"
-    },
     "config": {
       "command": "指令",
       "url": "URL",
       "args": "參數",
       "environment": "環境變數"
     },
-    "tools": {
-      "title": "工具",
-      "count": "（{{count}}）：",
-      "more": "還有 {{count}} 個"
-    },
     "actions": {
       "edit": "編輯伺服器",
       "delete": "刪除伺服器"
     }
-  },
-  "pluginSettings": {
-    "title": "外掛",
-    "description": "透過自訂外掛擴充介面。從 git 安裝或直接將資料夾放入 ~/.claude-code-ui/plugins/",
-    "installPlaceholder": "https://github.com/user/my-plugin",
-    "installButton": "安裝",
-    "installing": "安裝中…",
-    "securityWarning": "僅安裝您已審查過原始碼或信任作者的外掛。",
-    "scanningPlugins": "正在掃描外掛…",
-    "noPluginsInstalled": "未安裝外掛",
-    "pullLatest": "從 git 拉取最新內容",
-    "noGitRemote": "無 git 遠端儲存庫 — 無法更新",
-    "uninstallPlugin": "解除安裝外掛",
-    "confirmUninstall": "再次點擊確認",
-    "confirmUninstallMessage": "移除 {{name}}？此操作無法復原。",
-    "cancel": "取消",
-    "remove": "移除",
-    "updateFailed": "更新失敗",
-    "installFailed": "安裝失敗",
-    "uninstallFailed": "解除安裝失敗",
-    "toggleFailed": "切換失敗",
-    "buildYourOwn": "建立您自己的外掛",
-    "starter": "入門範本",
-    "docs": "文件",
-    "starterPlugin": {
-      "name": "專案統計",
-      "badge": "入門",
-      "description": "查看專案的檔案數、程式碼行數、檔案類型分佈以及最近活動。",
-      "install": "安裝"
-    },
-    "morePlugins": "更多",
-    "enable": "啟用",
-    "disable": "停用",
-    "installAriaLabel": "外掛 git 儲存庫 URL",
-    "tab": "分頁",
-    "runningStatus": "執行中"
   },
   "accounts": {
     "title": "帳號審批",

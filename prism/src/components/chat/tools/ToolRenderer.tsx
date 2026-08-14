@@ -46,12 +46,20 @@ function getToolCategory(toolName: string): string {
   return 'default';
 }
 
-// Exact denial messages from server/claude-sdk.js — other providers can't reliably signal denial
+/**
+ * 服务端 `canUseTool` 返回的拒绝文案(见 server/claude-sdk.js)—— 其它 provider
+ * 无法可靠地表达"被拒绝",只能按文本认。
+ *
+ * `permission request timed out` 那条保留着:它已经不再产生了(超时改成了
+ * "一直等",文案也换成了中文的"一直没有人回应"),但**旧会话的 transcript 里
+ * 还留着大量这句**,重新打开时仍要渲染成"已拒绝"而不是"出错"。
+ */
 const CLAUDE_DENIAL_MESSAGES = [
   'user denied tool use',
   'tool disallowed by settings',
   'permission request timed out',
   'permission request cancelled',
+  '一直没有人回应',
 ];
 
 function deriveToolStatus(toolResult: any): ToolStatus {

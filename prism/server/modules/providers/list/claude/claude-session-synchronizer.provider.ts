@@ -1,6 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { open, readFile, stat } from 'node:fs/promises';
 
 import { sessionsDb } from '@/modules/database/index.js';
 import {
@@ -44,7 +44,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
    * Scans ~/.claude/projects and upserts discovered sessions into DB.
    */
   async synchronize(since?: Date): Promise<number> {
-    const nameMap = await buildLookupMap(path.join(this.claudeHome, 'history.jsonl'), 'sessionId', 'display');
+    const nameMap = await this.cachedHistoryNameMap();
     const files = await findFilesRecursivelyCreatedAfter(
       path.join(this.claudeHome, 'projects'),
       '.jsonl',
@@ -89,7 +89,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       return null;
     }
 
-    const nameMap = await buildLookupMap(path.join(this.claudeHome, 'history.jsonl'), 'sessionId', 'display');
+    const nameMap = await this.cachedHistoryNameMap();
     const parsed = await this.processSessionFile(filePath, nameMap);
     if (!parsed) {
       return null;
@@ -156,12 +156,61 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     };
   }
 
+  /**
+   * `~/.claude/history.jsonl` 的 sessionId -> 显示名映射,按文件指纹缓存。
+   *
+   * 这个文件随用户全部历史无界增长,而同步器每个文件事件都会调一次(去抖后最长
+   * 3 秒一轮),原来每次都是全量读 + 逐行 JSON.parse。它只在有新会话被命名时才变,
+   * mtime+size 足以判定。
+   */
+  private historyNameMapCache: { fingerprint: string; map: Map<string, string> } | null = null;
+
+  private async cachedHistoryNameMap(): Promise<Map<string, string>> {
+    const historyPath = path.join(this.claudeHome, 'history.jsonl');
+
+    let fingerprint = 'missing';
+    try {
+      const stats = await stat(historyPath);
+      fingerprint = `${stats.mtimeMs}:${stats.size}`;
+    } catch {
+      // 文件不存在:指纹固定,缓存一个空 map,不必每次重试。
+    }
+
+    if (this.historyNameMapCache?.fingerprint === fingerprint) {
+      return this.historyNameMapCache.map;
+    }
+
+    const map = await buildLookupMap(historyPath, 'sessionId', 'display');
+    this.historyNameMapCache = { fingerprint, map };
+    return map;
+  }
+
   private async extractSessionAiTitleFromEnd(
     filePath: string,
     sessionId: string
   ): Promise<string | undefined> {
     try {
-      const content = await readFile(filePath, 'utf8');
+      // 只读文件尾部。标题事件(如果有)总在末尾附近,而这个函数对一个始终叫
+      // "Untitled Claude Session" 的会话每 3 秒就会被调用一次 —— 原来是把整份
+      // transcript 读进内存、切成行数组、从后往前全部 JSON.parse 一遍再返回
+      // undefined。24 MB 的会话就是每 3 秒 135 ms 加上万个临时数组元素。
+      const TAIL_BYTES = 64 * 1024;
+      const stats = await stat(filePath);
+      let content: string;
+      if (stats.size > TAIL_BYTES) {
+        const handle = await open(filePath, 'r');
+        try {
+          const buffer = Buffer.alloc(TAIL_BYTES);
+          await handle.read(buffer, 0, TAIL_BYTES, stats.size - TAIL_BYTES);
+          const tail = buffer.toString('utf8');
+          // 首行大概率被从中间截断,丢掉。
+          content = tail.slice(tail.indexOf('\n') + 1);
+        } finally {
+          await handle.close();
+        }
+      } else {
+        content = await readFile(filePath, 'utf8');
+      }
       const lines = content.split(/\r?\n/);
 
       for (let index = lines.length - 1; index >= 0; index -= 1) {

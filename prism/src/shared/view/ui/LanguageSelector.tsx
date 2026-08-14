@@ -3,6 +3,7 @@
 import { useTranslation } from 'react-i18next';
 import { Languages } from 'lucide-react';
 
+import { setLanguagePreference } from '../../../i18n/config.js';
 import { languages } from '../../../i18n/languages';
 
 type LanguageSelectorProps = {
@@ -22,8 +23,10 @@ export default function LanguageSelector({ compact = false }: LanguageSelectorPr
   const { i18n, t } = useTranslation('settings');
 
   const handleLanguageChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const newLanguage = event.target.value;
-    i18n.changeLanguage(newLanguage);
+    // Not `i18n.changeLanguage` directly: this records the pick as deliberate,
+    // which is what keeps it from being overwritten the next time the app's
+    // default language moves.
+    void setLanguagePreference(event.target.value);
   };
 
   // Compact style for QuickSettingsPanel

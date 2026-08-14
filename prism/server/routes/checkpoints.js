@@ -26,9 +26,56 @@ import {
 } from '../services/git-checkpoint.js';
 import { isClaudeSDKSessionActive } from '../claude-sdk.js';
 import { chatRunRegistry } from '../modules/websocket/services/chat-run-registry.service.js';
-import { sessionsDb } from '../modules/database/index.js';
+import { projectsDb, sessionsDb } from '../modules/database/index.js';
+import { canViewerSeeProject, readRequestViewer } from '../shared/project-visibility.js';
 
 const router = express.Router();
+
+/**
+ * 谁能看到 / 回滚一个 checkpoint。
+ *
+ * checkpoint 落在共享的 `~/.prism/checkpoints` 下,自己不带归属,所以归属要从
+ * 它记录的会话或工作目录反查出来:
+ *   1. `meta.sessionId` 是 provider 侧的会话 id —— 先换成 app 会话拿项目路径;
+ *   2. 拿不到就退回 `meta.cwd`;
+ *   3. 再由项目 owner 走与侧栏一致的那条判定。
+ *
+ * **路径没登记成项目时返回 false(仅 root)**,而不是沿用"owner 为空 = 公共"。
+ * 那条规则是给项目列表用的,让人看见一个条目;这里放行的却是
+ * `git reset --hard` 加删除未跟踪文件。同一个默认值放在这里就成了:任何人都能
+ * 抹掉任何一个尚未登记目录里的未提交改动。
+ */
+function canViewerUseCheckpoint(req, meta) {
+  const viewer = readRequestViewer(req);
+
+  let projectPath = null;
+  if (meta?.sessionId) {
+    const session =
+      sessionsDb.getSessionByProviderSessionId(meta.sessionId)
+      ?? sessionsDb.getSessionById(meta.sessionId);
+    projectPath = session?.project_path?.trim() ? session.project_path : null;
+  }
+  if (!projectPath && typeof meta?.cwd === 'string' && meta.cwd.trim()) {
+    projectPath = meta.cwd;
+  }
+
+  const project = projectPath ? projectsDb.getProjectPath(projectPath) : null;
+  if (!project) {
+    // 未登记路径:只有 root。-1 是个不存在的 owner,借它复用同一条判定,
+    // 免得在这里再手写一份 root 判断。
+    return canViewerSeeProject({
+      ownerUserId: -1,
+      viewerUserId: viewer.userId,
+      viewerUsername: viewer.username,
+    });
+  }
+
+  return canViewerSeeProject({
+    ownerUserId: project.owner_user_id ?? null,
+    viewerUserId: viewer.userId,
+    viewerUsername: viewer.username,
+  });
+}
 
 /**
  * Cross-session directory guard: find ANY live run (any session, any
@@ -78,7 +125,9 @@ router.get('/', async (req, res) => {
     });
     // Strip bulky fields for the list view.
     res.json({
-      checkpoints: checkpoints.map(({ untrackedStored, untracked, ...meta }) => ({
+      checkpoints: checkpoints
+        .filter((meta) => canViewerUseCheckpoint(req, meta))
+        .map(({ untrackedStored, untracked, ...meta }) => ({
         ...meta,
         untrackedCount: untracked?.length || 0,
       })),
@@ -91,7 +140,10 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const meta = await readCheckpoint(req.params.id);
-    if (!meta) return res.status(404).json({ error: 'Checkpoint not found' });
+    // 归属不符与不存在返回同一个 404:403 会确认"这个 id 是存在的"。
+    if (!meta || !canViewerUseCheckpoint(req, meta)) {
+      return res.status(404).json({ error: 'Checkpoint not found' });
+    }
     res.json({ checkpoint: meta });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -101,7 +153,10 @@ router.get('/:id', async (req, res) => {
 router.get('/:id/changes', async (req, res) => {
   try {
     const meta = await readCheckpoint(req.params.id);
-    if (!meta) return res.status(404).json({ error: 'Checkpoint not found' });
+    // 归属不符与不存在返回同一个 404:403 会确认"这个 id 是存在的"。
+    if (!meta || !canViewerUseCheckpoint(req, meta)) {
+      return res.status(404).json({ error: 'Checkpoint not found' });
+    }
     const changes = await changedFilesSince(req.params.id);
     res.json(changes);
   } catch (error) {
@@ -112,7 +167,10 @@ router.get('/:id/changes', async (req, res) => {
 router.post('/:id/restore', async (req, res) => {
   try {
     const meta = await readCheckpoint(req.params.id);
-    if (!meta) return res.status(404).json({ error: 'Checkpoint not found' });
+    // 归属不符与不存在返回同一个 404:403 会确认"这个 id 是存在的"。
+    if (!meta || !canViewerUseCheckpoint(req, meta)) {
+      return res.status(404).json({ error: 'Checkpoint not found' });
+    }
 
     // A running turn writing to the same tree must not race a rollback.
     if (meta.sessionId && isClaudeSDKSessionActive(meta.sessionId)) {
@@ -150,7 +208,10 @@ router.post('/:id/revert-file', async (req, res) => {
     if (!relPath) return res.status(400).json({ error: 'path is required' });
 
     const meta = await readCheckpoint(req.params.id);
-    if (!meta) return res.status(404).json({ error: 'Checkpoint not found' });
+    // 归属不符与不存在返回同一个 404:403 会确认"这个 id 是存在的"。
+    if (!meta || !canViewerUseCheckpoint(req, meta)) {
+      return res.status(404).json({ error: 'Checkpoint not found' });
+    }
     if (meta.sessionId && isClaudeSDKSessionActive(meta.sessionId)) {
       return res.status(409).json({
         code: 'DIRECTORY_BUSY',

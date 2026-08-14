@@ -194,6 +194,8 @@ export default tseslint.config(
             "server/shared/ws-tickets.js", // single-use WebSocket upgrade tickets
             "server/shared/root-users.js", // single source of truth for root identity (env-derived)
             "server/shared/preview-tickets.js", // short-lived, directory-scoped editor preview tickets
+            "server/shared/project-visibility.js", // one owner-visibility rule for list + broadcast
+            "server/shared/ticket-store.js", // 一次性/可重用票据的通用实现,ws 与预览票据共用
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },

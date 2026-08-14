@@ -12,75 +12,23 @@
     "copyAsText": "Copia come testo"
   },
   "messageTypes": {
-    "user": "U",
     "error": "Errore",
     "tool": "Strumento",
     "claude": "Claude"
   },
   "tools": {
-    "settings": "Impostazioni strumento",
-    "error": "Errore strumento",
-    "result": "Risultato strumento",
-    "viewParams": "Vedi parametri input",
-    "viewRawParams": "Vedi parametri grezzi",
-    "viewDiff": "Vedi differenze per",
-    "creatingFile": "Creazione nuovo file:",
-    "updatingTodo": "Aggiornamento lista attività",
-    "read": "Leggi",
-    "readFile": "Leggi file",
-    "updateTodo": "Aggiorna lista attività",
-    "readTodo": "Leggi lista attività",
-    "searchResults": "risultati"
+    "settings": "Impostazioni strumento"
   },
   "search": {
-    "found": "Trovati {{count}} {{type}}",
-    "file": "file",
-    "files": "file",
-    "pattern": "pattern:",
     "in": "in:"
-  },
-  "fileOperations": {
-    "updated": "File aggiornato con successo",
-    "created": "File creato con successo",
-    "written": "File scritto con successo",
-    "diff": "Differenze",
-    "newFile": "Nuovo file",
-    "viewContent": "Vedi contenuto file",
-    "viewFullOutput": "Vedi output completo ({{count}} caratteri)",
-    "contentDisplayed": "Il contenuto del file è visualizzato nella vista differenze sopra"
   },
   "interactive": {
     "title": "Prompt interattivo",
     "waiting": "In attesa della tua risposta nella CLI",
-    "instruction": "Seleziona un'opzione nel terminale dove Claude è in esecuzione.",
-    "selectedOption": "✓ Claude ha selezionato l'opzione {{number}}",
-    "instructionDetail": "Nella CLI, selezioneresti questa opzione interattivamente usando i tasti freccia o digitando il numero."
-  },
-  "thinking": {
-    "title": "Sto pensando...",
-    "emoji": "💭 Sto pensando..."
+    "instruction": "Seleziona un'opzione nel terminale dove Claude è in esecuzione."
   },
   "json": {
     "response": "Risposta JSON"
-  },
-  "permissions": {
-    "grant": "Concedi permesso per {{tool}}",
-    "added": "Permesso aggiunto",
-    "addTo": "Aggiunge {{entry}} agli strumenti consentiti.",
-    "retry": "Permesso salvato. Riprova la richiesta per usare lo strumento.",
-    "error": "Impossibile aggiornare i permessi. Riprova.",
-    "openSettings": "Apri impostazioni"
-  },
-  "todo": {
-    "updated": "Lista attività aggiornata con successo",
-    "current": "Lista attività corrente"
-  },
-  "plan": {
-    "viewPlan": "📋 Vedi piano di implementazione",
-    "title": "Piano di implementazione"
-  },
-  "usageLimit": {
-    "resetAt": "Limite di utilizzo Claude raggiunto. Il tuo limite verrà ripristinato alle **{{time}} {{timezone}}** - {{date}}"
   },
   "permissionModes": {
     "default": "Modalità predefinita",
@@ -91,8 +39,6 @@
   },
   "input": {
     "placeholder": "Digita / per i comandi, @ per i file, o chiedi qualcosa a {{provider}}...",
-    "placeholderDefault": "Scrivi il tuo messaggio...",
-    "disabled": "Input disabilitato",
     "attachFiles": "Allega file",
     "attachImages": "Allega immagini",
     "send": "Invia",
@@ -109,13 +55,7 @@
     "modelHint": "Current model: {{model}} · type /models to switch"
   },
   "providerSelection": {
-    "title": "Scegli il tuo assistente AI",
-    "description": "Seleziona un provider per iniziare una nuova conversazione",
-    "readyPrompt": {
-      "claude": "Pronto a usare Claude con {{model}}. Inizia a digitare il tuo messaggio qui sotto."
-    },
-    "pressToSearch": "Premi <kbd>{{shortcut}}</kbd> per cercare sessioni, file e commit",
-    "useModelsCommand": "Switch models with /models"
+    "pressToSearch": "Premi <kbd>{{shortcut}}</kbd> per cercare sessioni, file e commit"
   },
   "session": {
     "continue": {
@@ -133,8 +73,7 @@
       "loadEarlier": "Carica messaggi precedenti",
       "loadAll": "Carica tutti i messaggi",
       "loadingAll": "Caricamento di tutti i messaggi...",
-      "allLoaded": "Tutti i messaggi caricati",
-      "perfWarning": "Tutti i messaggi caricati — lo scorrimento potrebbe essere più lento. Clicca \"Scorri in basso\" per ripristinare le prestazioni."
+      "allLoaded": "Tutti i messaggi caricati"
     }
   },
   "shell": {
@@ -145,7 +84,8 @@
     "status": {
       "newSession": "Nuova sessione",
       "initializing": "Inizializzazione...",
-      "restarting": "Riavvio..."
+      "restarting": "Riavvio...",
+      "takenOver": "Conversation taken over"
     },
     "actions": {
       "disconnect": "Disconnetti",
@@ -153,7 +93,9 @@
       "restart": "Riavvia",
       "restartTitle": "Riavvia shell (disconnetti prima)",
       "connect": "Continua nella shell",
-      "connectTitle": "Connetti alla shell"
+      "connectTitle": "Connetti alla shell",
+      "takeOver": "Take over",
+      "takeOverTitle": "Continue this conversation in the terminal. The chat runtime is released first — one holder at a time."
     },
     "loading": "Caricamento terminale...",
     "connecting": "Connessione alla shell...",
@@ -172,29 +114,13 @@
       "computing": "Calcolo",
       "reasoning": "Ragionamento"
     },
-    "state": {
-      "live": "Attivo",
-      "paused": "In pausa"
-    },
     "elapsed": {
       "seconds": "{{count}}s",
-      "minutesSeconds": "{{minutes}}m {{seconds}}s",
-      "label": "{{time}} trascorsi",
-      "startingNow": "Avvio in corso"
-    },
-    "controls": {
-      "stopGeneration": "Interrompi generazione",
-      "pressEscToStop": "Premi Esc in qualsiasi momento per interrompere"
-    },
-    "providers": {
-      "assistant": "Assistente"
+      "minutesSeconds": "{{minutes}}m {{seconds}}s"
     }
   },
   "projectSelection": {
     "startChatWithProvider": "Seleziona un progetto per iniziare a chattare con {{provider}}"
-  },
-  "tasks": {
-    "nextTaskPrompt": "Inizia l'attività successiva"
   },
   "attachments": {
     "truncated": "troncato"

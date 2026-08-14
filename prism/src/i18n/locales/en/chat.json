@@ -12,75 +12,23 @@
     "copyAsText": "Copy as text"
   },
   "messageTypes": {
-    "user": "U",
     "error": "Error",
     "tool": "Tool",
     "claude": "Claude"
   },
   "tools": {
-    "settings": "Tool Settings",
-    "error": "Tool Error",
-    "result": "Tool Result",
-    "viewParams": "View input parameters",
-    "viewRawParams": "View raw parameters",
-    "viewDiff": "View edit diff for",
-    "creatingFile": "Creating new file:",
-    "updatingTodo": "Updating Todo List",
-    "read": "Read",
-    "readFile": "Read file",
-    "updateTodo": "Update todo list",
-    "readTodo": "Read todo list",
-    "searchResults": "results"
+    "settings": "Tool Settings"
   },
   "search": {
-    "found": "Found {{count}} {{type}}",
-    "file": "file",
-    "files": "files",
-    "pattern": "pattern:",
     "in": "in:"
-  },
-  "fileOperations": {
-    "updated": "File updated successfully",
-    "created": "File created successfully",
-    "written": "File written successfully",
-    "diff": "Diff",
-    "newFile": "New File",
-    "viewContent": "View file content",
-    "viewFullOutput": "View full output ({{count}} chars)",
-    "contentDisplayed": "The file content is displayed in the diff view above"
   },
   "interactive": {
     "title": "Interactive Prompt",
     "waiting": "Waiting for your response in the CLI",
-    "instruction": "Please select an option in your terminal where Claude is running.",
-    "selectedOption": "✓ Claude selected option {{number}}",
-    "instructionDetail": "In the CLI, you would select this option interactively using arrow keys or by typing the number."
-  },
-  "thinking": {
-    "title": "Thinking...",
-    "emoji": "💭 Thinking..."
+    "instruction": "Please select an option in your terminal where Claude is running."
   },
   "json": {
     "response": "JSON Response"
-  },
-  "permissions": {
-    "grant": "Grant permission for {{tool}}",
-    "added": "Permission added",
-    "addTo": "Adds {{entry}} to Allowed Tools.",
-    "retry": "Permission saved. Retry the request to use the tool.",
-    "error": "Unable to update permissions. Please try again.",
-    "openSettings": "Open settings"
-  },
-  "todo": {
-    "updated": "Todo list has been updated successfully",
-    "current": "Current Todo List"
-  },
-  "plan": {
-    "viewPlan": "📋 View implementation plan",
-    "title": "Implementation Plan"
-  },
-  "usageLimit": {
-    "resetAt": "Claude usage limit reached. Your limit will reset at **{{time}} {{timezone}}** - {{date}}"
   },
   "permissionModes": {
     "default": "Default Mode",
@@ -89,18 +37,8 @@
     "bypassPermissions": "Bypass Permissions",
     "plan": "Plan Mode"
   },
-  "voice": {
-    "input": "Voice input",
-    "stopRecording": "Stop recording",
-    "transcribing": "Transcribing…",
-    "speak": "Read aloud",
-    "stopSpeaking": "Stop",
-    "loading": "Loading…"
-  },
   "input": {
     "placeholder": "Type / for commands, @ for files, or ask {{provider}} anything...",
-    "placeholderDefault": "Type your message...",
-    "disabled": "Input disabled",
     "attachFiles": "Attach files",
     "attachImages": "Attach images",
     "send": "Send",
@@ -127,13 +65,7 @@
     "modelHint": "Current model: {{model}} · type /models to switch"
   },
   "providerSelection": {
-    "title": "Choose Your AI Assistant",
-    "description": "Select a provider to start a new conversation",
-    "readyPrompt": {
-      "claude": "Ready to use Claude with {{model}}. Start typing your message below."
-    },
-    "pressToSearch": "Press <kbd>{{shortcut}}</kbd> to search sessions, files, and commits",
-    "useModelsCommand": "Switch models with /models"
+    "pressToSearch": "Press <kbd>{{shortcut}}</kbd> to search sessions, files, and commits"
   },
   "session": {
     "continue": {
@@ -151,8 +83,7 @@
       "loadEarlier": "Load earlier messages",
       "loadAll": "Load all messages",
       "loadingAll": "Loading all messages...",
-      "allLoaded": "All messages loaded",
-      "perfWarning": "All messages loaded — scrolling may be slower. Click \"Scroll to bottom\" to restore performance."
+      "allLoaded": "All messages loaded"
     }
   },
   "shell": {
@@ -163,7 +94,8 @@
     "status": {
       "newSession": "New Session",
       "initializing": "Initializing...",
-      "restarting": "Restarting..."
+      "restarting": "Restarting...",
+      "takenOver": "Conversation taken over"
     },
     "actions": {
       "disconnect": "Disconnect",
@@ -171,7 +103,9 @@
       "restart": "Restart",
       "restartTitle": "Restart Shell",
       "connect": "Continue in Shell",
-      "connectTitle": "Connect to shell"
+      "connectTitle": "Connect to shell",
+      "takeOver": "Take over",
+      "takeOverTitle": "Continue this conversation in the terminal. The chat runtime is released first — one holder at a time."
     },
     "loading": "Loading terminal...",
     "connecting": "Connecting to shell...",
@@ -190,30 +124,14 @@
       "computing": "Computing",
       "reasoning": "Reasoning"
     },
-    "state": {
-      "live": "Live",
-      "paused": "Paused"
-    },
     "elapsed": {
       "seconds": "{{count}}s",
-      "minutesSeconds": "{{minutes}}m {{seconds}}s",
-      "label": "{{time}} elapsed",
-      "startingNow": "Starting now"
+      "minutesSeconds": "{{minutes}}m {{seconds}}s"
     },
-    "stop": "Stop",
-    "controls": {
-      "stopGeneration": "Stop Generation",
-      "pressEscToStop": "Press Esc anytime to stop"
-    },
-    "providers": {
-      "assistant": "Assistant"
-    }
+    "stop": "Stop"
   },
   "projectSelection": {
     "startChatWithProvider": "Select a project to start chatting with {{provider}}"
-  },
-  "tasks": {
-    "nextTaskPrompt": "Start the next task"
   },
   "checkpoint": {
     "changedFiles": "{{count}} file(s) changed this turn",

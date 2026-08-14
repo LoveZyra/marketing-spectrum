@@ -38,6 +38,10 @@ type ClaudeHistoryMessagesResult =
 
 async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
   const tools: AnyRecord[] = [];
+  // toolId -> tool。原来是在 tool_result 的循环里 `tools.find(...)` 线性查找,
+  // 于是复杂度 O(T²):一个有 500 次工具调用的 subagent transcript 是 12.5 万次
+  // 比较,2000 次就是 200 万次。
+  const toolsById = new Map<string, AnyRecord>();
 
   try {
     const fileStream = fs.createReadStream(filePath);
@@ -57,12 +61,16 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
         if (entry.message?.role === 'assistant' && Array.isArray(entry.message?.content)) {
           for (const part of entry.message.content as AnyRecord[]) {
             if (part.type === 'tool_use') {
-              tools.push({
+              const tool: AnyRecord = {
                 toolId: part.id,
                 toolName: part.name,
                 toolInput: part.input,
                 timestamp: entry.timestamp,
-              });
+              };
+              tools.push(tool);
+              if (typeof part.id === 'string') {
+                toolsById.set(part.id, tool);
+              }
             }
           }
         }
@@ -73,7 +81,7 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
               continue;
             }
 
-            const tool = tools.find((candidate) => candidate.toolId === part.tool_use_id);
+            const tool = typeof part.tool_use_id === 'string' ? toolsById.get(part.tool_use_id) : undefined;
             if (!tool) {
               continue;
             }
@@ -118,8 +126,6 @@ async function getSessionMessages(
     }
 
     const projectDir = path.dirname(jsonLPath);
-    const files = await fsp.readdir(projectDir);
-    const agentFiles = files.filter((file) => file.endsWith('.jsonl') && file.startsWith('agent-'));
 
     const messages: AnyRecord[] = [];
     const agentToolsCache = new Map<string, AnyRecord[]>();
@@ -152,6 +158,15 @@ async function getSessionMessages(
         agentIds.add(String(agentId));
       }
     }
+
+    // readdir 只在真的引用了 subagent 时才做。绝大多数会话一个 subagent 都没有,
+    // 而这个目录下文件多时 readdir 并不便宜 —— 原来它排在读 transcript 之前,
+    // 无条件执行。
+    const agentFiles = agentIds.size > 0
+      ? (await fsp.readdir(projectDir)).filter(
+          (file) => file.endsWith('.jsonl') && file.startsWith('agent-'),
+        )
+      : [];
 
     for (const agentId of agentIds) {
       const agentFileName = `agent-${agentId}.jsonl`;
@@ -290,7 +305,14 @@ function stripAnsiFormatting(text: string): string {
   return text.replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, '');
 }
 
-const historyCache = new FetchHistoryCache();
+// 单条目上限设为总预算的 1/4。
+//
+// 只有总预算这一道闸时,一个 24 MB 的会话能独占 3/4 额度,把其他所有人的条目
+// 挤出去 —— 单人使用无所谓,多用户下就是"某人打开长会话,其余人的历史集体变冷"。
+// 超过这个尺寸的会话干脆不缓存,让它每次冷读,好过让它清空别人的。
+const historyCache = new FetchHistoryCache({
+  maxEntryBytes: Math.floor((32 * 1024 * 1024) / 4),
+});
 
 /**
  * Drops every cached history entry.

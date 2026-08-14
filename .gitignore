@@ -19,6 +19,7 @@ _to_delete/
 _deploy/
 ma-*.tar.gz
 *.tgz
+*.gz
 
 # --- 密钥:永远不进库。ma-env.local.sh 是 restart_prism.sh 读的口令文件 ---
 ma-env.local.sh

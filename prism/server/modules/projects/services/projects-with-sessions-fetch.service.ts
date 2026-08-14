@@ -4,6 +4,7 @@ import path from 'node:path';
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/index.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
+import { canViewerSeeProject } from '@/shared/project-visibility.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -86,6 +87,45 @@ const MAX_PROJECT_SESSIONS_PAGE_SIZE = 200;
 /**
  * Generate better display name from path.
  */
+/**
+ * `package.json` 里的 name,按 mtime+size 缓存。
+ *
+ * 项目列表接口会对**每个项目**调一次 generateDisplayName,即 N 次磁盘 IO;
+ * 会话监视器每次构建 `session_upserted` 广播也调一次(运行中大约每 2–3 秒一回)。
+ * 而 package.json 的 name 基本不变。缓存 null 表示"读过,没有可用的 name",
+ * 免得对没有 package.json 的项目反复 ENOENT。
+ */
+const packageNameCache = new Map<string, { fingerprint: string; name: string | null }>();
+
+async function readPackageNameCached(packageJsonPath: string): Promise<string | null> {
+  let fingerprint = 'missing';
+  try {
+    const stats = await fs.stat(packageJsonPath);
+    fingerprint = `${stats.mtimeMs}:${stats.size}`;
+  } catch {
+    // 不存在:下面缓存 null。
+  }
+
+  const cached = packageNameCache.get(packageJsonPath);
+  if (cached && cached.fingerprint === fingerprint) {
+    return cached.name;
+  }
+
+  let name: string | null = null;
+  if (fingerprint !== 'missing') {
+    try {
+      const packageData = await fs.readFile(packageJsonPath, 'utf8');
+      const parsed = JSON.parse(packageData) as { name?: string };
+      name = typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name : null;
+    } catch {
+      name = null;
+    }
+  }
+
+  packageNameCache.set(packageJsonPath, { fingerprint, name });
+  return name;
+}
+
 export async function generateDisplayName(projectName: string, actualProjectDir: string | null = null): Promise<string> {
   // Use actual project directory if provided, otherwise decode from project name.
   const projectPath = actualProjectDir || projectName.replace(/-/g, '/');
@@ -93,6 +133,10 @@ export async function generateDisplayName(projectName: string, actualProjectDir:
   // Try to read package.json from the project path.
   try {
     const packageJsonPath = path.join(projectPath, 'package.json');
+    const cachedName = await readPackageNameCached(packageJsonPath);
+    if (cachedName) {
+      return cachedName;
+    }
     const packageData = await fs.readFile(packageJsonPath, 'utf8');
     const packageJson = JSON.parse(packageData) as { name?: string };
 
@@ -168,16 +212,33 @@ function readProjectSessionsPageByPath(
 
 // Broadcast progress to all connected WebSocket clients.
 // Uses the unified `kind` envelope like every other websocket frame.
-function broadcastProgress(progress: ProgressUpdate) {
+/**
+ * Loading progress for the project list.
+ *
+ * `currentProject` is a real filesystem path, so this is scoped to the account
+ * whose request triggered the scan rather than broadcast: otherwise everyone
+ * watching sees the paths of projects they are not allowed to list. `visibleTo`
+ * null means the caller was root (or had no user context), and the progress
+ * goes only to sockets that are also root.
+ */
+function broadcastProgress(progress: ProgressUpdate, visibleTo: number | null) {
   const message = JSON.stringify({
     kind: 'loading_progress',
     ...progress,
   });
 
   connectedClients.forEach((client: RealtimeClientConnection) => {
-    if (client.readyState === WS_OPEN_STATE) {
-      client.send(message);
-    }
+    if (client.readyState !== WS_OPEN_STATE) return;
+    // ownerUserId = visibleTo reuses the one visibility rule: a scan scoped to
+    // one account reaches that account (and root); an unscoped scan reaches
+    // only root.
+    if (!canViewerSeeProject({
+      ownerUserId: visibleTo,
+      viewerUserId: client.prismUserId,
+      viewerUsername: client.prismUsername,
+    })) return;
+
+    client.send(message);
   });
 }
 
@@ -213,7 +274,7 @@ export async function getProjectsWithSessions(
       current: processedProjects,
       total: totalProjects,
       currentProject: projectPath,
-    });
+    }, options.visibleTo ?? null);
 
     const displayName =
       row.custom_project_name && row.custom_project_name.trim().length > 0
@@ -244,7 +305,7 @@ export async function getProjectsWithSessions(
     phase: 'complete',
     current: totalProjects,
     total: totalProjects,
-  });
+  }, options.visibleTo ?? null);
 
   return projects;
 }

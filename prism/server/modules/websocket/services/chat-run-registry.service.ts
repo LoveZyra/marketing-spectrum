@@ -4,6 +4,7 @@ import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { generateDisplayName } from '@/modules/projects/index.js';
 import { ChatSessionWriter } from '@/modules/websocket/services/chat-session-writer.service.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
+import { canViewerSeeProject } from '@/shared/project-visibility.js';
 import type {
   LLMProvider,
   NormalizedMessage,
@@ -33,6 +34,8 @@ type ChatRun = {
   status: ChatRunStatus;
   lastSeq: number;
   events: NormalizedMessage[];
+  /** `events` 的近似字节数,用于字节预算裁剪。 */
+  bufferedBytes: number;
   writer: ChatSessionWriter;
   startedAt: number;
   completedAt: number | null;
@@ -52,6 +55,26 @@ const COMPLETED_RUN_RETENTION_MS = 5 * 60 * 1000;
  * REST history refresh, which is always the authoritative source.
  */
 const MAX_BUFFERED_EVENTS_PER_RUN = 5000;
+
+/**
+ * 缓冲的字节预算,比条数更能反映真实占用。
+ *
+ * 缓冲里放的是完整 `NormalizedMessage`,包含 `tool_result` 的整段内容 —— 读一个
+ * 大文件就是几百 KB 一条。5000 条 × 平均 10 KB = 50 MB/run,乘上并发 run 数和
+ * 5 分钟保留期,峰值可以到几百 MB。同一个仓库的 `history-cache.ts` 用的正是字节
+ * 预算,并写了很长的理由说明为什么按条数不对 —— 那套论证在这里同样成立。
+ *
+ * 按字节丢弃是安全的:`replayEvents` 本来就有"缓冲被截断则客户端回落 REST"的
+ * 语义,而 REST 永远是权威来源。
+ */
+const MAX_BUFFERED_BYTES_PER_RUN = 8 * 1024 * 1024;
+
+/** 一条事件的近似字节数。只数字符串内容,足够做预算控制。 */
+function approximateEventBytes(event: NormalizedMessage): number {
+  const content = typeof event.content === 'string' ? event.content.length : 0;
+  const toolResult = typeof event.toolResult?.content === 'string' ? event.toolResult.content.length : 0;
+  return content + toolResult + 256;
+}
 
 /**
  * Active and recently-completed runs keyed by app session id.
@@ -97,10 +120,19 @@ async function broadcastCanonicalSessionUpsert(appSessionId: string): Promise<vo
     timestamp: new Date().toISOString(),
   });
 
+  // Scoped, not fanned out. This payload carries the project's name and path;
+  // sending it to every open socket is how a colleague's project used to
+  // appear in someone else's sidebar mid-session and vanish again on refresh
+  // (the HTTP list was filtered, this was not).
   connectedClients.forEach((client) => {
-    if (client.readyState === WS_OPEN_STATE) {
-      client.send(payload);
-    }
+    if (client.readyState !== WS_OPEN_STATE) return;
+    if (!canViewerSeeProject({
+      ownerUserId: project?.owner_user_id ?? null,
+      viewerUserId: client.prismUserId,
+      viewerUsername: client.prismUsername,
+    })) return;
+
+    client.send(payload);
   });
 }
 
@@ -153,8 +185,23 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
   }
 
   run.events.push(outbound);
-  if (run.events.length > MAX_BUFFERED_EVENTS_PER_RUN) {
-    run.events.splice(0, run.events.length - MAX_BUFFERED_EVENTS_PER_RUN);
+  run.bufferedBytes += approximateEventBytes(outbound);
+
+  // 条数和字节两个上限,谁先到按谁裁。一次裁一批而不是逐条 shift:
+  // `splice(0, 1)` 在 5000 元素的数组上是一次 O(n) 的内存搬移。
+  const overCount = run.events.length > MAX_BUFFERED_EVENTS_PER_RUN;
+  const overBytes = run.bufferedBytes > MAX_BUFFERED_BYTES_PER_RUN;
+  if (overCount || overBytes) {
+    const dropCount = overCount
+      ? run.events.length - MAX_BUFFERED_EVENTS_PER_RUN
+      : Math.max(1, Math.ceil(run.events.length / 4));
+    const dropped = run.events.splice(0, dropCount);
+    for (const event of dropped) {
+      run.bufferedBytes -= approximateEventBytes(event);
+    }
+    if (run.bufferedBytes < 0) {
+      run.bufferedBytes = 0;
+    }
   }
 
   return outbound;
@@ -228,6 +275,7 @@ export const chatRunRegistry = {
       status: 'running',
       lastSeq: 0,
       events: [],
+      bufferedBytes: 0,
       writer: null as unknown as ChatSessionWriter,
       startedAt: Date.now(),
       completedAt: null,
@@ -305,11 +353,17 @@ export const chatRunRegistry = {
   },
 
   /**
-   * Re-attaches a run's outbound stream to a (new) websocket connection.
+   * 把一个 socket 加进这条 run 的订阅者集合。
    *
-   * This is the generic replacement for the Claude-only writer reconnect:
-   * after a page refresh the new socket subscribes and immediately starts
-   * receiving the still-running stream, for every provider.
+   * 页面刷新后新 socket 订阅上来就能接着收还在跑的流,对所有 provider 都一样。
+   *
+   * **加入,不是替换。**原来这里是 `updateWebSocket`,一次单持有者赋值 ——
+   * 谁最后订阅流就归谁,原来那个标签页从此收不到任何东西,一直转圈到刷新。
+   * 同一个人开两个标签页就会踩到,公开项目里换成另一个人也一样。而且它对审批
+   * 请求同样生效:审批帧发到了抢走流的那个浏览器,那边如果没在看这个会话,
+   * 前端还会再把它丢一次 —— 两边都看不见,原用户只等到一句超时。
+   *
+   * 谁有资格进这个集合由调用方判断(`assertSocketMaySeeSession`),这里不做鉴权。
    */
   attachConnection(appSessionId: string, connection: RealtimeClientConnection): boolean {
     const run = runs.get(appSessionId);
@@ -317,8 +371,20 @@ export const chatRunRegistry = {
       return false;
     }
 
-    run.writer.updateWebSocket(connection);
+    run.writer.addConnection(connection);
     return true;
+  },
+
+  /**
+   * 一个 socket 断开时,把它从所有还活着的 run 上摘掉。
+   *
+   * 不调也不会漏(`forward` 会顺手清理已关闭的连接),但主动摘掉可以让
+   * `liveConnectionCount()` 立刻反映现实 —— 审批投递可达性判断读的就是它。
+   */
+  detachConnection(connection: RealtimeClientConnection): void {
+    for (const run of runs.values()) {
+      run.writer.removeConnection(connection);
+    }
   },
 
   /**

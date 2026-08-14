@@ -45,11 +45,6 @@ type UserPublicRow = Pick<
   'id' | 'username' | 'created_at' | 'last_login' | 'token_version' | 'approval_status'
 >;
 
-type UserGitConfig = {
-  git_name: string | null;
-  git_email: string | null;
-};
-
 type CreateUserResult = {
   id: number | bigint;
   username: string;
@@ -161,15 +156,22 @@ export const userDb = {
     reviewedBy: number | null
   ): boolean {
     const db = getConnection();
+    // 不再是 approved 时必须顶掉已签发的 token。
+    //
+    // 鉴权中间件查的是账号存在性和 token_version,**从不查 approval_status**
+    // (它甚至被 select 出来然后丢掉了)。审批闸门只拦登录接口,所以 root 拒绝
+    // 一个正在线上的用户之后,那个人手里 7 天有效期的 JWT 会一直好用到过期 ——
+    // "拒绝"在界面上生效了,在会话层面没有。
     const result = db
       .prepare(
         `UPDATE users
          SET approval_status = ?,
              approved_at = CASE WHEN ? = 'approved' THEN CURRENT_TIMESTAMP ELSE NULL END,
-             reviewed_by = ?
+             reviewed_by = ?,
+             token_version = CASE WHEN ? = 'approved' THEN token_version ELSE token_version + 1 END
          WHERE id = ?`
       )
-      .run(status, status, reviewedBy, userId);
+      .run(status, status, reviewedBy, status, userId);
     return result.changes > 0;
   },
 
@@ -236,42 +238,17 @@ export const userDb = {
     ).run(passwordHash, userId);
   },
 
-  /** Stores the user's preferred git name and email. */
-  updateGitConfig(
-    userId: number,
-    gitName: string,
-    gitEmail: string
-  ): void {
-    const db = getConnection();
-    db.prepare('UPDATE users SET git_name = ?, git_email = ? WHERE id = ?').run(
-      gitName,
-      gitEmail,
-      userId
-    );
-  },
-
-  /** Retrieves the user's git identity (name + email). */
-  getGitConfig(userId: number): UserGitConfig | undefined {
-    const db = getConnection();
-    return db
-      .prepare('SELECT git_name, git_email FROM users WHERE id = ?')
-      .get(userId) as UserGitConfig | undefined;
-  },
-
-  /** Marks onboarding as complete for the given user. */
-  completeOnboarding(userId: number): void {
-    const db = getConnection();
-    db.prepare(
-      'UPDATE users SET has_completed_onboarding = 1 WHERE id = ?'
-    ).run(userId);
-  },
-
-  /** Returns true if the user has finished the onboarding flow. */
-  hasCompletedOnboarding(userId: number): boolean {
-    const db = getConnection();
-    const row = db
-      .prepare('SELECT has_completed_onboarding FROM users WHERE id = ?')
-      .get(userId) as { has_completed_onboarding: number } | undefined;
-    return row?.has_completed_onboarding === 1;
-  },
 };
+
+/*
+ * Removed accessors, and why the columns they addressed are still here:
+ *
+ * - `updateGitConfig` / `getGitConfig` went with the git surface.
+ * - `completeOnboarding` / `hasCompletedOnboarding` went with the onboarding
+ *   screen — Claude Code is the only agent, so there was nothing to choose.
+ *
+ * `git_name`, `git_email` and `has_completed_onboarding` stay in the table.
+ * Older SQLite builds have no DROP COLUMN, and a destructive migration to
+ * rebuild the table would risk live account rows to reclaim three unread
+ * fields. They are written by nothing and read by nothing.
+ */

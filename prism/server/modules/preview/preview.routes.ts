@@ -5,7 +5,11 @@ import express, { type RequestHandler, type Router } from 'express';
 
 import { projectsDb } from '@/modules/database/index.js';
 import { validatePathInProject } from '@/modules/files/index.js';
-import { PREVIEW_PAGE_CSP, contentTypeFor, normalizePublicSubPath } from '@/modules/publish/index.js';
+import {
+  PREVIEW_PAGE_CSP,
+  contentTypeFor,
+  normalizePublicSubPath,
+} from '@/modules/preview/services/static-content.service.js';
 import { issuePreviewTicket, readPreviewTicket } from '@/shared/preview-tickets.js';
 
 type PreviewRouterDependencies = {
@@ -13,7 +17,10 @@ type PreviewRouterDependencies = {
 };
 
 type PreviewPublicRouterDependencies = {
-  /** Same reasoning as the publish public router: an unmetered read endpoint is a hole. */
+  /**
+   * 必需,不是可选:这是 Prism 里仅剩的、不带凭据就能读到文件内容的路由,
+   * 而一个不限流的公开读接口正是「顺手把文件服务器压垮」的形状。
+   */
   rateLimiter: RequestHandler;
 };
 
@@ -77,9 +84,9 @@ export function createPreviewRouter(dependencies: PreviewRouterDependencies): Ro
 /**
  * `GET /preview/:ticket/*` — reads for the sandboxed preview iframe.
  *
- * Mounted outside the `/api` gate for the same reason as the publish public
- * route: the iframe has no `allow-same-origin`, so it sends no credentials and
- * the ticket in the path is the whole authorization story. Everything it can
+ * Mounted outside the `/api` gate on purpose: the iframe has no
+ * `allow-same-origin`, so it sends no credentials and the ticket in the path is
+ * the whole authorization story. Everything it can
  * reach is under the ticket's directory, checked by validatePathInProject
  * against the project root as well.
  */

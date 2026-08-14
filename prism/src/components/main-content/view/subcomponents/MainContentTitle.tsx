@@ -2,16 +2,14 @@ import { useTranslation } from 'react-i18next';
 
 import ClaudeLogo from '../../../llm-logo-provider/ClaudeLogo';
 import type { AppTab, Project, ProjectSession } from '../../../../types/app';
-import { usePlugins } from '../../../../contexts/PluginsContext';
 
 type MainContentTitleProps = {
   activeTab: AppTab;
   selectedProject: Project;
   selectedSession: ProjectSession | null;
-  shouldShowTasksTab: boolean;
 };
 
-function getTabTitle(activeTab: AppTab, shouldShowTasksTab: boolean, t: (key: string) => string, pluginDisplayName?: string) {
+function getTabTitle(activeTab: AppTab, t: (key: string) => string, pluginDisplayName?: string) {
   if (activeTab.startsWith('plugin:') && pluginDisplayName) {
     return pluginDisplayName;
   }
@@ -20,13 +18,6 @@ function getTabTitle(activeTab: AppTab, shouldShowTasksTab: boolean, t: (key: st
     return t('mainContent.projectFiles');
   }
 
-  if (activeTab === 'tasks' && shouldShowTasksTab) {
-    return 'TaskMaster';
-  }
-
-  if (activeTab === 'browser') {
-    return t('tabs.browser');
-  }
 
   return 'Project';
 }
@@ -40,14 +31,10 @@ export default function MainContentTitle({
   activeTab,
   selectedProject,
   selectedSession,
-  shouldShowTasksTab,
 }: MainContentTitleProps) {
   const { t } = useTranslation();
-  const { plugins } = usePlugins();
 
-  const pluginDisplayName = activeTab.startsWith('plugin:')
-    ? plugins.find((p) => p.name === activeTab.replace('plugin:', ''))?.displayName
-    : undefined;
+  const pluginDisplayName = undefined;
 
   const showSessionIcon = activeTab === 'chat' && Boolean(selectedSession);
   const showChatNewSession = activeTab === 'chat' && !selectedSession;
@@ -76,7 +63,7 @@ export default function MainContentTitle({
         ) : (
           <div className="min-w-0">
             <h2 className="text-sm font-semibold leading-tight text-foreground">
-              {getTabTitle(activeTab, shouldShowTasksTab, t, pluginDisplayName)}
+              {getTabTitle(activeTab, t, pluginDisplayName)}
             </h2>
             <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
           </div>

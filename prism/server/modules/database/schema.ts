@@ -123,26 +123,6 @@ CREATE TABLE IF NOT EXISTS scan_state (
 );
 `;
 
-/**
- * Published static pages.
- *
- * Stores a *reference* to a workspace path, never a copy of the bytes: the
- * public route reads the file live, so editing it and refreshing the browser is
- * the whole of "republishing". The UNIQUE on (project_id, rel_path) is what
- * makes re-publishing idempotent and keeps an already-shared URL working.
- */
-export const PUBLISHED_PAGES_TABLE_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS published_pages (
-    id TEXT PRIMARY KEY NOT NULL,
-    token TEXT UNIQUE NOT NULL,
-    project_id TEXT NOT NULL,
-    rel_path TEXT NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'file',   -- file | folder
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(project_id, rel_path)
-);
-`;
 
 export const APP_CONFIG_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS app_config (
@@ -193,6 +173,4 @@ ${LAST_SCANNED_AT_SQL}
 
 ${APP_CONFIG_TABLE_SCHEMA_SQL}
 
-${PUBLISHED_PAGES_TABLE_SCHEMA_SQL}
-CREATE INDEX IF NOT EXISTS idx_published_pages_project ON published_pages(project_id);
 `;

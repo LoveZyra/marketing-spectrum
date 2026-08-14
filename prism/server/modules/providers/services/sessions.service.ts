@@ -2,19 +2,15 @@ import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { canViewerSeeSession, projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
-import {
-  renderSessionExport,
-  type SessionExport,
-  type SessionExportFormat,
-} from '@/modules/providers/services/session-export.service.js';
 import type {
   FetchHistoryOptions,
   FetchHistoryResult,
   LLMProvider,
   NormalizedMessage,
+  Viewer,
 } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -96,13 +92,38 @@ export const sessionsService = {
    * This is intentionally status-only: callers that only need sidebar activity
    * indicators should not attach to chat streams or request replayed messages.
    */
-  listRunningSessions(): Array<{
+  /**
+   * 谁能看到这条会话。判定实现在 database 模块,这里只是转出去 —— providers 与
+   * websocket 两侧必须用同一份,不能各写一份。
+   */
+  canViewerSeeSession(sessionId: string, viewer: Viewer): boolean {
+    return canViewerSeeSession(sessionId, viewer);
+  },
+
+  /**
+   * `canViewerSeeSession` 的抛异常版本,给路由用。
+   *
+   * 统一 404 而不是 403:403 等于确认 "这个 id 是存在的,只是不给你",
+   * 对一个可以逐个试的 id 空间来说那是免费的存在性预言机。
+   */
+  assertViewerCanSeeSession(sessionId: string, viewer: Viewer): void {
+    if (!this.canViewerSeeSession(sessionId, viewer)) {
+      throw new AppError(`Session "${sessionId}" was not found.`, {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+  },
+
+  listRunningSessions(viewer: Viewer): Array<{
     sessionId: string;
     provider: LLMProvider;
     startedAt: number;
     lastSeq: number;
   }> {
-    return chatRunRegistry.listRunningRuns();
+    return chatRunRegistry
+      .listRunningRuns()
+      .filter((run) => this.canViewerSeeSession(run.sessionId, viewer));
   },
 
   /**
@@ -125,7 +146,11 @@ export const sessionsService = {
    * for the lifetime of the conversation. The provider-native id is mapped to
    * this row later, when the provider runtime announces it mid-run.
    */
-  createAppSession(provider: LLMProvider, projectPath: string): CreateAppSessionResult {
+  createAppSession(
+    provider: LLMProvider,
+    projectPath: string,
+    ownerUserId: number | null = null,
+  ): CreateAppSessionResult {
     const normalizedProjectPath = projectPath.trim();
     if (!normalizedProjectPath) {
       throw new AppError('projectPath is required.', {
@@ -135,7 +160,7 @@ export const sessionsService = {
     }
 
     const sessionId = randomUUID();
-    sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath);
+    sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, ownerUserId);
 
     return {
       sessionId,
@@ -194,45 +219,15 @@ export const sessionsService = {
     };
   },
 
-  /**
-   * Renders a whole session as a downloadable Markdown or JSON document.
-   *
-   * Deliberately unpaginated: an export that stopped at the default page size
-   * would look complete and silently omit the rest of the conversation, which
-   * is worse than being slow. fetchHistory already loads and caches the full
-   * transcript for any request, so `limit: null` costs nothing extra here.
-   */
-  async exportSession(sessionId: string, format: SessionExportFormat): Promise<SessionExport> {
-    const session = sessionsDb.getSessionById(sessionId);
-    if (!session) {
-      throw new AppError(`Session "${sessionId}" was not found.`, {
-        code: 'SESSION_NOT_FOUND',
-        statusCode: 404,
-      });
-    }
-
-    const history = await this.fetchHistory(sessionId, { limit: null, offset: 0 });
-
-    return renderSessionExport(
-      format,
-      {
-        sessionId,
-        provider: session.provider,
-        title: session.custom_name?.trim() || `Session ${sessionId}`,
-        projectPath: session.project_path ?? '',
-        createdAt: session.created_at ?? null,
-        updatedAt: session.updated_at ?? null,
-      },
-      history.messages,
-    );
-  },
 
   /**
    * Returns archived sessions with enough project metadata for the sidebar to
    * group, filter, open, and restore them without a per-row follow-up query.
    */
-  listArchivedSessions(): ArchivedSessionListItem[] {
-    const archivedSessions = sessionsDb.getArchivedSessions();
+  listArchivedSessions(viewer: Viewer): ArchivedSessionListItem[] {
+    const archivedSessions = sessionsDb
+      .getArchivedSessions()
+      .filter((session) => this.canViewerSeeSession(session.session_id, viewer));
     const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectPath>>();
 
     return archivedSessions.map((session) => {

@@ -222,7 +222,19 @@ test('replayEvents returns only events after the requested seq', async () => {
   });
 });
 
-test('attachConnection reroutes the live stream to a new socket', async () => {
+/**
+ * 订阅是**加入**,不是接管。
+ *
+ * 这条用例原来断言的正好相反 —— 第二个 socket 订阅后,第一个就收不到了。那是
+ * 当时的实现(`updateWebSocket` 单持有者赋值),而它是个 bug:同一个人开两个
+ * 标签页,先开的那个从此一个字节都收不到,一直转圈到刷新;公开项目里换成另一个
+ * 人打开同一会话,效果一样。
+ *
+ * 对审批请求尤其致命 —— 审批帧走的是同一条路。被抢走之后它落在另一个浏览器上,
+ * 那边如果没在看这个会话,前端还会再丢一次,于是**两边都没人看见**,原用户只
+ * 等到一句 "Permission request timed out"。
+ */
+test('订阅是加入而不是接管:两个 socket 都继续收流', async () => {
   await withIsolatedDatabase(() => {
     sessionsDb.createAppSession('app-run-5', 'claude', '/workspace/demo');
     const firstConnection = new FakeConnection();
@@ -241,8 +253,64 @@ test('attachConnection reroutes the live stream to a new socket', async () => {
     assert.equal(chatRunRegistry.attachConnection('app-run-5', secondConnection), true);
     run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'o', content: 'after' });
 
-    assert.deepEqual(firstConnection.frames.map((frame) => frame.content), ['before']);
+    // 先来的那个仍然在收 —— 这一条就是回归本体。
+    assert.deepEqual(firstConnection.frames.map((frame) => frame.content), ['before', 'after']);
+    // 后来的从加入的那一刻开始收;它之前错过的由 replayEvents 补。
     assert.deepEqual(secondConnection.frames.map((frame) => frame.content), ['after']);
+  });
+});
+
+test('断开的 socket 被摘掉,活着的不受影响', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('app-run-6', 'claude', '/workspace/demo');
+    const staying = new FakeConnection();
+    const leaving = new FakeConnection();
+    const run = chatRunRegistry.startRun({
+      appSessionId: 'app-run-6',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: staying,
+      userId: null,
+    });
+    assert.ok(run);
+    chatRunRegistry.attachConnection('app-run-6', leaving);
+    assert.equal(run.writer.liveConnectionCount(), 2);
+
+    chatRunRegistry.detachConnection(leaving);
+    assert.equal(run.writer.liveConnectionCount(), 1);
+
+    run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'o', content: 'x' });
+    assert.deepEqual(staying.frames.map((frame) => frame.content), ['x']);
+    assert.deepEqual(leaving.frames, []);
+  });
+});
+
+/**
+ * 已关闭的 socket 在 `forward` 时被顺手回收 —— 刷新页面留下的旧连接没有人会来
+ * 摘,靠这里兜底,否则 `liveConnectionCount()` 会一直虚高,而投递可达性判断读的
+ * 就是它。
+ */
+test('已关闭的连接在下一次发送时被回收', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('app-run-7', 'claude', '/workspace/demo');
+    const alive = new FakeConnection();
+    const dead = new FakeConnection();
+    const run = chatRunRegistry.startRun({
+      appSessionId: 'app-run-7',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: alive,
+      userId: null,
+    });
+    assert.ok(run);
+    chatRunRegistry.attachConnection('app-run-7', dead);
+
+    dead.readyState = 3; // CLOSED
+    run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'o', content: 'x' });
+
+    assert.equal(run.writer.liveConnectionCount(), 1);
+    assert.deepEqual(dead.frames, []);
+    assert.deepEqual(alive.frames.map((frame) => frame.content), ['x']);
   });
 });
 

@@ -1,7 +1,6 @@
 import { Edit3, Globe, Lock, Plus, Server, Terminal, Trash2, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { isManagedMcpServerName } from '../../../../shared/managedMcpServers.js';
 import type { McpProject, McpProvider, McpScope, ProviderMcpServer } from '../types';
 import { Badge, Button } from '../../../shared/view/ui';
 import { MCP_PROVIDER_NAMES } from '../constants';
@@ -47,12 +46,10 @@ const getServerKey = (server: ProviderMcpServer): string => (
   `${server.provider}:${server.scope}:${server.workspacePath || 'global'}:${server.name}`
 );
 
-// Written and removed automatically by a Prism feature toggle (the Browser
-// tab), not added by the user, so they are shown read-only: editing or deleting
-// one here would leave the toggle on with nothing behind it. The name list is
-// shared with the backend that registers them — see that module for why this
-// stopped agreeing with reality once.
-const isManagedServer = (server: ProviderMcpServer): boolean => isManagedMcpServerName(server.name);
+// 曾经有一类"由 Prism 自己写入的托管 MCP 服务器"(浏览器功能的开关会自动增删
+// 它),它们在列表里是只读的。浏览器功能整体移除后不再有任何托管服务器 ——
+// 现在列表里的每一条都是用户自己加的,一律可编辑可删除。
+const isManagedServer = (): boolean => false;
 
 function ConfigLine({ label, children }: { label: string; children: string }) {
   if (!children) {
@@ -138,7 +135,7 @@ export default function McpServers({ selectedProvider, currentProjects }: McpSer
         )}
 
         {servers.map((server) => {
-          const managed = isManagedServer(server);
+          const managed = isManagedServer();
 
           return (
             <div key={getServerKey(server)} className="rounded-lg border border-border bg-card/50 p-4">

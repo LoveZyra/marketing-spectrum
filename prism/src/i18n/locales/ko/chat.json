@@ -12,75 +12,23 @@
     "copyAsText": "텍스트로 복사"
   },
   "messageTypes": {
-    "user": "U",
     "error": "오류",
     "tool": "도구",
     "claude": "Claude"
   },
   "tools": {
-    "settings": "도구 설정",
-    "error": "도구 오류",
-    "result": "도구 결과",
-    "viewParams": "입력 파라미터 보기",
-    "viewRawParams": "Raw 파라미터 보기",
-    "viewDiff": "편집 Diff 보기:",
-    "creatingFile": "새 파일 생성:",
-    "updatingTodo": "Todo 리스트 업데이트",
-    "read": "읽기",
-    "readFile": "파일 읽기",
-    "updateTodo": "Todo 리스트 업데이트",
-    "readTodo": "Todo 리스트 읽기",
-    "searchResults": "결과"
+    "settings": "도구 설정"
   },
   "search": {
-    "found": "{{count}}개의 {{type}} 발견",
-    "file": "파일",
-    "files": "파일",
-    "pattern": "패턴:",
     "in": "위치:"
-  },
-  "fileOperations": {
-    "updated": "파일이 업데이트되었습니다",
-    "created": "파일이 생성되었습니다",
-    "written": "파일이 작성되었습니다",
-    "diff": "Diff",
-    "newFile": "새 파일",
-    "viewContent": "파일 내용 보기",
-    "viewFullOutput": "전체 출력 보기 ({{count}}자)",
-    "contentDisplayed": "파일 내용이 위의 Diff 보기에 표시됩니다"
   },
   "interactive": {
     "title": "대화형 프롬프트",
     "waiting": "CLI에서 응답을 기다리는 중",
-    "instruction": "Claude가 실행 중인 터미널에서 옵션을 선택해주세요.",
-    "selectedOption": "✓ Claude가 옵션 {{number}}을(를) 선택했습니다",
-    "instructionDetail": "CLI에서 화살표 키 또는 숫자를 입력하여 이 옵션을 대화형으로 선택합니다."
-  },
-  "thinking": {
-    "title": "생각 중...",
-    "emoji": "💭 생각 중..."
+    "instruction": "Claude가 실행 중인 터미널에서 옵션을 선택해주세요."
   },
   "json": {
     "response": "JSON 응답"
-  },
-  "permissions": {
-    "grant": "{{tool}}에 대한 권한 부여",
-    "added": "권한이 추가되었습니다",
-    "addTo": "{{entry}}을(를) 허용된 도구에 추가합니다.",
-    "retry": "권한이 저장되었습니다. 도구를 사용하려면 요청을 재시도하세요.",
-    "error": "권한을 업데이트할 수 없습니다. 다시 시도해주세요.",
-    "openSettings": "설정 열기"
-  },
-  "todo": {
-    "updated": "Todo 리스트가 업데이트되었습니다",
-    "current": "현재 Todo 리스트"
-  },
-  "plan": {
-    "viewPlan": "📋 구현 계획 보기",
-    "title": "구현 계획"
-  },
-  "usageLimit": {
-    "resetAt": "Claude 사용량 한도에 도달했습니다. 한도는 **{{time}} {{timezone}}** - {{date}}에 초기화됩니다"
   },
   "permissionModes": {
     "default": "기본 모드",
@@ -91,8 +39,6 @@
   },
   "input": {
     "placeholder": "/를 입력하여 명령어, @를 입력하여 파일, 또는 {{provider}}에게 무엇이든 물어보세요...",
-    "placeholderDefault": "메시지를 입력하세요...",
-    "disabled": "입력 비활성화",
     "attachFiles": "파일 첨부",
     "attachImages": "이미지 첨부",
     "send": "전송",
@@ -109,13 +55,7 @@
     "modelHint": "Current model: {{model}} · type /models to switch"
   },
   "providerSelection": {
-    "title": "AI 어시스턴트 선택",
-    "description": "새 대화를 시작할 프로바이더를 선택하세요",
-    "readyPrompt": {
-      "claude": "{{model}} 모델로 Claude를 사용할 준비가 되었습니다. 아래에 메시지를 입력하세요."
-    },
-    "pressToSearch": "<kbd>{{shortcut}}</kbd>를 눌러 세션, 파일 및 커밋을 검색하세요",
-    "useModelsCommand": "Switch models with /models"
+    "pressToSearch": "<kbd>{{shortcut}}</kbd>를 눌러 세션, 파일 및 커밋을 검색하세요"
   },
   "session": {
     "continue": {
@@ -133,8 +73,7 @@
       "loadEarlier": "이전 메시지 로드",
       "loadAll": "모든 메시지 로드",
       "loadingAll": "모든 메시지 로딩 중...",
-      "allLoaded": "모든 메시지 로드 완료",
-      "perfWarning": "모든 메시지가 로드됨 - 스크롤이 느려질 수 있습니다. \"맨 아래로 스크롤\"을 클릭하면 성능이 복구됩니다."
+      "allLoaded": "모든 메시지 로드 완료"
     }
   },
   "shell": {
@@ -145,7 +84,8 @@
     "status": {
       "newSession": "새 세션",
       "initializing": "초기화 중...",
-      "restarting": "재시작 중..."
+      "restarting": "재시작 중...",
+      "takenOver": "Conversation taken over"
     },
     "actions": {
       "disconnect": "연결 끊기",
@@ -153,7 +93,9 @@
       "restart": "재시작",
       "restartTitle": "Shell 재시작 (먼저 연결 끊기)",
       "connect": "Shell에서 계속",
-      "connectTitle": "Shell에 연결"
+      "connectTitle": "Shell에 연결",
+      "takeOver": "Take over",
+      "takeOverTitle": "Continue this conversation in the terminal. The chat runtime is released first — one holder at a time."
     },
     "loading": "터미널 로딩 중...",
     "connecting": "Shell에 연결 중...",
@@ -172,29 +114,13 @@
       "computing": "Computing",
       "reasoning": "Reasoning"
     },
-    "state": {
-      "live": "Live",
-      "paused": "Paused"
-    },
     "elapsed": {
       "seconds": "{{count}}s",
-      "minutesSeconds": "{{minutes}}m {{seconds}}s",
-      "label": "{{time}} elapsed",
-      "startingNow": "Starting now"
-    },
-    "controls": {
-      "stopGeneration": "Stop Generation",
-      "pressEscToStop": "Press Esc anytime to stop"
-    },
-    "providers": {
-      "assistant": "Assistant"
+      "minutesSeconds": "{{minutes}}m {{seconds}}s"
     }
   },
   "projectSelection": {
     "startChatWithProvider": "{{provider}}와 채팅을 시작하려면 프로젝트를 선택하세요"
-  },
-  "tasks": {
-    "nextTaskPrompt": "다음 작업 시작"
   },
   "attachments": {
     "truncated": "잘림"

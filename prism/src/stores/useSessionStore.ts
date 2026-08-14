@@ -152,9 +152,25 @@ function userTextFingerprint(m: NormalizedMessage): string | null {
   return t.length > 0 ? t : null;
 }
 
+/**
+ * 解析后的时间戳缓存。
+ *
+ * `compareMessagesChronologically` 每比较一次就调两次 `Date.parse`,而排序是
+ * O(n log n) 次比较 —— 三千条消息约 3.5 万次比较 = 7 万次 Date.parse,每轮对话
+ * 结束都要来一遍。消息对象本身是不可变的(store 里一律 spread 出新对象),
+ * 所以按对象身份缓存是安全的;用 WeakMap,消息被回收时条目自动消失。
+ */
+const messageTimeCache = new WeakMap<NormalizedMessage, number | null>();
+
 function readMessageTime(m: NormalizedMessage): number | null {
+  const cached = messageTimeCache.get(m);
+  if (cached !== undefined) {
+    return cached;
+  }
   const time = Date.parse(m.timestamp);
-  return Number.isFinite(time) ? time : null;
+  const value = Number.isFinite(time) ? time : null;
+  messageTimeCache.set(m, value);
+  return value;
 }
 
 function hasServerEchoForLocalUser(
@@ -199,11 +215,20 @@ function getUserTurnOrdinalBefore(
   message: NormalizedMessage,
   serverMessages: NormalizedMessage[],
   realtimeMessages: NormalizedMessage[],
+  /**
+   * 预先排好的合并视图。不传就地排一次(保持旧调用方可用),但热路径上必须传:
+   * 这个函数会对**每一条** realtime 行调用一次,而排序的是 server+realtime 全量。
+   * 实测 40 条 realtime × 3000 条 server = 75 ms,realtime 上限是 500 条。
+   */
+  presortedMerged?: NormalizedMessage[],
 ): number {
   const messageTime = readMessageTime(message);
   let userCount = 0;
 
-  for (const candidate of [...serverMessages, ...realtimeMessages].sort(compareMessagesChronologically)) {
+  const merged = presortedMerged
+    ?? [...serverMessages, ...realtimeMessages].sort(compareMessagesChronologically);
+
+  for (const candidate of merged) {
     if (candidate.id === message.id) {
       break;
     }
@@ -262,13 +287,14 @@ function isAssistantTextEchoedInSameTurnOnServer(
   message: NormalizedMessage,
   serverMessages: NormalizedMessage[],
   realtimeMessages: NormalizedMessage[],
+  presortedMerged?: NormalizedMessage[],
 ): boolean {
   const assistantText = (message.content || '').trim();
   if (!assistantText) {
     return false;
   }
 
-  const turnOrdinal = getUserTurnOrdinalBefore(message, serverMessages, realtimeMessages);
+  const turnOrdinal = getUserTurnOrdinalBefore(message, serverMessages, realtimeMessages, presortedMerged);
   const turnRange = findServerTurnRangeByOrdinal(serverMessages, turnOrdinal);
   if (!turnRange) {
     return false;
@@ -336,6 +362,17 @@ function pruneRealtimeSupersededByServer(
 
   const serverIds = new Set(serverMessages.map((message) => message.id));
 
+  // 合并视图只排一次,传给下面每一次判定复用。之前是每条 realtime 行各排一遍
+  // 全量 —— O(R × (S+R) log(S+R)),40×3000 实测 75 ms,而 realtime 上限 500 条。
+  // 只在真的会用到它的时候才排:纯 user 行的分支根本不需要。
+  let presortedMerged: NormalizedMessage[] | undefined;
+  const mergedView = () => {
+    if (!presortedMerged) {
+      presortedMerged = [...serverMessages, ...realtimeMessages].sort(compareMessagesChronologically);
+    }
+    return presortedMerged;
+  };
+
   return realtimeMessages.filter((message) => {
     if (serverIds.has(message.id)) {
       return false;
@@ -346,14 +383,14 @@ function pruneRealtimeSupersededByServer(
     }
 
     if (message.kind === 'stream_delta' || message.id === `__streaming_${message.sessionId}`) {
-      if (isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages)) {
+      if (isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages, mergedView())) {
         return false;
       }
       return true;
     }
 
     if (message.kind === 'text' && message.role === 'assistant') {
-      if (isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages)) {
+      if (isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages, mergedView())) {
         return false;
       }
       return true;
@@ -423,6 +460,9 @@ function recomputeMergedIfNeeded(slot: SessionSlot): boolean {
 }
 
 // ─── Stale threshold ─────────────────────────────────────────────────────────
+
+/** 与聊天面板的首屏分页大小一致 —— 刷新窗口不该小于它。 */
+const MESSAGES_PER_PAGE = 20;
 
 const STALE_THRESHOLD_MS = 30_000;
 
@@ -623,7 +663,18 @@ export function useSessionStore() {
     const slot = getSlot(sessionId);
     const fetchTicket = ++slot._fetchSeq;
     try {
-      const url = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages`;
+      // 只要回已经在手里的那个窗口,不要整份 transcript。
+      //
+      // 这个刷新每轮对话结束都会触发(complete 事件),而原来的请求不带 limit,
+      // 于是三千轮的会话每轮都回传 42 MB,服务端光 JSON.stringify 就阻塞事件
+      // 循环 190ms —— 单线程,那段时间所有用户的请求一起排队。
+      //
+      // 服务端 `sliceTailPage` 的语义正是"取末尾 N 条",所以传当前已加载条数
+      // 就得到同一个窗口,内容不变、体积回到几百 KB。初次打开会话仍走
+      // fetchFromServer 的分页路径,不受影响。
+      const loadedCount = slot.serverMessages.length;
+      const limit = Math.max(loadedCount, MESSAGES_PER_PAGE);
+      const url = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}&offset=0`;
       const response = await authenticatedFetch(url);
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);

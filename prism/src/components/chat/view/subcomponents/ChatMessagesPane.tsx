@@ -7,13 +7,12 @@ import type {
   Project,
   ProjectSession,
   LLMProvider,
-  ProviderModelsDefinition,
 } from '../../../../types/app';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 import { groupConsecutiveTools, isToolGroupItem } from '../../utils/toolGrouping';
 
 import MessageComponent from './MessageComponent';
-import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
+import ChatEmptyState from './ChatEmptyState';
 import ToolGroupContainer from './ToolGroupContainer';
 import LoadAllMessagesOverlay from './LoadAllMessagesOverlay';
 
@@ -30,12 +29,6 @@ interface ChatMessagesPaneProps {
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
   provider: LLMProvider;
-  textareaRef: RefObject<HTMLTextAreaElement>;
-  claudeModel: string;
-  providerModelCatalog: Partial<Record<LLMProvider, ProviderModelsDefinition>>;
-  tasksEnabled: boolean;
-  isTaskMasterInstalled: boolean | null;
-  onShowAllTasks?: (() => void) | null;
   setInput: Dispatch<SetStateAction<string>>;
   isLoadingMoreMessages: boolean;
   hasMoreMessages: boolean;
@@ -71,12 +64,6 @@ function ChatMessagesPane({
   selectedSession,
   currentSessionId,
   provider,
-  textareaRef,
-  claudeModel,
-  providerModelCatalog,
-  tasksEnabled,
-  isTaskMasterInstalled,
-  onShowAllTasks,
   setInput,
   isLoadingMoreMessages,
   hasMoreMessages,
@@ -158,16 +145,10 @@ function ChatMessagesPane({
           </div>
         </div>
       ) : chatMessages.length === 0 ? (
-        <ProviderSelectionEmptyState
+        <ChatEmptyState
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
           provider={provider}
-          textareaRef={textareaRef}
-          claudeModel={claudeModel}
-          providerModelCatalog={providerModelCatalog}
-          tasksEnabled={tasksEnabled}
-          isTaskMasterInstalled={isTaskMasterInstalled}
-          onShowAllTasks={onShowAllTasks}
           setInput={setInput}
         />
       ) : (

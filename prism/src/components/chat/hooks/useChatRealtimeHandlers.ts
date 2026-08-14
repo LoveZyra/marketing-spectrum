@@ -13,6 +13,18 @@ const isActionablePermissionRequest = (request: { toolName?: unknown } | null | 
   return request?.toolName !== 'ExitPlanMode' && request?.toolName !== 'exit_plan_mode';
 };
 
+/**
+ * 这一帧该不该推进 `lastSeq`(重连/切回来时的补发游标)。
+ *
+ * 规则是"只为**留下来的**帧推进"。permission 那两种帧是唯一的例外,而这个例外
+ * 不是洁癖:它们既不进 store(见 `shouldPersist`),又会在不属于当前所看会话时
+ * 被直接丢弃 —— 却照样推进过游标。后果是一条**永远回不来**的审批请求:切回那个
+ * 会话时 `chat.subscribe` 带的 `lastSeq` 已经越过它,`replayEvents` 不补发,
+ * 而没有任何地方存过它。整页刷新反倒能救回来(游标随 ref 一起清零),页内切换永远不能。
+ */
+export const advancesReplayCursor = (kind: unknown): boolean =>
+  kind !== 'permission_request' && kind !== 'permission_cancelled';
+
 const hasActionablePermissionRequests = (requests: Array<{ toolName?: unknown }> | null | undefined): boolean => {
   return Array.isArray(requests) && requests.some((request) => isActionablePermissionRequest(request));
 };
@@ -103,8 +115,8 @@ export function useChatRealtimeHandlers({
       const activeViewSessionId = activeViewSessionIdRef.current;
       const sid = (typeof msg.sessionId === 'string' && msg.sessionId) || activeViewSessionId;
 
-      // Record replay progress for every sequenced live event.
-      if (sid && typeof msg.seq === 'number') {
+      // Record replay progress for every sequenced live event we actually keep.
+      if (sid && typeof msg.seq === 'number' && advancesReplayCursor(msg.kind)) {
         const known = lastSeqRef.current.get(sid) ?? 0;
         if (msg.seq > known) {
           lastSeqRef.current.set(sid, msg.seq);

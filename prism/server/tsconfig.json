@@ -31,6 +31,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["./**/*.js", "./**/*.ts", "../shared/**/*.js", "../shared/**/*.ts"],
+  "include": ["./**/*.js", "./**/*.ts", "./**/*.d.ts", "../shared/**/*.js", "../shared/**/*.ts"],
   "exclude": ["../dist", "../dist-server", "../node_modules", "../src"]
 }

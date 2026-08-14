@@ -151,3 +151,16 @@ tasks/
 cloudcli-sidebar-app-source.tar.gz
 cloudcli-sidebar.html
 electron/*.tar.gz
+
+# 部署/同步时"删掉"的文件的去处。
+#
+# 挂载盘和部分服务器环境不允许直接 rm,所以移除一个功能时统一 `mv` 到这里,
+# 确认没问题后由人手动删掉整个目录。两个理由必须忽略它:
+#
+# · 它就在仓库根目录下,不忽略的话下一次打全量包会把整棵"已删除的树"一起打进去,
+#   而那正是 tar 覆盖式部署最怕的东西 —— 死掉的 .ts 又回到服务器上;
+# · 它按定义装的都是**不该再被任何工具看到**的文件。
+#
+# (tsc 那边是安全的:server/tsconfig.json 的 include 相对 server/,
+#  根目录下的 _to_delete 本来就不在编译范围内。这条是给打包和 git 用的。)
+/_to_delete/

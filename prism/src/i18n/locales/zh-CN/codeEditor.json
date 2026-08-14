@@ -21,6 +21,8 @@
     "exitFullscreen": "退出全屏",
     "fullscreen": "全屏",
     "close": "关闭",
+    "previewMarkdown": "预览 Markdown",
+    "editMarkdown": "编辑 Markdown",
     "reloadPreview": "重新加载",
     "editHtml": "回到源码",
     "previewHtml": "预览渲染效果"
@@ -35,6 +37,9 @@
     "message": "文件 \"{{fileName}}\" 无法在文本编辑器中显示，因为它是二进制文件。"
   },
   "filePreview": {
+    "loading": "预览加载中…",
+    "error": "无法显示此文件。",
+    "openInNewTab": "在新标签页打开",
     "unsavedNotice": "预览的是已保存的文件,保存后才会看到最新改动。"
   }
 }

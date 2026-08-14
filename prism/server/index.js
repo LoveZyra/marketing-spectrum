@@ -8,6 +8,7 @@ import path from 'path';
 import http from 'http';
 
 import express from 'express';
+import compression from 'compression';
 import cors from 'cors';
 
 import { AppError } from '@/shared/utils.js';
@@ -27,8 +28,10 @@ import { findAppRoot, getModuleDir, getDataDir, migrateLegacyDataDir } from './u
 import {
     queryClaudeSDK,
     prewarmClaudeSession,
+    releaseClaudeSession,
     abortClaudeSDKSession,
     getActiveClaudeSDKSessions,
+    getToolApprovalSessionId,
     resolveToolApproval,
     getPendingApprovalsForSession,
     getClaudeContextUsage,
@@ -45,25 +48,18 @@ import {
 import { createMaProxyRouterFromEnv, MA_PROXY_PREFIX } from './routes/ma-proxy.js';
 import { createMaServiceFromEnv } from './services/ma-service.js';
 import authRoutes from './routes/auth.js';
-import taskmasterRoutes from './routes/taskmaster.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
 import commandsRoutes from './routes/commands.js';
 import settingsRoutes from './routes/settings.js';
 import agentRoutes from './routes/agent.js';
 import projectModuleRoutes from './modules/projects/projects.routes.js';
-import userRoutes from './routes/user.js';
-import pluginsRoutes from './routes/plugins.js';
 import providerRoutes from './modules/providers/provider.routes.js';
-import voiceRoutes from './voice-proxy.js';
-import browserUseRoutes from './modules/browser-use/browser-use.routes.js';
 import { assetsRoutes } from './modules/assets/index.js';
-import browserUseMcpRoutes from './modules/browser-use/browser-use-mcp.routes.js';
-import { browserUseService } from './modules/browser-use/browser-use.service.js';
-import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
-import { initializeDatabase, closeConnection, sessionsDb, stopDatabaseBackups } from './modules/database/index.js';
+import { canViewerSeeSession, closeConnection, initializeDatabase, sessionsDb, stopDatabaseBackups } from './modules/database/index.js';
+import { readRequestViewer } from './shared/project-visibility.js';
+import { currentHolder } from './modules/websocket/services/conversation-ownership.service.js';
 import { validateApiKey, authenticateToken, requireRoot, authenticateWebSocket } from './middleware/auth.js';
 import { createAdminRouter, backfillProjectOwners } from './modules/admin/index.js';
-import { createPublishRouter, createPublishPublicRouter } from './modules/publish/index.js';
 import { createPreviewRouter, createPreviewPublicRouter } from './modules/preview/index.js';
 import { apiRateLimiter, TRUST_PROXY } from './middleware/rate-limit.js';
 import { consumeTicket } from './shared/ws-tickets.js';
@@ -108,7 +104,7 @@ server.requestTimeout = 30 * 60 * 1000;
 // Flipped once initializeSessionsWatcher() resolves; read by /api/ready.
 let sessionsWatcherReady = false;
 
-// Single WebSocket server that handles chat, shell, and plugin proxy paths.
+// Single WebSocket server that handles the chat and shell paths.
 const wss = createWebSocketServer(server, {
     verifyClient: {
         isPlatform: IS_PLATFORM,
@@ -119,10 +115,14 @@ const wss = createWebSocketServer(server, {
     chat: {
         spawnFns: { claude: queryClaudeSDK },
         abortFns: { claude: abortClaudeSDKSession },
+        getToolApprovalSessionId,
         resolveToolApproval,
         getPendingApprovalsForSession,
     },
     shell: {
+        // 终端接管一段对话前,先把 chat 那边的常驻 runtime 放掉:一个持有者,
+        // 而且 dispose 的收尾保证 transcript 完整落盘,终端 resume 才不会少一截。
+        releaseConversation: (providerSessionId) => releaseClaudeSession(providerSessionId),
         resolveProviderSessionId: (sessionId, provider) => {
             const dbSession = sessionsDb.getSessionById(sessionId);
             return dbSession ? (dbSession.provider_session_id ?? null) : null;
@@ -132,7 +132,6 @@ const wss = createWebSocketServer(server, {
         extractUrlsFromText,
         shouldAutoOpenUrlFromOutput,
     },
-    getPluginPort,
 });
 
 // Make WebSocket server available to routes
@@ -159,6 +158,16 @@ const corsOrigins = (process.env.PRISM_CORS_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
+// gzip/deflate。放在所有路由之前,静态资源和 API 一起覆盖。
+//
+// 值得的理由不在静态资源(866 kB 的入口块传成 253 kB 已经很可观),而在 API:
+// `/api/providers/sessions/:id/messages` 在三千轮的会话上响应体是 42 MB,
+// 未压缩直接过网;transcript 是 JSON,压缩比在 8–15 倍量级。
+//
+// threshold 1024:比这更小的响应压缩收益抵不过两边的 CPU。
+// 已经压过的内容(Content-Encoding 已设)compression 自己会跳过。
+app.use(compression({ threshold: 1024 }));
+
 app.use(cors({
     ...(corsOrigins.length > 0 ? { origin: corsOrigins } : {}),
     exposedHeaders: ['X-Refreshed-Token', 'X-Prism-Truncated'],
@@ -202,13 +211,6 @@ app.use(createSystemPublicRouter({
     isWatcherReady: () => sessionsWatcherReady,
 }));
 
-// Published static pages: GET /p/:token/* with no credentials.
-//
-// Mounted here, alongside the other public router and before the /api gate, so
-// that middleware later added to /api cannot change who can read a shared link.
-// It brings its own rate limiter — see createPublishPublicRouter.
-app.use(createPublishPublicRouter({ rateLimiter: apiRateLimiter }));
-
 // Editor preview reads: GET /preview/:ticket/*. Authorized by a 5-minute
 // ticket in the path because the sandboxed iframe sends no credentials.
 app.use(createPreviewPublicRouter({ rateLimiter: apiRateLimiter }));
@@ -249,9 +251,23 @@ app.post('/api/providers/:provider/sessions/:sessionId/prewarm', authenticateTok
     }
 
     try {
-        const session = sessionsDb.getSessionById(String(req.params.sessionId || ''));
+        const appSessionId = String(req.params.sessionId || '');
+        const session = sessionsDb.getSessionById(appSessionId);
         if (!session?.provider_session_id) {
             return res.json({ success: true, warmed: false, reason: 'no_provider_session' });
+        }
+
+        // 终端正接管着这段对话时不能预热。chat 面板的预热 effect 会在会话 id、
+        // 权限模式、模型、项目路径任一变化时重触发,而接管的动作恰恰是"先释放
+        // chat 的常驻 runtime,再起 claude --resume" —— 预热若在这中间跑,就会
+        // 再建一个进程 resume 同一段对话,正是所有权登记要消掉的双写。
+        if (currentHolder(appSessionId)) {
+            return res.json({ success: true, warmed: false, reason: 'held_by_shell' });
+        }
+
+        // 归属校验:预热会真的起一个 Claude 进程读这段对话的 transcript。
+        if (!canViewerSeeSession(appSessionId, readRequestViewer(req))) {
+            return res.status(404).json({ success: false, error: 'Session not found' });
         }
 
         const body = req.body || {};
@@ -273,10 +289,9 @@ app.post('/api/providers/:provider/sessions/:sessionId/prewarm', authenticateTok
     }
 });
 
-// Publication management. Mounted before the projects router because both
+// Preview ticket endpoint. Mounted before the projects router because both
 // answer under /api/projects and the projects router has a `/:projectId/...`
 // catch-all that would otherwise swallow these paths.
-app.use('/api/projects', createPublishRouter({ authenticateToken }));
 app.use('/api/projects', createPreviewRouter({ authenticateToken }));
 
 // Projects API Routes (protected)
@@ -330,17 +345,11 @@ app.use(createUsageRouter({ authenticateToken }));
 
 // Remaining feature routers, mounted in the pre-refactor order. All are JWT
 // protected except /api/browser-use-mcp (local token) and /api/agent (API key).
-app.use('/api/taskmaster', authenticateToken, taskmasterRoutes);
 app.use('/api/mcp-utils', authenticateToken, mcpUtilsRoutes);
 app.use('/api/commands', authenticateToken, commandsRoutes);
 app.use('/api/settings', authenticateToken, settingsRoutes); // includes notification-preferences
-app.use('/api/user', authenticateToken, userRoutes);
-app.use('/api/plugins', authenticateToken, pluginsRoutes);
-app.use('/api/browser-use-mcp', browserUseMcpRoutes);
-app.use('/api/browser-use', authenticateToken, browserUseRoutes);
 app.use('/api/providers', authenticateToken, providerRoutes);
 app.use('/api/agent', agentRoutes);
-app.use('/api/voice', authenticateToken, voiceRoutes);
 
 // Serve public files (like api-docs.html)
 app.use(express.static(path.join(APP_ROOT, 'public')));
@@ -481,8 +490,6 @@ async function shutdown(signal) {
     // SIGTERM 之后要给它一点收尾时间,别挤到 8s 硬退出的窗口末尾去。
     await shutdownStep('ma service stop', () => maService?.stop());
     // Runtime services — the same set the pre-refactor handler stopped.
-    await shutdownStep('browser-use sessions stop', () => browserUseService.stopAllSessions());
-    await shutdownStep('plugin processes stop', () => stopAllPlugins());
     await shutdownStep('server marker removal', () => removeLocalServerMarker(LOCAL_SERVER_MARKER_PATH));
     // Database last so every step above could still use it. Stop the backup
     // timer first — a VACUUM INTO firing mid-close would reopen the handle.
@@ -543,11 +550,6 @@ async function startServer() {
             // Start watching the projects folder for changes
             await initializeSessionsWatcher();
             sessionsWatcherReady = true;
-
-            // Start server-side plugin processes for enabled plugins
-            startEnabledPluginServers().catch(err => {
-                console.error('[Plugins] Error during startup:', err.message);
-            });
 
             // 营销诊断服务。不 await:它要等 healthz,慢的时候几十秒,不该拖着
             // "Server Ready" 之后的启动流程。起不来也只是 /api/ma/* 返回 502,

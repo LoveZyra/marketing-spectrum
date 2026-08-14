@@ -12,75 +12,23 @@
     "copyAsText": "複製為純文字"
   },
   "messageTypes": {
-    "user": "U",
     "error": "錯誤",
     "tool": "工具",
     "claude": "Claude"
   },
   "tools": {
-    "settings": "工具設定",
-    "error": "工具錯誤",
-    "result": "工具結果",
-    "viewParams": "查看輸入參數",
-    "viewRawParams": "查看原始參數",
-    "viewDiff": "查看編輯差異",
-    "creatingFile": "建立新檔案：",
-    "updatingTodo": "更新待辦事項",
-    "read": "讀取",
-    "readFile": "讀取檔案",
-    "updateTodo": "更新待辦清單",
-    "readTodo": "讀取待辦清單",
-    "searchResults": "結果"
+    "settings": "工具設定"
   },
   "search": {
-    "found": "找到 {{count}} 個{{type}}",
-    "file": "檔案",
-    "files": "檔案",
-    "pattern": "模式：",
     "in": "在："
-  },
-  "fileOperations": {
-    "updated": "檔案更新成功",
-    "created": "檔案建立成功",
-    "written": "檔案寫入成功",
-    "diff": "差異",
-    "newFile": "新檔案",
-    "viewContent": "查看檔案內容",
-    "viewFullOutput": "查看完整輸出（{{count}} 個字元）",
-    "contentDisplayed": "檔案內容顯示在上方的差異檢視中"
   },
   "interactive": {
     "title": "互動式提示",
     "waiting": "等待您在 CLI 中回應",
-    "instruction": "請在 Claude 執行的終端機中選擇一個選項。",
-    "selectedOption": "✓ Claude 選擇了選項 {{number}}",
-    "instructionDetail": "在 CLI 中，您可以使用方向鍵或輸入數字來互動式地選擇此選項。"
-  },
-  "thinking": {
-    "title": "思考中...",
-    "emoji": "💭 思考中..."
+    "instruction": "請在 Claude 執行的終端機中選擇一個選項。"
   },
   "json": {
     "response": "JSON 回應"
-  },
-  "permissions": {
-    "grant": "授予 {{tool}} 權限",
-    "added": "權限已新增",
-    "addTo": "將 {{entry}} 加入允許的工具。",
-    "retry": "權限已儲存。重試請求以使用該工具。",
-    "error": "無法更新權限。請重試。",
-    "openSettings": "開啟設定"
-  },
-  "todo": {
-    "updated": "待辦清單已成功更新",
-    "current": "目前待辦清單"
-  },
-  "plan": {
-    "viewPlan": "📋 查看實作計畫",
-    "title": "實作計畫"
-  },
-  "usageLimit": {
-    "resetAt": "Claude 使用限制已達到。您的限制將在 **{{time}} {{timezone}}** - {{date}} 重置"
   },
   "permissionModes": {
     "default": "預設模式",
@@ -91,8 +39,6 @@
   },
   "input": {
     "placeholder": "輸入 / 叫用指令，@ 選取檔案，或向 {{provider}} 提問...",
-    "placeholderDefault": "輸入您的訊息...",
-    "disabled": "輸入已停用",
     "attachFiles": "附加檔案",
     "attachImages": "附加圖片",
     "send": "傳送",
@@ -145,13 +91,7 @@
     "buttonTitle": "思考模式：{{mode}}"
   },
   "providerSelection": {
-    "title": "選擇您的 AI 助手",
-    "description": "選擇一個提供者以開始新對話",
-    "readyPrompt": {
-      "claude": "準備好使用 {{model}} 的 Claude。請在下方開始輸入您的訊息。"
-    },
-    "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜尋工作階段、檔案和提交",
-    "useModelsCommand": "輸入 /models 切換模型"
+    "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜尋工作階段、檔案和提交"
   },
   "session": {
     "continue": {
@@ -169,8 +109,7 @@
       "loadEarlier": "載入較早的訊息",
       "loadAll": "載入全部訊息",
       "loadingAll": "正在載入全部訊息...",
-      "allLoaded": "全部訊息已載入",
-      "perfWarning": "已載入全部訊息 - 捲動可能變慢。點擊「捲動到底部」恢復效能。"
+      "allLoaded": "全部訊息已載入"
     }
   },
   "shell": {
@@ -181,7 +120,8 @@
     "status": {
       "newSession": "新工作階段",
       "initializing": "初始化中...",
-      "restarting": "重新啟動中..."
+      "restarting": "重新啟動中...",
+      "takenOver": "已接管對話"
     },
     "actions": {
       "disconnect": "中斷連線",
@@ -189,7 +129,9 @@
       "restart": "重新啟動",
       "restartTitle": "重新啟動 Shell（請先中斷連線）",
       "connect": "在 Shell 中繼續",
-      "connectTitle": "連線到 Shell"
+      "connectTitle": "連線到 Shell",
+      "takeOver": "接管對話",
+      "takeOverTitle": "在終端裡繼續這段對話。會先釋放 chat 側的執行階段 —— 兩邊不能同時持有同一段對話。"
     },
     "loading": "正在載入終端機...",
     "connecting": "正在連線到 Shell...",
@@ -208,29 +150,13 @@
       "computing": "運算中",
       "reasoning": "推理中"
     },
-    "state": {
-      "live": "進行中",
-      "paused": "已暫停"
-    },
     "elapsed": {
       "seconds": "{{count}} 秒",
-      "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒",
-      "label": "已過 {{time}}",
-      "startingNow": "正要開始"
-    },
-    "controls": {
-      "stopGeneration": "停止生成",
-      "pressEscToStop": "隨時按 Esc 即可停止"
-    },
-    "providers": {
-      "assistant": "助理"
+      "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒"
     }
   },
   "projectSelection": {
     "startChatWithProvider": "選擇一個專案以開始與 {{provider}} 聊天"
-  },
-  "tasks": {
-    "nextTaskPrompt": "開始下一個任務"
   },
   "attachments": {
     "truncated": "已截斷"

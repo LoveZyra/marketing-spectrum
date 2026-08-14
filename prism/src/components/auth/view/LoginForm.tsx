@@ -64,7 +64,7 @@ export default function LoginForm({ onRegister }: LoginFormProps = {}) {
     <AuthScreenLayout
       title={t('login.title')}
       description={t('login.description')}
-      footerText="Enter your credentials to access Prism"
+      footerText={t('login.footer')}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <AuthInputField
@@ -113,7 +113,7 @@ export default function LoginForm({ onRegister }: LoginFormProps = {}) {
             onClick={onRegister}
             className="w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
           >
-            {t('login.registerPrompt', '还没有账号?申请一个')}
+            {t('login.registerPrompt')}
           </button>
         )}
       </form>

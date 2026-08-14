@@ -1,15 +1,5 @@
 import type { ComponentType } from 'react';
-import {
-  Bell,
-  Bot,
-  Info,
-  Users,
-  KeyRound,
-  ListChecks,
-  MonitorPlay,
-  Palette,
-  Plug,
-} from 'lucide-react';
+import { Bell, Bot, Info, KeyRound, ListChecks, Mic, MonitorPlay, Palette, Plug, Users } from 'lucide-react';
 
 import type {
   CodeEditorSettingsState,
@@ -25,20 +15,30 @@ export type SettingsMainTabMeta = {
    * Hidden from non-root accounts. The server 403s these routes regardless —
    * this only keeps a tab that can do nothing out of everyone else's settings.
    */
+  /** i18n key under the `settings` namespace — 侧栏用它,命令面板回落到 label。 */
+  labelKey: string;
   rootOnly?: boolean;
 };
 
+/**
+ * 设置页所有主标签的**唯一**清单。顺序即侧栏顺序。
+ *
+ * 之前这份清单在三个地方各写了一遍(这里、`SettingsSidebar` 的 NAV_ITEMS、
+ * `useSettingsController` 的 KNOWN_MAIN_TABS),然后就漂了:只有侧栏那份有
+ * `voice`,于是命令面板搜不到语音设置,`?tab=voice` 深链也会静默回落到 agents。
+ * 现在另外两处都从这里派生,加一个标签只需要在这里加一行。
+ */
 export const SETTINGS_MAIN_TABS: SettingsMainTabMeta[] = [
-  { id: 'agents', label: 'Agents', keywords: 'agents subagents claude code', icon: Bot },
-  { id: 'appearance', label: 'Appearance', keywords: 'appearance theme dark light language', icon: Palette },
-  { id: 'api', label: 'API Tokens', keywords: 'api tokens auth keys', icon: KeyRound },
-  { id: 'tasks', label: 'Tasks', keywords: 'tasks taskmaster', icon: ListChecks },
-  { id: 'browser', label: 'Browser', keywords: 'browser playwright chromium automation', icon: MonitorPlay },
-  { id: 'notifications', label: 'Notifications', keywords: 'notifications alerts push', icon: Bell },
-  { id: 'plugins', label: 'Plugins', keywords: 'plugins extensions integrations', icon: Plug },
-  { id: 'accounts', label: 'Accounts', keywords: 'accounts users approval root admin', icon: Users, rootOnly: true },
-  { id: 'about', label: 'About', keywords: 'about version info', icon: Info },
+  { id: 'agents', label: 'Agents', labelKey: 'mainTabs.agents', keywords: 'agents subagents claude code', icon: Bot },
+  { id: 'appearance', label: 'Appearance', labelKey: 'mainTabs.appearance', keywords: 'appearance theme dark light language', icon: Palette },
+  { id: 'api', label: 'API Tokens', labelKey: 'mainTabs.apiTokens', keywords: 'api tokens auth keys', icon: KeyRound },
+  { id: 'accounts', label: 'Accounts', labelKey: 'mainTabs.accounts', keywords: 'accounts users approval root admin', icon: Users, rootOnly: true },
+  { id: 'notifications', label: 'Notifications', labelKey: 'mainTabs.notifications', keywords: 'notifications alerts push', icon: Bell },
+  { id: 'about', label: 'About', labelKey: 'mainTabs.about', keywords: 'about version info', icon: Info },
 ];
+
+/** 所有合法的主标签 id。深链与持久化的标签值据此校验。 */
+export const SETTINGS_MAIN_TAB_IDS = SETTINGS_MAIN_TABS.map((tab) => tab.id);
 
 // `AGENT_PROVIDERS` and `AGENT_CATEGORIES` used to live here and were imported
 // by nobody — the agents tab built both lists itself, which is why nothing

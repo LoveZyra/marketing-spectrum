@@ -261,15 +261,6 @@ export const api = {
       body: JSON.stringify({ path: folderPath }),
     }),
 
-  // User endpoints
-  user: {
-    onboardingStatus: () => authenticatedFetch('/api/user/onboarding-status'),
-    completeOnboarding: () =>
-      authenticatedFetch('/api/user/complete-onboarding', {
-        method: 'POST',
-      }),
-  },
-
   // Generic GET method for any endpoint
   get: (endpoint) => authenticatedFetch(`/api${endpoint}`),
 

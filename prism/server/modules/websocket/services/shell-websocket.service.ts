@@ -5,10 +5,16 @@ import path from 'node:path';
 import pty, { type IPty } from 'node-pty';
 import { WebSocket, type RawData } from 'ws';
 
+import { projectsDb } from '@/modules/database/index.js';
+import { claimForShell, releaseShellClaim } from '@/modules/websocket/services/conversation-ownership.service.js';
+import { readSocketViewer, stampSocketViewer } from '@/shared/project-visibility.js';
+import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
 
 type ShellIncomingMessage = {
   type?: string;
+  /** 显式请求在终端里接管这段对话(默认 false = 普通终端)。 */
+  takeover?: boolean;
   data?: string;
   cols?: number;
   rows?: number;
@@ -28,6 +34,17 @@ type PtySessionEntry = {
   timeoutId: NodeJS.Timeout | null;
   projectPath: string;
   sessionId: string | null;
+  /**
+   * 这个 PTY 是不是"接管"起来的。两个地方要用:
+   *
+   * 1. 复用判定 —— 普通终端和接管终端的键是同一个(都带 sessionId),所以先开了
+   *    普通终端、再点接管时,会命中复用分支直接 return,接管逻辑一次都不执行。
+   *    这就是"点接管有时不生效"。模式不同就不能复用。
+   * 2. 断开处理 —— 接管终端断开必须立刻收掉,不能留 30 分钟。
+   */
+  isTakeover: boolean;
+  /** 被接管的 app 会话 id,断开时用它释放占用。 */
+  claimedSessionId: string | null;
 };
 
 const ptySessionsMap = new Map<string, PtySessionEntry>();
@@ -35,6 +52,11 @@ const PTY_SESSION_TIMEOUT = 30 * 60 * 1000;
 const SHELL_URL_PARSE_BUFFER_LIMIT = 32768;
 
 type ShellWebSocketDependencies = {
+  /**
+   * 释放 chat 那边的常驻 runtime,把对话让给终端。由组合根注入 —— 模块不直接
+   * import claude-sdk.js。
+   */
+  releaseConversation?: (providerSessionId: string) => Promise<{ released: boolean; reason: string }>;
   resolveProviderSessionId: (
     sessionId: string,
     provider: string,
@@ -81,16 +103,26 @@ function parseShellMessage(rawMessage: RawData): ShellIncomingMessage | null {
 
 const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9_.\-:]+$/;
 
+/**
+ * 终端为什么没能接管这段对话。
+ *
+ * 以前这里只有"能/不能"两种结果,不能的时候静默退回一个全新的 `claude` —— 用户
+ * 以为在继续原来的对话,其实在跟一段空白记录说话,而且没有任何提示。
+ */
+type ResumeResolution =
+  | { ok: true; sessionId: string }
+  | { ok: false; reason: 'no_session' | 'not_recorded' | 'invalid' | 'forbidden' };
+
 function resolveResumeSessionId(
   message: ShellIncomingMessage,
   dependencies: ShellWebSocketDependencies
-): string {
+): ResumeResolution {
   const hasSession = readBoolean(message.hasSession);
   const sessionId = readString(message.sessionId);
   const provider = readString(message.provider, 'claude');
 
   if (!hasSession || !sessionId) {
-    return '';
+    return { ok: false, reason: 'no_session' };
   }
 
   let resumeSessionId: string | null | undefined;
@@ -101,42 +133,51 @@ function resolveResumeSessionId(
     resumeSessionId = undefined;
   }
 
-  const resolvedSessionId = resumeSessionId === undefined ? sessionId : resumeSessionId;
-  if (!resolvedSessionId || !SAFE_SESSION_ID_PATTERN.test(resolvedSessionId)) {
-    return '';
+  // null 与 undefined 意思不同,以前被合并处理了:null 是"查过了,这个会话还没有
+  // provider 端的 id"(第一轮还没跑完,或者第一轮失败了),undefined 是"查询本身
+  // 出错"。前者退回 app id 去 resume 必然失败,所以分开报。
+  if (resumeSessionId === null) {
+    return { ok: false, reason: 'not_recorded' };
   }
 
-  return resolvedSessionId;
+  const resolvedSessionId = resumeSessionId === undefined ? sessionId : resumeSessionId;
+  if (!resolvedSessionId || !SAFE_SESSION_ID_PATTERN.test(resolvedSessionId)) {
+    return { ok: false, reason: 'invalid' };
+  }
+
+  return { ok: true, sessionId: resolvedSessionId };
 }
 
 /**
  * Resolves provider command line for plain shell and agent-backed shell modes.
  */
+/**
+ * 终端里跑什么。
+ *
+ * 默认是**普通终端**,不再自动 `claude --resume`。以前只要选中了会话,打开 Shell
+ * 就会另起一个 Claude 进程接管同一段对话,而 chat 那边的常驻 runtime 还活着 ——
+ * 两个进程往同一份 transcript 上写,谁也看不见谁。而 Shell 面板真正不可替代的
+ * 用途是"在项目目录里跑命令"(git、测试、脚本),那件事不需要第二个 Claude。
+ *
+ * 要在终端里继续对话仍然可以,但要显式接管(`takeover`),走释放 → 交接的流程。
+ */
 function buildShellCommand(
   message: ShellIncomingMessage,
-  dependencies: ShellWebSocketDependencies
+  resume: ResumeResolution
 ): string {
-  const hasSession = readBoolean(message.hasSession);
   const initialCommand = readString(message.initialCommand);
-  const provider = readString(message.provider, 'claude');
-  const resumeSessionId = resolveResumeSessionId(message, dependencies);
-  const isPlainShell =
-    readBoolean(message.isPlainShell) ||
-    (!!initialCommand && !hasSession) ||
-    provider === 'plain-shell';
+  const wantsTakeover = readBoolean(message.takeover);
 
-  if (isPlainShell) {
+  if (initialCommand) {
     return initialCommand;
   }
 
-  const command = initialCommand || 'claude';
-  if (resumeSessionId) {
-    // Surface --resume failures instead of silently falling back to a fresh
-    // session, which previously discarded conversation context without any
-    // indication that the resume did not succeed.
-    return `claude --resume "${resumeSessionId}"`;
+  if (wantsTakeover && resume.ok) {
+    return `claude --resume "${resume.sessionId}"`;
   }
-  return command;
+
+  // 空串 = 起用户的登录 shell(下面 pty.spawn 的 `-c ''` 会落到交互式 shell)。
+  return '';
 }
 
 function readEnvValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
@@ -200,9 +241,16 @@ function prioritizeUserNpmGlobalBin(env: NodeJS.ProcessEnv): { key: string; valu
  */
 export function handleShellConnection(
   ws: WebSocket,
+  request: AuthenticatedWebSocketRequest,
   dependencies: ShellWebSocketDependencies
 ): void {
   console.log('[INFO] Shell websocket connected');
+
+  // 必须和 chat 连接一样盖上身份。少了这一步会同时坏两件事:PTY 复用键分不出
+  // 用户(两个人在同一路径开终端会连到同一个 PTY 上),而 `claimForShell` 记下的
+  // 持有者恒为 null,chat 那边的占用提示永远显示不出是谁接管的。
+  stampSocketViewer(ws, request);
+  const connectionViewer = readSocketViewer(ws);
 
   let shellProcess: IPty | null = null;
   let ptySessionKey: string | null = null;
@@ -236,17 +284,36 @@ export function handleShellConnection(
           (initialCommand.includes('setup-token') ||
             initialCommand.includes('auth login'));
 
+        // 必须在复用判定之前算出来:模式参与"能不能复用现有 PTY"的决定。
+        const wantsTakeover = readBoolean(data.takeover);
+
         const commandSuffix =
           isPlainShell && initialCommand
             ? `_cmd_${Buffer.from(initialCommand).toString('base64').slice(0, 16)}`
             : '';
-        ptySessionKey = `${projectPath}_${sessionId ?? 'default'}${commandSuffix}`;
+        // 键里必须有用户:没有它,普通终端的 sessionId 是 null,键塌缩成
+        // `<projectPath>_default`,于是 B 在 A 已经打开的路径上开终端就会直接
+        // 接到 A 的活 PTY 上 —— 回放 A 的滚动缓冲、能往里打字,而且下面那句
+        // `existingSession.ws = ws` 会把 A 的输出整个重定向到 B,A 的终端无声
+        // 变哑。身份缺失时退回 'anon',它自己一个隔离域,不与任何登录用户共享。
+        const ptyOwnerKey = connectionViewer.userId === null || connectionViewer.userId === undefined
+          ? 'anon'
+          : String(connectionViewer.userId);
+        ptySessionKey = `u${ptyOwnerKey}_${projectPath}_${sessionId ?? 'default'}${commandSuffix}`;
 
-        if (isLoginCommand || forceRestart) {
+        // 模式变了就得重开:普通终端里跑着一个交互 bash,接管要的是
+        // `claude --resume <id>`,复用前者等于点了接管什么也没发生。
+        const cached = ptySessionsMap.get(ptySessionKey);
+        const modeChanged = Boolean(cached) && cached!.isTakeover !== wantsTakeover;
+
+        if (isLoginCommand || forceRestart || modeChanged) {
           const oldSession = ptySessionsMap.get(ptySessionKey);
           if (oldSession) {
             if (oldSession.timeoutId) {
               clearTimeout(oldSession.timeoutId);
+            }
+            if (oldSession.claimedSessionId) {
+              releaseShellClaim(oldSession.claimedSessionId);
             }
             oldSession.pty.kill();
             ptySessionsMap.delete(ptySessionKey);
@@ -254,7 +321,7 @@ export function handleShellConnection(
         }
 
         const existingSession =
-          isLoginCommand || forceRestart ? null : ptySessionsMap.get(ptySessionKey);
+          isLoginCommand || forceRestart || modeChanged ? null : ptySessionsMap.get(ptySessionKey);
         if (existingSession) {
           shellProcess = existingSession.pty;
           if (existingSession.timeoutId) {
@@ -294,17 +361,68 @@ export function handleShellConnection(
           return;
         }
 
+        // 抢在会话监视器前面把这个目录登记成"属于开终端的这个人"的项目。
+        //
+        // 不做这一步的后果是日常可触发的:用户在终端里于任何尚未登记的目录跑一次
+        // `claude`,监视器随后按 transcript 里的 cwd 建出项目行,而它没有用户
+        // 上下文,owner 只能是 NULL —— NULL 的语义是公共项目,于是那个目录连同
+        // 会话标题出现在所有人的侧栏里。这里先建,监视器后到时走 ON CONFLICT,
+        // owner 保持不变。
+        if (connectionViewer.userId !== null && connectionViewer.userId !== undefined) {
+          const ownerUserId = Number(connectionViewer.userId);
+          if (Number.isInteger(ownerUserId)) {
+            try {
+              projectsDb.createProjectPath(resolvedProjectPath, null, ownerUserId);
+            } catch (error) {
+              // 登记失败不该挡住开终端 —— 最坏情况退回到监视器建行的旧行为。
+              console.error('[Shell] 预登记项目归属失败:', error);
+            }
+          }
+        }
+
         const safeSessionIdPattern = /^[a-zA-Z0-9_.\-:]+$/;
         if (sessionId && !safeSessionIdPattern.test(sessionId)) {
           ws.send(JSON.stringify({ type: 'error', message: 'Invalid session ID' }));
           return;
         }
 
-        const shellCommand = buildShellCommand(data, dependencies);
-        const resumeSessionId = resolveResumeSessionId(data, dependencies);
+        const resume = resolveResumeSessionId(data, dependencies);
+        const appSessionId = readString(data.sessionId);
+        // 身份在连接建立时就盖好了(见 handleShellConnection 顶部),这里直接用。
+        // 原来这里是手抄的一份 `ws.prismUserId` 读取 —— 而 shell 连接从来没被
+        // 盖过章,所以它读到的永远是 null。
+        const viewer = connectionViewer;
+
+        // 接管前先把 chat 那边的 runtime 放掉。顺序不能反:先起 CLI 再释放,中间
+        // 那一小段就是两个进程同时写同一份 transcript,正是要消掉的东西。
+        let takeoverNote = '';
+        let takeoverGranted = false;
+        if (wantsTakeover) {
+          if (!resume.ok) {
+            takeoverNote = resume.reason === 'not_recorded'
+              ? '\x1b[33m这段对话还没有可恢复的记录 —— 先在 chat 里发一轮,让 Claude 报出它自己的会话 id,再回来接管。已为你打开普通终端。\x1b[0m\r\n'
+              : '\x1b[33m无法解析这段对话的会话 id,已为你打开普通终端。\x1b[0m\r\n';
+          } else if (dependencies.releaseConversation) {
+            const released = await dependencies.releaseConversation(resume.sessionId);
+            if (released.released) {
+              claimForShell(appSessionId || resume.sessionId, viewer);
+              takeoverGranted = true;
+            } else {
+              takeoverNote = released.reason === 'turn_in_flight'
+                ? '\x1b[33mchat 里有一轮对话正在进行,现在接管会打断它。等它跑完再试。已为你打开普通终端。\x1b[0m\r\n'
+                : '\x1b[33m释放 chat 侧运行时失败,没有接管。已为你打开普通终端。\x1b[0m\r\n';
+            }
+          } else {
+            claimForShell(appSessionId || resume.sessionId, viewer);
+            takeoverGranted = true;
+          }
+        }
+
+        const shellCommand = buildShellCommand(data, takeoverGranted ? resume : { ok: false, reason: 'no_session' });
         const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
-        const shellArgs =
-          os.platform() === 'win32' ? ['-Command', shellCommand] : ['-c', shellCommand];
+        const shellArgs = shellCommand
+          ? (os.platform() === 'win32' ? ['-Command', shellCommand] : ['-c', shellCommand])
+          : (os.platform() === 'win32' ? [] : ['-i']);
         const termCols = readNumber(data.cols, 80);
         const termRows = readNumber(data.rows, 24);
         const prioritizedPath = prioritizeUserNpmGlobalBin(process.env);
@@ -330,6 +448,8 @@ export function handleShellConnection(
           timeoutId: null,
           projectPath,
           sessionId,
+          isTakeover: takeoverGranted,
+          claimedSessionId: takeoverGranted ? (appSessionId || (resume.ok ? resume.sessionId : null)) : null,
         });
 
         shellProcess.onData((chunk) => {
@@ -433,16 +553,24 @@ export function handleShellConnection(
             clearTimeout(session.timeoutId);
           }
 
+          const claimed = session?.claimedSessionId ?? (session?.isTakeover ? appSessionId : null);
           ptySessionsMap.delete(ptySessionKey);
           shellProcess = null;
+          // 终端没了就还给 chat。忘了释放会让 chat 被一个已经不存在的终端锁住。
+          // 用条目上记的 id,不用闭包里的 appSessionId —— 重连之后 onExit 仍然
+          // 挂在最初那次 init 的闭包上,那里的变量未必还对得上。
+          if (claimed) {
+            releaseShellClaim(claimed);
+          }
         });
 
-        let welcomeMsg = `\x1b[36mStarting terminal in: ${projectPath}\x1b[0m\r\n`;
-        if (!isPlainShell) {
-          const providerName = 'Claude';
-          welcomeMsg = hasSession && resumeSessionId
-            ? `\x1b[36mResuming ${providerName} session ${resumeSessionId} in: ${projectPath}\x1b[0m\r\n`
-            : `\x1b[36mStarting new ${providerName} session in: ${projectPath}\x1b[0m\r\n`;
+        // 说清楚这个终端是什么。以前"接管失败"和"正常新会话"打的是同一句话,
+        // 用户没有任何线索知道自己在跟一段空白记录说话。
+        let welcomeMsg = takeoverGranted
+          ? `\x1b[36m已接管对话 ${resume.ok ? resume.sessionId : ''},chat 侧运行时已释放。退出终端后 chat 可继续。\x1b[0m\r\n`
+          : `\x1b[36m终端已就绪:${projectPath}\x1b[0m\r\n`;
+        if (takeoverNote) {
+          welcomeMsg = takeoverNote + welcomeMsg;
         }
 
         ws.send(
@@ -490,7 +618,35 @@ export function handleShellConnection(
       return;
     }
 
+    // 这个 PTY 已经被别的连接接手了(同一个人开了第二个标签页,那边的 init 把
+    // `session.ws` 指到了新 socket)。旧连接的 close 不能再动它:否则会把活跃
+    // 标签页的输出掐掉,还给它挂一个 30 分钟后的 kill,而那个定时器之后没有任何
+    // 地方会清。
+    if (session.ws !== ws) {
+      return;
+    }
+
     session.ws = null;
+
+    // 接管终端断开就立刻收掉,不留缓期。
+    //
+    // 这是"点断开连接回 chat 仍然无法对话"的原因:占用登记原先只在 PTY 退出时
+    // 释放,而断开连接并不结束 PTY —— 它按普通终端的重连逻辑活着,最长 30 分钟。
+    // 于是 chat 那边继续被 SESSION_HELD_BY_SHELL 挡着,而用户看得见的终端已经
+    // 关了,没有任何办法把对话要回来。接管是前台动作,关掉它就该交还。
+    if (session.isTakeover) {
+      if (session.claimedSessionId) {
+        releaseShellClaim(session.claimedSessionId);
+      }
+      try {
+        session.pty.kill();
+      } catch {
+        // 已经退出了 —— onExit 会做剩下的清理。
+      }
+      ptySessionsMap.delete(ptySessionKey);
+      return;
+    }
+
     session.timeoutId = setTimeout(() => {
       if (ptySessionsMap.get(ptySessionKey as string) !== session) {
         return;

@@ -12,75 +12,23 @@
     "copyAsText": "Копировать как текст"
   },
   "messageTypes": {
-    "user": "П",
     "error": "Ошибка",
     "tool": "Инструмент",
     "claude": "Claude"
   },
   "tools": {
-    "settings": "Настройки инструмента",
-    "error": "Ошибка инструмента",
-    "result": "Результат инструмента",
-    "viewParams": "Просмотр входных параметров",
-    "viewRawParams": "Просмотр сырых параметров",
-    "viewDiff": "Просмотр различий редактирования для",
-    "creatingFile": "Создание нового файла:",
-    "updatingTodo": "Обновление списка задач",
-    "read": "Чтение",
-    "readFile": "Чтение файла",
-    "updateTodo": "Обновить список задач",
-    "readTodo": "Прочитать список задач",
-    "searchResults": "результаты"
+    "settings": "Настройки инструмента"
   },
   "search": {
-    "found": "Найдено {{count}} {{type}}",
-    "file": "файл",
-    "files": "файлов",
-    "pattern": "шаблон:",
     "in": "в:"
-  },
-  "fileOperations": {
-    "updated": "Файл успешно обновлен",
-    "created": "Файл успешно создан",
-    "written": "Файл успешно записан",
-    "diff": "Различия",
-    "newFile": "Новый файл",
-    "viewContent": "Просмотр содержимого файла",
-    "viewFullOutput": "Просмотр полного вывода ({{count}} символов)",
-    "contentDisplayed": "Содержимое файла отображено в представлении различий выше"
   },
   "interactive": {
     "title": "Интерактивный запрос",
     "waiting": "Ожидание вашего ответа в CLI",
-    "instruction": "Пожалуйста, выберите опцию в терминале, где запущен Claude.",
-    "selectedOption": "✓ Claude выбрал опцию {{number}}",
-    "instructionDetail": "В CLI вы бы выбрали эту опцию интерактивно, используя клавиши со стрелками или введя номер."
-  },
-  "thinking": {
-    "title": "Думаю...",
-    "emoji": "💭 Думаю..."
+    "instruction": "Пожалуйста, выберите опцию в терминале, где запущен Claude."
   },
   "json": {
     "response": "JSON ответ"
-  },
-  "permissions": {
-    "grant": "Предоставить разрешение для {{tool}}",
-    "added": "Разрешение добавлено",
-    "addTo": "Добавляет {{entry}} в разрешенные инструменты.",
-    "retry": "Разрешение сохранено. Повторите запрос для использования инструмента.",
-    "error": "Не удалось обновить разрешения. Попробуйте снова.",
-    "openSettings": "Открыть настройки"
-  },
-  "todo": {
-    "updated": "Список задач успешно обновлен",
-    "current": "Текущий список задач"
-  },
-  "plan": {
-    "viewPlan": "📋 Просмотр плана реализации",
-    "title": "План реализации"
-  },
-  "usageLimit": {
-    "resetAt": "Достигнут лимит использования Claude. Ваш лимит будет сброшен в **{{time}} {{timezone}}** - {{date}}"
   },
   "permissionModes": {
     "default": "Режим по умолчанию",
@@ -91,8 +39,6 @@
   },
   "input": {
     "placeholder": "Введите / для команд, @ для файлов, или спросите {{provider}} что угодно...",
-    "placeholderDefault": "Введите ваше сообщение...",
-    "disabled": "Ввод отключен",
     "attachFiles": "Прикрепить файлы",
     "attachImages": "Прикрепить изображения",
     "send": "Отправить",
@@ -109,13 +55,7 @@
     "modelHint": "Current model: {{model}} · type /models to switch"
   },
   "providerSelection": {
-    "title": "Выберите вашего AI-ассистента",
-    "description": "Выберите провайдера для начала нового разговора",
-    "readyPrompt": {
-      "claude": "Готов использовать Claude с {{model}}. Начните вводить сообщение ниже."
-    },
-    "pressToSearch": "Нажмите <kbd>{{shortcut}}</kbd>, чтобы искать сессии, файлы и коммиты",
-    "useModelsCommand": "Switch models with /models"
+    "pressToSearch": "Нажмите <kbd>{{shortcut}}</kbd>, чтобы искать сессии, файлы и коммиты"
   },
   "session": {
     "continue": {
@@ -133,8 +73,7 @@
       "loadEarlier": "Загрузить более ранние сообщения",
       "loadAll": "Загрузить все сообщения",
       "loadingAll": "Загрузка всех сообщений...",
-      "allLoaded": "Все сообщения загружены",
-      "perfWarning": "Все сообщения загружены — прокрутка может быть медленнее. Нажмите \"Прокрутить вниз\" для восстановления производительности."
+      "allLoaded": "Все сообщения загружены"
     }
   },
   "shell": {
@@ -145,7 +84,8 @@
     "status": {
       "newSession": "Новый сеанс",
       "initializing": "Инициализация...",
-      "restarting": "Перезапуск..."
+      "restarting": "Перезапуск...",
+      "takenOver": "Conversation taken over"
     },
     "actions": {
       "disconnect": "Отключиться",
@@ -153,7 +93,9 @@
       "restart": "Перезапустить",
       "restartTitle": "Перезапустить оболочку (сначала отключитесь)",
       "connect": "Продолжить в оболочке",
-      "connectTitle": "Подключиться к оболочке"
+      "connectTitle": "Подключиться к оболочке",
+      "takeOver": "Take over",
+      "takeOverTitle": "Continue this conversation in the terminal. The chat runtime is released first — one holder at a time."
     },
     "loading": "Загрузка терминала...",
     "connecting": "Подключение к оболочке...",
@@ -172,29 +114,13 @@
       "computing": "Вычисляет",
       "reasoning": "Рассуждает"
     },
-    "state": {
-      "live": "В сети",
-      "paused": "Приостановлен"
-    },
     "elapsed": {
       "seconds": "{{count}}с",
-      "minutesSeconds": "{{minutes}}м {{seconds}}с",
-      "label": "Прошло {{time}}",
-      "startingNow": "Начинается сейчас"
-    },
-    "controls": {
-      "stopGeneration": "Остановить генерацию",
-      "pressEscToStop": "Нажмите Esc в любое время для остановки"
-    },
-    "providers": {
-      "assistant": "Ассистент"
+      "minutesSeconds": "{{minutes}}м {{seconds}}с"
     }
   },
   "projectSelection": {
     "startChatWithProvider": "Выберите проект для начала чата с {{provider}}"
-  },
-  "tasks": {
-    "nextTaskPrompt": "Начать следующую задачу"
   },
   "attachments": {
     "truncated": "усечено"

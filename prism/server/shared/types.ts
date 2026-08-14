@@ -32,6 +32,13 @@ export type AnyRecord = Record<string, any>;
 export type RealtimeClientConnection = {
   readyState: number;
   send(data: string): void;
+  /**
+   * Who is on the other end. Attached at upgrade time so broadcasts can be
+   * scoped per recipient — without it every connected socket looks identical
+   * and the only options are "send to everyone" or "send to nobody".
+   */
+  prismUserId?: string | number | null;
+  prismUsername?: string | null;
 };
 
 /**
@@ -55,6 +62,20 @@ export type AuthenticatedWebSocketUser = {
  */
 export type AuthenticatedWebSocketRequest = IncomingMessage & {
   user?: AuthenticatedWebSocketUser;
+};
+
+/**
+ * Who is asking — the minimum identity every visibility decision needs.
+ *
+ * Deliberately just these two fields. `username` is here because root is
+ * decided by name against `PRISM_ROOT_USERS` and never stored on the row, so a
+ * numeric id alone cannot answer "is this root". Anything richer would invite
+ * each call site to invent its own shape, which is how the archived-sessions
+ * endpoint ended up with no filter at all.
+ */
+export type Viewer = {
+  userId: number | string | null;
+  username: string | null;
 };
 
 // ---------------------------

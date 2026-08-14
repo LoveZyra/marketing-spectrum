@@ -1,4 +1,5 @@
-import { Bell, Bot, Info, Key, ListChecks, Mic, MonitorPlay, Palette, Puzzle, Users } from 'lucide-react';
+
+import { SETTINGS_MAIN_TABS, type SettingsMainTabMeta } from '../constants/constants';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../auth/context/AuthContext';
@@ -12,25 +13,14 @@ type SettingsSidebarProps = {
   onChange: (tab: SettingsMainTab) => void;
 };
 
-type NavItem = {
-  id: SettingsMainTab;
-  labelKey: string;
-  icon: typeof Bot;
-  rootOnly?: boolean;
-};
+// 图标类型跟着单一来源走。原来写死成 `typeof Bot`(lucide 的
+// ForwardRefExoticComponent),比 constants.ts 里声明的 ComponentType 更窄,
+// 派生时会对不上 —— 以清单那边为准。
+type NavItem = SettingsMainTabMeta;
 
-const NAV_ITEMS: NavItem[] = [
-  { id: 'agents', labelKey: 'mainTabs.agents', icon: Bot },
-  { id: 'appearance', labelKey: 'mainTabs.appearance', icon: Palette },
-  { id: 'api', labelKey: 'mainTabs.apiTokens', icon: Key },
-  { id: 'voice', labelKey: 'mainTabs.voice', icon: Mic },
-  { id: 'tasks', labelKey: 'mainTabs.tasks', icon: ListChecks },
-  { id: 'browser', labelKey: 'mainTabs.browser', icon: MonitorPlay },
-  { id: 'plugins', labelKey: 'mainTabs.plugins', icon: Puzzle },
-  { id: 'accounts', labelKey: 'mainTabs.accounts', icon: Users, rootOnly: true },
-  { id: 'notifications', labelKey: 'mainTabs.notifications', icon: Bell },
-  { id: 'about', labelKey: 'mainTabs.about', icon: Info },
-];
+// 派生自 SETTINGS_MAIN_TABS —— 这份清单曾经是手写的第二份,结果只有它有 voice,
+// 命令面板和深链校验那两份没有。加标签只改 constants.ts。
+const NAV_ITEMS: NavItem[] = SETTINGS_MAIN_TABS;
 
 export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebarProps) {
   const { t } = useTranslation('settings');

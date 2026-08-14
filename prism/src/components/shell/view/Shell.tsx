@@ -61,6 +61,8 @@ export default function Shell({
     isConnecting,
     connectToShell,
     disconnectFromShell,
+    isTakenOver,
+    takeOverConversation,
   } = useShellRuntime({
     selectedProject,
     selectedSession,
@@ -287,6 +289,13 @@ export default function Shell({
         restartLabel={t('shell.actions.restart')}
         restartTitle={t('shell.actions.restartTitle')}
         disableRestart={isRestarting || !isInitialized}
+        isTakenOver={isTakenOver}
+        onTakeOver={selectedSession ? takeOverConversation : null}
+        takeOverLabel={t('shell.actions.takeOver', { defaultValue: '接管对话' })}
+        takeOverTitle={t('shell.actions.takeOverTitle', {
+          defaultValue: '在终端里继续这段对话。会先释放 chat 侧的运行时 —— 两边不能同时持有同一段对话。',
+        })}
+        takenOverLabel={t('shell.status.takenOver', { defaultValue: '已接管对话' })}
       />
 
       <div className="relative flex-1 overflow-hidden p-2">

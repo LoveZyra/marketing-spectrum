@@ -6,9 +6,7 @@ import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionActivityMap } from '../../../../hooks/useSessionProtection';
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
-import { getTaskIndicatorStatus } from '../../utils/utils';
 
-import TaskIndicator from './TaskIndicator';
 import SidebarProjectSessions from './SidebarProjectSessions';
 
 type SidebarProjectItemProps = {
@@ -26,8 +24,6 @@ type SidebarProjectItemProps = {
   currentTime: Date;
   editingSession: string | null;
   editingSessionName: string;
-  tasksEnabled: boolean;
-  mcpServerStatus: MCPServerStatus;
   onEditingNameChange: (name: string) => void;
   onToggleProject: (projectName: string) => void;
   onProjectSelect: (project: Project) => void;
@@ -46,6 +42,7 @@ type SidebarProjectItemProps = {
   onLoadMoreSessions: (projectId: string) => void;
   activeSessions: SessionActivityMap;
   attentionSessionIds: ReadonlySet<string>;
+  awaitingApprovalSessionIds: ReadonlySet<string>;
   onNewSession: (project: Project) => void;
   onEditingSessionNameChange: (value: string) => void;
   onStartEditingSession: (sessionId: string, initialName: string) => void;
@@ -74,8 +71,6 @@ export default function SidebarProjectItem({
   currentTime,
   editingSession,
   editingSessionName,
-  tasksEnabled,
-  mcpServerStatus,
   onEditingNameChange,
   onToggleProject,
   onProjectSelect,
@@ -89,6 +84,7 @@ export default function SidebarProjectItem({
   onLoadMoreSessions,
   activeSessions,
   attentionSessionIds,
+  awaitingApprovalSessionIds,
   onNewSession,
   onEditingSessionNameChange,
   onStartEditingSession,
@@ -103,7 +99,6 @@ export default function SidebarProjectItem({
   const totalSessionCount = Number(project.sessionMeta?.total ?? sessions.length);
   const sessionCountDisplay = getSessionCountDisplay(project, sessions);
   const sessionCountLabel = `${sessionCountDisplay} session${totalSessionCount === 1 ? '' : 's'}`;
-  const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
 
   const isPublicProject = project.ownerUserId === null;
 
@@ -195,13 +190,6 @@ export default function SidebarProjectItem({
                           <span className="shrink-0 rounded bg-muted px-1 py-px text-[10px] text-muted-foreground">
                             {t('project.public', { defaultValue: '公共' })}
                           </span>
-                        )}
-                        {tasksEnabled && (
-                          <TaskIndicator
-                            status={taskStatus}
-                            size="xs"
-                            className="ml-2 hidden flex-shrink-0 md:inline-flex"
-                          />
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground">{sessionCountLabel}</p>
@@ -419,6 +407,7 @@ export default function SidebarProjectItem({
         isLoadingMoreSessions={isLoadingMoreSessions}
         activeSessions={activeSessions}
         attentionSessionIds={attentionSessionIds}
+        awaitingApprovalSessionIds={awaitingApprovalSessionIds}
         currentTime={currentTime}
         editingSession={editingSession}
         editingSessionName={editingSessionName}

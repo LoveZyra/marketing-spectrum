@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Download, FileText, FolderPlus, Link2, Link2Off, Pencil, RefreshCw, Share2, Trash2, type LucideIcon } from 'lucide-react';
+import { Copy, Download, FileText, FolderPlus, Pencil, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 
 type FileContextItem = {
@@ -53,10 +53,6 @@ export default function FileContextMenu({
   onRefresh,
   onCopyPath,
   onDownload,
-  onPublish,
-  onUnpublish,
-  onCopyPublicLink,
-  isPublished = false,
   isLoading = false,
   className = '',
 }: {
@@ -69,11 +65,6 @@ export default function FileContextMenu({
   onRefresh?: () => void;
   onCopyPath?: (item: FileContextItem) => void;
   onDownload?: (item: FileContextItem) => void;
-  onPublish?: (item: FileContextItem) => void;
-  onUnpublish?: (item: FileContextItem) => void;
-  onCopyPublicLink?: (item: FileContextItem) => void;
-  /** Whether this exact path already has a live share link. */
-  isPublished?: boolean;
   isLoading?: boolean;
   className?: string;
 }) {
@@ -98,45 +89,6 @@ export default function FileContextMenu({
     closeContextMenu();
     action?.();
   }, [closeContextMenu]);
-
-  /**
-   * Publish / unpublish / copy link.
-   *
-   * Only rendered when the tree actually passed the handlers down, so a tree
-   * mounted without a project (or before publications have loaded) shows the
-   * same menu it always did rather than an entry that silently does nothing.
-   */
-  const publishActions = useCallback((target: FileContextItem): ContextMenuAction[] => {
-    if (!onPublish && !onUnpublish) return [];
-
-    if (isPublished) {
-      return [
-        {
-          key: 'copyPublicLink',
-          icon: Link2,
-          label: t('fileTree.context.copyPublicLink', 'Copy Share Link'),
-          onSelect: () => onCopyPublicLink?.(target),
-          showDividerBefore: true,
-        },
-        {
-          key: 'unpublish',
-          icon: Link2Off,
-          label: t('fileTree.context.unpublish', 'Stop Sharing'),
-          onSelect: () => onUnpublish?.(target),
-        },
-      ];
-    }
-
-    return [
-      {
-        key: 'publish',
-        icon: Share2,
-        label: t('fileTree.context.publish', 'Share Link'),
-        onSelect: () => onPublish?.(target),
-        showDividerBefore: true,
-      },
-    ];
-  }, [isPublished, onCopyPublicLink, onPublish, onUnpublish, t]);
 
   const menuActions = useMemo<ContextMenuAction[]>(() => {
     if (item?.type === 'file') {
@@ -167,7 +119,6 @@ export default function FileContextMenu({
           label: t('fileTree.context.download', 'Download'),
           onSelect: () => onDownload?.(item),
         },
-        ...publishActions(item),
       ];
     }
 
@@ -212,7 +163,6 @@ export default function FileContextMenu({
           label: t('fileTree.context.download', 'Download'),
           onSelect: () => onDownload?.(item),
         },
-        ...publishActions(item),
       ];
     }
 
@@ -237,7 +187,7 @@ export default function FileContextMenu({
         showDividerBefore: true,
       },
     ];
-  }, [item, onCopyPath, onDelete, onDownload, onNewFile, onNewFolder, onRefresh, onRename, publishActions, t]);
+  }, [item, onCopyPath, onDelete, onDownload, onNewFile, onNewFolder, onRefresh, onRename, t]);
 
   useEffect(() => {
     if (!isMenuOpen) {

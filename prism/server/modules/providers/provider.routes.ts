@@ -6,10 +6,6 @@ import { providerMcpService } from '@/modules/providers/services/mcp.service.js'
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
-import {
-  SESSION_EXPORT_FORMATS,
-  isSessionExportFormat,
-} from '@/modules/providers/services/session-export.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
 import type {
   LLMProvider,
@@ -20,6 +16,7 @@ import type {
   ProviderSkillCreateInput,
   UpsertProviderMcpServerInput,
 } from '@/shared/types.js';
+import { readRequestViewer } from '@/shared/project-visibility.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 
 const router = express.Router();
@@ -527,23 +524,26 @@ router.post(
     const body = (req.body ?? {}) as Record<string, unknown>;
     const provider = parseProvider(body.provider);
     const projectPath = typeof body.projectPath === 'string' ? body.projectPath : '';
-    const result = sessionsService.createAppSession(provider, projectPath);
+    // 建会话的人就是项目的 owner。不传的话项目 owner 为 NULL,而 NULL 的语义是
+    // "公共项目" —— 新会话所在的目录会直接出现在所有人的侧栏里。
+    const ownerUserId = typeof req.user?.id === 'number' ? req.user.id : null;
+    const result = sessionsService.createAppSession(provider, projectPath, ownerUserId);
     res.status(201).json(createApiSuccessResponse(result));
   }),
 );
 
 router.get(
   '/sessions/running',
-  asyncHandler(async (_req: Request, res: Response) => {
-    const sessions = sessionsService.listRunningSessions();
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessions = sessionsService.listRunningSessions(readRequestViewer(req));
     res.json(createApiSuccessResponse({ sessions }));
   }),
 );
 
 router.get(
   '/sessions/archived',
-  asyncHandler(async (_req: Request, res: Response) => {
-    const sessions = sessionsService.listArchivedSessions();
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessions = sessionsService.listArchivedSessions(readRequestViewer(req));
     res.json(createApiSuccessResponse({ sessions }));
   }),
 );
@@ -552,6 +552,7 @@ router.delete(
   '/sessions/:sessionId',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
+    sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
     const force = parseOptionalBooleanQuery(req.query.force, 'force') ?? false;
     const deletedFromDisk = parseOptionalBooleanQuery(req.query.deletedFromDisk, 'deletedFromDisk') ?? force;
     const result = await sessionsService.deleteOrArchiveSessionById(sessionId, {
@@ -566,6 +567,7 @@ router.post(
   '/sessions/:sessionId/restore',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
+    sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
     const result = sessionsService.restoreSessionById(sessionId);
     res.json(createApiSuccessResponse(result));
   }),
@@ -575,6 +577,7 @@ router.put(
   '/sessions/:sessionId',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
+    sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
     const summary = parseSessionRenameSummary(req.body);
     const result = sessionsService.renameSessionById(sessionId, summary);
     res.json(createApiSuccessResponse(result));
@@ -582,36 +585,10 @@ router.put(
 );
 
 router.get(
-  '/sessions/:sessionId/export',
-  asyncHandler(async (req: Request, res: Response) => {
-    const sessionId = parseSessionId(req.params.sessionId);
-    const requestedFormat = req.query.format ?? 'md';
-    if (!isSessionExportFormat(requestedFormat)) {
-      throw new AppError(
-        `format must be one of: ${SESSION_EXPORT_FORMATS.join(', ')}.`,
-        { code: 'INVALID_QUERY_PARAMETER', statusCode: 400 },
-      );
-    }
-
-    const { body, contentType, filename } = await sessionsService.exportSession(
-      sessionId,
-      requestedFormat,
-    );
-
-    res.setHeader('Content-Type', contentType);
-    // filename is ASCII-sanitized by buildExportFilenameStem, so it is safe to
-    // interpolate into the quoted-string form of the header.
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Cache-Control', 'no-store');
-    // Not createApiSuccessResponse: this is a file download, not a JSON envelope.
-    res.send(body);
-  }),
-);
-
-router.get(
   '/sessions/:sessionId/messages',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
+    sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
     const limitRaw = readOptionalQueryString(req.query.limit);
     const offsetRaw = readOptionalQueryString(req.query.offset);
 
@@ -666,10 +643,15 @@ router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) 
   });
 
   try {
+    const viewer = (req as Request & { user?: { id?: number; username?: string } }).user;
+
     await sessionConversationsSearchService.search({
       query,
       limit,
       signal: abortController.signal,
+      // Scope the corpus to this account. The results carry conversation
+      // snippets, so an unscoped search hands over colleagues' message text.
+      viewer: { userId: viewer?.id ?? null, username: viewer?.username ?? null },
       onProgress: ({ projectResult, totalMatches, scannedProjects, totalProjects }) => {
         if (closed) {
           return;

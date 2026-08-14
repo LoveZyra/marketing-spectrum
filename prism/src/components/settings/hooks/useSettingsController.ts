@@ -4,7 +4,7 @@ import { useTheme } from '../../../contexts/ThemeContext';
 import { authenticatedFetch } from '../../../utils/api';
 import { setNotificationSoundEnabled } from '../../../utils/notificationSound';
 import { useProviderAuthStatus } from '../../provider-auth/hooks/useProviderAuthStatus';
-import { DEFAULT_CODE_EDITOR_SETTINGS } from '../constants/constants';
+import { DEFAULT_CODE_EDITOR_SETTINGS, SETTINGS_MAIN_TAB_IDS } from '../constants/constants';
 import type {
   AgentProvider,
   ClaudePermissionsState,
@@ -38,7 +38,9 @@ type NotificationPreferencesResponse = {
 
 type ActiveLoginProvider = AgentProvider | '';
 
-const KNOWN_MAIN_TABS: SettingsMainTab[] = ['agents', 'appearance', 'api', 'tasks', 'browser', 'notifications', 'plugins', 'accounts', 'about'];
+// 派生自同一份清单。手写的那一版少了 voice,于是 `?tab=voice` 深链会被
+// normalizeMainTab 判为未知值,静默回落到 agents。
+const KNOWN_MAIN_TABS: SettingsMainTab[] = SETTINGS_MAIN_TAB_IDS;
 
 const normalizeMainTab = (tab: string): SettingsMainTab => {
   // Keep backwards compatibility with older callers that still pass "tools".

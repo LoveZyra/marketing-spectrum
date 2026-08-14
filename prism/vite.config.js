@@ -62,6 +62,15 @@ export default defineConfig(({ mode }) => {
           // only their own package's code and stay reachable solely through the
           // `React.lazy` boundaries that load the editor and terminal.
           manualChunks(id) {
+            // 必须排在 node_modules 判断之前:这些是源码里的翻译文件。
+            //
+            // 每个 namespace 一个块 = 10 语种 × 7 namespace = 70 个块,而 i18next
+            // 启动时会把当前语言和回退语言的全部 7 个 namespace 都预加载,即
+            // 14 个独立请求,首屏渲染又被 initI18n().finally(render) 挡在后面。
+            // 按语种归并后变成 2 个请求,其余 8 种语言仍然是懒加载。
+            const localeMatch = /[\\/]src[\\/]i18n[\\/]locales[\\/]([^\\/]+)[\\/]/.exec(id)
+            if (localeMatch) return `locale-${localeMatch[1]}`
+
             if (!id.includes('node_modules')) return undefined
             // Must come first. These are one-line interop helpers (`_extends`,
             // `_objectWithoutPropertiesLoose`, tslib's `__awaiter`) that many

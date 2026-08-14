@@ -15,6 +15,14 @@ type SidebarSessionItemProps = {
   selectedSession: ProjectSession | null;
   isProcessing: boolean;
   needsAttention: boolean;
+  /**
+   * 这个会话卡在一个工具审批上,在等人点确认。
+   *
+   * 和 `needsAttention` 分开显示,因为它们说的不是一回事:那个是"这边有动静",
+   * 这个是"跑不下去了,在等你"。审批框只在正在看该会话时才渲染,人在别处时
+   * 这个点是唯一的提示 —— 不去点,那一轮就永远停在那里。
+   */
+  awaitingApproval: boolean;
   currentTime: Date;
   editingSession: string | null;
   editingSessionName: string;
@@ -67,6 +75,7 @@ export default function SidebarSessionItem({
   selectedSession,
   isProcessing,
   needsAttention,
+  awaitingApproval,
   currentTime,
   editingSession,
   editingSessionName,
@@ -84,8 +93,12 @@ export default function SidebarSessionItem({
   const isEditing = editingSession === session.id;
   const compactSessionAge = formatCompactSessionAge(sessionView.sessionTime, currentTime);
   const editingContainerRef = useRef<HTMLDivElement>(null);
-  const showAttentionIndicator = needsAttention && !isSelected;
-  const showRecentIndicator = !showAttentionIndicator && !isProcessing && sessionView.isActive;
+  // 待审批优先级最高,而且**选中时也要显示** —— 框虽然渲染在聊天区里,但用户
+  // 可能滚上去了、或者窗口不在前台。这是个恒定提示,不是"你没看见时才亮"。
+  const showApprovalIndicator = awaitingApproval;
+  const showAttentionIndicator = !showApprovalIndicator && needsAttention && !isSelected;
+  const showRecentIndicator =
+    !showApprovalIndicator && !showAttentionIndicator && !isProcessing && sessionView.isActive;
 
   // The rename panel sits inside a group-hover opacity wrapper, so leaving the row
   // would visually hide it. While editing, dismiss only when the user clicks outside
@@ -123,22 +136,29 @@ export default function SidebarSessionItem({
 
   return (
     <div className="group relative">
-      {(showAttentionIndicator || showRecentIndicator) && (
+      {(showApprovalIndicator || showAttentionIndicator || showRecentIndicator) && (
         <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
           <Tooltip
-            content={showAttentionIndicator
-              ? t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })
-              : t('tooltips.activeSessionIndicator')}
+            content={showApprovalIndicator
+              ? t('tooltips.approvalPendingIndicator', { defaultValue: '等待你确认工具权限' })
+              : showAttentionIndicator
+                ? t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })
+                : t('tooltips.activeSessionIndicator')}
             position="right"
           >
             <div
               role="status"
-              aria-label={showAttentionIndicator
-                ? t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })
-                : t('tooltips.activeSessionIndicator')}
+              aria-label={showApprovalIndicator
+                ? t('tooltips.approvalPendingIndicator', { defaultValue: '等待你确认工具权限' })
+                : showAttentionIndicator
+                  ? t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })
+                  : t('tooltips.activeSessionIndicator')}
               className={cn(
                 'h-2 w-2 animate-pulse rounded-full',
-                showAttentionIndicator ? 'bg-amber-500' : 'bg-green-500',
+                showApprovalIndicator
+                  // 红色而不是琥珀 —— 这条是阻塞的,不是"有点动静"。
+                  ? 'bg-red-500 ring-2 ring-red-500/30'
+                  : showAttentionIndicator ? 'bg-amber-500' : 'bg-green-500',
               )}
             />
           </Tooltip>

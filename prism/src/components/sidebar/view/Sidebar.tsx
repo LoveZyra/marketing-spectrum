@@ -1,13 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+
+import { usePendingApprovalCount } from '../../../hooks/usePendingApprovalCount';
+import { useAuth } from '../../auth/context/AuthContext';
 import { useTranslation } from 'react-i18next';
 
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
-import { useVersionCheck } from '../../../hooks/useVersionCheck';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useSidebarController } from '../hooks/useSidebarController';
-import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
-import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import type { Project, LLMProvider } from '../../../types/app';
 import type { MCPServerStatus, SidebarProps } from '../types/types';
 
@@ -16,17 +16,13 @@ import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
 
-type TaskMasterSidebarContext = {
-  setCurrentProject: (project: Project) => void;
-  mcpServerStatus: MCPServerStatus;
-};
-
 function Sidebar({
   projects,
   selectedProject,
   selectedSession,
   activeSessions,
   attentionSessionIds,
+  awaitingApprovalSessionIds,
   onProjectSelect,
   onSessionSelect,
   onNewSession,
@@ -44,14 +40,14 @@ function Sidebar({
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
-  const { updateAvailable, restartRequired, latestVersion, currentVersion, releaseInfo, installMode } = useVersionCheck(
-    'siteboon',
-    'claudecodeui',
-  );
   const { preferences, setPreference } = useUiPreferences();
+
+  // 设置入口上的红色未读计数。事件开关本身在设置页里,所以计数挂在设置入口上,
+  // 点进去即清零 —— 不做系统通知,免掉浏览器授权那条死角。
+  // 设置入口上的红色计数 = 待审批账号数。审批入口在设置 → 账号里,所以数字挂在
+  // 设置入口上;非 root 恒为 0(那个标签页对他们本来就不显示)。
+  const pendingApprovalCount = usePendingApprovalCount(Boolean(useAuth().user?.isRoot));
   const { sidebarVisible } = preferences;
-  const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
-  const { tasksEnabled } = useTasksSettings();
   const paletteOps = usePaletteOps();
 
   const {
@@ -76,7 +72,6 @@ function Sidebar({
     deletingProjects,
     deleteConfirmation,
     sessionDeleteConfirmation,
-    showVersionModal,
     filteredProjects,
     archivedProjects,
     archivedSessions,
@@ -111,7 +106,6 @@ function Sidebar({
     setSearchFilter,
     setDeleteConfirmation,
     setSessionDeleteConfirmation,
-    setShowVersionModal,
   } = useSidebarController({
     projects,
     selectedProject,
@@ -126,7 +120,6 @@ function Sidebar({
     onSessionDelete,
     onLoadMoreSessions,
     onProjectDelete,
-    setCurrentProject,
     setSidebarVisible: (visible) => setPreference('sidebarVisible', visible),
     sidebarVisible,
   });
@@ -159,12 +152,11 @@ function Sidebar({
     editingSession,
     editingSessionName,
     deletingProjects,
-    tasksEnabled,
-    mcpServerStatus,
     getProjectSessions,
     loadingMoreProjects,
     activeSessions,
     attentionSessionIds,
+    awaitingApprovalSessionIds,
     forceExpanded: searchMode === 'running',
     isProjectStarred,
     onEditingNameChange: setEditingName,
@@ -212,12 +204,6 @@ function Sidebar({
         sessionDeleteConfirmation={sessionDeleteConfirmation}
         onCancelDeleteSession={() => setSessionDeleteConfirmation(null)}
         onConfirmDeleteSession={confirmDeleteSession}
-        showVersionModal={showVersionModal}
-        onCloseVersionModal={() => setShowVersionModal(false)}
-        releaseInfo={releaseInfo}
-        currentVersion={currentVersion}
-        latestVersion={latestVersion}
-        installMode={installMode}
         t={t}
       />
 
@@ -225,9 +211,6 @@ function Sidebar({
         <SidebarCollapsed
           onExpand={handleExpandSidebar}
           onShowSettings={onShowSettings}
-          updateAvailable={updateAvailable}
-          restartRequired={restartRequired}
-          onShowVersionModal={() => setShowVersionModal(true)}
           t={t}
         />
       ) : (
@@ -298,13 +281,8 @@ function Sidebar({
             isRefreshing={isRefreshing}
             onCreateProject={() => setShowNewProject(true)}
             onCollapseSidebar={handleCollapseSidebar}
-            updateAvailable={updateAvailable}
-            restartRequired={restartRequired}
-            releaseInfo={releaseInfo}
-            latestVersion={latestVersion}
-            currentVersion={currentVersion}
-            onShowVersionModal={() => setShowVersionModal(true)}
             onShowSettings={onShowSettings}
+          notificationCount={pendingApprovalCount}
             projectListProps={projectListProps}
             t={t}
           />

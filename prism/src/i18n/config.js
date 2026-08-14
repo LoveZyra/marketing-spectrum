@@ -13,7 +13,106 @@ import { initReactI18next } from 'react-i18next';
 import { languages } from './languages.js';
 import { loadResource, namespacesIn, resourceIndex } from './resource-registry';
 
+/**
+ * The locale every other one falls back to, key by key.
+ *
+ * Deliberately not the same knob as `DEFAULT_LANGUAGE`: English is the only
+ * locale required to be complete, so it has to stay the fallback even when the
+ * UI opens in another language. Pointing `fallbackLng` at a partial locale
+ * would render raw key paths for whatever that locale has not translated yet,
+ * which is strictly worse than an English string.
+ */
 const FALLBACK_LANGUAGE = 'en';
+
+/**
+ * The locale a browser opens in when its user has never picked one.
+ */
+const DEFAULT_LANGUAGE = 'zh-CN';
+
+/**
+ * Where an *explicit* pick from the language selector is recorded.
+ *
+ * This key, not `userLanguage`, is what `resolveInitialLanguage` reads — and
+ * the distinction is the whole point. i18next writes `userLanguage` on every
+ * `changeLanguage`, including the one `init` itself performs, so every browser
+ * that had ever loaded the app already held `userLanguage: "en"` from the old
+ * default. Keying the initial language off that would have pinned every
+ * existing user to English forever and made this constant a no-op for
+ * everyone but a fresh browser.
+ *
+ * The trade-off, stated plainly: someone who had explicitly chosen a language
+ * before this key existed also has no record of it and gets moved to the
+ * default once. Re-picking it writes this key and is then honoured for good.
+ */
+const LANGUAGE_CHOICE_STORAGE_KEY = 'userLanguageChoice';
+
+/** i18next's detector cache. Written by us, authoritative for nothing. */
+const LANGUAGE_CACHE_STORAGE_KEY = 'userLanguage';
+
+const isSupportedLanguage = (language) =>
+  Boolean(language) && languages.some((entry) => entry.value === language);
+
+/**
+ * Returns `localStorage`, or `null` where there isn't one.
+ *
+ * `typeof` rather than a try/catch around the access: under the test runner
+ * and SSR the identifier is simply not declared, and a bare reference is a
+ * ReferenceError rather than something a property-access guard would catch.
+ */
+const readStorage = () => {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Picks the language i18next starts in.
+ *
+ * Exported and storage-injected so the precedence rule is testable without a
+ * DOM: an explicit, still-supported choice wins, and everything else — no
+ * choice, an unreadable store, a locale that has since been removed from
+ * `languages` — falls to the default.
+ */
+export const resolveInitialLanguage = (storage) => {
+  if (!storage) {
+    return DEFAULT_LANGUAGE;
+  }
+
+  try {
+    const chosen = storage.getItem(LANGUAGE_CHOICE_STORAGE_KEY);
+    return isSupportedLanguage(chosen) ? chosen : DEFAULT_LANGUAGE;
+  } catch {
+    return DEFAULT_LANGUAGE;
+  }
+};
+
+/**
+ * Switches language *and* records that a human asked for it.
+ *
+ * The language selector must go through here rather than calling
+ * `i18n.changeLanguage` directly, otherwise the pick is indistinguishable from
+ * the default and gets overwritten the next time the default moves.
+ */
+export const setLanguagePreference = (language) => {
+  if (!isSupportedLanguage(language)) {
+    return Promise.resolve();
+  }
+
+  const storage = readStorage();
+  if (storage) {
+    try {
+      storage.setItem(LANGUAGE_CHOICE_STORAGE_KEY, language);
+    } catch (error) {
+      // A full quota or Safari private browsing: the switch below still works
+      // for this tab, it just will not be remembered.
+      console.error('Failed to save language preference:', error);
+    }
+  }
+
+  return i18n.changeLanguage(language);
+};
 
 /**
  * Namespaces come from whatever `en` has on disk.
@@ -46,18 +145,6 @@ const lazyResourceBackend = {
   },
 };
 
-const getSavedLanguage = () => {
-  try {
-    const saved = localStorage.getItem('userLanguage');
-    if (saved && languages.some((language) => language.value === saved)) {
-      return saved;
-    }
-    return FALLBACK_LANGUAGE;
-  } catch {
-    return FALLBACK_LANGUAGE;
-  }
-};
-
 /**
  * Initializes i18next and resolves once the active language is usable.
  *
@@ -75,7 +162,7 @@ export const initI18n = () =>
     .use(LanguageDetector)
     .use(initReactI18next)
     .init({
-      lng: getSavedLanguage(),
+      lng: resolveInitialLanguage(readStorage()),
       fallbackLng: FALLBACK_LANGUAGE,
 
       debug: false,
@@ -100,14 +187,30 @@ export const initI18n = () =>
         bindI18nStore: false,
       },
 
+      // Inert while `lng` is supplied — i18next only runs detection when it is
+      // not. Configured anyway, and configured to read the *choice* key with
+      // caching off, so that the two code paths can never disagree: were `lng`
+      // ever dropped in a refactor, the detector would resolve exactly what
+      // `resolveInitialLanguage` resolves instead of reviving the old
+      // `userLanguage` cache and snapping every existing browser to English.
+      // `caches: []` because a detector write would stamp a choice the user
+      // never made, and an unasked-for choice is permanent by design.
       detection: {
         order: ['localStorage'],
-        lookupLocalStorage: 'userLanguage',
-        caches: ['localStorage'],
+        lookupLocalStorage: LANGUAGE_CHOICE_STORAGE_KEY,
+        caches: [],
       },
     });
 
 i18n.on('languageChanged', (language) => {
+  // Keeps `<html lang>` truthful. It is not decoration: screen readers pick
+  // the pronunciation dictionary from it, and CJK line breaking and font
+  // fallback differ from the Latin defaults, so a page serving Chinese while
+  // declaring `lang="en"` is read and wrapped as if it were English.
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = language;
+  }
+
   // Guarded rather than only caught: this also runs under the test runner and
   // any non-browser import, where a thrown-and-logged error on every language
   // change is noise, not a signal. The catch stays for the cases that are real
@@ -117,7 +220,10 @@ i18n.on('languageChanged', (language) => {
   }
 
   try {
-    localStorage.setItem('userLanguage', language);
+    // Compatibility cache only — nothing reads it back (see
+    // LANGUAGE_CHOICE_STORAGE_KEY for why the initial language must not).
+    // Kept so that rolling back to an older build does not lose the language.
+    localStorage.setItem(LANGUAGE_CACHE_STORAGE_KEY, language);
   } catch (error) {
     console.error('Failed to save language preference:', error);
   }

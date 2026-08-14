@@ -3,51 +3,15 @@
   "tabs": {
     "account": "Konto",
     "permissions": "Berechtigungen",
-    "mcpServers": "MCP-Server",
-    "appearance": "Darstellung"
+    "mcpServers": "MCP-Server"
   },
   "account": {
-    "title": "Konto",
     "language": "Sprache",
     "languageLabel": "Anzeigesprache",
-    "languageDescription": "Wähl deine bevorzugte Sprache für die Oberfläche",
-    "username": "Benutzername",
-    "email": "E-Mail",
-    "profile": "Profil",
-    "changePassword": "Passwort ändern"
-  },
-  "mcp": {
-    "title": "MCP-Server",
-    "addServer": "Server hinzufügen",
-    "editServer": "Server bearbeiten",
-    "deleteServer": "Server löschen",
-    "serverName": "Servername",
-    "serverType": "Servertyp",
-    "config": "Konfiguration",
-    "testConnection": "Verbindung testen",
-    "status": "Status",
-    "connected": "Verbunden",
-    "disconnected": "Getrennt",
-    "scope": {
-      "label": "Geltungsbereich",
-      "user": "Benutzer:in",
-      "project": "Projekt"
-    }
+    "languageDescription": "Wähl deine bevorzugte Sprache für die Oberfläche"
   },
   "appearance": {
-    "title": "Darstellung",
-    "theme": "Design",
-    "codeEditor": "Code-Editor",
-    "editorTheme": "Editor-Design",
-    "wordWrap": "Zeilenumbruch",
-    "showMinimap": "Minimap anzeigen",
-    "lineNumbers": "Zeilennummern",
-    "fontSize": "Schriftgröße"
-  },
-  "actions": {
-    "saveChanges": "Änderungen speichern",
-    "resetToDefaults": "Auf Standardwerte zurücksetzen",
-    "cancelChanges": "Änderungen abbrechen"
+    "theme": "Design"
   },
   "quickSettings": {
     "title": "Schnelleinstellungen",
@@ -70,44 +34,19 @@
     }
   },
   "terminalShortcuts": {
-    "title": "Terminal-Tastenkürzel",
-    "sectionKeys": "Tasten",
-    "sectionNavigation": "Navigation",
-    "escape": "Escape",
-    "tab": "Tab",
-    "shiftTab": "Shift+Tab",
-    "arrowUp": "Pfeil oben",
-    "arrowDown": "Pfeil unten",
-    "scrollDown": "Nach unten scrollen",
-    "handle": {
-      "closePanel": "Tastenkürzel-Panel schließen",
-      "openPanel": "Tastenkürzel-Panel öffnen"
-    }
+    "scrollDown": "Nach unten scrollen"
   },
   "mainTabs": {
-    "label": "Einstellungen",
     "agents": "Agenten",
     "appearance": "Darstellung",
-    "git": "Git",
     "apiTokens": "API & Token",
-    "tasks": "Aufgaben",
     "notifications": "Benachrichtigungen",
-    "plugins": "Plugins",
     "about": "Info",
     "accounts": "Accounts"
   },
   "notifications": {
     "title": "Benachrichtigungen",
     "description": "Lege fest, welche Benachrichtigungen du erhältst.",
-    "webPush": {
-      "title": "Web-Push-Benachrichtigungen",
-      "enable": "Push-Benachrichtigungen aktivieren",
-      "disable": "Push-Benachrichtigungen deaktivieren",
-      "enabled": "Push-Benachrichtigungen sind aktiviert",
-      "loading": "Wird aktualisiert...",
-      "unsupported": "Push-Benachrichtigungen werden in diesem Browser nicht unterstützt.",
-      "denied": "Push-Benachrichtigungen sind blockiert. Bitte erlaube sie in den Browsereinstellungen."
-    },
     "sound": {
       "title": "Ton",
       "description": "Spielt einen kurzen Ton ab, wenn ein Chat-Lauf abgeschlossen ist.",
@@ -134,10 +73,6 @@
     },
     "codeEditor": {
       "title": "Code-Editor",
-      "theme": {
-        "label": "Editor-Design",
-        "description": "Standarddesign für den Code-Editor"
-      },
       "wordWrap": {
         "label": "Zeilenumbruch",
         "description": "Zeilenumbruch standardmäßig im Editor aktivieren"
@@ -167,10 +102,6 @@
     },
     "scope": {
       "label": "Geltungsbereich",
-      "userGlobal": "Benutzer:in (Global)",
-      "projectLocal": "Projekt (Lokal)",
-      "userDescription": "Benutzerbereich: Auf allen Projekten deines Computers verfügbar",
-      "projectDescription": "Lokaler Bereich: Nur im ausgewählten Projekt verfügbar",
       "cannotChange": "Der Geltungsbereich kann beim Bearbeiten eines vorhandenen Servers nicht geändert werden"
     },
     "fields": {
@@ -192,11 +123,8 @@
       "stdioRequiresCommand": "stdio-Typ erfordert ein Befehlsfeld",
       "httpRequiresUrl": "{{type}}-Typ erfordert ein URL-Feld",
       "invalidJson": "Ungültiges JSON-Format",
-      "jsonHelp": "Füge deine MCP-Server-Konfiguration im JSON-Format ein. Beispielformate:",
-      "jsonExampleStdio": "• stdio: {\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"@upstash/context7-mcp\"]}",
-      "jsonExampleHttp": "• http/sse: {\"type\":\"http\",\"url\":\"https://api.example.com/mcp\"}"
+      "jsonHelp": "Füge deine MCP-Server-Konfiguration im JSON-Format ein. Beispielformate:"
     },
-    "configDetails": "Konfigurationsdetails (aus {{configFile}})",
     "projectPath": "Pfad: {{path}}",
     "actions": {
       "cancel": "Abbrechen",
@@ -206,32 +134,7 @@
     }
   },
   "saveStatus": {
-    "success": "Einstellungen erfolgreich gespeichert!",
-    "error": "Einstellungen konnten nicht gespeichert werden",
-    "saving": "Wird gespeichert..."
-  },
-  "footerActions": {
-    "save": "Einstellungen speichern",
-    "cancel": "Abbrechen"
-  },
-  "git": {
-    "title": "Git-Konfiguration",
-    "description": "Konfiguriere deine Git-Identität für Commits. Diese Einstellungen werden global über git config --global angewendet",
-    "name": {
-      "label": "Git-Name",
-      "help": "Dein Name für Git-Commits"
-    },
-    "email": {
-      "label": "Git-E-Mail",
-      "help": "Deine E-Mail-Adresse für Git-Commits"
-    },
-    "actions": {
-      "save": "Konfiguration speichern",
-      "saving": "Wird gespeichert..."
-    },
-    "status": {
-      "success": "Erfolgreich gespeichert"
-    }
+    "success": "Einstellungen erfolgreich gespeichert!"
   },
   "apiKeys": {
     "title": "API-Schlüssel",
@@ -259,7 +162,6 @@
     },
     "github": {
       "title": "GitHub-Token",
-      "description": "Füge GitHub Personal Access Tokens hinzu, um private Repositories über die externe API zu klonen.",
       "descriptionAlt": "Füge GitHub Personal Access Tokens hinzu, um private Repositories zu klonen. Du kannst Token auch direkt in API-Anfragen übergeben, ohne sie zu speichern.",
       "addButton": "Token hinzufügen",
       "form": {
@@ -275,29 +177,7 @@
       "confirmDelete": "Möchtest du diesen GitHub-Token wirklich löschen?"
     },
     "apiDocsLink": "API-Dokumentation",
-    "loading": "Lädt...",
-    "version": {
-      "updateAvailable": "Update verfügbar: v{{version}}"
-    }
-  },
-  "tasks": {
-    "checking": "TaskMaster-Installation wird überprüft...",
-    "notInstalled": {
-      "title": "TaskMaster AI CLI nicht installiert",
-      "description": "TaskMaster CLI ist erforderlich, um Aufgabenverwaltungsfunktionen zu nutzen. Installiere es, um loszulegen:",
-      "installCommand": "npm install -g task-master-ai",
-      "viewOnGitHub": "Auf GitHub anzeigen",
-      "afterInstallation": "Nach der Installation:",
-      "steps": {
-        "restart": "Diese Anwendung neu starten",
-        "autoAvailable": "TaskMaster-Funktionen werden automatisch verfügbar",
-        "initCommand": "task-master init in deinem Projektverzeichnis verwenden"
-      }
-    },
-    "settings": {
-      "enableLabel": "TaskMaster-Integration aktivieren",
-      "enableDescription": "TaskMaster-Aufgaben, Banner und Seitenleisten-Indikatoren in der gesamten Oberfläche anzeigen"
-    }
+    "loading": "Lädt..."
   },
   "agents": {
     "authStatus": {
@@ -344,32 +224,12 @@
       "placeholder": "z. B. \"Bash(rm:*)\"",
       "empty": "Keine gesperrten Werkzeuge konfiguriert"
     },
-    "allowedCommands": {
-      "title": "Erlaubte Shell-Befehle",
-      "description": "Shell-Befehle, die automatisch ohne Aufforderung erlaubt werden",
-      "placeholder": "z. B. \"Shell(ls)\" oder \"Shell(git status)\"",
-      "quickAdd": "Häufige Befehle schnell hinzufügen:",
-      "empty": "Keine erlaubten Befehle konfiguriert"
-    },
-    "blockedCommands": {
-      "title": "Gesperrte Shell-Befehle",
-      "description": "Shell-Befehle, die automatisch gesperrt werden",
-      "placeholder": "z. B. \"Shell(rm -rf)\" oder \"Shell(sudo)\"",
-      "empty": "Keine gesperrten Befehle konfiguriert"
-    },
     "toolExamples": {
       "title": "Werkzeugmuster-Beispiele:",
       "bashGitLog": "- Alle git log-Befehle erlauben",
       "bashGitDiff": "- Alle git diff-Befehle erlauben",
       "write": "- Alle Write-Werkzeugnutzungen erlauben",
       "bashRm": "- Alle rm-Befehle sperren (gefährlich)"
-    },
-    "shellExamples": {
-      "title": "Shell-Befehl-Beispiele:",
-      "ls": "- ls-Befehl erlauben",
-      "gitStatus": "- git status erlauben",
-      "npmInstall": "- npm install erlauben",
-      "rmRf": "- Rekursives Löschen sperren"
     },
     "actions": {
       "add": "Hinzufügen"
@@ -380,64 +240,17 @@
     "description": {
       "claude": "Model Context Protocol-Server stellen Claude zusätzliche Werkzeuge und Datenquellen zur Verfügung"
     },
-    "addButton": "MCP-Server hinzufügen",
     "empty": "Keine MCP-Server konfiguriert",
-    "serverType": "Typ",
-    "scope": {
-      "local": "lokal",
-      "user": "benutzer"
-    },
     "config": {
       "command": "Befehl",
       "url": "URL",
       "args": "Argumente",
       "environment": "Umgebung"
     },
-    "tools": {
-      "title": "Werkzeuge",
-      "count": "({{count}}):",
-      "more": "+{{count}} weitere"
-    },
     "actions": {
       "edit": "Server bearbeiten",
       "delete": "Server löschen"
     }
-  },
-  "pluginSettings": {
-    "title": "Plugins",
-    "description": "Erweitere die Oberfläche mit eigenen Plugins. Installiere sie von Git oder lege einen Ordner in ~/.claude-code-ui/plugins/ ab.",
-    "installPlaceholder": "https://github.com/benutzer/mein-plugin",
-    "installButton": "Installieren",
-    "installing": "Wird installiert…",
-    "securityWarning": "Installiere nur Plugins, deren Quellcode du geprüft hast oder die von Autoren stammen, denen du vertraust.",
-    "scanningPlugins": "Plugins werden durchsucht…",
-    "noPluginsInstalled": "Keine Plugins installiert",
-    "pullLatest": "Neueste Version von Git laden",
-    "noGitRemote": "Kein Git-Remote — Update nicht verfügbar",
-    "uninstallPlugin": "Plugin deinstallieren",
-    "confirmUninstall": "Zum Bestätigen erneut klicken",
-    "confirmUninstallMessage": "{{name}} entfernen? Das kann nicht rückgängig gemacht werden.",
-    "cancel": "Abbrechen",
-    "remove": "Entfernen",
-    "updateFailed": "Update fehlgeschlagen",
-    "installFailed": "Installation fehlgeschlagen",
-    "uninstallFailed": "Deinstallation fehlgeschlagen",
-    "toggleFailed": "Umschalten fehlgeschlagen",
-    "buildYourOwn": "Eigenes Plugin erstellen",
-    "starter": "Starter",
-    "docs": "Dokumentation",
-    "starterPlugin": {
-      "name": "Projektstatistiken",
-      "badge": "starter",
-      "description": "Dateianzahl, Codezeilen, Dateityp-Aufschlüsselung und aktuelle Aktivitäten für dein Projekt.",
-      "install": "Installieren"
-    },
-    "morePlugins": "Mehr",
-    "enable": "Aktivieren",
-    "disable": "Deaktivieren",
-    "installAriaLabel": "Git-Repository-URL des Plugins",
-    "tab": "Tab",
-    "runningStatus": "läuft"
   },
   "accounts": {
     "title": "Account approval",

@@ -2,10 +2,12 @@ import path from 'node:path';
 
 import type { WebSocket } from 'ws';
 
-import { sessionsDb } from '@/modules/database/index.js';
+import { canViewerSeeSession, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
+import { currentHolder } from '@/modules/websocket/services/conversation-ownership.service.js';
 import { getGlobalImageAssetsDir, normalizeImageDescriptors } from '@/shared/image-attachments.js';
+import { readSocketViewer } from '@/shared/project-visibility.js';
 import type {
   AnyRecord,
   AuthenticatedWebSocketRequest,
@@ -73,6 +75,11 @@ type ChatWebSocketDependencies = {
     LLMProvider,
     (providerSessionId: string, context?: { runId?: string }) => boolean | Promise<boolean>
   >;
+  /**
+   * 反查一个待批准请求挂在哪个 provider 会话上,给鉴权用 —— 这条消息只带
+   * requestId,没有它就无法判断调用方有没有资格替这个会话作决定。
+   */
+  getToolApprovalSessionId: (requestId: string) => string | null;
   resolveToolApproval: (
     requestId: string,
     payload: {
@@ -82,8 +89,13 @@ type ChatWebSocketDependencies = {
       rememberEntry?: unknown;
     }
   ) => void;
-  /** Claude-only today: pending tool approvals included in `chat_subscribed`. */
-  getPendingApprovalsForSession: (providerSessionId: string) => unknown[];
+  /**
+   * Claude-only today: pending tool approvals included in `chat_subscribed`.
+   *
+   * 接受 **app 会话 id 或 provider 原生 id**,两者都能命中。用 app id 调是关键 ——
+   * provider 原生 id 在一轮对话开局是 null,用它查会漏掉整个第一轮的待批请求。
+   */
+  getPendingApprovalsForSession: (sessionId: string) => unknown[];
 };
 
 /**
@@ -170,6 +182,33 @@ async function handleChatSend(
     return;
   }
 
+  // 这道门原来漏在这里 —— abort / subscribe / permission-response 三处都有,
+  // 唯独 send 没有,而 send 是四条里影响最大的那条。
+  //
+  // 常驻 runtime 是**按 provider session id 建索引的,键里没有用户**
+  // (claude-sdk.js 的 `claudeRuntimes`),`runtimeForSend` 每次都拿发送方的
+  // permissionMode / allowedTools 覆盖 runtime 上的,还会对活着的子进程调
+  // `setPermissionMode`。所以少了这道门,任何已登录的 socket 只要拿得到一个
+  // 会话 id,就能往别人的对话里发消息、顺带把自己的权限模式按到别人的运行时上
+  // —— 包括 bypassPermissions。
+  if (!assertSocketMaySeeSession(ws, sessionId)) {
+    return;
+  }
+
+  // 终端接管着这段对话时,chat 不能再往里写:那会变成两个进程追加同一份
+  // transcript,谁也看不见谁。明确拒绝并说清楚怎么拿回来,比默默双写好。
+  const holder = currentHolder(sessionId);
+  if (holder) {
+    const who = holder.username ? `(${holder.username})` : '';
+    sendProtocolError(
+      ws,
+      'SESSION_HELD_BY_SHELL',
+      `这段对话正在终端里被接管${who}。关掉那个终端后即可在这里继续 —— 两边同时写会互相覆盖。`,
+      sessionId
+    );
+    return;
+  }
+
   const provider = session.provider as LLMProvider;
   const spawnFn = dependencies.spawnFns[provider];
   if (!spawnFn) {
@@ -238,6 +277,25 @@ async function handleChatSend(
 }
 
 /**
+ * 这个 socket 能不能操作这条会话。
+ *
+ * 每条按 sessionId 寻址的消息都要过这道门 —— `chat.send` 曾经漏了,见那边的说明。
+ *
+ * `chat.subscribe` 需要它是因为订阅会把 socket 加进 run 的输出集合:一条对话的
+ * 实时流、以及其中的工具审批请求,都会广播给集合里的每一个人。
+ *
+ * 拒绝时回 SESSION_NOT_FOUND 而不是"无权限":对外与"这个 id 不存在"同形。
+ */
+function assertSocketMaySeeSession(ws: WebSocket, sessionId: string): boolean {
+  if (canViewerSeeSession(sessionId, readSocketViewer(ws))) {
+    return true;
+  }
+
+  sendProtocolError(ws, 'SESSION_NOT_FOUND', `Session "${sessionId}" was not found.`, sessionId);
+  return false;
+}
+
+/**
  * Handles `chat.abort`: cancels the run for one app session and emits the
  * terminal `complete` on its behalf (runtimes skip their own complete for
  * aborted runs, and the registry drops any duplicate).
@@ -250,6 +308,10 @@ async function handleChatAbort(
   const sessionId = readRequiredSessionId(data);
   if (!sessionId) {
     sendProtocolError(ws, 'SESSION_ID_REQUIRED', 'chat.abort requires a sessionId.');
+    return;
+  }
+
+  if (!assertSocketMaySeeSession(ws, sessionId)) {
     return;
   }
 
@@ -313,6 +375,12 @@ function handleChatSubscribe(
       ? Math.max(0, Math.floor(lastSeqRaw))
       : 0;
 
+    if (!canViewerSeeSession(sessionId, readSocketViewer(ws))) {
+      // 静默跳过而不是报错:subscribe 是批量的,一条不可见不该让整批失败,
+      // 而逐条回错误又会把"哪些 id 是存在的"告诉调用方。
+      continue;
+    }
+
     const run = chatRunRegistry.getRun(sessionId);
     const isProcessing = chatRunRegistry.isProcessing(sessionId);
 
@@ -322,16 +390,24 @@ function handleChatSubscribe(
       chatRunRegistry.attachConnection(sessionId, ws);
     }
 
-    // Pending approvals are tracked under the provider-native id inside the
-    // Claude runtime; remap their sessionId so the client only sees app ids.
-    const pendingPermissions = (run?.providerSessionId
-      ? dependencies.getPendingApprovalsForSession(run.providerSessionId)
-      : []
-    ).map((approval) =>
-      approval && typeof approval === 'object'
-        ? { ...(approval as AnyRecord), sessionId }
-        : approval,
-    );
+    // 待批审批用 **app 会话 id** 查,不再走 `run?.providerSessionId`。
+    //
+    // 原来是 `run?.providerSessionId ? 查 : []`,而新会话的第一轮里
+    // `providerSessionId` 必然是 null(startRun 从库里读的就是 null,要等运行时
+    // announce 才补上)。于是那个三元**必定短路成 `[]`** —— 而前端收到
+    // `chat_subscribed` 是整体替换,空数组也算数组,**已经弹出来的审批框会被抹掉**。
+    // 症状就是"弹窗闪一下就没了,然后 55 秒后超时"。
+    //
+    // 现在 claude-sdk 侧的待批请求同时按 provider 原生 id 和 app 会话 id 索引
+    // (`_appSessionId`),app 会话 id 从第一轮就存在,所以这里可以无条件地查,
+    // 空数组也就真的意味着"没有待批的",替换语义随之变得正确。
+    const pendingPermissions = dependencies
+      .getPendingApprovalsForSession(sessionId)
+      .map((approval) =>
+        approval && typeof approval === 'object'
+          ? { ...(approval as AnyRecord), sessionId }
+          : approval,
+      );
 
     sendJson(ws, {
       kind: 'chat_subscribed',
@@ -359,8 +435,28 @@ function handleChatSubscribe(
  * pending approval resolver (Claude is the only provider with interactive
  * approvals today, but the message is intentionally provider-neutral).
  */
-function handlePermissionResponse(data: AnyRecord, dependencies: ChatWebSocketDependencies): void {
+function handlePermissionResponse(
+  ws: WebSocket,
+  data: AnyRecord,
+  dependencies: ChatWebSocketDependencies
+): void {
   if (typeof data.requestId !== 'string' || data.requestId.length === 0) {
+    return;
+  }
+
+  // 这个决定属于谁。requestId 登记在 provider 会话下,先换回 app 会话再判定。
+  // 没有这一步,任何已登录的 socket 都能替别人的会话点"允许",而工具批准正是
+  // 决定要不要真的动文件、真的执行命令的那一步。
+  const providerSessionId = dependencies.getToolApprovalSessionId(data.requestId);
+  if (!providerSessionId) {
+    // 已超时或已被回答:静默丢弃,与原行为一致。
+    return;
+  }
+
+  const owningSession = sessionsDb.getSessionByProviderSessionId(providerSessionId);
+  const appSessionId = owningSession?.session_id ?? providerSessionId;
+  if (!canViewerSeeSession(appSessionId, readSocketViewer(ws))) {
+    sendProtocolError(ws, 'SESSION_NOT_FOUND', 'No such pending approval.', appSessionId);
     return;
   }
 
@@ -395,6 +491,12 @@ export function handleChatConnection(
   connectedClients.add(ws);
 
   const userId = readRequestUserId(request);
+  // Broadcasts fan out over `connectedClients`, which holds bare sockets.
+  // Stamping the identity here is what lets them be filtered by project
+  // ownership instead of going to every browser on the server.
+  (ws as typeof ws & { prismUserId?: string | number | null; prismUsername?: string | null }).prismUserId = userId;
+  (ws as typeof ws & { prismUsername?: string | null }).prismUsername =
+    typeof request?.user?.username === 'string' ? request.user.username : null;
 
   ws.on('message', async (rawMessage) => {
     try {
@@ -423,7 +525,7 @@ export function handleChatConnection(
           handleChatSubscribe(ws, data, dependencies);
           return;
         case 'chat.permission-response':
-          handlePermissionResponse(data, dependencies);
+          handlePermissionResponse(ws, data, dependencies);
           return;
         default:
           sendProtocolError(ws, 'UNKNOWN_MESSAGE_TYPE', `Unknown message type "${messageType}".`);
@@ -439,5 +541,9 @@ export function handleChatConnection(
   ws.on('close', () => {
     console.log('[INFO] Chat client disconnected');
     connectedClients.delete(ws);
+    // 从所有 run 的订阅者集合里摘掉。不摘也不会漏(forward 会清理已关闭的),
+    // 但摘掉能让 `liveConnectionCount()` 立刻反映现实 —— 审批帧要不要认为
+    // "送到了"读的就是它。
+    chatRunRegistry.detachConnection(ws);
   });
 }
