@@ -291,10 +291,31 @@ function waitForToolApproval(requestId, options = {}) {
  * 所以在没有这个反查之前,任何已登录的 socket 都能替别人的会话点"允许"。
  * 返回 null 表示这个 requestId 已经不在(超时/已回答/根本没有过)。
  */
-function getToolApprovalSessionId(requestId) {
-  const resolver = pendingToolApprovals.get(requestId);
+/**
+ * 一条待批请求该用哪个会话 id 去做授权判定:provider 原生 id 优先,**app 会话 id
+ * 兜底**。
+ *
+ * 上一轮把审批的显示/补发路径改成了 provider-id 为空时用 app 会话 id 兜底
+ * (approvalBelongsToSession),但这条授权/回填路径当时漏了 —— 它只认 `_sessionId`
+ * (provider 原生 id)。新会话第一轮里,canUseTool 可能在流里第一条消息回来、
+ * 也就是 provider session id 被捕获之前就触发,于是这条请求的 `_sessionId` 永久是
+ * null;用户点"允许"时 handlePermissionResponse 拿到 null 直接丢弃,而超时又是
+ * "一直等",结果卡到 turn 看门狗(默认 1 小时)。两条路径必须认同一套 id。
+ *
+ * 抽成纯函数是为了能单测,并且和 `approvalBelongsToSession` 明确对齐。
+ *
+ * @param {{_sessionId?: unknown, _appSessionId?: unknown}|null|undefined} resolver
+ * @returns {string|null}
+ */
+export function preferredApprovalSessionId(resolver) {
   if (!resolver) return null;
-  return typeof resolver._sessionId === 'string' ? resolver._sessionId : null;
+  if (typeof resolver._sessionId === 'string' && resolver._sessionId) return resolver._sessionId;
+  if (typeof resolver._appSessionId === 'string' && resolver._appSessionId) return resolver._appSessionId;
+  return null;
+}
+
+function getToolApprovalSessionId(requestId) {
+  return preferredApprovalSessionId(pendingToolApprovals.get(requestId));
 }
 
 function resolveToolApproval(requestId, decision) {
@@ -336,6 +357,45 @@ function matchesToolPermission(entry, toolName, input) {
   }
 
   return false;
+}
+
+/**
+ * 别名 → 实际下发给 CLI 的 model 参数。'default' 档**不下发**(返回 null)。
+ *
+ * 实测依据(claude -p "1" --model default):CLI 不把 'default' 当别名解析,而是
+ * 原样透传给网关 —— 请求落进网关对陌生名字的兜底路由,和 settings.json 的
+ * "model" 配置链毫无关系。于是同一个"默认档",chat、终端、探测各走一条路。
+ * 省略 model 时 CLI 才走自己的配置链(settings.json "model" → ANTHROPIC_MODEL →
+ * 内置默认),这才是"默认"该有的语义,也让 chat 与终端行为一致。
+ */
+function toSdkModel(model) {
+  const normalized = typeof model === 'string' ? model.trim() : '';
+  if (!normalized || normalized === 'default') return null;
+  return normalized;
+}
+
+/**
+ * ~/.claude/settings.json 的 mtime,3 秒节流。
+ *
+ * 模型映射(ANTHROPIC_DEFAULT_*_MODEL / "model")就住在这个文件里,而常驻 CLI
+ * 子进程只在**启动那一刻**读它 —— 之前改完 settings 必须重启 Prism 或手动切档,
+ * 活着的会话才会用新映射。runtimeForSend 用这个指纹对比 runtime 创建时的值,
+ * 变了就懒重建(resume 续对话),让"改 settings 下一条消息就生效"成为默认行为。
+ */
+const USER_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
+const SETTINGS_STAT_THROTTLE_MS = 3_000;
+let settingsMtimeProbe = { at: 0, mtimeMs: 0 };
+async function currentUserSettingsMtimeMs() {
+  const now = Date.now();
+  if (now - settingsMtimeProbe.at < SETTINGS_STAT_THROTTLE_MS) return settingsMtimeProbe.mtimeMs;
+  let mtimeMs = 0;
+  try {
+    mtimeMs = (await fs.stat(USER_SETTINGS_PATH)).mtimeMs;
+  } catch {
+    mtimeMs = 0; // 没有 settings.json 也是一种状态:出现/消失同样算"变了"
+  }
+  settingsMtimeProbe = { at: now, mtimeMs };
+  return mtimeMs;
 }
 
 function mapCliOptionsToSDK(options = {}, stderrTail = null) {
@@ -394,10 +454,15 @@ function mapCliOptionsToSDK(options = {}, stderrTail = null) {
 
   sdkOptions.disallowedTools = settings.disallowedTools || [];
 
-  sdkOptions.model = options.model || CLAUDE_FALLBACK_MODELS.DEFAULT;
+  // 'default' 档省略 model(见 toSdkModel),CLI 按 settings 配置链自选;
+  // effort 仍按别名(含 'default')查表,两者口径不同是有意的。
+  const sdkModel = toSdkModel(options.model);
+  if (sdkModel) {
+    sdkOptions.model = sdkModel;
+  }
 
   const resolvedEffort = resolveClaudeEffort(
-    sdkOptions.model,
+    options.model || CLAUDE_FALLBACK_MODELS.DEFAULT,
     effort,
     options.effortModels || CLAUDE_FALLBACK_MODELS,
   );
@@ -1252,7 +1317,9 @@ function buildPersistentSdkOptions(options, runtime) {
   sdkOptions.allowedTools = [...runtime.settings.allowedTools];
   sdkOptions.disallowedTools = [...runtime.settings.disallowedTools];
   sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
-  sdkOptions.model = options.model || CLAUDE_FALLBACK_MODELS.DEFAULT;
+  // 'default' 档不下发 model(见 toSdkModel)—— CLI 按 settings 配置链自选。
+  const persistentSdkModel = toSdkModel(options.model);
+  if (persistentSdkModel) sdkOptions.model = persistentSdkModel;
   if (options.resolvedEffort) sdkOptions.effort = options.resolvedEffort;
   sdkOptions.systemPrompt = { type: 'preset', preset: 'claude_code' };
   sdkOptions.settingSources = ['project', 'user', 'local'];
@@ -1593,7 +1660,9 @@ async function createPersistentRuntime(key, options, settings) {
     turn: null,
     lastUsed: Date.now(),
     disposed: false,
-    currentModel: options.model || null,
+    currentModel: toSdkModel(options.model),
+    // settings.json 在本 runtime 启动时的指纹;runtimeForSend 据此判断配置是否已变。
+    userSettingsMtimeMs: await currentUserSettingsMtimeMs(),
     currentPermissionMode: settings.permissionMode,
     lastContextUsage: null,
     contextBackfillStarted: false,
@@ -1651,6 +1720,18 @@ async function runtimeForSend(options) {
       throw new Error('A turn is already running for this session');
     }
 
+    // ~/.claude/settings.json 变了(模型映射的 env 就住在里面)—— 这个常驻子进程
+    // 携带的还是启动时那份配置,只有重建才会重读。改完 settings 的下一条消息在
+    // 这里自动换新,不再需要重启 Prism 或手动切档。正在跑的轮次已在上面挡掉。
+    if (runtime && runtime.userSettingsMtimeMs !== undefined) {
+      const settingsMtimeMs = await currentUserSettingsMtimeMs();
+      if (settingsMtimeMs !== runtime.userSettingsMtimeMs) {
+        const resumeSessionId = runtime.sessionId || requestedSessionId;
+        await disposePersistentRuntime(runtime);
+        return createPersistentRuntime(key, { ...options, resumeSessionId }, settings);
+      }
+    }
+
     if (runtime && runtime.signature !== signature) {
       const resumeSessionId = runtime.sessionId || requestedSessionId;
       await disposePersistentRuntime(runtime);
@@ -1687,7 +1768,7 @@ async function runtimeForSend(options) {
         }
       }
 
-      const targetModel = options.model || null;
+      const targetModel = toSdkModel(options.model);
       if (targetModel && runtime.currentModel !== targetModel) {
         if (typeof runtime.query?.setModel === 'function') {
           try {
@@ -1704,6 +1785,13 @@ async function runtimeForSend(options) {
           await disposePersistentRuntime(runtime);
           return createPersistentRuntime(key, { ...options, resumeSessionId }, settings);
         }
+      } else if (!targetModel && runtime.currentModel) {
+        // 切回 default 档:这个 runtime 之前被显式定过模型,而 setModel('default')
+        // 会退回"字面量透传 → 网关兜底"的老路。重建一个**不带 model** 的 runtime,
+        // 让 CLI 重新按 settings 配置链选默认。切档是低频操作,重建(resume)可接受。
+        const resumeSessionId = runtime.sessionId || requestedSessionId;
+        await disposePersistentRuntime(runtime);
+        return createPersistentRuntime(key, { ...options, resumeSessionId }, settings);
       }
 
       return runtime;
@@ -2477,6 +2565,7 @@ async function prewarmClaudeSession(options = {}) {
 }
 
 export {
+  toSdkModel,
   queryClaudeSDK,
   prewarmClaudeSession,
   releaseClaudeSession,

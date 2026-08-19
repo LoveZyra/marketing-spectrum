@@ -12,8 +12,12 @@ import { AppError, normalizeProjectPath, validateWorkspacePath } from '@/shared/
 type CreateProjectInput = {
   projectPath: string;
   customName?: string | null;
-  /** Account that will own the new project. `null`/omitted creates it public. */
+  /** Account that will own the new project(公共/指定用户项目同样保留 owner 便于管理)。 */
   ownerUserId?: number | null;
+  /** 'public' = 创建时选「公共」;null = 个人/指定用户(默认语义)。 */
+  visibility?: 'public' | null;
+  /** 创建时选「指定用户」的授权列表;写入 project_shares。 */
+  sharedUserIds?: number[];
 };
 
 type CreateProjectDependencies = {
@@ -23,8 +27,10 @@ type CreateProjectDependencies = {
     projectPath: string,
     customName: string | null,
     ownerUserId: number | null,
+    visibility: 'public' | null,
   ) => CreateProjectPathResult;
   getProjectByPath: (projectPath: string) => ProjectRepositoryRow | null;
+  setProjectShares: (projectId: string, userIds: number[], grantedBy: number | null) => void;
 };
 
 type ProjectApiView = {
@@ -63,9 +69,12 @@ const defaultDependencies: CreateProjectDependencies = {
     projectPath: string,
     customName: string | null,
     ownerUserId: number | null,
-  ): CreateProjectPathResult => projectsDb.createProjectPath(projectPath, customName, ownerUserId),
+    visibility: 'public' | null,
+  ): CreateProjectPathResult => projectsDb.createProjectPath(projectPath, customName, ownerUserId, visibility),
   getProjectByPath: (projectPath: string): ProjectRepositoryRow | null =>
     projectsDb.getProjectPath(projectPath),
+  setProjectShares: (projectId: string, userIds: number[], grantedBy: number | null): void =>
+    projectsDb.setProjectShares(projectId, userIds, grantedBy),
 };
 
 function resolveDisplayName(customName: string | null | undefined, projectPath: string): string {
@@ -123,6 +132,7 @@ export async function createProject(
     resolvedProjectPath,
     normalizedCustomName,
     input.ownerUserId ?? null,
+    input.visibility ?? null,
   );
 
   if (persistedProject.outcome === 'active_conflict') {
@@ -139,6 +149,12 @@ export async function createProject(
       code: 'PROJECT_CREATE_FAILED',
       statusCode: 500,
     });
+  }
+
+  // 指定用户授权:只在真正新建时写(复活归档路径不改权限,与 owner/visibility 同规)。
+  const sharedUserIds = input.sharedUserIds ?? [];
+  if (persistedProject.outcome === 'created' && sharedUserIds.length > 0) {
+    dependencies.setProjectShares(projectRow.project_id, sharedUserIds, input.ownerUserId ?? null);
   }
 
   // Archived rows intentionally remain archived when reused, as requested.

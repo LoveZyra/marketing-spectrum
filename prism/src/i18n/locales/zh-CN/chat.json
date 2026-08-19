@@ -62,7 +62,7 @@
       "delete": "删除排队消息"
     },
     "attachmentPath": "路径",
-    "modelHint": "当前模型：{{model}} · 输入 /models 切换"
+    "modelHint": "当前模型：{{model}} · 点击切换"
   },
   "providerSelection": {
     "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜索会话、文件和提交"

@@ -9,15 +9,14 @@ type MainContentTitleProps = {
   selectedSession: ProjectSession | null;
 };
 
-function getTabTitle(activeTab: AppTab, t: (key: string) => string, pluginDisplayName?: string) {
-  if (activeTab.startsWith('plugin:') && pluginDisplayName) {
-    return pluginDisplayName;
-  }
-
+function getTabTitle(activeTab: AppTab, t: (key: string) => string) {
   if (activeTab === 'files') {
     return t('mainContent.projectFiles');
   }
 
+  if (activeTab === 'notebook') {
+    return 'JupyterLab';
+  }
 
   return 'Project';
 }
@@ -33,8 +32,6 @@ export default function MainContentTitle({
   selectedSession,
 }: MainContentTitleProps) {
   const { t } = useTranslation();
-
-  const pluginDisplayName = undefined;
 
   const showSessionIcon = activeTab === 'chat' && Boolean(selectedSession);
   const showChatNewSession = activeTab === 'chat' && !selectedSession;
@@ -63,7 +60,7 @@ export default function MainContentTitle({
         ) : (
           <div className="min-w-0">
             <h2 className="text-sm font-semibold leading-tight text-foreground">
-              {getTabTitle(activeTab, t, pluginDisplayName)}
+              {getTabTitle(activeTab, t)}
             </h2>
             <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
           </div>

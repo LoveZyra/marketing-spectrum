@@ -26,6 +26,7 @@
     "createProject": "Create new project",
     "refresh": "Refresh projects and sessions (Ctrl+R)",
     "renameProject": "Rename project (F2)",
+    "managePermissions": "Project permissions",
     "deleteProject": "Remove project from sidebar (Delete)",
     "addToFavorites": "Add to favorites",
     "removeFromFavorites": "Remove from favorites",
@@ -37,7 +38,8 @@
     "clearSearch": "Clear search",
     "openCommandPalette": "Open command palette",
     "attentionRequiredIndicator": "Session needs attention",
-    "approvalPendingIndicator": "Waiting for you to approve a tool"
+    "approvalPendingIndicator": "Waiting for you to approve a tool",
+    "exportSession": "Export session (Markdown)"
   },
   "actions": {
     "settings": "Settings",
@@ -78,6 +80,19 @@
     "deleteAllData": "Delete all data permanently"
   },
   "project": {
-    "public": "Public"
+    "public": "Public",
+    "rootOnly": "Root only",
+    "shared": "Shared",
+    "sharedOut": "Shared out",
+    "permissions": {
+      "title": "Project permissions",
+      "close": "Close",
+      "cancel": "Cancel",
+      "save": "Save",
+      "saving": "Saving…",
+      "loadFailed": "Failed to load permissions",
+      "saveFailed": "Failed to save",
+      "needUsers": "Select at least one user for \"Specific users\""
+    }
   }
 }

@@ -51,7 +51,7 @@ export function PanelLoadingFallback({ fullHeight = true }: { fullHeight?: boole
  */
 export function ModalLoadingFallback() {
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black bg-opacity-50">
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div
         className="h-8 w-8 rounded-full border-[3px] border-white/30 border-t-white"
         style={{ animation: 'spin 1s linear infinite' }}

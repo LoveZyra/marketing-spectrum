@@ -52,7 +52,7 @@
     "clearInput": "입력 지우기",
     "scrollToBottom": "맨 아래로 스크롤",
     "attachmentPath": "경로",
-    "modelHint": "Current model: {{model}} · type /models to switch"
+    "modelHint": "현재 모델: {{model}} · 클릭하여 전환"
   },
   "providerSelection": {
     "pressToSearch": "<kbd>{{shortcut}}</kbd>를 눌러 세션, 파일 및 커밋을 검색하세요"

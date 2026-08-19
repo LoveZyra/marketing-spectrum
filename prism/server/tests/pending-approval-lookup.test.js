@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 import { describe, test } from 'vitest';
 
-import { approvalBelongsToSession } from '../claude-sdk.js';
+import { approvalBelongsToSession, preferredApprovalSessionId } from '../claude-sdk.js';
 
 /**
  * 待批审批的归属判定 —— 决定一条审批请求在重连/切回会话时能不能被补发。
@@ -52,5 +52,32 @@ describe('待批审批按会话查找', () => {
     assert.equal(approvalBelongsToSession({ _sessionId: null, _appSessionId: null }, 'app-1'), false);
     assert.equal(approvalBelongsToSession(null, 'app-1'), false);
     assert.equal(approvalBelongsToSession(undefined, 'app-1'), false);
+  });
+});
+
+
+/**
+ * 授权/回填路径该用哪个会话 id。这是 getToolApprovalSessionId 的内核。
+ *
+ * 回归点:上一轮修了显示/补发(approvalBelongsToSession),漏了这条授权路径。
+ * 新会话第一轮 provider id 还没捕获时,`_sessionId` 是 null —— 必须用 app 会话
+ * id 兜底,否则用户点"允许"会被 handlePermissionResponse 当成 null 丢弃,turn
+ * 卡到看门狗超时。这两个函数必须对同一批 resolver 给出自洽的答案。
+ */
+describe('待批审批的授权会话 id 选择', () => {
+  test('provider 原生 id 优先', () => {
+    assert.equal(preferredApprovalSessionId({ _sessionId: 'prov-1', _appSessionId: 'app-1' }), 'prov-1');
+  });
+
+  test('provider id 为空时用 app 会话 id 兜底 —— 第一轮的回归点', () => {
+    assert.equal(preferredApprovalSessionId({ _sessionId: null, _appSessionId: 'app-1' }), 'app-1');
+    // 与 approvalBelongsToSession 对齐:拿兜底出来的 app id 反查,必须命中同一条。
+    assert.equal(approvalBelongsToSession({ _sessionId: null, _appSessionId: 'app-1' }, 'app-1'), true);
+  });
+
+  test('两个 id 都没有时返回 null(超时/已答/根本不存在)', () => {
+    assert.equal(preferredApprovalSessionId({ _sessionId: null, _appSessionId: null }), null);
+    assert.equal(preferredApprovalSessionId(null), null);
+    assert.equal(preferredApprovalSessionId(undefined), null);
   });
 });

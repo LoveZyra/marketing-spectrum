@@ -52,7 +52,7 @@
     "clearInput": "Очистить ввод",
     "scrollToBottom": "Прокрутить вниз",
     "attachmentPath": "путь",
-    "modelHint": "Current model: {{model}} · type /models to switch"
+    "modelHint": "Текущая модель: {{model}} · нажмите, чтобы сменить"
   },
   "providerSelection": {
     "pressToSearch": "Нажмите <kbd>{{shortcut}}</kbd>, чтобы искать сессии, файлы и коммиты"

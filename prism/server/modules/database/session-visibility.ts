@@ -1,3 +1,4 @@
+import { projectVisibilityInput } from '@/modules/database/project-access.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
 import { sessionsDb } from '@/modules/database/repositories/sessions.db.js';
 import { canViewerSeeProject } from '@/shared/project-visibility.js';
@@ -41,7 +42,7 @@ export function canViewerSeeSession(sessionId: string, viewer: Viewer): boolean 
 
   const project = projectsDb.getProjectPath(projectPath);
   return canViewerSeeProject({
-    ownerUserId: project?.owner_user_id ?? null,
+    ...projectVisibilityInput(project, projectPath),
     viewerUserId: viewer.userId,
     viewerUsername: viewer.username,
   });

@@ -26,6 +26,7 @@
     "createProject": "建立新專案",
     "refresh": "重新整理專案和工作階段 (Ctrl+R)",
     "renameProject": "重新命名專案 (F2)",
+    "managePermissions": "專案權限",
     "deleteProject": "從側邊欄移除專案 (Delete)",
     "addToFavorites": "加入收藏",
     "removeFromFavorites": "從收藏移除",
@@ -36,7 +37,8 @@
     "clearSearch": "清除搜尋",
     "openCommandPalette": "開啟指令面板",
     "attentionRequiredIndicator": "工作階段需要處理",
-    "approvalPendingIndicator": "等待你確認工具權限"
+    "approvalPendingIndicator": "等待你確認工具權限",
+    "exportSession": "匯出工作階段 (Markdown)"
   },
   "actions": {
     "settings": "設定",
@@ -77,6 +79,19 @@
     "deleteAllData": "永久刪除所有資料"
   },
   "project": {
-    "public": "公共"
+    "public": "公共",
+    "rootOnly": "僅 root",
+    "shared": "共享",
+    "sharedOut": "已共享",
+    "permissions": {
+      "title": "專案權限",
+      "close": "關閉",
+      "cancel": "取消",
+      "save": "儲存",
+      "saving": "儲存中…",
+      "loadFailed": "權限載入失敗",
+      "saveFailed": "儲存失敗",
+      "needUsers": "選擇「指定使用者」時至少勾選一位使用者"
+    }
   }
 }

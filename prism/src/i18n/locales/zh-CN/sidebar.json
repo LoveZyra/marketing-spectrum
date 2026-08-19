@@ -26,6 +26,7 @@
     "createProject": "创建新项目",
     "refresh": "刷新项目和会话 (Ctrl+R)",
     "renameProject": "重命名项目 (F2)",
+    "managePermissions": "项目权限",
     "deleteProject": "从侧边栏移除项目 (Delete)",
     "addToFavorites": "添加到收藏",
     "removeFromFavorites": "从收藏移除",
@@ -37,7 +38,8 @@
     "clearSearch": "清除搜索",
     "openCommandPalette": "打开命令面板",
     "attentionRequiredIndicator": "会话需要处理",
-    "approvalPendingIndicator": "等待你确认工具权限"
+    "approvalPendingIndicator": "等待你确认工具权限",
+    "exportSession": "导出会话 (Markdown)"
   },
   "actions": {
     "settings": "设置",
@@ -78,6 +80,19 @@
     "deleteAllData": "永久删除所有数据"
   },
   "project": {
-    "public": "公共"
+    "public": "公共",
+    "rootOnly": "仅 root",
+    "shared": "共享",
+    "sharedOut": "已共享",
+    "permissions": {
+      "title": "项目权限",
+      "close": "关闭",
+      "cancel": "取消",
+      "save": "保存",
+      "saving": "保存中…",
+      "loadFailed": "权限加载失败",
+      "saveFailed": "保存失败",
+      "needUsers": "选择「指定用户」时至少勾选一位用户"
+    }
   }
 }

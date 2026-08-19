@@ -23,6 +23,14 @@ export default function StepReview({ formState }: StepReviewProps) {
               {formState.workspacePath}
             </span>
           </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-600 dark:text-gray-400">{t('projectWizard.permission.label')}</span>
+            <span className="text-xs text-gray-900 dark:text-white">
+              {t(`projectWizard.permission.${formState.visibility}`)}
+              {formState.visibility === 'shared'
+                && ` · ${t('projectWizard.permission.sharedCount', { count: formState.sharedUserIds.length })}`}
+            </span>
+          </div>
         </div>
       </div>
 

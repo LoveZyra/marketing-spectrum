@@ -1,6 +1,7 @@
 export { initializeDatabase, startDatabaseBackups, stopDatabaseBackups } from '@/modules/database/init-db.js';
 export { backupDatabase, closeConnection, getConnection, getDatabasePath } from '@/modules/database/connection.js';
 export { canViewerSeeSession } from '@/modules/database/session-visibility.js';
+export { projectVisibilityInput, resolveVisibleProjectRoot } from '@/modules/database/project-access.js';
 export { apiKeysDb } from '@/modules/database/repositories/api-keys.js';
 export { auditLogDb } from '@/modules/database/repositories/audit-log.js';
 export type { AuditEntry, AuditEvent, AuditRow } from '@/modules/database/repositories/audit-log.js';

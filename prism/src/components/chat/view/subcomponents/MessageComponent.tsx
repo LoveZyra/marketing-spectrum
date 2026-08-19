@@ -1,4 +1,5 @@
 import { memo, useMemo, useRef } from 'react';
+import { Wrench } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import ClaudeLogo from '../../../llm-logo-provider/ClaudeLogo';
@@ -95,7 +96,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               />
             )}
             {userCopyContent.trim().length > 0 || !message.images?.length ? (
-              <div className="group max-w-full rounded-2xl rounded-br-md bg-blue-600 px-3 py-2 text-white shadow-sm sm:px-4">
+              <div className="group max-w-full rounded-2xl rounded-br-md bg-primary px-3 py-2 text-primary-foreground shadow-sm sm:px-4">
                 <UserMessageBody content={userCopyContent} />
                 <div className="mt-1 flex items-center justify-end gap-1 text-xs text-primary-foreground/80">
                   {onEditRerun && Boolean(message.id) && userCopyContent.trim().length > 0 && (
@@ -122,7 +123,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
             )}
           </div>
           {!isGrouped && (
-            <div className="hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm text-white sm:flex">
+            <div className="hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-primary text-sm text-primary-foreground sm:flex">
               U
             </div>
           )}
@@ -145,8 +146,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                   !
                 </div>
               ) : message.type === 'tool' ? (
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gray-600 text-sm text-white dark:bg-gray-700">
-                  🔧
+                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                  <Wrench className="h-4 w-4" aria-hidden />
                 </div>
               ) : (
                 <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full p-1 text-sm text-foreground">
@@ -169,7 +170,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               <>
                 <div className="flex flex-col">
                   <div className="flex flex-col">
-                    <Markdown className="prose prose-sm max-w-none font-serif dark:prose-invert">
+                    <Markdown className="prose prose-sm max-w-none font-sans dark:prose-invert">
                       {String(message.displayText || '')}
                     </Markdown>
                   </div>
@@ -207,7 +208,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                         <span className="text-xs font-medium text-red-700 dark:text-red-300">{t('messageTypes.error')}</span>
                       </div>
                       <div className="relative text-sm text-red-900 dark:text-red-100">
-                        <Markdown className="prose prose-sm prose-red max-w-none font-serif dark:prose-invert">
+                        <Markdown className="prose prose-sm prose-red max-w-none font-sans dark:prose-invert">
                           {String(message.toolResult.content || '')}
                         </Markdown>
                       </div>
@@ -315,7 +316,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               <Reasoning defaultOpen={false}>
                 <ReasoningTrigger />
                 <ReasoningContent>
-                  <Markdown className="prose prose-sm prose-gray max-w-none font-serif dark:prose-invert">
+                  <Markdown className="prose prose-sm prose-gray max-w-none font-sans dark:prose-invert">
                     {message.content}
                   </Markdown>
                   <div className="mt-3 flex items-center text-[11px]">
@@ -372,7 +373,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
 
                   // Normal rendering for non-JSON content
                   return message.type === 'assistant' ? (
-                    <Markdown className="prose prose-sm prose-gray max-w-none font-serif dark:prose-invert">
+                    <Markdown className="prose prose-sm prose-gray max-w-none font-sans dark:prose-invert">
                       {content}
                     </Markdown>
                   ) : (
@@ -390,6 +391,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                   <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
                 )}
                 {!isGrouped && <span>{formattedTime}</span>}
+                {/* 这一轮实际服务的模型(响应元数据)。模型的自我介绍会顺着上下文
+                    复述历史("我是 XX"),不可信;这个小标签才是铁证。
+                    注意不能绑 !isGrouped —— 回复常以 thinking 块开头,正文会被判成
+                    "同类分组"而藏掉时间戳;徽标必须独立于分组,否则几乎永远看不见。 */}
+                {typeof message.model === 'string' && message.model && (
+                  <span
+                    className="rounded bg-muted/70 px-1 py-px font-mono text-[10px] text-muted-foreground"
+                    title="这一轮实际服务的模型（来自响应元数据，非模型自述）"
+                  >
+                    {message.model}
+                  </span>
+                )}
               </div>
             )}
           </div>

@@ -86,10 +86,41 @@ CREATE TABLE IF NOT EXISTS projects (
     custom_project_name TEXT DEFAULT NULL,
     isStarred BOOLEAN DEFAULT 0,
     isArchived BOOLEAN DEFAULT 0,
-    -- Owner. NULL means public: visible to everyone. This is a tidiness
-    -- boundary, not a security one — see the spec doc; project-level routes
-    -- deliberately do not check it.
-    owner_user_id INTEGER
+    -- Owner. NULL = unclaimed(仅 root,公共目录例外);具体 id = 个人项目。
+    owner_user_id INTEGER,
+    -- 显式可见性:'public' = 对所有登录用户可见(创建时选"公共")。
+    -- NULL = 默认语义(个人/无主按 owner_user_id 走)。指定用户授权见 project_shares。
+    visibility TEXT DEFAULT NULL
+);
+`;
+
+/**
+ * 指定用户授权:一行 = "把 project_id 开放给 user_id"。
+ * 创建项目选「指定用户」时写入;可见性判定(JS 与 SQL 两侧)都会查这张表。
+ */
+export const PROJECT_SHARES_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS project_shares (
+    project_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    granted_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project_id, user_id),
+    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+);
+`;
+
+/**
+ * 按用户隔离的项目收藏。老的 projects.isStarred 是全局一份 —— 任何人收藏,
+ * root(以及共享/公共项目的其他可见者)看到的都是"已收藏"。这张表把收藏
+ * 变成 (project, user) 维度;旧列保留不再作为权威(平台模式无用户时仍回退它)。
+ */
+export const PROJECT_STARS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS project_stars (
+    project_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project_id, user_id),
+    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
 );
 `;
 

@@ -1,10 +1,16 @@
 import { useTranslation } from 'react-i18next';
+import type { ProjectVisibilityChoice } from '../types';
+import PermissionSelector from './PermissionSelector';
 import WorkspacePathField from './WorkspacePathField';
 
 type StepConfigurationProps = {
   workspacePath: string;
+  visibility: ProjectVisibilityChoice;
+  sharedUserIds: number[];
   isCreating: boolean;
   onWorkspacePathChange: (workspacePath: string) => void;
+  onVisibilityChange: (visibility: ProjectVisibilityChoice) => void;
+  onSharedUserIdsChange: (userIds: number[]) => void;
   onAdvanceToConfirm: () => void;
 };
 
@@ -15,8 +21,12 @@ type StepConfigurationProps = {
  */
 export default function StepConfiguration({
   workspacePath,
+  visibility,
+  sharedUserIds,
   isCreating,
   onWorkspacePathChange,
+  onVisibilityChange,
+  onSharedUserIdsChange,
   onAdvanceToConfirm,
 }: StepConfigurationProps) {
   const { t } = useTranslation();
@@ -39,6 +49,14 @@ export default function StepConfiguration({
           {t('projectWizard.step2.newHelp')}
         </p>
       </div>
+
+      <PermissionSelector
+        visibility={visibility}
+        sharedUserIds={sharedUserIds}
+        disabled={isCreating}
+        onVisibilityChange={onVisibilityChange}
+        onSharedUserIdsChange={onSharedUserIdsChange}
+      />
     </div>
   );
 }

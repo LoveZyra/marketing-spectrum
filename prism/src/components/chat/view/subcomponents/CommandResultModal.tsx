@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Activity,
   BadgeCheck,
@@ -13,10 +13,12 @@ import {
   TerminalSquare,
   Timer,
   RefreshCw,
+  Radar,
   X,
 } from 'lucide-react';
 
 import { Badge, Button, Dialog, DialogContent, DialogTitle, Input } from '../../../../shared/view/ui';
+import { authenticatedFetch } from '../../../../utils/api';
 import type { LLMProvider, ProviderModelsCacheInfo, ProviderModelsDefinition } from '../../../../types/app';
 import type {
   CommandModalPayload,
@@ -227,6 +229,45 @@ function HelpContent({ data }: { data: HelpCommandData }) {
   );
 }
 
+/**
+ * 别名 → 真实模型的实测结果,由后端探测(逐别名各发一次最小请求)后缓存。
+ *
+ * 卡片上的描述是 Anthropic 官方口径;ANTHROPIC_BASE_URL 指向自定义网关时,
+ * 界面上选 "sonnet" 实际由哪个模型来答是网关说了算 —— 本部署就是活例子
+ * (实际服务的是 deepseek-v4-flash)。这块 UI 的职责就是把这件事直接摆在卡片上。
+ */
+type ModelMappingEntry = {
+  actualModel: string | null;
+  error: string | null;
+  checkedAt: string;
+};
+
+type ModelConfigMappingEntry = {
+  configuredModel: string | null;
+  source: string | null;
+};
+
+type ModelMappingsState = {
+  mappings: Record<string, ModelMappingEntry>;
+  /** 配置层映射:读 settings.json 直接解析,零成本、随改随新,不依赖实测。 */
+  configMappings: Record<string, ModelConfigMappingEntry>;
+  gatewayHost: string | null;
+  /** settings.json 在上次实测后改过 —— 实测值可能过期,提示重测。 */
+  stale: boolean;
+};
+
+/** "3 分钟前 / 2 小时前 / 5 天前" —— 映射是网关配置,新鲜度比精确时刻有用。 */
+function formatCheckedAgo(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return '刚刚实测';
+  if (minutes < 60) return `${minutes} 分钟前实测`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前实测`;
+  return `${Math.floor(hours / 24)} 天前实测`;
+}
+
 function ModelsContent({
   data,
   providerModelCatalog,
@@ -234,6 +275,7 @@ function ModelsContent({
   onHardRefreshProviderModels,
   currentSessionId,
   onSelectProviderModel,
+  onClose,
 }: {
   data: ModelCommandData;
   providerModelCatalog: Partial<Record<LLMProvider, ProviderModelsDefinition>>;
@@ -241,12 +283,86 @@ function ModelsContent({
   onHardRefreshProviderModels: () => void;
   currentSessionId: string | null;
   onSelectProviderModel: CommandResultModalProps['onSelectProviderModel'];
+  onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [changingModel, setChangingModel] = useState<string | null>(null);
   const [pendingSessionModel, setPendingSessionModel] = useState<string | null>(null);
   const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
+  // 选中成功后短暂显示确认再自动关弹窗。用 ref 存 timer,卸载时清掉,避免关到
+  // 已经不在的组件上。
+  const autoCloseTimerRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (autoCloseTimerRef.current !== null) {
+      window.clearTimeout(autoCloseTimerRef.current);
+    }
+  }, []);
+  const [mappingsState, setMappingsState] = useState<ModelMappingsState>({ mappings: {}, configMappings: {}, gatewayHost: null, stale: false });
+  const [probing, setProbing] = useState(false);
   const currentProvider = (data?.current?.provider || 'claude') as LLMProvider;
+
+  // 打开弹窗时读缓存的实测映射。只读缓存,不触发探测 —— 探测要花真实的 API
+  // 调用,必须是显式动作。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await authenticatedFetch(`/api/providers/${currentProvider}/model-mappings`);
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          data?: {
+            mappings?: Record<string, ModelMappingEntry>;
+            configMappings?: Record<string, ModelConfigMappingEntry>;
+            gatewayHost?: string | null;
+            stale?: boolean;
+          };
+        };
+        if (!cancelled && payload.data) {
+          setMappingsState({
+            mappings: payload.data.mappings ?? {},
+            configMappings: payload.data.configMappings ?? {},
+            gatewayHost: payload.data.gatewayHost ?? null,
+            stale: payload.data.stale === true,
+          });
+        }
+      } catch {
+        // 拿不到就不显示映射行,卡片照常可用。
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProvider]);
+
+  const handleProbeMappings = async () => {
+    setProbing(true);
+    try {
+      const response = await authenticatedFetch(`/api/providers/${currentProvider}/model-mappings/probe`, {
+        method: 'POST',
+      });
+      if (!response.ok) throw new Error(`探测失败(HTTP ${response.status})`);
+      const payload = (await response.json()) as {
+        data?: {
+          mappings?: Record<string, ModelMappingEntry>;
+          configMappings?: Record<string, ModelConfigMappingEntry>;
+          gatewayHost?: string | null;
+          stale?: boolean;
+        };
+      };
+      if (payload.data) {
+        setMappingsState({
+          mappings: payload.data.mappings ?? {},
+          configMappings: payload.data.configMappings ?? {},
+          gatewayHost: payload.data.gatewayHost ?? null,
+          stale: payload.data.stale === true,
+        });
+      }
+    } catch (error) {
+      setSelectionNotice(error instanceof Error ? error.message : '探测失败');
+    } finally {
+      setProbing(false);
+    }
+  };
   const currentModel = data?.current?.model || 'Unknown';
   const providerLabel = data?.current?.providerLabel || getProviderLabel(currentProvider);
   const liveDefinition = providerModelCatalog[currentProvider];
@@ -277,18 +393,31 @@ function ModelsContent({
   const hasConcreteSessionId = typeof currentSessionId === 'string' && currentSessionId.trim().length > 0;
   const showSearch = availableOptions.length > 6;
 
+  // 成功切换后短暂延时再关弹窗:让绿色确认("下一条生效")闪一下,读起来是
+  // "切换完成、自动收起",而不是默默无反应。失败则不关,把错误留在弹窗里。
+  const scheduleAutoClose = () => {
+    if (autoCloseTimerRef.current !== null) {
+      window.clearTimeout(autoCloseTimerRef.current);
+    }
+    autoCloseTimerRef.current = window.setTimeout(() => {
+      autoCloseTimerRef.current = null;
+      onClose();
+    }, 650);
+  };
+
   const handleSelectModel = async (model: string) => {
     setChangingModel(model);
     try {
       const result = await onSelectProviderModel(currentProvider, model, currentSessionId);
       if (result.scope === 'session') {
         setPendingSessionModel(result.model);
-        setSelectionNotice(`Next response will resume with ${result.model}.`);
-        return;
+        setSelectionNotice(`已切换 · 下一条消息将用 ${result.model}`);
+      } else {
+        setPendingSessionModel(null);
+        setSelectionNotice(`已设为默认模型：${result.model}`);
       }
-
-      setPendingSessionModel(null);
-      setSelectionNotice(`Default ${providerLabel} model set to ${result.model}.`);
+      // 切换成功 —— 自动收起弹窗(用户要的"切换后直接关闭")。
+      scheduleAutoClose();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to change the model right now.';
       setSelectionNotice(message);
@@ -314,19 +443,51 @@ function ModelsContent({
             )}
           </p>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={onHardRefreshProviderModels}
-          disabled={providerModelsRefreshing}
-          title="Refresh model list from providers"
-          aria-label="Refresh model list from providers"
-          className="h-9 w-9 shrink-0 rounded-xl text-muted-foreground hover:text-foreground"
-        >
-          <RefreshCw className={`h-4 w-4 ${providerModelsRefreshing ? 'animate-spin' : ''}`} />
-        </Button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={handleProbeMappings}
+            disabled={probing}
+            title="对每个别名各发一次最小请求,读出网关实际使用的模型"
+            className="h-9 shrink-0 gap-1.5 rounded-xl px-2.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <Radar className={`h-4 w-4 ${probing ? 'animate-pulse text-primary' : ''}`} />
+            {probing ? '实测中…' : '实测真实模型'}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onHardRefreshProviderModels}
+            disabled={providerModelsRefreshing}
+            title="Refresh model list from providers"
+            aria-label="Refresh model list from providers"
+            className="h-9 w-9 shrink-0 rounded-xl text-muted-foreground hover:text-foreground"
+          >
+            <RefreshCw className={`h-4 w-4 ${providerModelsRefreshing ? 'animate-spin' : ''}`} />
+          </Button>
+        </div>
       </div>
+
+      {/* settings.json 在上次实测后改过 —— 实测值可能已过期,提醒重测。 */}
+      {mappingsState.stale && (
+        <p className="shrink-0 rounded-xl border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+          模型配置(settings.json)在上次实测后已变更 —— 下方「实际模型」可能过期。
+          点右上「实测真实模型」重测一次即可更新。
+        </p>
+      )}
+
+      {/* 自定义网关提示:卡片描述是官方口径,实际映射由网关决定。
+          官方 API(gatewayHost 为空)下不显示 —— 那时描述本来就是对的。 */}
+      {mappingsState.gatewayHost && (
+        <p className="shrink-0 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+          本部署经由网关 <span className="font-mono">{mappingsState.gatewayHost}</span> 转发。
+          卡片上的模型说明与价格是 Anthropic 官方口径,实际由哪个模型回答由网关决定 ——
+          以下方每张卡片的「实际模型」实测值为准(没有的话点右上「实测真实模型」)。
+        </p>
+      )}
 
       {showSearch && (
         <SearchField value={query} onChange={setQuery} placeholder={`Search ${providerLabel} models...`} />
@@ -369,6 +530,63 @@ function ModelsContent({
                   {option.description && (
                     <span className="mt-1 text-xs leading-5 text-muted-foreground">{option.description}</span>
                   )}
+                  {(() => {
+                    const mapping = mappingsState.mappings[option.value];
+                    const config = mappingsState.configMappings[option.value];
+                    const configModel = config?.configuredModel ?? null;
+                    // 实测过期时不展示实测行 —— 配置行此刻才是新值。
+                    const probedModel = !mappingsState.stale && mapping?.actualModel ? mapping.actualModel : null;
+                    const rows: ReactNode[] = [];
+
+                    // 配置行:读 settings.json 直接解析,改完配置立刻是新值,零成本。
+                    if (configModel) {
+                      rows.push(
+                        <span
+                          key="config"
+                          className="mt-1.5 flex flex-wrap items-baseline gap-x-1.5 text-[11px] leading-4"
+                          title={config?.source ? `来源:${config.source}(settings.json,实时)` : undefined}
+                        >
+                          <span className="text-muted-foreground">配置</span>
+                          <span className="font-mono font-semibold text-foreground">{configModel}</span>
+                        </span>,
+                      );
+                    }
+
+                    // 实测行:端到端验证(网关那一跳)。与配置一致就不重复占一行。
+                    if (probedModel && probedModel !== configModel) {
+                      const ago = mapping ? formatCheckedAgo(mapping.checkedAt) : '';
+                      rows.push(
+                        <span key="probe" className="mt-1 flex flex-wrap items-baseline gap-x-1.5 text-[11px] leading-4">
+                          <span className="text-muted-foreground">实测</span>
+                          <span className="font-mono font-semibold text-foreground">{probedModel}</span>
+                          {ago && <span className="text-muted-foreground/70">· {ago}</span>}
+                        </span>,
+                      );
+                      if (configModel) {
+                        // 两层不一致 = 网关在改写 CLI 发出的名字 —— 这是重要信号,不是显示错误。
+                        rows.push(
+                          <span key="mismatch" className="mt-1 text-[11px] leading-4 text-amber-600 dark:text-amber-400">
+                            ⚠ 实测与配置不一致:网关把「{configModel}」改写成了「{probedModel}」
+                          </span>,
+                        );
+                      }
+                    } else if (probedModel && probedModel === configModel) {
+                      const ago = mapping ? formatCheckedAgo(mapping.checkedAt) : '';
+                      rows.push(
+                        <span key="verified" className="mt-1 text-[11px] leading-4 text-muted-foreground/70">
+                          实测一致{ago ? ` · ${ago}` : ''}
+                        </span>,
+                      );
+                    } else if (!probedModel && !configModel && mapping && !mapping.actualModel) {
+                      rows.push(
+                        <span key="error" className="mt-1.5 text-[11px] leading-4 text-red-500/90">
+                          实测失败:{mapping.error || '未知原因'}
+                        </span>,
+                      );
+                    }
+
+                    return rows.length > 0 ? <>{rows}</> : null;
+                  })()}
                   {isCurrent && (
                     <span className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">Current selection</span>
                   )}
@@ -610,6 +828,7 @@ export default function CommandResultModal({
               onHardRefreshProviderModels={onHardRefreshProviderModels}
               currentSessionId={currentSessionId}
               onSelectProviderModel={onSelectProviderModel}
+              onClose={onClose}
             />
           )}
           {payload?.kind === 'cost' && <CostContent data={payload.data as CostCommandData} />}

@@ -7,7 +7,8 @@
   "tabs": {
     "chat": "聊天",
     "shell": "终端",
-    "files": "文件"
+    "files": "文件",
+    "notebook": "Notebook"
   },
   "status": {
     "completed": "已完成"
@@ -84,6 +85,20 @@
       "newPath": "工作区路径",
       "newHelp": "工作区目录的完整路径"
     },
+    "permission": {
+      "label": "项目权限",
+      "personal": "个人",
+      "personalHelp": "仅自己（和 root）可见",
+      "public": "公共",
+      "publicHelp": "所有登录用户可见",
+      "shared": "指定用户",
+      "sharedHelp": "仅勾选的用户（和你）可见",
+      "pickUsers": "选择可见用户",
+      "noUsers": "没有其他可选用户",
+      "loadUsersFailed": "用户列表加载失败",
+      "needUsers": "选择「指定用户」时至少勾选一位用户",
+      "sharedCount": "已选 {{count}} 人"
+    },
     "step3": {
       "reviewConfig": "查看您的配置",
       "path": "路径：",
@@ -135,6 +150,13 @@
     "message": "加载该区域时出错。",
     "messageWithLabel": "加载{{label}}时出错。",
     "details": "错误详情",
+    "retry": "重试"
+  },
+  "jupyter": {
+    "starting": "正在启动 JupyterLab…首次启动可能需要半分钟",
+    "notInstalled": "服务器上没有找到 JupyterLab",
+    "installHint": "在服务器上安装后重试:",
+    "startFailed": "JupyterLab 启动失败",
     "retry": "重试"
   }
 }

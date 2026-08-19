@@ -26,6 +26,9 @@ export type AuditEvent =
   | 'ws_ticket_issued'
   | 'register_pending'
   | 'login_unapproved'
+  | 'password_reset_by_admin'
+  | 'user_deactivated'
+  | 'user_activated'
   | 'user_approved'
   | 'user_rejected'
   | 'project_owner_changed';

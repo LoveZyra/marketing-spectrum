@@ -76,6 +76,10 @@ function ChatInterface({
     selectPermissionMode,
     availablePermissionModes,
     activeSessionModel,
+    modelMappings,
+    modelMappingsStale,
+    modelConfigMappings,
+    refreshModelMappings,
     providerModelCatalog,
     providerModelCacheCatalog,
     providerModelsRefreshing,
@@ -196,6 +200,7 @@ function ChatInterface({
     commandModalPayload,
     closeCommandModal,
     showCostModal,
+    showModelsModal,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -400,6 +405,13 @@ function ChatInterface({
           isLoading={isProcessing}
           onAbortSession={handleAbortSession}
           activeModel={activeSessionModel ?? claudeModel}
+          activeModelReal={(() => {
+            // 优先级:新鲜的实测(端到端真相)> 配置映射(读 settings,随改随新)。
+            // 实测过期时不用它 —— 但配置映射恰恰在这时是新值,正好补位。
+            const alias = activeSessionModel ?? claudeModel;
+            const probed = modelMappingsStale ? null : (modelMappings[alias]?.actualModel ?? null);
+            return probed ?? modelConfigMappings[alias]?.configuredModel ?? null;
+          })()}
           permissionMode={permissionMode}
           onSelectMode={selectPermissionMode}
           availablePermissionModes={availablePermissionModes}
@@ -408,6 +420,7 @@ function ChatInterface({
           onSelectEffort={(nextEffort) => setStoredProviderEffort(provider, nextEffort)}
           tokenBudget={tokenBudget}
           onShowTokenUsage={showCostModal}
+          onShowModelPicker={showModelsModal}
           onShowCheckpoints={() => setShowCheckpoints(true)}
           slashCommandsCount={slashCommandsCount}
           onToggleCommandMenu={handleToggleCommandMenu}
@@ -483,7 +496,12 @@ function ChatInterface({
 
       <CommandResultModal
         payload={commandModalPayload}
-        onClose={closeCommandModal}
+        onClose={() => {
+          closeCommandModal();
+          // 关弹窗时刷一遍映射 —— 用户刚在弹窗里点过「实测真实模型」的话,
+          // 输入框上的 chip 立刻就能显示实测到的真实模型名,不用刷新页面。
+          void refreshModelMappings();
+        }}
         providerModelCatalog={providerModelCatalog}
         providerModelCacheCatalog={providerModelCacheCatalog}
         providerModelsRefreshing={providerModelsRefreshing}

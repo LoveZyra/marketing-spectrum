@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+
 import { test } from 'vitest';
 
 import { ClaudeSessionsProvider } from '@/modules/providers/list/claude/claude-sessions.provider.js';

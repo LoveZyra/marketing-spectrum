@@ -38,32 +38,50 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 }
 
 describe('项目归属与可见性', () => {
-  test('未指定 owner 的项目是公共项目,谁都看得到', async () => {
-    await withIsolatedDatabase(() => {
-      const alice = userDb.createUser('alice', 'hash');
-      projectsDb.createProjectPath('/workspace/shared');
+  test('未指定 owner 的项目默认不再公开:不在公共目录下时对非 root 不可见', async () => {
+    // 2026-08-14 口径变更:无主 ≠ 公开。没配公共目录时,无主项目对普通用户
+    // 一个都不出现(只有 root 的不过滤视图看得到)。
+    const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
+    delete process.env.PRISM_PUBLIC_WORKSPACE;
+    try {
+      await withIsolatedDatabase(() => {
+        const alice = userDb.createUser('alice', 'hash');
+        projectsDb.createProjectPath('/workspace/shared'); // 无主
 
-      const visibleToAlice = projectsDb.getProjectPaths(Number(alice.id));
-      assert.equal(visibleToAlice.length, 1);
-      assert.equal(visibleToAlice[0].owner_user_id, null);
-    });
+        const visibleToAlice = projectsDb.getProjectPaths(Number(alice.id));
+        assert.equal(visibleToAlice.length, 0);
+        // root 的不过滤视图仍然看得到
+        assert.equal(projectsDb.getProjectPaths(null).length, 1);
+      });
+    } finally {
+      if (previousPublic === undefined) delete process.env.PRISM_PUBLIC_WORKSPACE;
+      else process.env.PRISM_PUBLIC_WORKSPACE = previousPublic;
+    }
   });
 
-  test('列表按 owner 过滤:别人的项目看不到,自己的和公共的看得到', async () => {
-    await withIsolatedDatabase(() => {
-      const alice = Number(userDb.createUser('alice', 'hash').id);
-      const bob = Number(userDb.createUser('bob', 'hash').id);
+  test('列表按 owner 过滤:自己的 + 公共目录下的无主项目可见,别人的和目录外无主项目不可见', async () => {
+    const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
+    process.env.PRISM_PUBLIC_WORKSPACE = '/workspace/public';
+    try {
+      await withIsolatedDatabase(() => {
+        const alice = Number(userDb.createUser('alice', 'hash').id);
+        const bob = Number(userDb.createUser('bob', 'hash').id);
 
-      projectsDb.createProjectPath('/workspace/alice-only', null, alice);
-      projectsDb.createProjectPath('/workspace/bob-only', null, bob);
-      projectsDb.createProjectPath('/workspace/public');
+        projectsDb.createProjectPath('/workspace/alice-only', null, alice);
+        projectsDb.createProjectPath('/workspace/bob-only', null, bob);
+        projectsDb.createProjectPath('/workspace/public/shared'); // 无主 + 公共目录下
+        projectsDb.createProjectPath('/workspace/orphan');        // 无主 + 目录外
 
-      const alicePaths = projectsDb.getProjectPaths(alice).map((row) => row.project_path).sort();
-      assert.deepEqual(alicePaths, ['/workspace/alice-only', '/workspace/public']);
+        const alicePaths = projectsDb.getProjectPaths(alice).map((row) => row.project_path).sort();
+        assert.deepEqual(alicePaths, ['/workspace/alice-only', '/workspace/public/shared']);
 
-      // null = 不过滤,这是 root 拿到的视图
-      assert.equal(projectsDb.getProjectPaths(null).length, 3);
-    });
+        // null = 不过滤,这是 root 拿到的视图 —— 四个都在
+        assert.equal(projectsDb.getProjectPaths(null).length, 4);
+      });
+    } finally {
+      if (previousPublic === undefined) delete process.env.PRISM_PUBLIC_WORKSPACE;
+      else process.env.PRISM_PUBLIC_WORKSPACE = previousPublic;
+    }
   });
 
   test('重新注册一个已归档项目不会改变它的归属', async () => {

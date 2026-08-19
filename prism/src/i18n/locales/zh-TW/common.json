@@ -7,7 +7,8 @@
   "tabs": {
     "chat": "聊天",
     "shell": "終端機",
-    "files": "檔案"
+    "files": "檔案",
+    "notebook": "Notebook"
   },
   "status": {
     "completed": "已完成"
@@ -129,5 +130,12 @@
         }
       }
     }
+  },
+  "jupyter": {
+    "starting": "正在啟動 JupyterLab…首次啟動可能需要半分鐘",
+    "notInstalled": "伺服器上沒有找到 JupyterLab",
+    "installHint": "在伺服器上安裝後重試:",
+    "startFailed": "JupyterLab 啟動失敗",
+    "retry": "重試"
   }
 }

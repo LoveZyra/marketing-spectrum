@@ -48,7 +48,6 @@ import {
 import { createMaProxyRouterFromEnv, MA_PROXY_PREFIX } from './routes/ma-proxy.js';
 import { createMaServiceFromEnv } from './services/ma-service.js';
 import authRoutes from './routes/auth.js';
-import mcpUtilsRoutes from './routes/mcp-utils.js';
 import commandsRoutes from './routes/commands.js';
 import settingsRoutes from './routes/settings.js';
 import agentRoutes from './routes/agent.js';
@@ -61,8 +60,10 @@ import { currentHolder } from './modules/websocket/services/conversation-ownersh
 import { validateApiKey, authenticateToken, requireRoot, authenticateWebSocket } from './middleware/auth.js';
 import { createAdminRouter, backfillProjectOwners } from './modules/admin/index.js';
 import { createPreviewRouter, createPreviewPublicRouter } from './modules/preview/index.js';
-import { apiRateLimiter, TRUST_PROXY } from './middleware/rate-limit.js';
+import { jupyterRoutes, createJupyterProxyHandler, handleJupyterUpgrade, stopJupyter } from './modules/jupyter/index.js';
+import { apiRateLimiter, createRateLimiter, TRUST_PROXY } from './middleware/rate-limit.js';
 import { consumeTicket } from './shared/ws-tickets.js';
+import { listRootUsernames } from './shared/root-users.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { c } from './utils/colors.js';
 
@@ -119,6 +120,8 @@ const wss = createWebSocketServer(server, {
         resolveToolApproval,
         getPendingApprovalsForSession,
     },
+    // /jupyter/* 的 WebSocket(kernel channels 等)整体交给 jupyter 反代隧道。
+    jupyterUpgrade: handleJupyterUpgrade,
     shell: {
         // 终端接管一段对话前,先把 chat 那边的常驻 runtime 放掉:一个持有者,
         // 而且 dispose 的收尾保证 transcript 完整落盘,终端 resume 才不会少一截。
@@ -143,6 +146,21 @@ app.locals.wss = wss;
 if (TRUST_PROXY) {
     app.set('trust proxy', true);
 }
+
+// JupyterLab 反代(/jupyter/* -> 127.0.0.1 上 Prism 托管的 lab 实例)。
+// 挂载位置有讲究,三点都不能挪:
+//   * 在 express.json 之前 —— notebook 保存(PUT /api/contents)的请求体要原样
+//     流式透传,先解析再重序列化既费内存又可能改字节形态。
+//   * 在全局安全头中间件之前 —— 那里给一切响应打 X-Frame-Options: DENY,而
+//     lab 恰恰要装进自家 iframe(反代内部改打 SAMEORIGIN)。
+//   * 限流单独给 —— lab 一次冷加载上百个静态资源,套 /api 的 600/min 会饿死;
+//     鉴权(票据换 cookie)在反代内部,见 jupyter-proxy.service。
+const jupyterRateLimiter = createRateLimiter({
+    windowMs: 60_000,
+    max: 3000,
+    message: 'Too many Jupyter requests, slow down',
+});
+app.use('/jupyter', jupyterRateLimiter, createJupyterProxyHandler());
 
 // Baseline security headers on every response (API and static alike).
 app.use((req, res, next) => {
@@ -298,7 +316,7 @@ app.use('/api/projects', createPreviewRouter({ authenticateToken }));
 app.use('/api/projects', authenticateToken, projectModuleRoutes);
 
 // Account administration — approval queue. Root only (PRISM_ROOT_USERS).
-app.use('/api/admin', createAdminRouter({ authenticateToken, requireRoot }));
+app.use('/api/admin', createAdminRouter({ authenticateToken, requireRoot, runningVersion: RUNNING_VERSION }));
 
 // Chat image asset upload/serving (global assets store, see server/modules/assets; protected)
 app.use('/api/assets', authenticateToken, assetsRoutes);
@@ -306,6 +324,9 @@ app.use('/api/assets', authenticateToken, assetsRoutes);
 
 // Checkpoints: per-turn git snapshots with transactional rollback (prism)
 app.use('/api/checkpoints', authenticateToken, checkpointsRoutes);
+
+// JupyterLab 控制面:状态查询 + 铸 iframe 入口票(反代本体挂在最前面,见上)。
+app.use('/api/jupyter', authenticateToken, jupyterRoutes);
 
 // Documents: text extraction (PDF/DOCX/PPTX/XLSX/…) + URL article fetch (prism)
 app.use('/api/documents', authenticateToken, documentsRoutes);
@@ -316,6 +337,10 @@ app.get('/api/claude/context-usage', authenticateToken, async (req, res) => {
     try {
         const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
         if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+        // 归属校验:相邻的 prewarm 有,这两条 /api/claude/* 当初漏了。
+        if (!canViewerSeeSession(sessionId, readRequestViewer(req))) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
         const usage = await getClaudeContextUsage(sessionId);
         if (!usage) return res.json({ available: false });
         res.json({ available: true, totalTokens: usage.totalTokens, maxTokens: usage.maxTokens, ratio: usage.ratio });
@@ -330,6 +355,9 @@ app.get('/api/claude/slash-commands', authenticateToken, async (req, res) => {
     try {
         const appSessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
         if (!appSessionId) return res.status(400).json({ error: 'sessionId is required' });
+        if (!canViewerSeeSession(appSessionId, readRequestViewer(req))) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
         const row = sessionsDb.getSessionById(appSessionId);
         const providerSessionId = row?.provider_session_id || appSessionId;
         const commands = await getClaudeSlashCommands(providerSessionId);
@@ -344,8 +372,7 @@ app.get('/api/claude/slash-commands', authenticateToken, async (req, res) => {
 app.use(createUsageRouter({ authenticateToken }));
 
 // Remaining feature routers, mounted in the pre-refactor order. All are JWT
-// protected except /api/browser-use-mcp (local token) and /api/agent (API key).
-app.use('/api/mcp-utils', authenticateToken, mcpUtilsRoutes);
+// protected except /api/agent (API-key auth for the external agent endpoint).
 app.use('/api/commands', authenticateToken, commandsRoutes);
 app.use('/api/settings', authenticateToken, settingsRoutes); // includes notification-preferences
 app.use('/api/providers', authenticateToken, providerRoutes);
@@ -485,6 +512,9 @@ async function shutdown(signal) {
         );
     });
 
+    // JupyterLab 子进程(SIGTERM;kernel 落盘由 jupyter 自己负责)。
+    await shutdownStep('jupyter stop', () => stopJupyter());
+
     await shutdownStep('sessions watcher close', () => closeSessionsWatcher());
     // 营销诊断子进程。放在这儿(而不是最后)是因为它可能正在跑一单几十分钟的诊断,
     // SIGTERM 之后要给它一点收尾时间,别挤到 8s 硬退出的窗口末尾去。
@@ -517,6 +547,17 @@ async function startServer() {
         // migrations (the columns must exist) and is a no-op once its
         // app_config flag is set, or while no configured root has registered.
         backfillProjectOwners();
+
+        // 首次部署最容易踩的坑:PRISM_ROOT_USERS 配空或拼错 → 没人是 root →
+        // 没人能开审批队列 → 同事注册后全部卡在待审、登不进,而产品里没有任何提示。
+        // 至少在启动日志里喊一声,让运维一眼看到。
+        if (listRootUsernames().length === 0) {
+            console.warn('');
+            console.warn(`${c.warn('[WARN]')} PRISM_ROOT_USERS 为空 —— 没有任何管理员。`);
+            console.warn('       后果:设置页看不到「账号」标签,新注册的账号会永远卡在待审批、无人能批。');
+            console.warn('       解决:在 .env 里设 PRISM_ROOT_USERS=<你的用户名>(用该名字注册后即为 root),然后重启。');
+            console.warn('');
+        }
 
         // Production mode = a built dist folder exists
         const distIndexPath = path.join(APP_ROOT, 'dist', 'index.html');

@@ -1,5 +1,18 @@
 import express, { type Request, type Response } from 'express';
 
+import {
+  isProbeRunning,
+  probeModelMappings,
+  readModelMappingsMeta,
+} from '@/modules/providers/list/claude/claude-model-probe.service.js';
+import { readAliasConfigMappings } from '@/modules/providers/list/claude/claude-settings-mapping.service.js';
+import {
+  MANAGED_ALIASES,
+  readModelConfigView,
+  writeModelConfig,
+  type ManagedAlias,
+  type ModelConfigUpdate,
+} from '@/modules/providers/list/claude/claude-model-config.service.js';
 import { providerAuthService } from '@/modules/providers/services/provider-auth.service.js';
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
 import { providerMcpService } from '@/modules/providers/services/mcp.service.js';
@@ -16,8 +29,27 @@ import type {
   ProviderSkillCreateInput,
   UpsertProviderMcpServerInput,
 } from '@/shared/types.js';
+import { sessionsDb } from '@/modules/database/index.js';
+import {
+  renderSessionExport,
+  type ExportableMessage,
+} from '@/modules/providers/services/session-export.service.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
+
+/**
+ * 自定义网关的主机名,给前端决定要不要提示"卡片描述仅供参考"。
+ * 只暴露 host,不暴露完整 URL —— 路径里可能带租户 id 之类不该给所有登录用户看的东西。
+ */
+const readGatewayHost = (): string | null => {
+  const raw = process.env.ANTHROPIC_BASE_URL;
+  if (!raw || !raw.trim()) return null;
+  try {
+    return new URL(raw.trim()).host || null;
+  } catch {
+    return raw.trim();
+  }
+};
 
 const router = express.Router();
 
@@ -379,6 +411,125 @@ router.get(
 );
 
 /**
+ * 别名 → 真实模型的实测结果。
+ *
+ * /models 卡片上的描述("Sonnet 4.6 · $3/$15")是 Anthropic 官方口径;部署把
+ * ANTHROPIC_BASE_URL 指向自己的网关时,实际由哪个模型来答是网关在请求时决定的,
+ * 没有任何接口可查。GET 回缓存的实测值;POST 逐别名各发一次最小请求现测。
+ *
+ * `gatewayHost` 让前端知道该不该提醒"描述仅供参考":官方 API 下卡片文案本来
+ * 就是对的,不需要打扰。
+ */
+/** root 才许读写模型映射配置 —— settings.json 是服务器全局文件。 */
+const assertRootForModelConfig = (req: Request): void => {
+  const user = (req as Request & { user?: { isRoot?: boolean } }).user;
+  if (user?.isRoot !== true) {
+    throw new AppError('只有 root 可以管理模型映射', {
+      code: 'MODEL_CONFIG_FORBIDDEN',
+      statusCode: 403,
+    });
+  }
+};
+
+/**
+ * 模型映射管理(root):读/写 settings.json 的别名映射。
+ * 写回后热感知自动生效(runtime 重建 + 实测缓存置 stale),无需重启。
+ */
+router.get(
+  '/:provider/model-config',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider);
+    assertRootForModelConfig(req);
+    res.json(createApiSuccessResponse(await readModelConfigView()));
+  }),
+);
+
+router.put(
+  '/:provider/model-config',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider);
+    assertRootForModelConfig(req);
+
+    const body = (req.body ?? {}) as { defaultModel?: unknown; mappings?: unknown };
+    const update: ModelConfigUpdate = {};
+
+    if ('defaultModel' in body) {
+      if (body.defaultModel !== null && typeof body.defaultModel !== 'string') {
+        throw new AppError('defaultModel 必须是字符串或 null', {
+          code: 'INVALID_MODEL_CONFIG',
+          statusCode: 400,
+        });
+      }
+      update.defaultModel = body.defaultModel as string | null;
+    }
+
+    if ('mappings' in body) {
+      if (!body.mappings || typeof body.mappings !== 'object' || Array.isArray(body.mappings)) {
+        throw new AppError('mappings 必须是对象', { code: 'INVALID_MODEL_CONFIG', statusCode: 400 });
+      }
+      const mappings: Partial<Record<ManagedAlias, string | null>> = {};
+      for (const [alias, value] of Object.entries(body.mappings as Record<string, unknown>)) {
+        if (!(MANAGED_ALIASES as readonly string[]).includes(alias)) {
+          throw new AppError(`不认识的别名: ${alias}`, { code: 'INVALID_MODEL_CONFIG', statusCode: 400 });
+        }
+        if (value !== null && typeof value !== 'string') {
+          throw new AppError(`别名 ${alias} 的映射必须是字符串或 null`, {
+            code: 'INVALID_MODEL_CONFIG',
+            statusCode: 400,
+          });
+        }
+        mappings[alias as ManagedAlias] = value as string | null;
+      }
+      update.mappings = mappings;
+    }
+
+    res.json(createApiSuccessResponse(await writeModelConfig(update)));
+  }),
+);
+
+router.get(
+  '/:provider/model-mappings',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider); // 目前只有 claude,守卫同其它路由
+    const meta = await readModelMappingsMeta();
+    // 配置层映射:每次现读 settings.json —— 改完配置这里立即是新值,不依赖实测。
+    const definition = await providerModelsService.getProviderModels('claude');
+    const configMappings = await readAliasConfigMappings(
+      definition.models.OPTIONS.map((option) => option.value),
+    );
+    res.json(createApiSuccessResponse({
+      mappings: meta.mappings,
+      // settings.json 在上次实测后改过 → 实测值可能过期。前端据此提示重测,
+      // chip 停显过期真名(回退到 configMappings)。
+      stale: meta.stale,
+      configMappings,
+      probing: isProbeRunning(),
+      gatewayHost: readGatewayHost(),
+    }));
+  }),
+);
+
+router.post(
+  '/:provider/model-mappings/probe',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider);
+    const definition = await providerModelsService.getProviderModels('claude');
+    const aliases = definition.models.OPTIONS.map((option) => option.value);
+    // 并发点击加入同一次探测(service 内单飞),不会拉起第二排 CLI 进程。
+    await probeModelMappings(aliases);
+    // 刚落盘的实测自带最新 settings 指纹,这里重读一次拿权威的 stale(通常 false)。
+    const meta = await readModelMappingsMeta();
+    const configMappings = await readAliasConfigMappings(aliases);
+    res.json(createApiSuccessResponse({
+      mappings: meta.mappings,
+      stale: meta.stale,
+      configMappings,
+      gatewayHost: readGatewayHost(),
+    }));
+  }),
+);
+
+/**
  * The session's effective model.
  *
  * Exists so the composer can show which model is actually running. Until this
@@ -390,6 +541,9 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const provider = parseProvider(req.params.provider);
     const sessionId = parseSessionId(req.params.sessionId);
+    // 兄弟路由(delete/rename/messages)都过这道门,这两条当初漏了 —— 读会泄露
+    // 别人会话的当前模型,写能替别人的会话改下一轮用的模型。
+    sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
     const active = await providerModelsService.getCurrentActiveModel(provider, sessionId);
     res.json(createApiSuccessResponse({ provider, sessionId, model: active.model }));
   }),
@@ -400,6 +554,7 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const provider = parseProvider(req.params.provider);
     const sessionId = parseSessionId(req.params.sessionId);
+    sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
     const payload = parseChangeActiveModelPayload(req.body);
     const result = await providerModelsService.changeActiveModel(provider, {
       ...payload,
@@ -485,12 +640,10 @@ router.delete(
   }),
 );
 
-// `POST /mcp/servers/global` used to fan one server out to every provider, and
-// refused `local` scope because not every provider had one. With Claude the
-// only provider it wrote to exactly the same file as the route above, minus
-// that scope — so it was the same feature with a hole in it. The service call
-// behind it survives: browser-use still registers its managed server that way,
-// and it iterates the registry, so one provider is a fine answer.
+// `POST /mcp/servers/global` was removed: with Claude the only provider it wrote
+// to exactly the same file as the per-provider add route above, minus `local`
+// scope — the same feature with a hole in it. (Its old consumer, browser-use,
+// is gone too.)
 
 router.get(
   '/capabilities',
@@ -581,6 +734,49 @@ router.put(
     const summary = parseSessionRenameSummary(req.body);
     const result = sessionsService.renameSessionById(sessionId, summary);
     res.json(createApiSuccessResponse(result));
+  }),
+);
+
+/**
+ * 会话导出:?format=md(默认)|html。可见性校验与 messages 同门;
+ * 全量拉取(limit=null),只渲染正文,attachment 直接触发浏览器下载。
+ */
+router.get(
+  '/sessions/:sessionId/export',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
+
+    const formatRaw = readOptionalQueryString(req.query.format) ?? 'md';
+    if (formatRaw !== 'md' && formatRaw !== 'html') {
+      throw new AppError('format must be md or html', {
+        code: 'INVALID_QUERY_PARAMETER',
+        statusCode: 400,
+      });
+    }
+
+    const history = await sessionsService.fetchHistory(sessionId, { limit: null, offset: 0 });
+    const dbSession = sessionsDb.getSessionById(sessionId);
+    const title = (dbSession?.custom_name && String(dbSession.custom_name).trim()) || `会话 ${sessionId.slice(0, 8)}`;
+
+    const rendered = renderSessionExport(
+      {
+        title,
+        sessionId,
+        exportedAt: new Date().toISOString(),
+        messages: history.messages as ExportableMessage[],
+      },
+      formatRaw,
+    );
+
+    const asciiName = `session-${sessionId.slice(0, 8)}.${rendered.extension}`;
+    const utf8Name = encodeURIComponent(`${title}.${rendered.extension}`);
+    res.setHeader('Content-Type', rendered.mime);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${asciiName}"; filename*=UTF-8''${utf8Name}`,
+    );
+    res.send(rendered.content);
   }),
 );
 

@@ -1,8 +1,9 @@
 import express from 'express';
 
-import { auditLogDb, projectsDb, userDb } from '@/modules/database/index.js';
+import { auditLogDb, projectsDb, resolveVisibleProjectRoot, userDb } from '@/modules/database/index.js';
 import { createProject, updateProjectDisplayName } from '@/modules/projects/services/project-management.service.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
+import { readRequestViewer } from '@/shared/project-visibility.js';
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
 import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projects/services/project-delete.service.js';
 import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/projects/services/project-star.service.js';
@@ -26,6 +27,22 @@ const readUser = (req: express.Request): AuthenticatedUser | undefined =>
  * the unfiltered list there is deliberate: platform deployments authenticate
  * upstream and have always shown every project.
  */
+/**
+ * 归属校验:这个调用者能不能操作这个项目。看不见就回 404 并返回 false。
+ *
+ * 之前 `/:projectId` 那组增删改查(rename / star / restore / delete / sessions)
+ * 只按 id 找路径就动手,不问归属 —— 拿到别人的 projectId 就能删库删转录。
+ * 这道门和文件模块用同一个 path-aware 判定(无主项目只有在公共目录下才对非 root
+ * 可见)。回 404 而非 403:与"不存在"同形,不泄露 id 有效性。
+ */
+const assertVisibleProject = (req: express.Request, res: express.Response, projectId: string): boolean => {
+  if (resolveVisibleProjectRoot(readRequestViewer(req), projectId)) {
+    return true;
+  }
+  res.status(404).json({ error: 'Project not found' });
+  return false;
+};
+
 const visibilityScopeFor = (req: express.Request): number | null => {
   const user = readUser(req);
   if (!user || user.isRoot || typeof user.id !== 'number') {
@@ -86,6 +103,9 @@ router.get(
       sessionsLimit,
       sessionsOffset,
       visibleTo: visibilityScopeFor(req),
+      // 收藏按"我是谁"算,与可见范围无关 —— root 的 visibleTo 是 null(不过滤),
+      // 但 root 的收藏只能看 root 自己那份。
+      starsFor: readUser(req)?.id ?? null,
     });
     res.json(projects);
   }),
@@ -94,8 +114,124 @@ router.get(
 router.get(
   '/archived',
   asyncHandler(async (req, res) => {
-    const projects = await getArchivedProjectsWithSessions({ visibleTo: visibilityScopeFor(req) });
+    const projects = await getArchivedProjectsWithSessions({
+      visibleTo: visibilityScopeFor(req),
+      starsFor: readUser(req)?.id ?? null,
+    });
     res.json(createApiSuccessResponse({ projects }));
+  }),
+);
+
+/**
+ * 「指定用户」授权选择器的用户名录:id + username,只含 active 且已批准的账号。
+ * 挂在 /api/projects 下走统一登录鉴权;不含任何敏感字段。放在 /:projectId 组
+ * 之前注册,免得 "shareable-users" 被当成一个 projectId 吞掉。
+ */
+router.get(
+  '/shareable-users',
+  asyncHandler(async (req, res) => {
+    const callerId = readUser(req)?.id ?? null;
+    const users = userDb.listBasicUsers().filter((entry) => entry.id !== callerId);
+    res.json(createApiSuccessResponse({ users }));
+  }),
+);
+
+// ----------------- 项目权限管理(改存量项目) -----------------
+
+/** 当前权限档位(与创建向导同一三选)+ 授权名单。 */
+const readProjectPermissionsView = (projectId: string) => {
+  const row = projectsDb.getProjectById(projectId);
+  if (!row) return null;
+  const sharedUserIds = projectsDb.getProjectSharedUserIds(projectId);
+  return {
+    visibility: row.visibility === 'public'
+      ? ('public' as const)
+      : sharedUserIds.length > 0
+        ? ('shared' as const)
+        : ('personal' as const),
+    sharedUserIds,
+  };
+};
+
+/**
+ * 只有 root 或 owner 能改权限 —— 共享接收方"可见不可管",公共项目的路人同理。
+ * (可见性由 assertVisibleProject 先挡:看不见的人拿到 404,看得见但非管理者 403。)
+ */
+const canManageProject = (req: express.Request, projectId: string): boolean => {
+  const user = readUser(req);
+  if (user?.isRoot === true) return true;
+  const owner = projectsDb.getProjectOwner(projectId);
+  return owner !== undefined && owner !== null
+    && typeof user?.id === 'number' && owner === user.id;
+};
+
+router.get(
+  '/:projectId/permissions',
+  asyncHandler(async (req, res) => {
+    const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
+    if (!assertVisibleProject(req, res, projectId)) return;
+    if (!canManageProject(req, projectId)) {
+      throw new AppError('只有项目所有者或 root 可以管理权限', {
+        code: 'PROJECT_PERMISSIONS_FORBIDDEN',
+        statusCode: 403,
+      });
+    }
+    res.json(createApiSuccessResponse(readProjectPermissionsView(projectId)));
+  }),
+);
+
+router.put(
+  '/:projectId/permissions',
+  asyncHandler(async (req, res) => {
+    const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
+    if (!assertVisibleProject(req, res, projectId)) return;
+    if (!canManageProject(req, projectId)) {
+      throw new AppError('只有项目所有者或 root 可以管理权限', {
+        code: 'PROJECT_PERMISSIONS_FORBIDDEN',
+        statusCode: 403,
+      });
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const choice = typeof body.visibility === 'string' ? body.visibility : '';
+    if (!['personal', 'public', 'shared'].includes(choice)) {
+      throw new AppError('visibility must be one of personal | public | shared', {
+        code: 'INVALID_PROJECT_VISIBILITY',
+        statusCode: 400,
+      });
+    }
+
+    let sharedUserIds: number[] = [];
+    if (choice === 'shared') {
+      const ownerId = projectsDb.getProjectOwner(projectId) ?? null;
+      const rawIds = Array.isArray(body.sharedUserIds) ? body.sharedUserIds : [];
+      const parsedIds = [...new Set(
+        rawIds
+          .map((value) => (typeof value === 'number' ? value : Number.parseInt(String(value), 10)))
+          .filter((value) => Number.isInteger(value) && value > 0),
+      )].filter((id) => id !== ownerId); // owner 本来就可见,不必授权给自己
+      if (parsedIds.length === 0) {
+        throw new AppError('选择「指定用户」时至少要选一位用户', {
+          code: 'SHARED_USERS_REQUIRED',
+          statusCode: 400,
+        });
+      }
+      const knownIds = new Set(userDb.listBasicUsers().map((entry) => entry.id));
+      const unknown = parsedIds.filter((id) => !knownIds.has(id));
+      if (unknown.length > 0) {
+        throw new AppError(`未知用户 id: ${unknown.join(', ')}`, {
+          code: 'UNKNOWN_SHARED_USER',
+          statusCode: 400,
+        });
+      }
+      sharedUserIds = parsedIds;
+    }
+
+    // 三档互斥,与创建向导同语义:public 清授权名单;personal 两者皆清。
+    projectsDb.setProjectVisibility(projectId, choice === 'public' ? 'public' : null);
+    projectsDb.setProjectShares(projectId, sharedUserIds, readUser(req)?.id ?? null);
+
+    res.json(createApiSuccessResponse(readProjectPermissionsView(projectId)));
   }),
 );
 
@@ -103,6 +239,7 @@ router.get(
   '/:projectId/sessions',
   asyncHandler(async (req, res) => {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
+    if (!assertVisibleProject(req, res, projectId)) return;
     const limit = parseNonNegativeIntQuery(req.query.limit, 'limit', 20);
     const offset = parseNonNegativeIntQuery(req.query.offset, 'offset', 0);
     const sessionsPage = await getProjectSessionsPage(projectId, { limit, offset });
@@ -132,10 +269,56 @@ router.post(
       });
     }
 
+    // 反归档越权:传别人的已归档路径,createProject 会把它 isArchived=0 复活并
+    // 回传对方的真实 projectId —— 既改了别人的状态,又是文件 IDOR 的"拿 id"桥。
+    // 已存在的行若对当前用户不可见,直接拒。不存在的路径正常走新建。
+    const existing = projectsDb.getProjectPath(projectPath);
+    if (existing && !resolveVisibleProjectRoot(readRequestViewer(req), existing.project_id)) {
+      throw new AppError('Project not found', { code: 'PROJECT_NOT_FOUND', statusCode: 404 });
+    }
+
+    // 权限三选:personal(默认,仅自己)/ public(所有登录用户)/ shared(指定用户)。
+    const rawVisibility = typeof requestBody.visibility === 'string' ? requestBody.visibility : 'personal';
+    if (!['personal', 'public', 'shared'].includes(rawVisibility)) {
+      throw new AppError('visibility must be one of personal | public | shared', {
+        code: 'INVALID_PROJECT_VISIBILITY',
+        statusCode: 400,
+      });
+    }
+
+    const callerId = readUser(req)?.id ?? null;
+    let sharedUserIds: number[] = [];
+    if (rawVisibility === 'shared') {
+      const rawIds = Array.isArray(requestBody.sharedUserIds) ? requestBody.sharedUserIds : [];
+      const parsedIds = [...new Set(
+        rawIds
+          .map((value) => (typeof value === 'number' ? value : Number.parseInt(String(value), 10)))
+          .filter((value) => Number.isInteger(value) && value > 0),
+      )].filter((id) => id !== callerId); // 创建者本来就是 owner,不必授权给自己
+      if (parsedIds.length === 0) {
+        throw new AppError('选择「指定用户」时至少要选一位用户', {
+          code: 'SHARED_USERS_REQUIRED',
+          statusCode: 400,
+        });
+      }
+      // 只接受真实存在的账号 —— 防拼错/防拿接口塞垃圾行。
+      const knownIds = new Set(userDb.listBasicUsers().map((entry) => entry.id));
+      const unknown = parsedIds.filter((id) => !knownIds.has(id));
+      if (unknown.length > 0) {
+        throw new AppError(`未知用户 id: ${unknown.join(', ')}`, {
+          code: 'UNKNOWN_SHARED_USER',
+          statusCode: 400,
+        });
+      }
+      sharedUserIds = parsedIds;
+    }
+
     const projectCreationResult = await createProject({
       projectPath,
       customName,
-      ownerUserId: readUser(req)?.id ?? null,
+      ownerUserId: callerId,
+      visibility: rawVisibility === 'public' ? 'public' : null,
+      sharedUserIds,
     });
 
     res.json({
@@ -158,7 +341,7 @@ router.post(
     const projectIds = Array.isArray((req.body as { projectIds?: unknown })?.projectIds)
       ? ((req.body as { projectIds: unknown[] }).projectIds as unknown[]).map((x) => String(x))
       : [];
-    const { updated } = applyLegacyStarredProjectIds(projectIds);
+    const { updated } = applyLegacyStarredProjectIds(projectIds, readUser(req)?.id ?? null);
     res.json({ success: true, updated });
   }),
 );
@@ -222,6 +405,7 @@ router.patch(
 router.put('/:projectId/rename', (req, res) => {
   try {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
+    if (!assertVisibleProject(req, res, projectId)) return;
     const { displayName } = req.body as { displayName?: unknown };
     updateProjectDisplayName(projectId, displayName);
     res.json({ success: true });
@@ -234,7 +418,8 @@ router.post(
   '/:projectId/toggle-star',
   asyncHandler(async (req, res) => {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
-    const { isStarred } = toggleProjectStar(projectId);
+    if (!assertVisibleProject(req, res, projectId)) return;
+    const { isStarred } = toggleProjectStar(projectId, readUser(req)?.id ?? null);
     res.json({ success: true, isStarred });
   }),
 );
@@ -243,6 +428,7 @@ router.post(
   '/:projectId/restore',
   asyncHandler(async (req, res) => {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
+    if (!assertVisibleProject(req, res, projectId)) return;
     restoreArchivedProject(projectId);
     res.json(createApiSuccessResponse({ projectId, isArchived: false }));
   }),
@@ -256,6 +442,7 @@ router.delete(
   '/:projectId',
   asyncHandler(async (req, res) => {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
+    if (!assertVisibleProject(req, res, projectId)) return;
     const force = req.query.force === 'true';
     await deleteOrArchiveProject(projectId, force);
     res.json({ success: true });

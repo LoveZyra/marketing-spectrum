@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -138,9 +138,24 @@ function AppContentInner() {
     return () => window.clearInterval(interval);
   }, [refreshRunningSessions]);
 
+  // 「在 JupyterLab 打开」:编辑器里的按钮通过 paletteOps 走到这里 ——
+  // 记下目标文件、切到 notebook 标签页;nonce 保证同一文件连点也重新定位。
+  const [jupyterTarget, setJupyterTarget] = useState<{ path: string | null; nonce: number }>({
+    path: null,
+    nonce: 0,
+  });
+  const openInJupyter = useCallback(
+    (path: string) => {
+      setJupyterTarget((previous) => ({ path, nonce: previous.nonce + 1 }));
+      setActiveTab('notebook');
+    },
+    [setActiveTab],
+  );
+
   usePaletteOpsRegister({
     openSettings,
     refreshProjects: refreshProjectsSilently,
+    openInJupyter,
   });
 
   // Pending tool permissions are recovered through the `chat.subscribe` flow:
@@ -226,6 +241,7 @@ function AppContentInner() {
           onShowSettings={openSettings}
           externalMessageUpdate={externalMessageUpdate}
           newSessionTrigger={newSessionTrigger}
+          jupyterTarget={jupyterTarget}
         />
       </div>
 

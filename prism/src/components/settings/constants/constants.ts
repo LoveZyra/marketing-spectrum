@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import { Bell, Bot, Info, KeyRound, ListChecks, Mic, MonitorPlay, Palette, Plug, Users } from 'lucide-react';
+import { Activity, Bell, Bot, Info, KeyRound, ListChecks, Mic, MonitorPlay, Palette, Plug, Shuffle, UserRound, Users } from 'lucide-react';
 
 import type {
   CodeEditorSettingsState,
@@ -34,6 +34,9 @@ export const SETTINGS_MAIN_TABS: SettingsMainTabMeta[] = [
   { id: 'api', label: 'API Tokens', labelKey: 'mainTabs.apiTokens', keywords: 'api tokens auth keys', icon: KeyRound },
   { id: 'accounts', label: 'Accounts', labelKey: 'mainTabs.accounts', keywords: 'accounts users approval root admin', icon: Users, rootOnly: true },
   { id: 'notifications', label: 'Notifications', labelKey: 'mainTabs.notifications', keywords: 'notifications alerts push', icon: Bell },
+  { id: 'account', label: 'My Account', labelKey: 'mainTabs.account', keywords: 'account logout switch user sign out password 退出 登出 切换账号 修改密码', icon: UserRound },
+  { id: 'models', label: 'Model Mapping', labelKey: 'mainTabs.models', keywords: 'model mapping alias sonnet opus haiku fable settings.json 模型 映射 别名', icon: Shuffle, rootOnly: true },
+  { id: 'server', label: 'Server Status', labelKey: 'mainTabs.server', keywords: 'server status cpu memory disk jupyter gateway 服务器 状态 网关', icon: Activity, rootOnly: true },
   { id: 'about', label: 'About', labelKey: 'mainTabs.about', keywords: 'about version info', icon: Info },
 ];
 

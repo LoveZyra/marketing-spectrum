@@ -25,7 +25,10 @@
     "editMarkdown": "编辑 Markdown",
     "reloadPreview": "重新加载",
     "editHtml": "回到源码",
-    "previewHtml": "预览渲染效果"
+    "previewHtml": "预览渲染效果",
+    "previewNotebook": "预览 notebook",
+    "editNotebook": "查看源码 (JSON)",
+    "openInJupyter": "在 JupyterLab 打开"
   },
   "footer": {
     "lines": "行数：",
@@ -41,5 +44,10 @@
     "error": "无法显示此文件。",
     "openInNewTab": "在新标签页打开",
     "unsavedNotice": "预览的是已保存的文件,保存后才会看到最新改动。"
+  },
+  "notebook": {
+    "legacyFormat": "这个 notebook 是很老的 nbformat 3 格式,预览不支持 —— 可切换到源码视图查看,或在 JupyterLab 里打开(会自动升级格式)。",
+    "parseFailed": "无法解析这个 notebook 文件(JSON 结构不对)。可切换到源码视图检查内容。",
+    "empty": "空 notebook —— 还没有任何单元格。"
   }
 }

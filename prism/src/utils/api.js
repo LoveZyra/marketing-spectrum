@@ -68,7 +68,19 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
     user: () => authenticatedFetch('/api/auth/user'),
-    logout: () => authenticatedFetch('/api/auth/logout', { method: 'POST' }),
+    // options.all = true → 服务端 bump token_version,撤销该账号所有设备的旧令牌。
+    logout: (options) => authenticatedFetch('/api/auth/logout', {
+      method: 'POST',
+      ...(options ? { body: JSON.stringify(options) } : {}),
+    }),
+    // 改密成功服务端会吊销其他设备令牌并返回本会话的新令牌(调用方负责落 localStorage)。
+    changePassword: (currentPassword, newPassword) => authenticatedFetch('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+    // root 读全量,普通用户只回自己的行(服务端裁剪)。
+    auditLog: ({ limit = 50, offset = 0 } = {}) =>
+      authenticatedFetch(`/api/auth/audit-log?limit=${limit}&offset=${offset}`),
   },
 
   // Protected endpoints
@@ -83,8 +95,6 @@ export const api = {
     params.set('offset', String(offset));
     return authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/sessions?${params.toString()}`);
   },
-  projectTaskmaster: (projectId) =>
-    authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/taskmaster`),
   // Unified endpoint for persisted session messages.
   // Provider/project metadata are resolved by the backend from sessionId.
   unifiedSessionMessages: (sessionId, _provider = 'claude', { limit = null, offset = 0 } = {}) => {
@@ -151,6 +161,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(projectData),
     }),
+  projectPermissions: (projectId) =>
+    authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/permissions`),
+  updateProjectPermissions: (projectId, payload) =>
+    authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/permissions`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  jupyterStatus: () => authenticatedFetch('/api/jupyter/status'),
+  // path 可选:传了就深链到 JupyterLab 里的那个文件。
+  jupyterSession: (path) =>
+    authenticatedFetch('/api/jupyter/session', {
+      method: 'POST',
+      body: JSON.stringify(path ? { path } : {}),
+    }),
   migrateLegacyProjectStars: (projectIds) =>
     authenticatedFetch('/api/projects/migrate-legacy-stars', {
       method: 'POST',
@@ -205,47 +229,6 @@ export const api = {
       body: formData,
       headers: {}, // Let browser set Content-Type for FormData
     }),
-
-  // TaskMaster endpoints — all addressed by DB projectId post-migration.
-  taskmaster: {
-    // Initialize TaskMaster in a project
-    init: (projectId) =>
-      authenticatedFetch(`/api/taskmaster/init/${projectId}`, {
-        method: 'POST',
-      }),
-
-    // Add a new task
-    addTask: (projectId, { prompt, title, description, priority, dependencies }) =>
-      authenticatedFetch(`/api/taskmaster/add-task/${projectId}`, {
-        method: 'POST',
-        body: JSON.stringify({ prompt, title, description, priority, dependencies }),
-      }),
-
-    // Parse PRD to generate tasks
-    parsePRD: (projectId, { fileName, numTasks, append }) =>
-      authenticatedFetch(`/api/taskmaster/parse-prd/${projectId}`, {
-        method: 'POST',
-        body: JSON.stringify({ fileName, numTasks, append }),
-      }),
-
-    // Get available PRD templates
-    getTemplates: () =>
-      authenticatedFetch('/api/taskmaster/prd-templates'),
-
-    // Apply a PRD template
-    applyTemplate: (projectId, { templateId, fileName, customizations }) =>
-      authenticatedFetch(`/api/taskmaster/apply-template/${projectId}`, {
-        method: 'POST',
-        body: JSON.stringify({ templateId, fileName, customizations }),
-      }),
-
-    // Update a task
-    updateTask: (projectId, taskId, updates) =>
-      authenticatedFetch(`/api/taskmaster/update-task/${projectId}/${taskId}`, {
-        method: 'PUT',
-        body: JSON.stringify(updates),
-      }),
-  },
 
   // Browse filesystem for project suggestions
   browseFilesystem: (dirPath = null) => {

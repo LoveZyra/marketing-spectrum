@@ -26,7 +26,7 @@ import {
 } from '../services/git-checkpoint.js';
 import { isClaudeSDKSessionActive } from '../claude-sdk.js';
 import { chatRunRegistry } from '../modules/websocket/services/chat-run-registry.service.js';
-import { projectsDb, sessionsDb } from '../modules/database/index.js';
+import { projectVisibilityInput, projectsDb, sessionsDb } from '../modules/database/index.js';
 import { canViewerSeeProject, readRequestViewer } from '../shared/project-visibility.js';
 
 const router = express.Router();
@@ -71,7 +71,7 @@ function canViewerUseCheckpoint(req, meta) {
   }
 
   return canViewerSeeProject({
-    ownerUserId: project.owner_user_id ?? null,
+    ...projectVisibilityInput(project, projectPath),
     viewerUserId: viewer.userId,
     viewerUsername: viewer.username,
   });

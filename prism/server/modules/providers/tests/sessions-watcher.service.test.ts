@@ -81,6 +81,22 @@ test('subagent transcripts are pruned from the watch tree', () => {
   assert.equal(shouldIgnoreWatchPath(subagentFile), true);
 });
 
+/**
+ * 模型探测(/models 的"实测真实模型")的 cwd 编码进 ~/.claude/projects 后带着
+ * 'prism-model-probe' 标记。不忽略它,每次探测都会往所有人的侧栏广播一个幽灵
+ * 项目 —— getSupportedModels() 当年就是因为这个被整个禁用的(见
+ * claude-models.provider.ts),这条测试防止同一个坑换个入口再踩一次。
+ */
+test('model-probe transcripts are pruned from the watch tree', () => {
+  const probeDir = path.join('projects', '-root--prism-prism-model-probe');
+
+  assert.equal(shouldIgnoreWatchPath(probeDir, dirStats), true);
+  assert.equal(shouldIgnoreWatchPath(path.join(probeDir, 'sess-1.jsonl'), fileStats), true);
+  assert.equal(shouldIgnoreWatchPath(path.join(probeDir, 'sess-1.jsonl')), true);
+  // 名字里不带标记的正常项目不受影响。
+  assert.equal(shouldIgnoreWatchPath(path.join('projects', '-home-me-app', 'sess.jsonl'), fileStats), false);
+});
+
 test('non-transcript files are pruned but directories are always descended', () => {
   assert.equal(shouldIgnoreWatchPath(path.join('projects', 'a', 'notes.txt'), fileStats), true);
   assert.equal(shouldIgnoreWatchPath(path.join('projects', 'a', '.DS_Store'), fileStats), true);

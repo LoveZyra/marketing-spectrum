@@ -35,8 +35,8 @@ describe('设置页主标签清单', () => {
     assert.equal(SETTINGS_MAIN_TAB_IDS.includes('voice' as SettingsMainTab), false);
   });
 
-  test('只有 accounts 是 root 专属', () => {
+  test('root 专属标签 = 账号管理 + 模型映射 + 服务器状态', () => {
     const rootOnly = SETTINGS_MAIN_TABS.filter((tab) => tab.rootOnly).map((tab) => tab.id);
-    assert.deepEqual(rootOnly, ['accounts']);
+    assert.deepEqual(rootOnly, ['accounts', 'models', 'server']);
   });
 });

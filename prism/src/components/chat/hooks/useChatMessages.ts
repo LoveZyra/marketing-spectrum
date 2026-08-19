@@ -223,6 +223,10 @@ function convertMessage(msg: NormalizedMessage, resolvedToolResult: ResolvedTool
           type: 'assistant',
           content: text,
           timestamp: msg.timestamp,
+          // 这一轮实际服务的模型(响应元数据)—— 比模型的自我介绍可信。
+          model: typeof (msg as { model?: unknown }).model === 'string'
+            ? ((msg as { model?: string }).model)
+            : undefined,
           ...sharedMetadata,
         });
       }

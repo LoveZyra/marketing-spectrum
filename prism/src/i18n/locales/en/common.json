@@ -7,7 +7,8 @@
   "tabs": {
     "chat": "Chat",
     "shell": "Shell",
-    "files": "Files"
+    "files": "Files",
+    "notebook": "Notebook"
   },
   "status": {
     "completed": "Completed"
@@ -84,6 +85,20 @@
       "newPath": "Workspace Path",
       "newHelp": "Full path to your workspace directory"
     },
+    "permission": {
+      "label": "Project access",
+      "personal": "Personal",
+      "personalHelp": "Only you (and root)",
+      "public": "Public",
+      "publicHelp": "Every signed-in user",
+      "shared": "Specific users",
+      "sharedHelp": "Only the users you pick (and you)",
+      "pickUsers": "Pick users",
+      "noUsers": "No other users available",
+      "loadUsersFailed": "Failed to load users",
+      "needUsers": "Pick at least one user for specific-user access",
+      "sharedCount": "{{count}} selected"
+    },
     "step3": {
       "reviewConfig": "Review Your Configuration",
       "path": "Path:",
@@ -136,5 +151,12 @@
     "messageWithLabel": "An error occurred while loading {{label}}.",
     "details": "Error Details",
     "retry": "Try Again"
+  },
+  "jupyter": {
+    "starting": "Starting JupyterLab… first boot can take half a minute",
+    "notInstalled": "JupyterLab was not found on the server",
+    "installHint": "Install it on the server, then retry:",
+    "startFailed": "JupyterLab failed to start",
+    "retry": "Retry"
   }
 }

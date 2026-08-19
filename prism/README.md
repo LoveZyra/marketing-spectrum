@@ -128,15 +128,13 @@ VITE_PRISM_API_KEY=<同一个值>  # 前端构建时打进 bundle
 | `PRISM_WATCH_POLL` / `_INTERVAL_MS` | `0` / `6000` | 用轮询代替 inotify，NFS/SMB 和部分容器挂载上需要 |
 | `PRISM_FILETREE_MAX_ENTRIES` | `5000` | 单次文件树请求的条目上限 |
 
-### 文档摄取与浏览器工具
+### 文档摄取
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `PRISM_DOC_MAX_CHARS` | `200000` | 单个文档保留的提取文本字数 |
 | `PRISM_DOC_MAX_UNCOMPRESSED` | `209715200` | 解压总量上限（zip 炸弹防护） |
 | `PRISM_PDF_TIMEOUT_MS` / `PRISM_URL_FETCH_TIMEOUT_MS` | `30000` / `20000` | PDF 解析 / URL 抓取超时 |
-| `PRISM_BROWSER_USE_*` | 见 `.env.example` | 浏览器自动化工具的并发、TTL 与超时 |
-| `VOICE_*` | 关闭 | OpenAI 兼容的语音转写 / 朗读代理 |
 
 ## 新增 API
 

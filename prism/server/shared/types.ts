@@ -250,6 +250,12 @@ export type NormalizedMessage = {
    */
   seq?: number;
   role?: 'user' | 'assistant';
+  /**
+   * 这一轮实际服务的模型(assistant 文本消息携带;取自响应元数据的 message.model)。
+   * 前端在每条回答的时间戳旁显示 —— 模型的自我介绍会顺着上下文复述历史,不可信,
+   * 这个字段才是"谁答的"的铁证。
+   */
+  model?: string;
   content?: string;
   /**
    * Optional display-oriented metadata used by providers that need to expose
@@ -571,9 +577,14 @@ export type ProjectRepositoryRow = {
   custom_project_name: string | null;
   isStarred: number;
   isArchived: number;
-  /** NULL = public project, visible to every account. */
+  /** NULL = unclaimed(仅 root,公共目录例外);具体 id = 个人项目。 */
   owner_user_id: number | null;
+  /** 'public' = 显式公共(所有登录用户可见);NULL = 默认语义。 */
+  visibility: string | null;
 };
+
+/** 项目可见性档位(创建时的三选)。 */
+export type ProjectVisibilityChoice = 'personal' | 'public' | 'shared';
 
 /**
  * Result category returned by `projectsDb.createProjectPath`.

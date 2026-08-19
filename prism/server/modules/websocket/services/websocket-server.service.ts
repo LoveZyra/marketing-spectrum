@@ -1,6 +1,7 @@
-import type { Server as HttpServer } from 'node:http';
+import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import type { Duplex } from 'node:stream';
 
-import { WebSocketServer, type VerifyClientCallbackSync } from 'ws';
+import { WebSocketServer } from 'ws';
 
 import { handleChatConnection } from '@/modules/websocket/services/chat-websocket.service.js';
 import { verifyWebSocketClient } from '@/modules/websocket/services/websocket-auth.service.js';
@@ -11,21 +12,55 @@ type WebSocketServerDependencies = {
   verifyClient: Parameters<typeof verifyWebSocketClient>[1];
   chat: Parameters<typeof handleChatConnection>[2];
   shell: Parameters<typeof handleShellConnection>[2];
+  /**
+   * /jupyter/* 的升级请求整个让给 jupyter 反代(cookie 鉴权 + TCP 隧道),
+   * 不走下面的 Prism 票据/JWT 校验。不注入时该前缀的升级一律拒绝。
+   */
+  jupyterUpgrade?: (request: IncomingMessage, socket: Duplex, head: Buffer) => void;
 };
 
 /**
  * Creates and wires the server-wide websocket gateway used for chat, shell, and
  * plugin proxy routes.
+ *
+ * noServer 模式 + 自己的 upgrade 路由:ws 的 {server} 模式会接管 HTTP 服务器上
+ * 【所有】升级请求,/jupyter 的 kernel WebSocket 会被它的 verifyClient 先拒掉。
+ * 改为手动分发:/jupyter 前缀交给注入的隧道,其余路径保持原有的
+ * verifyClient → handleUpgrade 语义,行为与 {server} 模式一致。
  */
 export function createWebSocketServer(
   server: HttpServer,
   dependencies: WebSocketServerDependencies
 ): WebSocketServer {
-  const wss = new WebSocketServer({
-    server,
-    verifyClient: ((
-      info: Parameters<VerifyClientCallbackSync<AuthenticatedWebSocketRequest>>[0]
-    ) => verifyWebSocketClient(info, dependencies.verifyClient)),
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+
+    if (pathname === '/jupyter' || pathname.startsWith('/jupyter/')) {
+      if (dependencies.jupyterUpgrade) {
+        dependencies.jupyterUpgrade(request, socket, head);
+      } else {
+        socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+      }
+      return;
+    }
+
+    const info = {
+      origin: String(request.headers.origin ?? ''),
+      secure: false,
+      req: request as AuthenticatedWebSocketRequest,
+    };
+    if (!verifyWebSocketClient(info, dependencies.verifyClient)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
   });
 
   wss.on('connection', (ws, request) => {

@@ -41,7 +41,10 @@ export const PromptInput = React.forwardRef<HTMLFormElement, PromptInputProps>(
           ref={ref}
           data-slot="prompt-input"
           className={cn(
-            'relative overflow-hidden rounded-xl border border-border/50 bg-card/80 shadow-sm backdrop-blur-sm transition-all duration-200 focus-within:border-primary/30 focus-within:shadow-md focus-within:ring-1 focus-within:ring-primary/15',
+            // 只过渡聚焦相关的边框/阴影(含 ring,ring 本质是 box-shadow),
+            // **不要**用 transition-all —— 那会把 textarea 自适应高度带来的高度变化
+            // 也一起做 200ms 动画,表现为"打字时输入框缓慢放大"。高度改成瞬时生效。
+            'relative overflow-hidden rounded-xl border border-border/50 bg-card/80 shadow-sm backdrop-blur-sm transition-[border-color,box-shadow] duration-200 focus-within:border-primary/30 focus-within:shadow-md focus-within:ring-1 focus-within:ring-primary/15',
             className
           )}
           {...props}

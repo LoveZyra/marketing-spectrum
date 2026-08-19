@@ -1,7 +1,7 @@
 import { EditorView } from '@codemirror/view';
 import { unifiedMergeView } from '@codemirror/merge';
 import type { Extension } from '@codemirror/state';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
@@ -9,6 +9,7 @@ import { useTheme } from '../../../contexts/ThemeContext';
 import { useCodeEditorDocument } from '../hooks/useCodeEditorDocument';
 import { useCodeEditorSettings } from '../hooks/useCodeEditorSettings';
 import { useEditorKeyboardShortcuts } from '../hooks/useEditorKeyboardShortcuts';
+import { useHtmlPreview } from '../hooks/useHtmlPreview';
 import type { CodeEditorFile } from '../types/types';
 import { createMinimapExtension, createScrollToFirstChunkExtension, getLanguageExtensions } from '../utils/editorExtensions';
 import { getEditorStyles } from '../utils/editorStyles';
@@ -20,7 +21,7 @@ import CodeEditorLoadingState from './subcomponents/CodeEditorLoadingState';
 import CodeEditorSurface from './subcomponents/CodeEditorSurface';
 import CodeEditorBinaryFile from './subcomponents/CodeEditorBinaryFile';
 import CodeEditorMediaPreview from './subcomponents/CodeEditorMediaPreview';
-import { useHtmlPreview } from '../hooks/useHtmlPreview';
+import NotebookViewer from './subcomponents/notebook/NotebookViewer';
 
 type CodeEditorProps = {
   file: CodeEditorFile;
@@ -66,6 +67,7 @@ export default function CodeEditor({
     saving,
     saveSuccess,
     saveError,
+    loadError,
     isBinary,
     previewKind,
     fileProjectId,
@@ -76,10 +78,33 @@ export default function CodeEditor({
     projectPath,
   });
 
+  // 有未保存改动时,离开页面/刷新/关标签给浏览器原生拦截。编辑器不像聊天草稿
+  // 那样有持久化,直接关掉就丢了。
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [hasUnsavedChanges]);
+
   const isMarkdownFile = useMemo(() => {
     const extension = file.name.split('.').pop()?.toLowerCase();
     return extension === 'md' || extension === 'markdown';
   }, [file.name]);
+
+  const isNotebookFile = useMemo(
+    () => file.name.split('.').pop()?.toLowerCase() === 'ipynb',
+    [file.name],
+  );
+
+  // notebook 默认进渲染视图(点开就是"看"),要改 JSON 才切源码。
+  const [notebookRaw, setNotebookRaw] = useState(false);
+  useEffect(() => {
+    setNotebookRaw(false);
+  }, [file.path]);
 
   const isHtmlPreviewFile = useMemo(() => {
     const extension = file.name.split('.').pop()?.toLowerCase();
@@ -269,10 +294,14 @@ export default function CodeEditor({
             isHtmlPreviewFile={isHtmlPreviewFile}
             markdownPreview={markdownPreview}
             htmlPreview={htmlPreview}
+            isNotebookFile={isNotebookFile}
+            notebookRaw={notebookRaw}
             saving={saving}
             saveSuccess={saveSuccess}
             onToggleMarkdownPreview={() => setMarkdownPreview((previous) => !previous)}
             onToggleHtmlPreview={() => setHtmlPreview((previous) => !previous)}
+            onToggleNotebookRaw={() => setNotebookRaw((previous) => !previous)}
+            onOpenInJupyter={() => paletteOps.openInJupyter(file.path)}
             onOpenSettings={() => paletteOps.openSettings('appearance')}
             onDownload={handleDownload}
             onSave={handleSave}
@@ -284,6 +313,9 @@ export default function CodeEditor({
               previewMarkdown: t('actions.previewMarkdown'),
               previewHtml: t('actions.previewHtml', 'Preview rendered HTML'),
               editHtml: t('actions.editHtml', 'Back to source'),
+              previewNotebook: t('actions.previewNotebook', '预览 notebook'),
+              editNotebook: t('actions.editNotebook', '查看源码 (JSON)'),
+              openInJupyter: t('actions.openInJupyter', '在 JupyterLab 打开'),
               settings: t('toolbar.settings'),
               download: t('actions.download'),
               save: t('actions.save'),
@@ -295,6 +327,12 @@ export default function CodeEditor({
             }}
           />
 
+          {loadError && (
+            <div className="border-b border-amber-300/50 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-800/40 dark:bg-amber-900/20 dark:text-amber-300">
+              文件加载失败:{loadError} —— 已禁止保存以免覆盖原文件,请关闭后重新打开。
+            </div>
+          )}
+
           {saveError && (
             <div className="border-b border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
               {saveError}
@@ -302,6 +340,9 @@ export default function CodeEditor({
           )}
 
           <div className="flex-1 overflow-hidden">
+            {isNotebookFile && !notebookRaw ? (
+              <NotebookViewer content={content} />
+            ) : (
             <CodeEditorSurface
               content={content}
               onChange={setContent}
@@ -328,6 +369,7 @@ export default function CodeEditor({
               showLineNumbers={showLineNumbers}
               extensions={extensions}
             />
+            )}
           </div>
 
           <CodeEditorFooter

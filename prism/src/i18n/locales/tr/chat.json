@@ -52,7 +52,7 @@
     "clearInput": "Girdiyi temizle",
     "scrollToBottom": "En alta git",
     "attachmentPath": "yol",
-    "modelHint": "Current model: {{model}} · type /models to switch"
+    "modelHint": "Geçerli model: {{model}} · değiştirmek için tıklayın"
   },
   "providerSelection": {
     "pressToSearch": "Oturumlarda, dosyalarda ve commit'lerde arama yapmak için <kbd>{{shortcut}}</kbd> tuşlarına bas"

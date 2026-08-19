@@ -16,6 +16,8 @@ type ProjectCreationWizardProps = {
 
 const initialFormState: WizardFormState = {
   workspacePath: '',
+  visibility: 'personal',
+  sharedUserIds: [],
 };
 
 export default function ProjectCreationWizard({
@@ -41,9 +43,13 @@ export default function ProjectCreationWizard({
         setError(t('projectWizard.errors.providePath'));
         return;
       }
+      if (formState.visibility === 'shared' && formState.sharedUserIds.length === 0) {
+        setError(t('projectWizard.permission.needUsers'));
+        return;
+      }
       setStep(2);
     }
-  }, [formState.workspacePath, step, t]);
+  }, [formState.workspacePath, formState.visibility, formState.sharedUserIds, step, t]);
 
   const handleBack = useCallback(() => {
     setError(null);
@@ -57,6 +63,8 @@ export default function ProjectCreationWizard({
     try {
       const project = await createProjectRequest({
         path: formState.workspacePath.trim(),
+        visibility: formState.visibility,
+        sharedUserIds: formState.visibility === 'shared' ? formState.sharedUserIds : [],
       });
 
       onProjectCreated?.(project);
@@ -101,8 +109,12 @@ export default function ProjectCreationWizard({
           {step === 1 && (
             <StepConfiguration
               workspacePath={formState.workspacePath}
+              visibility={formState.visibility}
+              sharedUserIds={formState.sharedUserIds}
               isCreating={isCreating}
               onWorkspacePathChange={(workspacePath) => updateField('workspacePath', workspacePath)}
+              onVisibilityChange={(visibility) => updateField('visibility', visibility)}
+              onSharedUserIdsChange={(sharedUserIds) => updateField('sharedUserIds', sharedUserIds)}
               onAdvanceToConfirm={() => setStep(2)}
             />
           )}

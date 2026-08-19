@@ -19,9 +19,19 @@ export type CreateFolderResponse = {
   details?: string;
 };
 
+/** 创建项目的权限三选:个人(默认)/ 公共(所有登录用户)/ 指定用户。 */
+export type ProjectVisibilityChoice = 'personal' | 'public' | 'shared';
+
+export type ShareableUser = {
+  id: number;
+  username: string;
+};
+
 export type CreateProjectPayload = {
   path: string;
   customName?: string;
+  visibility?: ProjectVisibilityChoice;
+  sharedUserIds?: number[];
 };
 
 export type CreateProjectApiError = {
@@ -40,4 +50,6 @@ export type CreateProjectResponse = {
 
 export type WizardFormState = {
   workspacePath: string;
+  visibility: ProjectVisibilityChoice;
+  sharedUserIds: number[];
 };

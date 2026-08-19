@@ -75,16 +75,6 @@ export const useWebSocket = () => {
   return context;
 };
 
-/**
- * Subscribes a component to the most recent websocket frame.
- *
- * Only for low-frequency consumers (TaskMaster broadcasts). High-rate chat
- * streams must use `subscribe` from `useWebSocket`: React batches state
- * updates, so consecutive frames can overwrite each other here before anything
- * renders, which makes this API lossy under load by construction.
- */
-
-
 const useWebSocketProviderState = () => {
   const wsRef = useRef<WebSocket | null>(null);
   const unmountedRef = useRef(false); // Track if component is unmounted

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo } from 'react';
+import { lazy, Suspense, useEffect, useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import { AlertTriangle, EyeOff, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
@@ -10,10 +10,8 @@ import type { DeleteProjectConfirmation, SessionDeleteConfirmation, SettingsProj
 import { ModalLoadingFallback } from '../../../../shared/view/LazyPanel';
 
 // Both are already gated behind an explicit boolean, so deferring their modules
-// is free. Settings in particular reaches the MCP, plugins, skills, permissions
-// and API-key screens, which is a large graph for something most sessions never
-// open. VersionUpgradeModal stays eager: it is mounted unconditionally and
-// self-hides, so a lazy import would resolve immediately anyway.
+// is free. Settings in particular reaches the MCP, skills, permissions and
+// API-key screens, which is a large graph for something most sessions never open.
 const Settings = lazy(() => import('../../../settings/view/Settings'));
 const ProjectCreationWizard = lazy(() => import('../../../project-creation-wizard/ProjectCreationWizard'));
 
@@ -68,6 +66,40 @@ export default function SidebarModals({
     () => projects.map(normalizeProjectForSettings),
     [projects],
   );
+
+  // 首次点「设置」的抖动来自懒加载:点开时代码块还没到,先显示 fallback 遮罩,
+  // 到货后再换成真弹窗——这一"遮罩→真弹窗(背景色 + 模糊 + 入场动画都不同)"的
+  // 切换就是那一下抖动/动画不稳。这里在浏览器空闲时预取这两个弹窗的代码块,等用户
+  // 真的点开时模块已就位,React.lazy 同步渲染,不再闪 fallback,首次和后续一样顺。
+  // 放在空闲期,不影响首屏加载,也不改变"大多数会话不会打开设置"的分包收益太多。
+  useEffect(() => {
+    let cancelled = false;
+    const prefetch = () => {
+      if (cancelled) return;
+      void import('../../../settings/view/Settings');
+      void import('../../../project-creation-wizard/ProjectCreationWizard');
+    };
+    const scheduler = window as typeof window & {
+      requestIdleCallback?: (cb: () => void) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    let idleId: number | null = null;
+    let timerId: number | null = null;
+    if (typeof scheduler.requestIdleCallback === 'function') {
+      idleId = scheduler.requestIdleCallback(prefetch);
+    } else {
+      timerId = window.setTimeout(prefetch, 1500);
+    }
+    return () => {
+      cancelled = true;
+      if (idleId !== null && typeof scheduler.cancelIdleCallback === 'function') {
+        scheduler.cancelIdleCallback(idleId);
+      }
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, []);
 
   return (
     <>

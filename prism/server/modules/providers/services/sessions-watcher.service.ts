@@ -4,7 +4,7 @@ import { promises as fsPromises } from 'node:fs';
 
 import chokidar, { type ChokidarOptions, type FSWatcher } from 'chokidar';
 
-import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { projectVisibilityInput, projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import { canViewerSeeProject } from '@/shared/project-visibility.js';
@@ -100,7 +100,16 @@ export function shouldIgnoreWatchPath(
   watchedPath: string,
   stats?: { isDirectory(): boolean }
 ): boolean {
-  if (path.normalize(watchedPath).split(path.sep).includes('subagents')) {
+  const segments = path.normalize(watchedPath).split(path.sep);
+  if (segments.includes('subagents')) {
+    return true;
+  }
+  // 模型探测(/models 弹窗的"实测真实模型")留下的 transcript。探测的 cwd 名字里
+  // 带这个标记,编码进 ~/.claude/projects 的目录名后仍然可辨认。不忽略的话,
+  // 每次探测都会往所有人的侧栏里广播一个叫 "prism-model-probe" 的幽灵项目 ——
+  // 这正是 claude-models.provider.ts 里 getSupportedModels() 被禁用的原因,
+  // 别让同一个坑换个入口再踩一次。探测完那些目录会被删掉,这里挡的是删掉之前的窗口。
+  if (segments.some((segment) => segment.includes('prism-model-probe'))) {
     return true;
   }
   if (!stats || stats.isDirectory()) {
@@ -199,7 +208,14 @@ function queuePendingWatcherUpdate(updatedSessionId: string | null): void {
  * project-list refetch when a transcript file changes on disk. Returns `null`
  * when the id cannot be resolved to an indexed session row.
  */
-type ScopedEvent = { payload: string; ownerUserId: number | null };
+type ScopedEvent = {
+  payload: string;
+  ownerUserId: number | null;
+  projectPath: string | null;
+  /** 显式可见性('public' = 所有人可见)与指定用户授权 —— 广播过滤要用全量输入。 */
+  visibility: string | null;
+  sharedUserIds: number[];
+};
 
 async function buildSessionUpsertedEvent(updatedProviderSessionId: string): Promise<ScopedEvent | null> {
   const row = sessionsDb.getSessionByProviderSessionId(updatedProviderSessionId)
@@ -236,7 +252,14 @@ async function buildSessionUpsertedEvent(updatedProviderSessionId: string): Prom
     timestamp: new Date().toISOString(),
   });
 
-  return { payload, ownerUserId: project?.owner_user_id ?? null };
+  const visibilityInput = projectVisibilityInput(project, projectPath ?? null);
+  return {
+    payload,
+    ownerUserId: visibilityInput.ownerUserId,
+    projectPath: visibilityInput.projectPath,
+    visibility: visibilityInput.visibility,
+    sharedUserIds: visibilityInput.sharedUserIds,
+  };
 }
 
 async function flushPendingWatcherUpdate(): Promise<void> {
@@ -280,6 +303,9 @@ async function flushPendingWatcherUpdate(): Promise<void> {
             ownerUserId: event.ownerUserId,
             viewerUserId: client.prismUserId,
             viewerUsername: client.prismUsername,
+            projectPath: event.projectPath,
+            visibility: event.visibility,
+            sharedUserIds: event.sharedUserIds,
           })) continue;
 
           client.send(event.payload);

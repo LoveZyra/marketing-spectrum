@@ -35,6 +35,8 @@ export type MainContentProps = {
   onShowSettings: (tab?: SettingsMainTab) => void;
   externalMessageUpdate: number;
   newSessionTrigger: number;
+  /** 「在 JupyterLab 打开」的目标;nonce 变化触发 notebook 标签页重新定位。 */
+  jupyterTarget?: { path: string | null; nonce: number };
 };
 
 export type MainContentHeaderProps = {

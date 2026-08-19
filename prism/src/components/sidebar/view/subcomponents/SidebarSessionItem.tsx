@@ -1,13 +1,43 @@
 import { useEffect, useRef } from 'react';
-import { Check, Edit2, Loader2, Trash2, X } from 'lucide-react';
+import { Check, Edit2, FileDown, Loader2, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Badge, Tooltip, buttonVariants } from '../../../../shared/view/ui';
+import { authenticatedFetch } from '../../../../utils/api';
 import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
 import { createSessionViewModel } from '../../utils/utils';
 import ClaudeLogo from '../../../llm-logo-provider/ClaudeLogo';
+
+/**
+ * 导出会话为 Markdown 并触发浏览器下载。
+ * 走 authenticatedFetch(带 JWT)→ blob → objectURL —— 不能用裸 <a href>,
+ * 那样带不上 Authorization。文件名交给服务端的 Content-Disposition。
+ */
+async function downloadSessionExport(sessionId: string, fallbackName: string): Promise<void> {
+  const response = await authenticatedFetch(
+    `/api/providers/sessions/${encodeURIComponent(sessionId)}/export?format=md`,
+  );
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const blob = await response.blob();
+  const disposition = response.headers.get('content-disposition') ?? '';
+  const utf8Match = /filename\*=UTF-8''([^;]+)/.exec(disposition);
+  const asciiMatch = /filename="([^"]+)"/.exec(disposition);
+  const fileName = utf8Match
+    ? decodeURIComponent(utf8Match[1])
+    : asciiMatch
+      ? asciiMatch[1]
+      : `${fallbackName}.md`;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
 
 type SidebarSessionItemProps = {
   project: Project;
@@ -339,6 +369,18 @@ export default function SidebarSessionItem({
               </>
             ) : (
               <>
+                <button
+                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void downloadSessionExport(session.id, sessionView.sessionName).catch(() => {
+                      // 下载失败不打断侧栏;通常是网络/权限,重试即可。
+                    });
+                  }}
+                  title={t('tooltips.exportSession', { defaultValue: '导出会话 (Markdown)' })}
+                >
+                  <FileDown className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                </button>
                 <button
                   className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
                   onClick={(event) => {

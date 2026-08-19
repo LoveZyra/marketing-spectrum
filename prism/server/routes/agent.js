@@ -919,9 +919,14 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
       let targetPath;
       if (projectPath) {
-        targetPath = projectPath;
+        // 用户指定的克隆目标必须落在工作区根之下 —— 这道校验以前只在"已存在
+        // 路径"那支有,克隆这支漏了。少了它,一把自助 API key + githubUrl 就能
+        // 把攻击者仓库克隆到 /root/.ssh 之类任意可写路径(服务常以 root 跑),
+        // 是一个先于 agent 执行、独立于 bypassPermissions 的"任意路径写"原语。
+        targetPath = normalizeProjectPath(path.resolve(projectPath));
+        await assertInsideWorkspaceRoot(targetPath);
       } else {
-        // Generate a unique path for cloning
+        // 自动生成的路径由服务端固定前缀 + hash 决定,不受调用方控制,天然安全。
         const repoHash = crypto.createHash('md5').update(githubUrl + Date.now()).digest('hex');
         targetPath = path.join(os.homedir(), '.claude', 'external-projects', repoHash);
       }

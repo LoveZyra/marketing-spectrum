@@ -185,6 +185,8 @@ function Sidebar({
     onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => {
       void updateSessionSummary(projectName, sessionId, summary, provider);
     },
+    // 权限修改保存后拉一次项目列表 —— 徽标(公共/已共享·N)和可见范围立即刷新。
+    onProjectsRefresh: onRefresh,
     t,
   };
 

@@ -129,6 +129,27 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
   const [activeSessionModel, setActiveSessionModel] = useState<string | null>(null);
   const [providerModelsLoading, setProviderModelsLoading] = useState(true);
   const [providerModelsRefreshing, setProviderModelsRefreshing] = useState(false);
+  /**
+   * 别名 → 网关实际模型的实测缓存。自定义网关把 "haiku/sonnet" 之类的别名在请求时
+   * 解析成真实模型,只有实测(/models 里点「实测真实模型」)后才知道。这里读回缓存,
+   * 让输入框上的模型 chip 能直接显示"实际是谁在答",而不是只有一个内部别名。
+   * 空 = 还没实测过 / 官方 API,chip 退回显示别名。
+   */
+  const [modelMappings, setModelMappings] = useState<
+    Record<string, { actualModel: string | null; error: string | null; checkedAt: string }>
+  >({});
+  /**
+   * settings.json 在上次实测后改过 → 缓存的"实际模型"可能已不成立。
+   * 为 true 时 chip 停显真名(宁缺毋错),/models 弹窗提示重测。
+   */
+  const [modelMappingsStale, setModelMappingsStale] = useState(false);
+  /**
+   * 配置层映射(读 settings.json 直接算出,后端每次现读):别名 → 配置的模型。
+   * 与实测互补 —— 实测缺失/过期时 chip 用它回退,改完配置立即是新值。
+   */
+  const [modelConfigMappings, setModelConfigMappings] = useState<
+    Record<string, { configuredModel: string | null; source: string | null }>
+  >({});
 
   const providerModelsRequestIdRef = useRef(0);
 
@@ -155,6 +176,29 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
       setActiveSessionModel(null);
     }
   }, []);
+
+  const refreshModelMappings = useCallback(async () => {
+    try {
+      const response = await authenticatedFetch(`/api/providers/${PROVIDER}/model-mappings`);
+      if (!response.ok) return;
+      const body = (await response.json()) as {
+        data?: {
+          mappings?: Record<string, { actualModel: string | null; error: string | null; checkedAt: string }>;
+          stale?: boolean;
+          configMappings?: Record<string, { configuredModel: string | null; source: string | null }>;
+        };
+      };
+      setModelMappings(body.data?.mappings ?? {});
+      setModelMappingsStale(body.data?.stale === true);
+      setModelConfigMappings(body.data?.configMappings ?? {});
+    } catch {
+      // 拿不到映射就不显示真实名 —— chip 退回显示别名,不影响使用。
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshModelMappings();
+  }, [refreshModelMappings]);
 
   const setStoredProviderEffort = useCallback((targetProvider: LLMProvider, effort: string) => {
     setProviderEfforts((previous) => (
@@ -567,6 +611,10 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
     currentProviderEffortOptions,
     activeSessionModel,
     refreshActiveSessionModel,
+    modelMappings,
+    modelMappingsStale,
+    modelConfigMappings,
+    refreshModelMappings,
     permissionMode,
     setPermissionMode,
     selectPermissionMode,

@@ -9,6 +9,9 @@ import AgentsSettingsTab from '../view/tabs/agents-settings/AgentsSettingsTab';
 import AppearanceSettingsTab from '../view/tabs/AppearanceSettingsTab';
 import CredentialsSettingsTab from '../view/tabs/api-settings/CredentialsSettingsTab';
 import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
+import AccountSettingsTab from '../view/tabs/AccountSettingsTab';
+import ModelMappingSettingsTab from '../view/tabs/ModelMappingSettingsTab';
+import ServerStatusTab from '../view/tabs/ServerStatusTab';
 import AboutTab from '../view/tabs/AboutTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import type { SettingsProps } from '../types/types';
@@ -106,6 +109,9 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
 
               {activeTab === 'accounts' && <AccountsSettingsTab />}
+              {activeTab === 'account' && <AccountSettingsTab />}
+              {activeTab === 'models' && <ModelMappingSettingsTab />}
+              {activeTab === 'server' && <ServerStatusTab />}
 
               {activeTab === 'about' && <AboutTab />}
             </div>

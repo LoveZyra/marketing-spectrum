@@ -26,6 +26,7 @@ import MainContentStateView from './subcomponents/MainContentStateView';
 // CodeMirror itself, since it returns null until a file is actually open.
 const FileTree = lazy(() => import('../../file-tree/view/FileTree'));
 const StandaloneShell = lazy(() => import('../../standalone-shell/view/StandaloneShell'));
+const JupyterPanel = lazy(() => import('../../jupyter/JupyterPanel'));
 // Imported by concrete path rather than through the package barrels: the
 
 function MainContent({
@@ -47,10 +48,20 @@ function MainContent({
   onShowSettings,
   externalMessageUpdate,
   newSessionTrigger,
+  jupyterTarget,
 }: MainContentProps) {
   const { t } = useTranslation('common');
   const { preferences } = useUiPreferences();
   const { showRawParameters, showThinking, sendByCtrlEnter } = preferences;
+
+  // notebook 标签页首次激活后保持挂载(CSS 隐藏):iframe 卸载 = lab 界面重载,
+  // 正在跑的 kernel 虽然不会死(在服务端),但界面状态全丢。与 chat 同一策略。
+  const [notebookMounted, setNotebookMounted] = useState(false);
+  useEffect(() => {
+    if (activeTab === 'notebook') {
+      setNotebookMounted(true);
+    }
+  }, [activeTab]);
 
 
 
@@ -146,6 +157,14 @@ function MainContent({
                   showHeader={false}
                   isActive={activeTab === 'shell'}
                 />
+              </LazyPanel>
+            </div>
+          )}
+
+          {notebookMounted && (
+            <div className={`h-full w-full overflow-hidden ${activeTab === 'notebook' ? 'block' : 'hidden'}`}>
+              <LazyPanel label={t('tabs.notebook', { defaultValue: 'Notebook' })}>
+                <JupyterPanel target={jupyterTarget ?? { path: null, nonce: 0 }} />
               </LazyPanel>
             </div>
           )}

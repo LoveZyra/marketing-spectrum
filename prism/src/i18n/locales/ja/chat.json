@@ -50,7 +50,7 @@
     "clickToChangeMode": "クリックで権限モードを変更（または入力欄でTab）",
     "showAllCommands": "すべてのコマンドを表示",
     "attachmentPath": "パス",
-    "modelHint": "Current model: {{model}} · type /models to switch"
+    "modelHint": "現在のモデル：{{model}} · クリックで切り替え"
   },
   "providerSelection": {
     "pressToSearch": "<kbd>{{shortcut}}</kbd> を押してセッション、ファイル、コミットを検索"

@@ -26,17 +26,31 @@ function uniqueProjectIds(projectIds: string[]): string[] {
 }
 
 /**
- * Applies legacy `localStorage` stars keyed by DB `projectId` onto `projects.isStarred`.
+ * Applies legacy `localStorage` stars keyed by DB `projectId`.
  *
+ * 收藏现在按用户隔离(project_stars):有 userId 时写该用户自己的行;
+ * userId 为 null(平台模式,无账号体系)时退回旧的全局 isStarred 列。
  * The operation is idempotent: already-starred projects are ignored, unknown ids are skipped.
  */
-export function applyLegacyStarredProjectIds(projectIds: string[]): ApplyLegacyStarredProjectIdsResult {
+export function applyLegacyStarredProjectIds(
+  projectIds: string[],
+  userId: number | null = null,
+): ApplyLegacyStarredProjectIdsResult {
   const normalizedProjectIds = uniqueProjectIds(projectIds);
   let updated = 0;
 
   for (const projectId of normalizedProjectIds) {
     const project = projectsDb.getProjectById(projectId);
     if (!project) {
+      continue;
+    }
+
+    if (userId != null) {
+      if (projectsDb.isProjectStarredByUser(projectId, userId)) {
+        continue;
+      }
+      projectsDb.setProjectStarForUser(projectId, userId, true);
+      updated += 1;
       continue;
     }
 
@@ -52,9 +66,12 @@ export function applyLegacyStarredProjectIds(projectIds: string[]): ApplyLegacyS
 }
 
 /**
- * Flips `projects.isStarred` for one project and returns the new state.
+ * Flips the caller's star for one project and returns the new state.
+ *
+ * 有 userId → 只动 project_stars 里 (project, user) 这一行,别人的收藏和
+ * root 视角互不影响;userId 为 null(平台模式)→ 旧全局列行为不变。
  */
-export function toggleProjectStar(projectId: string): ToggleProjectStarResult {
+export function toggleProjectStar(projectId: string, userId: number | null = null): ToggleProjectStarResult {
   const normalizedProjectId = normalizeProjectId(projectId);
   if (!normalizedProjectId) {
     throw new AppError('projectId is required', {
@@ -69,6 +86,12 @@ export function toggleProjectStar(projectId: string): ToggleProjectStarResult {
       code: 'PROJECT_NOT_FOUND',
       statusCode: 404,
     });
+  }
+
+  if (userId != null) {
+    const nextStarredState = !projectsDb.isProjectStarredByUser(normalizedProjectId, userId);
+    projectsDb.setProjectStarForUser(normalizedProjectId, userId, nextStarredState);
+    return { isStarred: nextStarredState };
   }
 
   const nextStarredState = !Boolean(project.isStarred);

@@ -25,7 +25,10 @@
     "editMarkdown": "Edit markdown",
     "reloadPreview": "Reload",
     "editHtml": "Back to source",
-    "previewHtml": "Preview rendered HTML"
+    "previewHtml": "Preview rendered HTML",
+    "previewNotebook": "Preview notebook",
+    "editNotebook": "View source (JSON)",
+    "openInJupyter": "Open in JupyterLab"
   },
   "footer": {
     "lines": "Lines:",
@@ -41,5 +44,10 @@
     "error": "Unable to display this file.",
     "openInNewTab": "Open in new tab",
     "unsavedNotice": "Preview shows the saved file. Save to see your latest edits."
+  },
+  "notebook": {
+    "legacyFormat": "This notebook uses the ancient nbformat 3 layout, which the preview does not support — switch to the source view, or open it in JupyterLab (which upgrades the format).",
+    "parseFailed": "Could not parse this notebook file (invalid JSON structure). Switch to the source view to inspect it.",
+    "empty": "Empty notebook — no cells yet."
   }
 }

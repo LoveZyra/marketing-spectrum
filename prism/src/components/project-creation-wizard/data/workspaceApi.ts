@@ -1,10 +1,11 @@
-import { api } from '../../../utils/api';
+import { api, authenticatedFetch } from '../../../utils/api';
 import type {
   BrowseFilesystemResponse,
   CreateFolderResponse,
   CreateProjectPayload,
   CreateProjectResponse,
   FolderSuggestion,
+  ShareableUser,
 } from '../types';
 
 const parseJson = async <T>(response: Response): Promise<T> => {
@@ -72,6 +73,16 @@ export const createFolderInFilesystem = async (folderPath: string) => {
   }
 
   return data.path || folderPath;
+};
+
+/** 「指定用户」授权选择器的用户名录(不含自己;后端已过滤)。 */
+export const fetchShareableUsers = async (): Promise<ShareableUser[]> => {
+  const response = await authenticatedFetch('/api/projects/shareable-users');
+  if (!response.ok) {
+    throw new Error('Failed to load users');
+  }
+  const data = (await response.json()) as { data?: { users?: ShareableUser[] } };
+  return data.data?.users ?? [];
 };
 
 export const createProjectRequest = async (payload: CreateProjectPayload) => {

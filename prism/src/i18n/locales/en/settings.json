@@ -7,9 +7,29 @@
     "skills": "Skills"
   },
   "account": {
-    "language": "Language",
-    "languageLabel": "Display Language",
-    "languageDescription": "Choose your preferred language for the interface"
+    "signedInAs": "Signed in as",
+    "logoutTitle": "Log out / switch account",
+    "logoutHelp": "You'll return to the sign-in page; signing in with another account completes the switch. Local sessions and drafts stay in this browser.",
+    "logoutButton": "Log out",
+    "revokeAllTitle": "Log out everywhere",
+    "revokeAllHelp": "Revokes this account's tokens on every browser/device (use if a token may have leaked). This device returns to the sign-in page too.",
+    "revokeAllButton": "Log out everywhere",
+    "revokeAllConfirm": "Confirm: log out everywhere",
+    "revokeAllWorking": "Revoking…",
+    "revokeAllCancel": "Cancel",
+    "password": {
+      "title": "Change password",
+      "help": "After a successful change, this account is signed out on every other device; this device stays signed in.",
+      "current": "Current password",
+      "new": "New password (min 6 chars)",
+      "confirm": "Repeat new password",
+      "tooShort": "New password must be at least 6 characters",
+      "mismatch": "The two new passwords do not match",
+      "failed": "Change failed",
+      "done": "Password changed; all other devices signed out.",
+      "working": "Changing…",
+      "submit": "Change password"
+    }
   },
   "appearance": {
     "theme": "Theme"
@@ -43,7 +63,10 @@
     "apiTokens": "API & Tokens",
     "notifications": "Notifications",
     "about": "About",
-    "accounts": "Accounts"
+    "accounts": "Accounts",
+    "account": "My Account",
+    "models": "Model Mapping",
+    "server": "Server"
   },
   "notifications": {
     "title": "Notifications",
@@ -278,8 +301,65 @@
     },
     "actions": {
       "approve": "Approve",
-      "reject": "Reject"
+      "reject": "Reject",
+      "resetPassword": "Reset password",
+      "deactivate": "Deactivate",
+      "activate": "Activate"
     },
-    "notIsolationNotice": "Note: accounts separate what people see (their own projects plus public ones). This is not access control — anyone who knows a project id can still call the API directly."
+    "notIsolationNotice": "Note: accounts separate what people see (their own projects plus public ones). This is not access control — anyone who knows a project id can still call the API directly.",
+    "disabled": "Disabled",
+    "resetFor": "Set a new password for {{name}} (all their devices will be signed out):",
+    "resetPlaceholder": "New password (min 6 chars)",
+    "resetConfirm": "Confirm reset",
+    "resetCancel": "Cancel",
+    "resetDone": "Reset {{name}}'s password; all their devices were signed out."
+  },
+  "audit": {
+    "title": "Security audit log",
+    "total": "{{count}} entries",
+    "refresh": "Refresh",
+    "columns": {
+      "time": "Time",
+      "user": "User",
+      "event": "Event",
+      "detail": "Detail"
+    },
+    "loading": "Loading…",
+    "empty": "No entries",
+    "prev": "Prev",
+    "next": "Next"
+  },
+  "models": {
+    "title": "Model mapping",
+    "description": "Edit the alias mapping in the server's settings.json directly. Saves take effect immediately (the next message uses the new mapping) — no restart; the probe cache is marked stale so you can re-verify gateway behavior on the model switcher.",
+    "reload": "Reload",
+    "saved": "Written to settings.json — hot reload takes over; the next message uses the new mapping.",
+    "unsetPlaceholder": "Unset — CLI uses its built-in ID; the gateway decides",
+    "defaultPlaceholder": "Unset — CLI falls back to ANTHROPIC_MODEL/built-in chain",
+    "defaultHelp": "Enter an alias (e.g. sonnet) to make default follow that alias, or a gateway model name directly.",
+    "gateway": "Gateway",
+    "missingFile": "(file does not exist yet; saving will create it)",
+    "saving": "Saving…",
+    "save": "Save mapping",
+    "tokenNote": "This page only reads/writes mapping fields; the gateway URL and auth token in settings.json are preserved untouched and never sent to the browser."
+  },
+  "server": {
+    "title": "Server status",
+    "description": "Auto-refreshes every 10 s. The gateway probe carries no credentials — it measures reachability and latency only.",
+    "refresh": "Refresh",
+    "load": "Load (1min)",
+    "cores": "cores",
+    "memory": "Memory",
+    "disk": "Disk (workspace)",
+    "diskFree": "free",
+    "uptime": "Uptime",
+    "osUptime": "host",
+    "jupyterReady": "ready · 127.0.0.1:{{port}}",
+    "jupyterStarting": "starting…",
+    "jupyterMissing": "not installed",
+    "jupyterIdle": "idle (starts when the Notebook tab is first opened)",
+    "gateway": "Model gateway",
+    "gatewayDown": "unreachable",
+    "gatewayUnset": "BASE_URL not configured"
   }
 }

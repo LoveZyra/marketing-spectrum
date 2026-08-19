@@ -125,6 +125,22 @@ export const userDb = {
   },
 
   /**
+   * 最小用户名录(id + username),给「指定用户」授权选择器用。
+   * 只含 active 且已批准的账号;不带任何敏感字段,普通登录用户可见 ——
+   * 在这个多用户协作工具里,同事的用户名本就互相可见(会话/项目侧栏)。
+   */
+  listBasicUsers(): Array<{ id: number; username: string }> {
+    const db = getConnection();
+    return db
+      .prepare(
+        `SELECT id, username FROM users
+         WHERE is_active = 1 AND approval_status = 'approved'
+         ORDER BY username COLLATE NOCASE`
+      )
+      .all() as Array<{ id: number; username: string }>;
+  },
+
+  /**
    * Every account, newest first, for the root-only approval panel.
    * Left-joins the reviewer so the panel can show who approved whom.
    */
@@ -236,6 +252,20 @@ export const userDb = {
     db.prepare(
       'UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?'
     ).run(passwordHash, userId);
+  },
+
+  /**
+   * 启用/停用账号。停用同时递增 token_version —— is_active 只拦得住新登录
+   * (getUserByUsername 带 is_active=1),已签发的 JWT 要靠版本号立刻作废。
+   */
+  setActive(userId: number, active: boolean): boolean {
+    const db = getConnection();
+    const result = active
+      ? db.prepare('UPDATE users SET is_active = 1 WHERE id = ?').run(userId)
+      : db.prepare(
+          'UPDATE users SET is_active = 0, token_version = token_version + 1 WHERE id = ?'
+        ).run(userId);
+    return result.changes > 0;
   },
 
 };

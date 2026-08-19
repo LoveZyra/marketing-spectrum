@@ -6,9 +6,29 @@
     "mcpServers": "MCP 伺服器"
   },
   "account": {
-    "language": "語言",
-    "languageLabel": "顯示語言",
-    "languageDescription": "選擇您偏好的介面語言"
+    "signedInAs": "目前登入帳號",
+    "logoutTitle": "登出 / 切換帳號",
+    "logoutHelp": "登出後回到登入頁；用另一個帳號登入即完成切換。本機會話與草稿保存在此瀏覽器中，不會遺失。",
+    "logoutButton": "登出",
+    "revokeAllTitle": "登出所有裝置",
+    "revokeAllHelp": "吊銷此帳號在所有瀏覽器/裝置上已簽發的登入權杖（懷疑權杖外洩時使用），隨後本機也會回到登入頁。",
+    "revokeAllButton": "登出所有裝置",
+    "revokeAllConfirm": "確認：全部登出",
+    "revokeAllWorking": "正在吊銷…",
+    "revokeAllCancel": "取消",
+    "password": {
+      "title": "修改密碼",
+      "help": "修改成功後,這個帳號在其他裝置上的登入會全部失效;目前裝置保持登入。",
+      "current": "目前密碼",
+      "new": "新密碼(至少 6 位)",
+      "confirm": "再輸一遍新密碼",
+      "tooShort": "新密碼至少 6 位",
+      "mismatch": "兩次輸入的新密碼不一致",
+      "failed": "修改失敗",
+      "done": "密碼已修改,其他裝置已全部登出。",
+      "working": "修改中…",
+      "submit": "修改密碼"
+    }
   },
   "appearance": {
     "theme": "佈景主題"
@@ -43,7 +63,10 @@
     "computer": "電腦使用",
     "notifications": "通知",
     "about": "關於",
-    "accounts": "帳號"
+    "accounts": "帳號",
+    "account": "我的帳號",
+    "models": "模型映射",
+    "server": "伺服器"
   },
   "notifications": {
     "title": "通知",
@@ -274,8 +297,65 @@
     },
     "actions": {
       "approve": "通過",
-      "reject": "駁回"
+      "reject": "駁回",
+      "resetPassword": "重設密碼",
+      "deactivate": "停用",
+      "activate": "啟用"
     },
-    "notIsolationNotice": "說明:帳號區分只用於介面隔離(各人只看到自己的專案與公共專案),不是越權防護 —— 知道專案 id 的人仍然可以直接呼叫介面。"
+    "notIsolationNotice": "說明:帳號區分只用於介面隔離(各人只看到自己的專案與公共專案),不是越權防護 —— 知道專案 id 的人仍然可以直接呼叫介面。",
+    "disabled": "已停用",
+    "resetFor": "為 {{name}} 設定新密碼(其所有裝置將被登出):",
+    "resetPlaceholder": "新密碼(至少 6 位)",
+    "resetConfirm": "確認重設",
+    "resetCancel": "取消",
+    "resetDone": "已重設 {{name}} 的密碼,其所有裝置已登出。"
+  },
+  "audit": {
+    "title": "安全稽核日誌",
+    "total": "共 {{count}} 條",
+    "refresh": "重新整理",
+    "columns": {
+      "time": "時間",
+      "user": "使用者",
+      "event": "事件",
+      "detail": "詳情"
+    },
+    "loading": "載入中…",
+    "empty": "暫無記錄",
+    "prev": "上一頁",
+    "next": "下一頁"
+  },
+  "models": {
+    "title": "模型映射",
+    "description": "直接編輯伺服器 settings.json 的別名映射。儲存後立即生效(下一條訊息就用新映射),無需重啟;模型切換頁的實測快取會被標記過期,可去那裡點實測驗證閘道行為。",
+    "reload": "重新讀取",
+    "saved": "已寫入 settings.json —— 熱感知已接管,下一條訊息即用新映射。",
+    "unsetPlaceholder": "未配置 —— CLI 用內建 ID,由閘道決定",
+    "defaultPlaceholder": "未設定 —— CLI 走 ANTHROPIC_MODEL/內建鏈",
+    "defaultHelp": "填別名(如 sonnet)則 default 檔跟隨該別名的映射;也可直接填閘道模型名。",
+    "gateway": "閘道",
+    "missingFile": "(檔案尚不存在,儲存時會建立)",
+    "saving": "儲存中…",
+    "save": "儲存映射",
+    "tokenNote": "此頁只讀寫映射相關欄位;settings.json 裡的閘道位址與鑑權 token 原樣保留,且永遠不會傳到瀏覽器。"
+  },
+  "server": {
+    "title": "伺服器狀態",
+    "description": "每 10 秒自動重新整理。閘道探測不攜帶任何憑據,只量網路連通與延遲。",
+    "refresh": "重新整理",
+    "load": "負載 (1min)",
+    "cores": "核",
+    "memory": "記憶體",
+    "disk": "磁碟(工作區)",
+    "diskFree": "剩餘",
+    "uptime": "運行時長",
+    "osUptime": "主機",
+    "jupyterReady": "就緒 · 127.0.0.1:{{port}}",
+    "jupyterStarting": "啟動中…",
+    "jupyterMissing": "未安裝",
+    "jupyterIdle": "未啟動(首次打開 Notebook 標籤頁時拉起)",
+    "gateway": "模型閘道",
+    "gatewayDown": "不可達",
+    "gatewayUnset": "未配置 BASE_URL"
   }
 }

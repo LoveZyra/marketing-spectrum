@@ -15,8 +15,11 @@ export default {
     },
     extend: {
       fontFamily: {
-        sans: ['"Encode Sans"', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"Helvetica Neue"', 'Arial', 'sans-serif'],
-        serif: ['Merriweather', 'Georgia', 'Cambria', '"Times New Roman"', 'serif'],
+        // 界面默认中文,但拉丁字体后面必须挂上系统中文字体,否则中文会落到
+        // Windows 的宋体(SimSun)—— 又细又旧,和这套紫色设计完全不搭。挂上
+        // 各平台的现代黑体(苹方 / 微软雅黑 / 思源黑体),不需要额外下载。
+        sans: ['"Encode Sans"', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"Helvetica Neue"', 'Arial', 'sans-serif', '"PingFang SC"', '"Microsoft YaHei"', '"Noto Sans SC"', '"Hiragino Sans GB"', '"Source Han Sans SC"'],
+        serif: ['Merriweather', 'Georgia', 'Cambria', '"Times New Roman"', 'serif', '"PingFang SC"', '"Microsoft YaHei"', '"Noto Sans SC"'],
       },
       colors: {
         border: "hsl(var(--border))",

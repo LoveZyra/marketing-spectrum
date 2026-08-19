@@ -100,11 +100,22 @@ const RIPGREP_FILE_CHUNK_SIZE = 40;
 const RIPGREP_CHUNK_CONCURRENCY = 6;
 const UNKNOWN_PROJECT_KEY = '__unknown_project__';
 
+// 与 claude-sessions.provider.ts 的同名清单保持同义(那边多一条注释说明)。
 const INTERNAL_CONTENT_PREFIXES = [
   '<system-reminder>',
   'Caveat:',
+  '<local-command-caveat>',
   'Invalid API key',
   '[Request interrupted',
+  'Base directory for this skill:',
+  // 与 claude-sessions.provider.ts 的清单保持同步:SDK 的空响应/坏工具调用重试提示、
+  // 压缩/跨机续接注入、本地命令占位、工具打断占位。
+  '[Your previous response had no visible output',
+  'Your tool call was malformed',
+  'This session is being continued',
+  'No response requested.',
+  '[Tool use interrupted]',
+  '[Tool use removed]',
 ] as const;
 
 function normalizeComparablePath(inputPath: string): string {
@@ -439,10 +450,11 @@ function normalizeSearchableSessions(rows: SessionRepositoryRow[]): SearchableSe
       continue;
     }
 
+    // 不再逐条 existsSync —— 那是一个同步 fs 调用 × 全部会话数,直接卡事件循环、
+    // 拖慢所有用户。ripgrep 用 `--no-messages` + 显式文件列表跑,天生跳过不存在
+    // 的文件;而解析(parseClaudeSessionMatches)只碰 rg 命中的文件,那些必然存在。
+    // 所以这个预检是纯冗余,删掉即可。
     const absoluteJsonlPath = path.resolve(rawJsonlPath);
-    if (!fsSync.existsSync(absoluteJsonlPath)) {
-      continue;
-    }
 
     /**
      * Active session rows can still belong to an archived project because
@@ -929,24 +941,48 @@ function restrictToViewer(
     return sessions;
   }
 
-  const ownerByPath = new Map<string, number | null>();
+  // 每路径一次性取齐完整可见性输入(owner + 显式 visibility + 指定用户授权),
+  // 授权列表按 project_id 惰性取并缓存,避免逐 session 重复查。
+  type PathMeta = { ownerUserId: number | null; visibility: string | null; projectId: string };
+  const metaByPath = new Map<string, PathMeta>();
   for (const project of projectsDb.getProjectPaths(null)) {
-    ownerByPath.set(normalizeComparablePath(project.project_path), project.owner_user_id ?? null);
+    metaByPath.set(normalizeComparablePath(project.project_path), {
+      ownerUserId: project.owner_user_id ?? null,
+      visibility: project.visibility ?? null,
+      projectId: project.project_id,
+    });
   }
   for (const project of projectsDb.getArchivedProjectPaths(null)) {
-    ownerByPath.set(normalizeComparablePath(project.project_path), project.owner_user_id ?? null);
+    metaByPath.set(normalizeComparablePath(project.project_path), {
+      ownerUserId: project.owner_user_id ?? null,
+      visibility: project.visibility ?? null,
+      projectId: project.project_id,
+    });
   }
+
+  const sharesCache = new Map<string, number[]>();
+  const sharedUserIdsFor = (projectId: string): number[] => {
+    const cached = sharesCache.get(projectId);
+    if (cached) return cached;
+    const ids = projectsDb.getProjectSharedUserIds(projectId);
+    sharesCache.set(projectId, ids);
+    return ids;
+  };
 
   return sessions.filter((session) => {
     const key = normalizeComparablePath(session.project_path ?? '');
-    if (!key || !ownerByPath.has(key)) {
+    if (!key || !metaByPath.has(key)) {
       return true;
     }
 
+    const meta = metaByPath.get(key)!;
     return canViewerSeeProject({
-      ownerUserId: ownerByPath.get(key) ?? null,
+      ownerUserId: meta.ownerUserId,
       viewerUserId: viewer.userId,
       viewerUsername: viewer.username,
+      projectPath: session.project_path ?? null,
+      visibility: meta.visibility,
+      sharedUserIds: sharedUserIdsFor(meta.projectId),
     });
   });
 }

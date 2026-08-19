@@ -132,6 +132,12 @@ do_start() {
     return 1
   fi
 
+  # libuv 线程池:默认 4 太小,单进程多用户下所有 fs 操作互相排队。在 node 启动
+  # 前 export 一定生效(load-env.js 里也设了一份作为 npm run server 直跑时的兜底)。
+  # 外部已设则尊重外部。
+  : "${UV_THREADPOOL_SIZE:=16}"
+  export UV_THREADPOOL_SIZE
+
   # env -u API_KEY:见文件头第 3 条。
   nohup env -u API_KEY npm run server > "$LOG_FILE" 2>&1 &
   local start_pid=$!

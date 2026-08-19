@@ -52,7 +52,7 @@
     "clearInput": "Eingabe leeren",
     "scrollToBottom": "Nach unten scrollen",
     "attachmentPath": "Pfad",
-    "modelHint": "Current model: {{model}} · type /models to switch"
+    "modelHint": "Aktuelles Modell: {{model}} · zum Wechseln klicken"
   },
   "providerSelection": {
     "pressToSearch": "Drücke <kbd>{{shortcut}}</kbd>, um Sitzungen, Dateien und Commits zu durchsuchen"

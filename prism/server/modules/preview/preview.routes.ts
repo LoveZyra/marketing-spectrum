@@ -3,8 +3,9 @@ import path from 'node:path';
 
 import express, { type RequestHandler, type Router } from 'express';
 
-import { projectsDb } from '@/modules/database/index.js';
+import { projectsDb, resolveVisibleProjectRoot } from '@/modules/database/index.js';
 import { validatePathInProject } from '@/modules/files/index.js';
+import { readRequestViewer } from '@/shared/project-visibility.js';
 import {
   PREVIEW_PAGE_CSP,
   contentTypeFor,
@@ -42,7 +43,9 @@ export function createPreviewRouter(dependencies: PreviewRouterDependencies): Ro
 
   router.post('/:projectId/preview-ticket', async (req, res) => {
     const projectId = String(req.params.projectId ?? '');
-    const projectRoot = projectsDb.getProjectPathById(projectId);
+    // 归属校验:签出的票据由公开 /preview/:ticket/* 吐字节,所以铸票这一步必须
+    // 确认调用者能看这个项目 —— 否则拿到别人的 projectId 就能预览其文件。
+    const projectRoot = resolveVisibleProjectRoot(readRequestViewer(req), projectId);
     if (!projectRoot) {
       return res.status(404).json({ error: 'Project not found' });
     }

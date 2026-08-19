@@ -571,6 +571,27 @@ export function useChatComposerState({
     );
   }, [executeCommand]);
 
+  /**
+   * 打开 /models 弹窗 —— 给输入框上的模型徽标点击用。
+   *
+   * 和 showCostModal 同一个形状:走 executeCommand 而不是直接 set 弹窗状态,
+   * 这样点徽标和敲 /models 是**同一条代码路径**,弹窗拿到的数据(当前模型、
+   * provider、可选列表)不会因入口不同而分叉。preserveInput:点徽标不该吃掉
+   * 用户已经打了一半的消息。
+   */
+  const showModelsModal = useCallback(() => {
+    executeCommand(
+      {
+        name: '/models',
+        description: 'Browse available models for the active provider',
+        namespace: 'builtin',
+        metadata: { type: 'builtin' },
+      } as SlashCommand,
+      '/models',
+      { preserveInput: true },
+    );
+  }, [executeCommand]);
+
   const {
     slashCommands,
     slashCommandsCount,
@@ -1574,5 +1595,6 @@ export function useChatComposerState({
     commandModalPayload,
     closeCommandModal,
     showCostModal,
+    showModelsModal,
   };
 }

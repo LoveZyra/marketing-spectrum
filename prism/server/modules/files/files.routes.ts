@@ -7,7 +7,8 @@ import express, { type RequestHandler, type Router } from 'express';
 import mime from 'mime-types';
 import multer from 'multer';
 
-import { projectsDb } from '@/modules/database/index.js';
+import { projectsDb, resolveVisibleProjectRoot } from '@/modules/database/index.js';
+import { readRequestViewer } from '@/shared/project-visibility.js';
 import {
   getFileTree,
   getFileTreeMaxEntries,
@@ -362,7 +363,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
 
       // Resolve the absolute project root via the DB-backed helper; the
       // caller passes the DB-assigned `projectId`, not a folder name.
-      const projectRoot = await projectsDb.getProjectPathById(projectId);
+      const projectRoot = resolveVisibleProjectRoot(readRequestViewer(req), projectId);
       if (!projectRoot) {
         return res.status(404).json({ error: 'Project not found' });
       }
@@ -403,7 +404,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
 
       // Projects are now addressed by DB `projectId`, resolved to their path here.
-      const projectRoot = await projectsDb.getProjectPathById(projectId);
+      const projectRoot = resolveVisibleProjectRoot(readRequestViewer(req), projectId);
       if (!projectRoot) {
         return res.status(404).json({ error: 'Project not found' });
       }
@@ -464,7 +465,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
 
       // Projects are now addressed by DB `projectId`, resolved to their path here.
-      const projectRoot = await projectsDb.getProjectPathById(projectId);
+      const projectRoot = resolveVisibleProjectRoot(readRequestViewer(req), projectId);
       if (!projectRoot) {
         return res.status(404).json({ error: 'Project not found' });
       }
@@ -501,7 +502,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
     try {
       // Resolve the project's absolute path through the DB (projectId is the
       // primary key of the `projects` table after the identifier migration).
-      const actualPath = await projectsDb.getProjectPathById(req.params.projectId as string);
+      const actualPath = resolveVisibleProjectRoot(readRequestViewer(req), req.params.projectId as string);
       if (!actualPath) {
         return res.status(404).json({ error: 'Project not found' });
       }
@@ -583,7 +584,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
 
       // Resolve the project directory through the DB using the new projectId.
-      const projectRoot = await projectsDb.getProjectPathById(projectId);
+      const projectRoot = resolveVisibleProjectRoot(readRequestViewer(req), projectId);
       if (!projectRoot) {
         return res.status(404).json({ error: 'Project not found' });
       }
@@ -659,7 +660,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
 
       // Resolve the project directory through the DB using the new projectId.
-      const projectRoot = await projectsDb.getProjectPathById(projectId);
+      const projectRoot = resolveVisibleProjectRoot(readRequestViewer(req), projectId);
       if (!projectRoot) {
         return res.status(404).json({ error: 'Project not found' });
       }
@@ -734,7 +735,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
 
       // Resolve the project directory through the DB using the new projectId.
-      const projectRoot = await projectsDb.getProjectPathById(projectId);
+      const projectRoot = resolveVisibleProjectRoot(readRequestViewer(req), projectId);
       if (!projectRoot) {
         return res.status(404).json({ error: 'Project not found' });
       }
@@ -891,7 +892,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
           : uploadedRequestFiles.length;
 
         // Resolve the project directory through the DB using the new projectId.
-        const projectRoot = await projectsDb.getProjectPathById(projectId);
+        const projectRoot = resolveVisibleProjectRoot(readRequestViewer(req), projectId);
         if (!projectRoot) {
           return res.status(404).json({ error: 'Project not found' });
         }
@@ -1029,7 +1030,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         return res.status(413).json({ error: `File too large. Maximum size is ${MAX_FILE_UPLOAD_SIZE_LABEL}.` });
       }
       const projectId = req.params.projectId as string;
-      const projectRoot = await projectsDb.getProjectPathById(projectId);
+      const projectRoot = resolveVisibleProjectRoot(readRequestViewer(req), projectId);
       if (!projectRoot) return res.status(404).json({ error: 'Project not found' });
 
       // 目标目录在 start 就校验一次:让越权路径在传字节之前失败,而不是传完 1GB 才被拒。
@@ -1136,7 +1137,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         });
       }
 
-      const projectRoot = await projectsDb.getProjectPathById(session.projectId);
+      const projectRoot = resolveVisibleProjectRoot(readRequestViewer(req), session.projectId);
       if (!projectRoot) {
         dropUploadChunkSession(uploadId);
         return res.status(404).json({ error: 'Project not found' });

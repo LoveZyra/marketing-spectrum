@@ -11,7 +11,10 @@ const projectRow = {
   isStarred: 0,
   isArchived: 0,
   owner_user_id: null,
+  visibility: null as string | null,
 };
+
+const noShares = (): void => undefined;
 
 test('createProject throws when project path is missing', async () => {
   await assert.rejects(
@@ -35,6 +38,7 @@ test('createProject throws when path validation fails', async () => {
           ensureWorkspaceDirectory: async () => undefined,
           persistProjectPath: () => ({ outcome: 'created', project: projectRow }),
           getProjectByPath: () => projectRow,
+          setProjectShares: noShares,
         },
       ),
     (error: unknown) => {
@@ -57,6 +61,7 @@ test('createProject throws conflict when active project path already exists', as
           ensureWorkspaceDirectory: async () => undefined,
           persistProjectPath: () => ({ outcome: 'active_conflict', project: projectRow }),
           getProjectByPath: () => projectRow,
+          setProjectShares: noShares,
         },
       ),
     (error: unknown) => {
@@ -80,7 +85,7 @@ test('createProject falls back to directory name when custom name is not provide
       persistProjectPath: (_projectPath, customName) => {
         capturedCustomName = customName;
         return {
-          outcome: 'created',
+          outcome: 'created' as const,
           project: {
             ...projectRow,
             custom_project_name: customName,
@@ -88,6 +93,7 @@ test('createProject falls back to directory name when custom name is not provide
         };
       },
       getProjectByPath: () => projectRow,
+      setProjectShares: noShares,
     },
   );
 
@@ -111,9 +117,36 @@ test('createProject returns archived reuse outcome when archived row is reused',
         },
       }),
       getProjectByPath: () => projectRow,
+      setProjectShares: noShares,
     },
   );
 
   assert.equal(result.outcome, 'reactivated_archived');
   assert.equal(result.project.isArchived, true);
+});
+
+test('createProject:「指定用户」新建时写入授权,复活归档路径时不写', async () => {
+  const sharesWritten: Array<{ projectId: string; userIds: number[]; grantedBy: number | null }> = [];
+  const deps = (outcome: 'created' | 'reactivated_archived') => ({
+    validatePath: async () => ({ valid: true, resolvedPath: '/workspace/my-project' }),
+    ensureWorkspaceDirectory: async () => undefined,
+    persistProjectPath: () => ({ outcome, project: projectRow }),
+    getProjectByPath: () => projectRow,
+    setProjectShares: (projectId: string, userIds: number[], grantedBy: number | null) => {
+      sharesWritten.push({ projectId, userIds, grantedBy });
+    },
+  });
+
+  await createProject(
+    { projectPath: '/workspace/my-project', ownerUserId: 7, sharedUserIds: [3, 5] },
+    deps('created'),
+  );
+  assert.deepEqual(sharesWritten, [{ projectId: 'project-1', userIds: [3, 5], grantedBy: 7 }]);
+
+  // 复活归档路径:权限不动(与 owner/visibility 同规),不追加授权。
+  await createProject(
+    { projectPath: '/workspace/my-project', ownerUserId: 7, sharedUserIds: [3] },
+    deps('reactivated_archived'),
+  );
+  assert.equal(sharesWritten.length, 1);
 });

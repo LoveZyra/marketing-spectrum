@@ -231,7 +231,23 @@ async function getSessionMessages(
 const INTERNAL_CONTENT_PREFIXES = [
   '<system-reminder>',
   'Caveat:',
+  '<local-command-caveat>',
   '[Request interrupted',
+  // Skill 被调用时,CLI 把整份 SKILL.md 连同"Base directory for this skill: …"
+  // 前缀注入成一条 user 消息喂给模型 —— 那是给模型看的说明书,不是用户发言。
+  // 不滤掉它,聊天里就会凭空出现一大段紫色"用户消息"(技能全文)。
+  'Base directory for this skill:',
+  // SDK 的自动重试提示:模型给了空响应 / 吐了解析不了的工具调用时,CLI 会以
+  // user 身份注入这两句催它重来。是机器对机器的耳语,不是用户发言。
+  '[Your previous response had no visible output',
+  'Your tool call was malformed',
+  // 压缩续接(耗尽上下文后 CLI 注入的"本会话接续自…"+全文摘要)与跨机续接。
+  'This session is being continued',
+  // 本地命令执行后 CLI 注入的"不用回应"占位。
+  'No response requested.',
+  // 工具调用被打断/移除时的占位说明。
+  '[Tool use interrupted]',
+  '[Tool use removed]',
 ] as const;
 
 function isInternalContent(content: string): boolean {
@@ -613,6 +629,12 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     if (raw.message?.role === 'assistant' && raw.message?.content) {
+      // 响应元数据里的真实模型名。历史(jsonl 行)和实时(SDK 流)在这里共用同一个
+      // 归一化,所以一处透传,两条路的 assistant 消息都会带上。
+      const assistantModel =
+        typeof raw.message.model === 'string' && raw.message.model.trim()
+          ? raw.message.model.trim()
+          : undefined;
       if (Array.isArray(raw.message.content)) {
         let partIndex = 0;
         for (const part of raw.message.content) {
@@ -625,6 +647,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               kind: 'text',
               role: 'assistant',
               content: part.text,
+              model: assistantModel,
             }));
           } else if (part.type === 'tool_use') {
             messages.push(createNormalizedMessage({
@@ -658,6 +681,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           kind: 'text',
           role: 'assistant',
           content: raw.message.content,
+          model: assistantModel,
         }));
       }
       return messages;

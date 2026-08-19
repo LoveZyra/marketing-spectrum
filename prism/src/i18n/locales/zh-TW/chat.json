@@ -52,7 +52,7 @@
     "clearInput": "清空輸入",
     "scrollToBottom": "捲動到底部",
     "attachmentPath": "路徑",
-    "modelHint": "目前模型：{{model}} · 輸入 /models 切換"
+    "modelHint": "目前模型：{{model}} · 點擊切換"
   },
   "thinkingMode": {
     "selector": {

@@ -1,12 +1,15 @@
-import { Check, ChevronDown, ChevronRight, Edit3, Star, Trash2, X } from 'lucide-react';
+import { useState } from 'react';
+import { Check, ChevronDown, ChevronRight, Edit3, ShieldCheck, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
+import { useAuth } from '../../../auth/context/AuthContext';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionActivityMap } from '../../../../hooks/useSessionProtection';
-import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
+import type { SessionWithProvider } from '../../types/types';
 
+import ProjectPermissionsModal from './ProjectPermissionsModal';
 import SidebarProjectSessions from './SidebarProjectSessions';
 
 type SidebarProjectItemProps = {
@@ -48,6 +51,8 @@ type SidebarProjectItemProps = {
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
+  /** 权限保存成功后刷新项目列表,让徽标(公共/已共享·N)立即跟上。 */
+  onProjectsRefresh?: () => void;
   t: TFunction;
 };
 
@@ -90,8 +95,11 @@ export default function SidebarProjectItem({
   onStartEditingSession,
   onCancelEditingSession,
   onSaveEditingSession,
+  onProjectsRefresh,
   t,
 }: SidebarProjectItemProps) {
+  const { user } = useAuth();
+  const [showPermissions, setShowPermissions] = useState(false);
   // Project identity is tracked by the DB-assigned `projectId` everywhere
   // after the projectName → projectId migration.
   const isSelected = selectedProject?.projectId === project.projectId;
@@ -100,7 +108,24 @@ export default function SidebarProjectItem({
   const sessionCountDisplay = getSessionCountDisplay(project, sessions);
   const sessionCountLabel = `${sessionCountDisplay} session${totalSessionCount === 1 ? '' : 's'}`;
 
-  const isPublicProject = project.ownerUserId === null;
+  // "公共" 只在项目真正对所有人可见时才打(无主且落在 PRISM_PUBLIC_WORKSPACE 下,
+  // 由后端 isPublic 判定)。以前拿 ownerUserId===null 当"公共"是错的 —— 没配公共目录
+  // 时,无主项目其实只有 root 看得到,不该标"公共"。
+  const isPublicProject = project.isPublic === true;
+  // 无主但不在公共目录:只有 root 收得到这类项目(非 root 根本不会出现在列表里)。
+  // 给它一个"仅 root"标,让管理员一眼看出这些是未认领、仅自己可见的目录。
+  const isRootOnlyUnclaimed = !isPublicProject && project.ownerUserId === null;
+  // 被「指定用户」授权给当前用户的项目 —— 打"共享"标,说明它是别人开放给你的。
+  const isSharedToViewer = project.sharedWithViewer === true;
+  // 反向视角:owner 和 root 不是接收方,靠授权人数看出"这个项目共享过"。
+  const sharedOutCount = !isSharedToViewer ? (project.sharedUserCount ?? 0) : 0;
+  // 权限管理入口:root 或项目 owner 才显示。这只是入口显隐 —— 服务端对
+  // GET/PUT /permissions 有同样的校验(非 owner/root 一律 403),边界在后端。
+  const canManagePermissions =
+    user?.isRoot === true ||
+    (project.ownerUserId != null &&
+      user?.id != null &&
+      String(project.ownerUserId) === String(user.id));
 
   const toggleProject = () => onToggleProject(project.projectId);
   const toggleStarProject = () => onToggleStarProject(project.projectId);
@@ -191,6 +216,21 @@ export default function SidebarProjectItem({
                             {t('project.public', { defaultValue: '公共' })}
                           </span>
                         )}
+                        {isRootOnlyUnclaimed && (
+                          <span className="shrink-0 rounded bg-amber-100 px-1 py-px text-[10px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                            {t('project.rootOnly', { defaultValue: '仅 root' })}
+                          </span>
+                        )}
+                        {isSharedToViewer && (
+                          <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[10px] text-primary">
+                            {t('project.shared', { defaultValue: '共享' })}
+                          </span>
+                        )}
+                        {sharedOutCount > 0 && (
+                          <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[10px] text-primary">
+                            {t('project.sharedOut', { defaultValue: '已共享' })}·{sharedOutCount}
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-muted-foreground">{sessionCountLabel}</p>
                     </>
@@ -241,6 +281,19 @@ export default function SidebarProjectItem({
                     >
                       <Edit3 className="h-4 w-4 text-primary" />
                     </button>
+
+                    {canManagePermissions && (
+                      <button
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setShowPermissions(true);
+                        }}
+                        title={t('tooltips.managePermissions', { defaultValue: '项目权限' })}
+                      >
+                        <ShieldCheck className="h-4 w-4 text-primary" />
+                      </button>
+                    )}
 
                     <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted/30">
                       {isExpanded ? (
@@ -319,12 +372,27 @@ export default function SidebarProjectItem({
                     <div className="truncate text-sm font-normal text-foreground" title={project.displayName}>
                       {project.displayName}
                     </div>
-                    {/* Only public projects get a marker. Everything else in
-                        the list is already the viewer's own — root aside, the
-                        server never sends anyone another account's projects. */}
+                    {/* 徽标含义:公共 = 无主且在公共目录下,对所有人可见;
+                        仅 root = 无主但没在公共目录下,只有 root 收得到。
+                        有主项目不打标 —— root 之外,后端从不把别人账号的项目发给你。 */}
                     {isPublicProject && (
                       <span className="shrink-0 rounded bg-muted px-1 py-px text-[10px] text-muted-foreground">
                         {t('project.public', { defaultValue: '公共' })}
+                      </span>
+                    )}
+                    {isRootOnlyUnclaimed && (
+                      <span className="shrink-0 rounded bg-amber-100 px-1 py-px text-[10px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                        {t('project.rootOnly', { defaultValue: '仅 root' })}
+                      </span>
+                    )}
+                    {isSharedToViewer && (
+                      <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[10px] text-primary">
+                        {t('project.shared', { defaultValue: '共享' })}
+                      </span>
+                    )}
+                    {sharedOutCount > 0 && (
+                      <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[10px] text-primary">
+                        {t('project.sharedOut', { defaultValue: '已共享' })}·{sharedOutCount}
                       </span>
                     )}
                   </div>
@@ -376,6 +444,18 @@ export default function SidebarProjectItem({
                 >
                   <Edit3 className="h-3 w-3" />
                 </div>
+                {canManagePermissions && (
+                  <div
+                    className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setShowPermissions(true);
+                    }}
+                    title={t('tooltips.managePermissions', { defaultValue: '项目权限' })}
+                  >
+                    <ShieldCheck className="h-3 w-3" />
+                  </div>
+                )}
                 <div
                   className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-red-50 group-hover:opacity-100 dark:hover:bg-red-900/20"
                   onClick={(event) => {
@@ -422,6 +502,16 @@ export default function SidebarProjectItem({
         onNewSession={onNewSession}
         t={t}
       />
+
+      {/* 挂在根 div 下而不是上面的 <Button> 里:portal 的合成事件沿 React 树冒泡,
+          放进 Button 会让弹窗内的每次点击都触发选中/展开项目。 */}
+      {showPermissions && (
+        <ProjectPermissionsModal
+          project={project}
+          onClose={() => setShowPermissions(false)}
+          onSaved={() => onProjectsRefresh?.()}
+        />
+      )}
     </div>
   );
 }

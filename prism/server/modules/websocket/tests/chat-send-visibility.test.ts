@@ -166,20 +166,40 @@ describe('chat.send 的归属校验', () => {
   });
 
   /**
-   * `owner_user_id = NULL` 表示公开,是有意的设计(见 project-owner-backfill)。
-   * 这道门守的是归属,不是"禁止协作" —— 公开项目仍然人人可发。钉住这一条,
-   * 免得以后有人把守卫收紧成"只有 owner 能发"而悄悄改掉公开项目的语义。
+   * 无主项目的口径 2026-08-14 变了:**不再默认公开**,只有落在
+   * PRISM_PUBLIC_WORKSPACE 之下才对所有人可见/可发,否则仅 root。这条钉住新语义
+   * 的两侧:公共目录内人人可发,目录外普通人被挡、root 仍可发。
    */
-  test('公开项目(owner 为 NULL)对所有人仍然可发', async () => {
-    await withIsolatedDatabase(async () => {
-      const bob = { id: Number(userDb.createUser('bob', 'hash').id), username: 'bob' };
-      projectsDb.createProjectPath('/workspace/shared', null, null);
-      sessionsDb.createAppSession('s-shared', 'claude', '/workspace/shared', null);
+  test('无主项目:公共目录内人人可发,目录外仅 root', async () => {
+    const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
+    process.env.PRISM_PUBLIC_WORKSPACE = '/workspace/public';
+    try {
+      await withIsolatedDatabase(async () => {
+        const bob = { id: Number(userDb.createUser('bob', 'hash').id), username: 'bob' };
+        userDb.createUser('boss', 'hash'); // PRISM_ROOT_USERS=boss(见 withIsolatedDatabase)
 
-      const { ws, spawned } = connect(bob);
-      await send(ws, { type: 'chat.send', sessionId: 's-shared', content: 'hi' });
+        // 公共目录内的无主项目 —— bob 可发
+        projectsDb.createProjectPath('/workspace/public/shared', null, null);
+        sessionsDb.createAppSession('s-pub', 'claude', '/workspace/public/shared', null);
+        const pub = connect(bob);
+        await send(pub.ws, { type: 'chat.send', sessionId: 's-pub', content: 'hi' });
+        assert.equal(pub.spawned.length, 1, '公共目录内 bob 应能发');
 
-      assert.equal(spawned.length, 1);
-    });
+        // 目录外的无主项目 —— bob 被挡
+        projectsDb.createProjectPath('/workspace/orphan', null, null);
+        sessionsDb.createAppSession('s-orphan', 'claude', '/workspace/orphan', null);
+        const denied = connect(bob);
+        await send(denied.ws, { type: 'chat.send', sessionId: 's-orphan', content: 'hi' });
+        assert.deepEqual(denied.spawned, [], '目录外的无主项目,bob 不该能发');
+
+        // 同一个目录外项目 —— root 仍可发
+        const asRoot = connect({ id: 2, username: 'boss' });
+        await send(asRoot.ws, { type: 'chat.send', sessionId: 's-orphan', content: 'hi' });
+        assert.equal(asRoot.spawned.length, 1, 'root 应能发进任何项目');
+      });
+    } finally {
+      if (previousPublic === undefined) delete process.env.PRISM_PUBLIC_WORKSPACE;
+      else process.env.PRISM_PUBLIC_WORKSPACE = previousPublic;
+    }
   });
 });

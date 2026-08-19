@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { projectVisibilityInput, projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { generateDisplayName } from '@/modules/projects/index.js';
 import { ChatSessionWriter } from '@/modules/websocket/services/chat-session-writer.service.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
@@ -127,7 +127,7 @@ async function broadcastCanonicalSessionUpsert(appSessionId: string): Promise<vo
   connectedClients.forEach((client) => {
     if (client.readyState !== WS_OPEN_STATE) return;
     if (!canViewerSeeProject({
-      ownerUserId: project?.owner_user_id ?? null,
+      ...projectVisibilityInput(project, projectPath ?? null),
       viewerUserId: client.prismUserId,
       viewerUsername: client.prismUsername,
     })) return;

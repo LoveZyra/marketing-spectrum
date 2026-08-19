@@ -8,9 +8,12 @@ import {
   AUDIT_LOG_TABLE_SCHEMA_SQL,
   LAST_SCANNED_AT_SQL,
   PROJECTS_TABLE_SCHEMA_SQL,
+  PROJECT_SHARES_TABLE_SCHEMA_SQL,
+  PROJECT_STARS_TABLE_SCHEMA_SQL,
   SESSIONS_TABLE_SCHEMA_SQL,
   USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL,
 } from '@/modules/database/schema.js';
+import { listRootUsernames } from '@/shared/root-users.js';
 
 const SQLITE_UUID_SQL = `
 lower(hex(randomblob(4))) || '-' ||
@@ -516,6 +519,56 @@ const addProjectOwnerColumn = (db: Database): void => {
   addColumnToTableIfNotExists(db, 'projects', columnNames, 'owner_user_id', 'INTEGER');
 };
 
+/**
+ * `projects.visibility` + `project_shares` —— 创建项目时的显式权限三选
+ * (个人 / 公共 / 指定用户)。visibility='public' 对所有登录用户可见;
+ * project_shares 逐用户授权。NULL/无行 = 原有语义不变(个人按 owner,
+ * 无主仅 root、公共目录例外),所以存量数据零迁移成本。
+ */
+const addProjectVisibilityAndShares = (db: Database): void => {
+  const projectsTableInfo = db.prepare('PRAGMA table_info(projects)').all() as TableInfoRow[];
+  const columnNames = projectsTableInfo.map((column) => column.name);
+  addColumnToTableIfNotExists(db, 'projects', columnNames, 'visibility', 'TEXT DEFAULT NULL');
+  db.exec(PROJECT_SHARES_TABLE_SCHEMA_SQL);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_project_shares_user ON project_shares(user_id)');
+};
+
+/**
+ * 收藏按用户隔离(project_stars),并做一次性搬迁:
+ * 老的全局 isStarred=1 归属给项目 owner;无主项目的旧收藏归给全部 root 账号
+ * (无主项目本来只有 root 看得到,旧标记只可能是 root 打的)。表已存在时
+ * 整段跳过 —— 搬迁只跑一次,之后两边各自演化互不干扰。
+ */
+const addProjectStarsTable = (db: Database): void => {
+  const existing = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_stars'")
+    .get();
+  db.exec(PROJECT_STARS_TABLE_SCHEMA_SQL);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_project_stars_user ON project_stars(user_id)');
+  if (existing) return;
+
+  db.prepare(`
+    INSERT OR IGNORE INTO project_stars (project_id, user_id)
+    SELECT project_id, owner_user_id FROM projects
+    WHERE isStarred = 1 AND owner_user_id IS NOT NULL
+  `).run();
+
+  const rootIds = listRootUsernames()
+    .map((username) => db
+      .prepare('SELECT id FROM users WHERE username = ? COLLATE NOCASE')
+      .get(username) as { id: number } | undefined)
+    .filter((row): row is { id: number } => row !== undefined)
+    .map((row) => row.id);
+  const insertForRoot = db.prepare(`
+    INSERT OR IGNORE INTO project_stars (project_id, user_id)
+    SELECT project_id, ? FROM projects
+    WHERE isStarred = 1 AND owner_user_id IS NULL
+  `);
+  for (const rootId of rootIds) {
+    insertForRoot.run(rootId);
+  }
+};
+
 export const runMigrations = (db: Database) => {
   try {
     const usersTableInfo = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
@@ -565,6 +618,8 @@ export const runMigrations = (db: Database) => {
     db.exec(PROJECTS_TABLE_SCHEMA_SQL);
     rebuildProjectsTableWithPrimaryKeySchema(db);
     addProjectOwnerColumn(db);
+    addProjectVisibilityAndShares(db);
+    addProjectStarsTable(db);
 
     migrateLegacyWorkspaceTableIntoProjects(db);
     rebuildSessionsTableWithProjectSchema(db);

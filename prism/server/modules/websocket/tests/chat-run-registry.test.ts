@@ -70,6 +70,13 @@ test('live events are remapped to the app session id and sequenced', async () =>
 });
 
 test('session_created is swallowed and persisted as the provider-id mapping', async () => {
+  // 广播现在按项目可见性过滤。这条会话建在无主项目 /workspace/demo 下,而连接是
+  // 匿名的(无 prismUserId)—— 新口径下匿名看不到非公共的无主项目。把
+  // /workspace 声明成公共目录,让这条测试专注它本来要测的东西(session_created →
+  // 映射持久化),而不是被可见性过滤挡在门外。
+  const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
+  process.env.PRISM_PUBLIC_WORKSPACE = '/workspace';
+  try {
   await withIsolatedDatabase(() => {
     sessionsDb.createAppSession('app-run-2', 'claude', '/workspace/demo');
     const connection = new FakeConnection();
@@ -99,6 +106,10 @@ test('session_created is swallowed and persisted as the provider-id mapping', as
     assert.equal(run.providerSessionId, 'native-7');
     assert.equal(sessionsDb.getSessionById('app-run-2')?.provider_session_id, 'native-7');
   });
+  } finally {
+    if (previousPublic === undefined) delete process.env.PRISM_PUBLIC_WORKSPACE;
+    else process.env.PRISM_PUBLIC_WORKSPACE = previousPublic;
+  }
 });
 
 test('complete marks the run finished and duplicate completes are dropped', async () => {

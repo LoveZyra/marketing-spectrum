@@ -67,14 +67,29 @@ describe('会话可见性', () => {
     });
   });
 
-  test('公共项目(owner 为 NULL)下的会话所有人可见', async () => {
-    await withIsolatedDatabase(() => {
-      const bob = { id: Number(userDb.createUser('bob', 'hash').id) };
-      projectsDb.createProjectPath('/workspace/shared');
-      sessionsDb.createAppSession('s-shared', 'claude', '/workspace/shared');
+  test('无主项目下的会话:在公共目录内所有人可见,目录外仅 root', async () => {
+    // 2026-08-14 口径变更:无主 ≠ 公开,取决于是否落在 PRISM_PUBLIC_WORKSPACE 下。
+    const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
+    process.env.PRISM_PUBLIC_WORKSPACE = '/workspace/public';
+    try {
+      await withIsolatedDatabase(() => {
+        const bob = { id: Number(userDb.createUser('bob', 'hash').id) };
 
-      assert.equal(canViewerSeeSession('s-shared', { userId: bob.id, username: 'bob' }), true);
-    });
+        // 无主 + 公共目录内 —— 所有人可见
+        projectsDb.createProjectPath('/workspace/public/shared');
+        sessionsDb.createAppSession('s-pub', 'claude', '/workspace/public/shared');
+        assert.equal(canViewerSeeSession('s-pub', { userId: bob.id, username: 'bob' }), true);
+
+        // 无主 + 公共目录外 —— bob 看不到,root(boss)看得到
+        projectsDb.createProjectPath('/workspace/orphan');
+        sessionsDb.createAppSession('s-orphan', 'claude', '/workspace/orphan');
+        assert.equal(canViewerSeeSession('s-orphan', { userId: bob.id, username: 'bob' }), false);
+        assert.equal(canViewerSeeSession('s-orphan', { userId: 999, username: 'boss' }), true);
+      });
+    } finally {
+      if (previousPublic === undefined) delete process.env.PRISM_PUBLIC_WORKSPACE;
+      else process.env.PRISM_PUBLIC_WORKSPACE = previousPublic;
+    }
   });
 
   /**

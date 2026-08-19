@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { projectsDb, scanStateDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/index.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
-import { canViewerSeeProject } from '@/shared/project-visibility.js';
+import { canViewerSeeProject, isPublicWorkspacePath } from '@/shared/project-visibility.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -30,8 +30,23 @@ export type ProjectListItem = {
   displayName: string;
   fullPath: string;
   isStarred: boolean;
-  /** Owning account id; null means the project is public. */
+  /**
+   * Owning account id. `null` = unclaimed —— 只有 root 看得到,除非它落在
+   * PRISM_PUBLIC_WORKSPACE 之下(那时才对所有人可见)。
+   */
   ownerUserId: number | null;
+  /**
+   * 真正"对所有人可见"才为 true:显式 visibility='public'(创建时选的),
+   * 或无主 **且** 在公共目录下。前端据此打"公共"徽标。
+   */
+  isPublic: boolean;
+  /** 这个项目是被「指定用户」授权给当前 viewer 的 —— 前端打"共享"徽标。 */
+  sharedWithViewer: boolean;
+  /**
+   * 授权名单人数。owner 和 root 不是接收方,`sharedWithViewer` 恒 false,
+   * 没有这个数字他们就看不出一个项目共享过 —— 前端据此打"已共享·N"徽标。
+   */
+  sharedUserCount: number;
   sessions: SessionSummary[];
   sessionMeta: {
     hasMore: boolean;
@@ -59,6 +74,12 @@ type GetProjectsWithSessionsOptions = {
    * `null`/omitted returns everything — that is what root sees.
    */
   visibleTo?: number | null;
+  /**
+   * 收藏视角:调用者本人的用户 id。与 visibleTo 是两码事 —— root 的
+   * visibleTo 是 null(看所有项目),但收藏必须只算 root 自己那份。
+   * null/omitted(平台模式)回退老的全局 isStarred 列。
+   */
+  starsFor?: number | null;
 };
 
 type SessionPaginationOptions = {
@@ -243,13 +264,33 @@ function broadcastProgress(progress: ProgressUpdate, visibleTo: number | null) {
 }
 
 /**
+ * 项目列表请求前的会话同步 —— 带节流。
+ *
+ * 原来每次 `/api/projects` 都无条件 `synchronizeSessions()`,而那是对整个
+ * `~/.claude/projects` 的递归 readdir + 逐 jsonl 串行 stat,量级是**全体用户**的
+ * 会话文件数,不是当前调用者的。而原生 watcher 一直在实时把库刷新,所以两次扫描
+ * 之间的那次全量走盘几乎全是冗余。节流窗口内跳过,把新鲜度交给 watcher。
+ *
+ * 首次(getLastScannedAt 为 null)或距上次扫描超过窗口才真扫。
+ */
+const SYNC_THROTTLE_MS = 10_000;
+
+async function maybeSynchronizeSessions(): Promise<void> {
+  const last = scanStateDb.getLastScannedAt();
+  if (last && Date.now() - last.getTime() < SYNC_THROTTLE_MS) {
+    return; // watcher 已经在维护库,窗口内不重复全量走盘
+  }
+  await sessionSynchronizerService.synchronizeSessions();
+}
+
+/**
  * Reads all projects from DB and returns normalized session summaries.
  */
 export async function getProjectsWithSessions(
   options: GetProjectsWithSessionsOptions = {}
 ): Promise<ProjectListItem[]> {
   if (!options.skipSynchronization) {
-    await sessionSynchronizerService.synchronizeSessions();
+    await maybeSynchronizeSessions();
   }
 
   const projectRows = projectsDb.getProjectPaths(options.visibleTo ?? null) as Array<{
@@ -258,10 +299,16 @@ export async function getProjectsWithSessions(
     custom_project_name?: string | null;
     isStarred?: number;
     owner_user_id?: number | null;
+    visibility?: string | null;
   }>;
   const totalProjects = projectRows.length;
   const projects: ProjectListItem[] = [];
   let processedProjects = 0;
+
+  // 一次取全调用者的收藏集合,循环里 O(1) 判定。
+  const starredSet = options.starsFor != null
+    ? new Set(projectsDb.getStarredProjectIdsForUser(options.starsFor))
+    : null;
 
   for (const row of projectRows) {
     processedProjects += 1;
@@ -286,13 +333,24 @@ export async function getProjectsWithSessions(
       offset: options.sessionsOffset,
     });
 
+    // 授权名单取一次,喂两个字段(是否授权给我 + 人数),避免双查。
+    const sharedUserIds = projectsDb.getProjectSharedUserIds(row.project_id);
+
     projects.push({
       projectId,
       path: projectPath,
       displayName,
       fullPath: projectPath,
-      isStarred: Boolean(row.isStarred),
+      isStarred: starredSet ? starredSet.has(projectId) : Boolean(row.isStarred),
       ownerUserId: row.owner_user_id ?? null,
+      // 公共 = 创建时显式选的 public,或(存量语义)无主且在公共目录下。
+      isPublic: row.visibility === 'public'
+        || ((row.owner_user_id ?? null) === null && isPublicWorkspacePath(projectPath)),
+      // 这个项目是被指定授权给当前 viewer 的(非本人、非公共,靠 project_shares 可见)。
+      sharedWithViewer: options.visibleTo != null
+        && (row.owner_user_id ?? null) !== options.visibleTo
+        && sharedUserIds.includes(options.visibleTo),
+      sharedUserCount: sharedUserIds.length,
       sessions: sessionsPage.sessions,
       sessionMeta: {
         hasMore: sessionsPage.hasMore,
@@ -316,10 +374,10 @@ export async function getProjectsWithSessions(
  * conversation history in the archive view regardless of each session's flag.
  */
 export async function getArchivedProjectsWithSessions(
-  options: Pick<GetProjectsWithSessionsOptions, 'skipSynchronization' | 'visibleTo'> = {},
+  options: Pick<GetProjectsWithSessionsOptions, 'skipSynchronization' | 'visibleTo' | 'starsFor'> = {},
 ): Promise<ArchivedProjectListItem[]> {
   if (!options.skipSynchronization) {
-    await sessionSynchronizerService.synchronizeSessions();
+    await maybeSynchronizeSessions();
   }
 
   const projectRows = projectsDb.getArchivedProjectPaths(options.visibleTo ?? null) as Array<{
@@ -328,9 +386,14 @@ export async function getArchivedProjectsWithSessions(
     custom_project_name?: string | null;
     isStarred?: number;
     owner_user_id?: number | null;
+    visibility?: string | null;
   }>;
 
   const archivedProjects: ArchivedProjectListItem[] = [];
+
+  const starredSet = options.starsFor != null
+    ? new Set(projectsDb.getStarredProjectIdsForUser(options.starsFor))
+    : null;
 
   for (const row of projectRows) {
     const displayName =
@@ -339,14 +402,21 @@ export async function getArchivedProjectsWithSessions(
         : await generateDisplayName(path.basename(row.project_path) || row.project_path, row.project_path);
 
     const sessionsPage = readProjectSessionsIncludingArchived(row.project_path);
+    const sharedUserIds = projectsDb.getProjectSharedUserIds(row.project_id);
 
     archivedProjects.push({
       projectId: row.project_id,
       path: row.project_path,
       displayName,
       fullPath: row.project_path,
-      isStarred: Boolean(row.isStarred),
+      isStarred: starredSet ? starredSet.has(row.project_id) : Boolean(row.isStarred),
       ownerUserId: row.owner_user_id ?? null,
+      isPublic: row.visibility === 'public'
+        || ((row.owner_user_id ?? null) === null && isPublicWorkspacePath(row.project_path)),
+      sharedWithViewer: options.visibleTo != null
+        && (row.owner_user_id ?? null) !== options.visibleTo
+        && sharedUserIds.includes(options.visibleTo),
+      sharedUserCount: sharedUserIds.length,
       isArchived: true,
       sessions: sessionsPage.sessions,
       sessionMeta: {

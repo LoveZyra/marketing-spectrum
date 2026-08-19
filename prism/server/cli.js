@@ -239,8 +239,6 @@ async function main() {
         case 'start':
             await startServer();
             break;
-            await startBrowserUseMcp();
-            break;
         case 'status':
         case 'info':
             showStatus();

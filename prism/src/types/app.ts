@@ -33,7 +33,7 @@ export type ProviderModelsCacheInfo = {
   source: 'memory' | 'disk' | 'fresh';
 };
 
-export type AppTab = 'chat' | 'files' | 'shell';
+export type AppTab = 'chat' | 'files' | 'shell' | 'notebook';
 
 export interface ProjectSession {
   id: string;
@@ -70,10 +70,21 @@ export interface Project {
   path?: string;
   isStarred?: boolean;
   /**
-   * Owning account id; `null` marks a public project that everyone sees.
-   * Undefined on payloads produced before ownership existed.
+   * Owning account id. `null` = unclaimed (only root sees it, unless it sits
+   * under PRISM_PUBLIC_WORKSPACE). Undefined on payloads produced before
+   * ownership existed. NOTE: null no longer implies "public" —— use `isPublic`.
    */
   ownerUserId?: number | null;
+  /**
+   * True only when the project is genuinely world-visible: explicitly created
+   * as public (visibility='public') or unclaimed AND under the configured
+   * public workspace. Drives the "公共" badge.
+   */
+  isPublic?: boolean;
+  /** 这个项目是被「指定用户」授权给当前登录用户的 —— 显示"共享"徽标。 */
+  sharedWithViewer?: boolean;
+  /** 授权名单人数;owner/root 视角靠它显示"已共享·N"(他们不是接收方)。 */
+  sharedUserCount?: number;
   sessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
   [key: string]: unknown;

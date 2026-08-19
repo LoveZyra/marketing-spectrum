@@ -23,7 +23,10 @@
     "close": "關閉",
     "reloadPreview": "重新載入",
     "editHtml": "回到原始碼",
-    "previewHtml": "預覽渲染效果"
+    "previewHtml": "預覽渲染效果",
+    "previewNotebook": "預覽 notebook",
+    "editNotebook": "檢視原始碼 (JSON)",
+    "openInJupyter": "在 JupyterLab 開啟"
   },
   "footer": {
     "lines": "行數：",
@@ -36,5 +39,10 @@
   },
   "filePreview": {
     "unsavedNotice": "預覽的是已儲存的檔案,儲存後才會看到最新改動。"
+  },
+  "notebook": {
+    "legacyFormat": "這個 notebook 是很舊的 nbformat 3 格式,預覽不支援 —— 可切換到原始碼檢視,或在 JupyterLab 裡開啟(會自動升級格式)。",
+    "parseFailed": "無法解析這個 notebook 檔案(JSON 結構不對)。可切換到原始碼檢視檢查內容。",
+    "empty": "空 notebook —— 還沒有任何單元格。"
   }
 }

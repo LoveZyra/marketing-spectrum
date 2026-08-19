@@ -61,8 +61,13 @@ interface ChatComposerProps {
   activity: SessionActivity | null;
   isLoading: boolean;
   onAbortSession: () => void;
-  /** Model this conversation is actually running. Null while it is unknown. */
+  /** Model alias this conversation is running (what the user picks). Null while unknown. */
   activeModel: string | null;
+  /**
+   * 网关实测出的真实模型名(别名 activeModel 背后实际由谁回答)。仅在自定义网关 +
+   * 实测过时有值;为空则 chip 只显示别名。
+   */
+  activeModelReal?: string | null;
   permissionMode: PermissionMode | string;
   /** Jump straight to a gear. Tab still cycles, handled in useChatComposerState. */
   onSelectMode: (mode: PermissionMode) => void;
@@ -73,6 +78,8 @@ interface ChatComposerProps {
   onSelectEffort: (effort: string) => void;
   tokenBudget: Record<string, unknown> | null;
   onShowTokenUsage: () => void;
+  /** 打开 /models 弹窗。模型徽标的点击入口 —— 和敲 /models 同一条路径。 */
+  onShowModelPicker: () => void;
   slashCommandsCount: number;
   onToggleCommandMenu: () => void;
   hasInput: boolean;
@@ -135,6 +142,7 @@ export default function ChatComposer({
   isLoading,
   onAbortSession,
   activeModel,
+  activeModelReal,
   permissionMode,
   onSelectMode,
   availablePermissionModes,
@@ -143,6 +151,7 @@ export default function ChatComposer({
   onSelectEffort,
   tokenBudget,
   onShowTokenUsage,
+  onShowModelPicker,
   slashCommandsCount,
   onToggleCommandMenu,
   hasInput,
@@ -198,6 +207,25 @@ export default function ChatComposer({
   const docInputRef = useRef<HTMLInputElement>(null);
   // prism: hidden file input for the generic attach-any-file button (all types).
   const anyInputRef = useRef<HTMLInputElement>(null);
+
+  // 模型切换后给 chip 一个短暂高亮 —— 弹窗关掉后,这是"确实切了"最直接的反馈。
+  // 只在"已知模型 → 另一个已知模型"时闪,首屏加载(null→X)不算切换,不打扰。
+  const [modelJustChanged, setModelJustChanged] = useState(false);
+  const previousActiveModelRef = useRef<string | null>(activeModel);
+  useEffect(() => {
+    const previous = previousActiveModelRef.current;
+    if (previous === activeModel) return;
+    previousActiveModelRef.current = activeModel;
+    if (!previous || !activeModel) return;
+    setModelJustChanged(true);
+    const timer = window.setTimeout(() => setModelJustChanged(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [activeModel]);
+
+  // 网关把别名解析成的真实模型。只有实测过、且与别名不同才显示 —— 官方 API
+  // 或没实测时别名本身就是答案,不必重复。
+  const activeModelRealName =
+    activeModelReal && activeModelReal !== activeModel ? activeModelReal : null;
   const commandMenuPosition = useMemo(() => {
     if (!isCommandMenuOpen) {
       return { top: 0, left: 16, bottom: 90 };
@@ -345,13 +373,17 @@ export default function ChatComposer({
 
   const hasQueuedDraft = Boolean(queuedDraft);
   const canQueueDraft = isLoading && Boolean(input.trim());
+  // 快捷键说明不再占底栏排版位(那段长文案被左侧一排 chip 挤压后会折行,
+  // 底栏随之长高 —— 就是"对话框突然变化"的主要来源),收进发送按钮的悬停提示。
+  const keyboardHint = sendByCtrlEnter
+    ? t('input.hintText.ctrlEnter')
+    : t('input.hintText.enter');
+  // 只有"流式中回车会排队"这种**当下才成立**的短提示留在底栏,单行截断。
   const submitHint = canQueueDraft
     ? hasQueuedDraft
       ? t('input.hintText.updateQueued', { defaultValue: 'Enter to update queued message' })
       : t('input.hintText.queue', { defaultValue: 'Enter to queue your next message' })
-    : sendByCtrlEnter
-      ? t('input.hintText.ctrlEnter')
-      : t('input.hintText.enter');
+    : keyboardHint;
   const submitAriaLabel = canQueueDraft
     ? hasQueuedDraft
       ? t('input.queue.update', { defaultValue: 'Update queued message' })
@@ -639,20 +671,81 @@ export default function ChatComposer({
               </PromptInputButton>
             )}
 
-            {/* Which model is actually running.
-                Read-only on purpose: /models is the single switch. Before this
-                chip existed the model was displayed only on the empty new-chat
-                screen, so inside a live conversation there was no way to tell
-                what you were talking to — or whether a /models switch had
-                taken. */}
+            {/* 排序不变量:**固定图标一律排在会变宽/会出现消失的 chip 前面**。
+                模型 chip(实测名加载后变长)、Effort(随模型出现/消失)、tokens
+                (会话中途出现)都在图标之后 —— 它们的变化只向右侧空白扩展,
+                图标位置因此纹丝不动。谁要往这行加东西,按这条规则放位置。 */}
+            {onShowCheckpoints && (
+              <PromptInputButton
+                tooltip={{ content: t('checkpoint.historyTitle', { defaultValue: '检查点历史' }) }}
+                onClick={onShowCheckpoints}
+              >
+                <History />
+              </PromptInputButton>
+            )}
+
+            <PromptInputButton
+              tooltip={{ content: t('input.showAllCommands') }}
+              onClick={onToggleCommandMenu}
+              className="relative"
+            >
+              <MessageSquareIcon />
+              {slashCommandsCount > 0 && (
+                <span
+                  className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground"
+                >
+                  {slashCommandsCount}
+                </span>
+              )}
+            </PromptInputButton>
+
+            {/* 清空按钮:**常驻占位**,无输入时只是隐形(invisible 仍占宽)。
+                以前是"打字才出现",输入从空到非空的瞬间整排图标被挤一下 ——
+                恰恰是最高频的"图标动了"。 */}
+            <PromptInputButton
+              tooltip={hasInput ? { content: t('input.clearInput', { defaultValue: 'Clear input' }) } : undefined}
+              onClick={onClearInput}
+              disabled={!hasInput}
+              className={`hidden sm:flex ${hasInput ? '' : 'invisible'}`}
+            >
+              <XIcon />
+            </PromptInputButton>
+
+            {/* Which model is actually running — click to switch.
+                Originally read-only with "输入 /models 切换" in the tooltip;
+                that made the one visible model indicator a dead end while the
+                switcher hid behind a slash command. Clicking goes through the
+                exact same executeCommand('/models') path as typing it, so both
+                entrances feed the modal identical data. */}
             {activeModel && (
-              <span
-                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border/60 bg-muted/40 px-2 text-xs font-medium text-muted-foreground sm:px-2.5"
-                title={t('input.modelHint', { model: activeModel, defaultValue: `当前模型：${activeModel}，输入 /models 切换` })}
+              <button
+                type="button"
+                onClick={onShowModelPicker}
+                className={`inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border px-2 text-xs font-medium transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-2.5 ${
+                  modelJustChanged
+                    ? 'border-primary bg-primary/15 text-primary ring-2 ring-primary/40'
+                    : 'border-border/60 bg-muted/40 text-muted-foreground hover:border-primary/40 hover:bg-muted hover:text-foreground'
+                }`}
+                title={
+                  activeModelRealName
+                    ? `别名 ${activeModel} · 实际模型 ${activeModelRealName}，点击切换`
+                    : t('input.modelHint', { model: activeModel, defaultValue: `当前模型：${activeModel}，点击切换` })
+                }
+                aria-label={
+                  activeModelRealName
+                    ? `别名 ${activeModel} · 实际模型 ${activeModelRealName}，点击切换`
+                    : t('input.modelHint', { model: activeModel, defaultValue: `当前模型：${activeModel}，点击切换` })
+                }
               >
                 <Cpu className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                <span className="hidden max-w-28 truncate sm:inline">{activeModel}</span>
-              </span>
+                {activeModelRealName ? (
+                  // 只显示实际生效的模型名 —— 别名(default/sonnet…)是内部转发细节,
+                  // 用户关心"现在到底是谁在答"。别名仍在 hover 提示里可查。
+                  <span className="hidden max-w-56 truncate font-semibold sm:inline">{activeModelRealName}</span>
+                ) : (
+                  <span className="hidden max-w-28 truncate sm:inline">{activeModel}</span>
+                )}
+              </button>
             )}
 
             {/* Execution mode.
@@ -797,50 +890,16 @@ export default function ChatComposer({
 
             <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />
 
-            {onShowCheckpoints && (
-              <PromptInputButton
-                tooltip={{ content: t('checkpoint.historyTitle', { defaultValue: '检查点历史' }) }}
-                onClick={onShowCheckpoints}
-              >
-                <History />
-              </PromptInputButton>
-            )}
-
-            <PromptInputButton
-              tooltip={{ content: t('input.showAllCommands') }}
-              onClick={onToggleCommandMenu}
-              className="relative"
-            >
-              <MessageSquareIcon />
-              {slashCommandsCount > 0 && (
-                <span
-                  className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground"
-                >
-                  {slashCommandsCount}
-                </span>
-              )}
-            </PromptInputButton>
-
-            {hasInput && (
-              <PromptInputButton
-                tooltip={{ content: t('input.clearInput', { defaultValue: 'Clear input' }) }}
-                onClick={onClearInput}
-                className="hidden sm:flex"
-              >
-                <XIcon />
-              </PromptInputButton>
-            )}
-
           </PromptInputTools>
 
-          <div className="flex items-center gap-2">
-            <div
-              className={`hidden text-xs text-muted-foreground/50 transition-opacity duration-200 lg:block ${
-                input.trim() && !canQueueDraft ? 'opacity-0' : 'opacity-100'
-              }`}
-            >
-              {submitHint}
-            </div>
+          <div className="flex min-w-0 items-center gap-2">
+            {/* 底栏高度必须恒定:这里只放"排队"这类当下才成立的短提示,强制单行 +
+                截断,绝不折行。静态快捷键说明在发送按钮的 title 里。 */}
+            {canQueueDraft && (
+              <div className="hidden min-w-0 max-w-64 truncate whitespace-nowrap text-xs text-muted-foreground/60 lg:block">
+                {submitHint}
+              </div>
+            )}
             <PromptInputSubmit
               onClick={
                 canQueueDraft
@@ -854,7 +913,8 @@ export default function ChatComposer({
               }
               disabled={isLoading ? false : !input.trim()}
               aria-label={submitAriaLabel}
-              title={submitAriaLabel}
+              // 悬停提示带上完整快捷键说明(底栏那段长文案删了,信息收到这里)。
+              title={`${submitAriaLabel} · ${submitHint}`}
               className="h-10 w-10 sm:h-10 sm:w-10"
             >
               {canQueueDraft ? <ArrowUpIcon className="h-4 w-4" /> : undefined}

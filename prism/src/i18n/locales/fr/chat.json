@@ -52,7 +52,7 @@
     "clearInput": "Effacer la saisie",
     "scrollToBottom": "Défiler vers le bas",
     "attachmentPath": "chemin",
-    "modelHint": "Current model: {{model}} · type /models to switch"
+    "modelHint": "Modèle actuel : {{model}} · cliquer pour changer"
   },
   "providerSelection": {
     "pressToSearch": "Appuyez sur <kbd>{{shortcut}}</kbd> pour rechercher sessions, fichiers et commits"

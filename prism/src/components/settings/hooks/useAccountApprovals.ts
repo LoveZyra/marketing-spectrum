@@ -81,5 +81,54 @@ export function useAccountApprovals(enabled: boolean) {
     [refresh],
   );
 
-  return { users, isLoading, error, busyUserId, refresh, decide };
+  /** root 重置某账号密码。成功后该账号所有设备被踢出,需用新密码重登。 */
+  const resetPassword = useCallback(
+    async (userId: number, newPassword: string): Promise<boolean> => {
+      setBusyUserId(userId);
+      setError(null);
+      try {
+        const response = await authenticatedFetch(`/api/admin/users/${userId}/reset-password`, {
+          method: 'POST',
+          body: JSON.stringify({ newPassword }),
+        });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as AdminUsersResponse;
+          throw new Error(payload.error || 'Failed to reset password');
+        }
+        return true;
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Failed to reset password');
+        return false;
+      } finally {
+        setBusyUserId(null);
+      }
+    },
+    [],
+  );
+
+  /** 停用/启用账号。停用即时踢出该账号全部会话。 */
+  const setActive = useCallback(
+    async (userId: number, active: boolean) => {
+      setBusyUserId(userId);
+      setError(null);
+      try {
+        const response = await authenticatedFetch(
+          `/api/admin/users/${userId}/${active ? 'activate' : 'deactivate'}`,
+          { method: 'POST' },
+        );
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as AdminUsersResponse;
+          throw new Error(payload.error || 'Failed to update the account');
+        }
+        await refresh();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Failed to update the account');
+      } finally {
+        setBusyUserId(null);
+      }
+    },
+    [refresh],
+  );
+
+  return { users, isLoading, error, busyUserId, refresh, decide, resetPassword, setActive };
 }
