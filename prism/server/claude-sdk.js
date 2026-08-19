@@ -68,7 +68,7 @@ const abortedSessionIds = new Set();
  * 结构上就赢不了这场竞速。
  *
  * 所以改成一直等。中止的责任回到本来就该负责的地方:用户点停止(turn 的
- * AbortSignal)、turn 看门狗(PRISM_TURN_TIMEOUT_MS,默认 1 小时)、以及会话被
+ * AbortSignal)、turn 看门狗(静默 60 分钟判死,工具在途不判;见 readTurnWatchdogConfig)、以及会话被
  * 销毁。这三条都会走 `signal` 分支返回 `{ cancelled: true }`,和超时不同的是
  * **它们都是有人真的做了决定**。
  *
@@ -79,16 +79,18 @@ const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEO
 /**
  * 一次性路径上的审批上限。
  *
- * 常驻 runtime 有 turn 看门狗兜底(`PRISM_TURN_TIMEOUT_MS`),所以那边可以真的
+ * 常驻 runtime 有 turn 看门狗兜底(静默判死,见 readTurnWatchdogConfig),所以那边可以真的
  * 一直等 —— 卡死的那一轮会被看门狗以**取消**的形式收掉,而不是被悄悄拒绝。
  * 一次性路径没有看门狗,真无限等会把 SDK 进程和它占的 one-shot 名额永久钉住,
- * 所以这里保留一个上限,并且刻意取同一个值,免得两条路的行为悄悄分叉。
+ * 所以这里保留一个上限。常驻路径的绝对上限(PRISM_TURN_TIMEOUT_MS)如今默认关闭
+ * (改用静默看门狗),但这里的审批等待仍需要兜底,默认维持 1 小时;显式配置了
+ * PRISM_TURN_TIMEOUT_MS 时两边仍取同一个值。
  */
 const ONESHOT_APPROVAL_TIMEOUT_MS = (() => {
   const parsed = parseInt(process.env.PRISM_TURN_TIMEOUT_MS, 10);
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
   if (Number.isFinite(parsed) && parsed === 0) return 0; // 看门狗关掉了,这里也跟着不限
-  return 3600000; // 1 小时,与 TURN_TIMEOUT_MS 的默认值一致
+  return 3600000; // 1 小时(审批等待自己的兜底默认,与常驻路径的绝对上限解耦)
 })();
 
 /**
@@ -1194,11 +1196,55 @@ const MAX_ONESHOT_OVERFLOW = (() => {
   const parsed = parseInt(process.env.PRISM_MAX_ONESHOT_OVERFLOW, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 2;
 })();
-/** Per-turn watchdog: fail + dispose a runtime whose result never arrives (0 disables). */
-const TURN_TIMEOUT_MS = (() => {
-  const parsed = parseInt(process.env.PRISM_TURN_TIMEOUT_MS, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 60 * 60 * 1000;
-})();
+/**
+ * 回合看门狗配置(纯函数,单测钉解析与默认值)。
+ *
+ * 旧版是绝对墙钟 60 分钟一刀切 —— 长 SQL/长构建这类"在干活但耗时超一小时"的
+ * 回合会被误杀(2026-08-19 用户实际踩中)。改成两档:
+ *   - idle(PRISM_TURN_IDLE_TIMEOUT_MS,默认 60 分钟,0 关):只看**静默** ——
+ *     流上有任何动静(增量文本/工具事件/状态)都续期;且工具在途(已见
+ *     tool_use、未见对应 tool_result)期间不判死,CLI 自己的工具超时会给结果。
+ *     默认 60 分钟:纯文本超长生成(无工具、流上零事件)也几乎不可能误伤;
+ *     真卡死(网关在两步之间断流)最多一小时恢复,且不再误杀干活的回合。
+ *   - absolute(PRISM_TURN_TIMEOUT_MS,默认 0=关):可选硬上限,老部署配过的
+ *     照旧生效,语义不变。
+ *   - toolSilenceMax(PRISM_TURN_TOOL_SILENCE_MAX_MS,默认 24 小时,0 关):
+ *     工具在途豁免自己的硬顶。没有它,一条被遗忘的审批(tool_use 已发、没人点
+ *     允许/拒绝)或一次丢失的 tool_result 会让 idle 看门狗无限续期,把 runtime
+ *     名额(PRISM_MAX_RUNTIMES)永久钉住 —— idle reaper 只回收无 turn 的 runtime。
+ *     24 小时远大于任何真实 SQL/构建,又保证僵尸最多活一天。
+ */
+function readTurnWatchdogConfig(env = process.env) {
+  const idleParsed = parseInt(env.PRISM_TURN_IDLE_TIMEOUT_MS, 10);
+  const absoluteParsed = parseInt(env.PRISM_TURN_TIMEOUT_MS, 10);
+  const toolSilenceParsed = parseInt(env.PRISM_TURN_TOOL_SILENCE_MAX_MS, 10);
+  return {
+    idleMs: Number.isFinite(idleParsed) && idleParsed >= 0 ? idleParsed : 60 * 60 * 1000,
+    absoluteMs: Number.isFinite(absoluteParsed) && absoluteParsed >= 0 ? absoluteParsed : 0,
+    toolSilenceMaxMs: Number.isFinite(toolSilenceParsed) && toolSilenceParsed >= 0
+      ? toolSilenceParsed
+      : 24 * 60 * 60 * 1000,
+  };
+}
+const TURN_WATCHDOG = readTurnWatchdogConfig();
+
+/**
+ * 从一条 SDK 流消息里提取工具调用的开始/结束(纯函数,供 idle 看门狗跟踪在途
+ * 工具)。assistant 的 tool_use 记开始;user 的 tool_result 记结束。
+ */
+function collectToolUseDelta(message) {
+  const adds = [];
+  const removes = [];
+  const content = message?.message?.content;
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      if (!part || typeof part !== 'object') continue;
+      if (part.type === 'tool_use' && typeof part.id === 'string') adds.push(part.id);
+      if (part.type === 'tool_result' && typeof part.tool_use_id === 'string') removes.push(part.tool_use_id);
+    }
+  }
+  return { adds, removes };
+}
 
 /** Resident runtimes keyed by provider-native session id (or pending:<uuid>). */
 const claudeRuntimes = new Map();
@@ -1462,6 +1508,12 @@ async function readPersistentRuntime(runtime) {
       const turn = runtime.turn;
       if (!turn) continue; // stray events between turns
 
+      // 活跃度看门狗:任何流事件都算"活着",刷时间戳并续期;同时跟踪在途工具调用。
+      const toolDelta = collectToolUseDelta(message);
+      for (const id of toolDelta.adds) turn.pendingToolUses.add(id);
+      for (const id of toolDelta.removes) turn.pendingToolUses.delete(id);
+      touchTurnActivity(runtime, turn);
+
       if (message.session_id && !turn.capturedSessionId) {
         turn.capturedSessionId = message.session_id;
         addSession(turn.capturedSessionId, runtime.query, turn.ws);
@@ -1539,12 +1591,68 @@ function rekeyRuntime(runtime) {
   claudeRuntimes.set(runtime.key, runtime);
 }
 
+/** 清掉一个 turn 的全部看门狗计时器。 */
+function clearTurnTimers(turn) {
+  if (turn.idleTimer) clearTimeout(turn.idleTimer);
+  if (turn.absoluteTimer) clearTimeout(turn.absoluteTimer);
+  turn.idleTimer = null;
+  turn.absoluteTimer = null;
+}
+
+/** 看门狗触发:回合报错、中止子进程、重建 runtime(下一条消息自动续聊)。 */
+function fireTurnTimeout(runtime, turn, messageText) {
+  const timeoutError = new Error(messageText);
+  timeoutError.prismTurnTimeout = true;
+  console.error(`[Claude SDK] Turn watchdog fired for runtime ${runtime.key}: ${timeoutError.message}`);
+  failActiveTurn(runtime, timeoutError);
+  try {
+    runtime.abortController?.abort();
+  } catch { /* best effort */ }
+  disposePersistentRuntime(runtime).catch(() => {});
+}
+
+/**
+ * 流上有动静:刷新活跃时间戳并重新武装静默看门狗。只有真实事件才走这里 ——
+ * 看门狗自己的续期(armIdleWatchdog)不刷时间戳,否则工具在途硬顶永远测不满。
+ */
+function touchTurnActivity(runtime, turn) {
+  turn.lastStreamActivityAt = Date.now();
+  armIdleWatchdog(runtime, turn);
+}
+
+/**
+ * (重新)武装静默看门狗。到点时:工具在途 → 通常只续期不杀(长 SQL/长构建期间
+ * 流上本来就没输出,CLI 的工具超时机制负责那一层),但静默超过 toolSilenceMax
+ * (默认 24h)也判死 —— 兜住被遗忘的审批和丢失的 tool_result,不让 runtime
+ * 名额被永久钉住;无工具在途且静默超阈 → 判死。
+ */
+function armIdleWatchdog(runtime, turn) {
+  if (TURN_WATCHDOG.idleMs <= 0) return;
+  if (turn.idleTimer) clearTimeout(turn.idleTimer);
+  turn.idleTimer = setTimeout(() => {
+    if (runtime.turn !== turn) return; // result arrived in the meantime
+    if (turn.pendingToolUses.size > 0) {
+      const silenceMs = Date.now() - (turn.lastStreamActivityAt || Date.now());
+      if (TURN_WATCHDOG.toolSilenceMaxMs > 0 && silenceMs >= TURN_WATCHDOG.toolSilenceMaxMs) {
+        fireTurnTimeout(runtime, turn,
+          `Claude turn had a tool call pending with no activity for ${Math.round(silenceMs / 3600000)}h (abandoned approval or lost tool result); the session runtime was restarted`);
+        return;
+      }
+      armIdleWatchdog(runtime, turn);
+      return;
+    }
+    fireTurnTimeout(runtime, turn,
+      `Claude turn produced no output for ${Math.round(TURN_WATCHDOG.idleMs / 60000)} minutes; the session runtime was restarted`);
+  }, TURN_WATCHDOG.idleMs);
+  turn.idleTimer.unref?.();
+}
+
 function finishPersistentTurn(runtime, { resultMessage }) {
   const turn = runtime.turn;
   if (!turn) return;
   runtime.turn = null;
   runtime.lastUsed = Date.now();
-  if (turn.watchdog) clearTimeout(turn.watchdog);
+  clearTurnTimers(turn);
   if (turn.capturedSessionId) removeSession(turn.capturedSessionId);
   turn.resolve({ resultMessage, sessionId: runtime.sessionId || turn.capturedSessionId || null });
 }
@@ -1553,7 +1661,7 @@ function failActiveTurn(runtime, error) {
   const turn = runtime.turn;
   if (!turn) return;
   runtime.turn = null;
-  if (turn.watchdog) clearTimeout(turn.watchdog);
+  clearTurnTimers(turn);
   if (turn.capturedSessionId) removeSession(turn.capturedSessionId);
   // Mark whether the client already saw partial output for this turn — the
   // dispatcher only replays the turn on the one-shot path when nothing
@@ -1821,7 +1929,12 @@ async function runPersistentTurn(runtime, { command, images, cwd, ws, sessionSum
     capturedSessionId: runtime.sessionId || null,
     sessionCreatedSent: false,
     sawCompactBoundary: false,
-    watchdog: null,
+    // 在途工具调用(见过 tool_use、还没等到 tool_result 的 id):工具执行期间
+    // 流上可以完全安静(长 SQL 不吐 stdout),不能按静默判死。
+    pendingToolUses: new Set(),
+    lastStreamActivityAt: Date.now(),
+    idleTimer: null,
+    absoluteTimer: null,
     resolve: null,
     reject: null,
   };
@@ -1846,23 +1959,16 @@ async function runPersistentTurn(runtime, { command, images, cwd, ws, sessionSum
     throw error;
   }
 
-  // Turn watchdog: a result that never arrives would otherwise wedge the
-  // runtime in "running" forever. On timeout the turn fails (rejection reaches
-  // the UI), the runtime is torn down — its subprocess aborted via the real
-  // AbortController — and the next turn resumes on a fresh runtime.
-  if (TURN_TIMEOUT_MS > 0) {
-    turn.watchdog = setTimeout(() => {
+  // 静默看门狗:流上有动静就续期(续期点在 readPersistentRuntime 的读循环里),
+  // 工具在途时到点只续不杀(硬顶 toolSilenceMax)。绝对上限保持旧语义可选。
+  touchTurnActivity(runtime, turn);
+  if (TURN_WATCHDOG.absoluteMs > 0) {
+    turn.absoluteTimer = setTimeout(() => {
       if (runtime.turn !== turn) return; // result arrived in the meantime
-      const timeoutError = new Error(`Claude turn timed out after ${Math.round(TURN_TIMEOUT_MS / 60000)} minutes; the session runtime was restarted`);
-      timeoutError.prismTurnTimeout = true;
-      console.error(`[Claude SDK] Turn watchdog fired for runtime ${runtime.key}: ${timeoutError.message}`);
-      failActiveTurn(runtime, timeoutError);
-      try {
-        runtime.abortController?.abort();
-      } catch { /* best effort */ }
-      disposePersistentRuntime(runtime).catch(() => {});
-    }, TURN_TIMEOUT_MS);
-    turn.watchdog.unref?.();
+      fireTurnTimeout(runtime, turn,
+        `Claude turn exceeded the absolute cap of ${Math.round(TURN_WATCHDOG.absoluteMs / 60000)} minutes; the session runtime was restarted`);
+    }, TURN_WATCHDOG.absoluteMs);
+    turn.absoluteTimer.unref?.();
   }
 
   return turn.promise;
@@ -2566,6 +2672,8 @@ async function prewarmClaudeSession(options = {}) {
 
 export {
   toSdkModel,
+  readTurnWatchdogConfig,
+  collectToolUseDelta,
   queryClaudeSDK,
   prewarmClaudeSession,
   releaseClaudeSession,

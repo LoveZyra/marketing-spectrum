@@ -1512,6 +1512,34 @@ export function useChatComposerState({
         return;
       }
 
+      // 「允许并记住」必须落到 localStorage 的 claude-settings 里:服务端虽然会把
+      // 这条规则记进当前 runtime,但下一条消息的 chat.send 会用这里读出的列表
+      // **整体覆盖**运行时设置 —— 不落盘的话,"记住"只活到下一条消息之前。
+      // 落盘后与设置页「权限」里的 Allow rule 完全同一份数据,那里可见可删。
+      if (decision?.allow && typeof decision.rememberEntry === 'string' && decision.rememberEntry) {
+        try {
+          const raw = safeLocalStorage.getItem('claude-settings');
+          const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+          const allowed = Array.isArray(parsed.allowedTools)
+            ? (parsed.allowedTools as unknown[]).filter((entry): entry is string => typeof entry === 'string')
+            : [];
+          if (!allowed.includes(decision.rememberEntry)) {
+            allowed.push(decision.rememberEntry);
+          }
+          const disallowed = Array.isArray(parsed.disallowedTools)
+            ? (parsed.disallowedTools as unknown[]).filter(
+                (entry): entry is string => typeof entry === 'string' && entry !== decision.rememberEntry,
+              )
+            : [];
+          safeLocalStorage.setItem(
+            'claude-settings',
+            JSON.stringify({ ...parsed, allowedTools: allowed, disallowedTools: disallowed }),
+          );
+        } catch (error) {
+          console.error('Failed to persist remembered permission rule:', error);
+        }
+      }
+
       validIds.forEach((requestId) => {
         sendMessage({
           type: 'chat.permission-response',
