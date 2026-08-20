@@ -29,7 +29,10 @@
       "done": "密码已修改,其他设备已全部退出。",
       "working": "修改中…",
       "submit": "修改密码"
-    }
+    },
+    "language": "语言",
+    "languageLabel": "语言选择",
+    "languageDescription": "界面显示用哪种语言"
   },
   "appearance": {
     "theme": "主题"
@@ -277,7 +280,7 @@
     },
     "managed": {
       "badge": "托管",
-      "hint": "由 Prism 托管。"
+      "hint": "由棱镜托管。"
     }
   },
   "accounts": {
@@ -331,17 +334,18 @@
   },
   "models": {
     "title": "模型映射",
-    "description": "直接编辑服务器 settings.json 的别名映射。保存后立即生效(下一条消息就用新映射),无需重启;模型切换页的实测缓存会被标记过期,可去那里点实测验证网关行为。",
+    "description": "把 Sonnet / Opus / Haiku / Fable 这几档,映射到网关上真实的模型名。保存即生效,下一条消息就走新映射,不用重启。",
     "reload": "重新读取",
-    "saved": "已写入 settings.json —— 热感知已接管,下一条消息即用新映射。",
-    "unsetPlaceholder": "未配置 —— CLI 用内置 ID,由网关决定",
-    "defaultPlaceholder": "未设置 —— CLI 走 ANTHROPIC_MODEL/内置链",
-    "defaultHelp": "填别名(如 sonnet)则 default 档跟随该别名的映射;也可直接填网关模型名。",
+    "saved": "已写入 settings.json,下一条消息即用新映射。",
+    "unsetPlaceholder": "留空 —— 用 CLI 内置 ID,由网关决定",
+    "defaultPlaceholder": "留空 —— 跟随 CLI 内置链",
+    "defaultHelp": "填别名(如 sonnet)就跟着那一档走;也可以直接填网关的模型名。",
     "gateway": "网关",
     "missingFile": "(文件尚不存在,保存时会创建)",
     "saving": "保存中…",
     "save": "保存映射",
-    "tokenNote": "此页只读写映射相关字段;settings.json 里的网关地址与鉴权 token 原样保留,且永远不会传到浏览器。"
+    "tokenNote": "本页只读写映射字段;settings.json 里的网关地址与鉴权 token 原样保留,也不会传到浏览器。",
+    "cacheNote": "改完之后,模型切换页上一次的实测结果就不作数了 —— 想确认网关的真实行为,去那页重新实测一次。"
   },
   "server": {
     "title": "服务器状态",

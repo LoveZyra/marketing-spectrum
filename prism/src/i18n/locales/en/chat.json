@@ -62,7 +62,8 @@
       "delete": "Delete queued message"
     },
     "attachmentPath": "path",
-    "modelHint": "Current model: {{model}} · click to switch"
+    "modelHint": "Current model: {{model}} · click to switch",
+    "queueShort": "Queue"
   },
   "providerSelection": {
     "pressToSearch": "Press <kbd>{{shortcut}}</kbd> to search sessions, files, and commits"
@@ -128,7 +129,8 @@
       "seconds": "{{count}}s",
       "minutesSeconds": "{{minutes}}m {{seconds}}s"
     },
-    "stop": "Stop"
+    "stop": "Stop",
+    "compacting": "Compacting context"
   },
   "projectSelection": {
     "startChatWithProvider": "Select a project to start chatting with {{provider}}"
@@ -166,7 +168,8 @@
       "incompleteSkipNote": "For safety, rolling back will NOT delete any untracked files; only tracked changes and saved snapshots will be restored.",
       "forceRestore": "Roll back anyway",
       "cancel": "Cancel"
-    }
+    },
+    "changedFilesTitle": "Changed this turn"
   },
   "attachments": {
     "truncated": "truncated"
@@ -178,5 +181,60 @@
     "acceptEdits": "Edits files without asking. Still asks before running commands.",
     "auto": "Decides routine calls itself; asks about the rest.",
     "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
+  },
+  "permission": {
+    "title": "Approval required to continue",
+    "meta": "tool {{tool}}{{rule}}",
+    "viewInput": "View tool input",
+    "deny": "Deny",
+    "allowRemember": "Allow & remember",
+    "allowSaved": "Remembered",
+    "allowOnce": "Allow once"
+  },
+  "activity": {
+    "read": "Read {{target}}",
+    "write": "Write {{target}}",
+    "edit": "Edit {{target}}",
+    "bash": "Run {{target}}",
+    "search": "Search {{target}}",
+    "glob": "Match {{target}}",
+    "fetch": "Fetch {{target}}",
+    "agent": "Subagent {{target}}",
+    "todo": "Update task list",
+    "thinking": "Thinking",
+    "running": "running",
+    "failed": "failed",
+    "summary": {
+      "bash": "ran {{count}} commands",
+      "write": "created {{count}} files",
+      "edit": "made {{count}} edits",
+      "read": "read {{count}} files",
+      "search": "searched {{count}} times",
+      "glob": "listed {{count}} times",
+      "fetch": "fetched {{count}} pages",
+      "agent": "{{count}} subagents",
+      "todo": "updated the task list {{count}} times",
+      "mcp": "{{count}} external tool calls",
+      "tool": "{{count}} other tool calls",
+      "thinking": "thought {{count}} times"
+    },
+    "foldedCount": "+{{count}}",
+    "collapseRun": "Collapse"
+  },
+  "details": {
+    "parameters": "Parameters",
+    "result": "Result",
+    "noParams": "No parameters",
+    "noOutput": "No output",
+    "failed": "failed",
+    "failedNoOutput": "failed · no output",
+    "expandAll": "Expand all",
+    "expandAllWithCount": "Expand all · {{count}} lines",
+    "collapse": "Collapse",
+    "copy": "Copy",
+    "copied": "Copied"
+  },
+  "compactSummary": {
+    "title": "Context compacted — earlier turns were folded into a summary"
   }
 }

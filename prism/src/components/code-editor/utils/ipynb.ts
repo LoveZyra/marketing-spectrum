@@ -37,7 +37,7 @@ export function joinSource(value: unknown): string {
 }
 
 // CSI 序列(颜色等)。traceback 里全是这类转义,浏览器端直接剥掉。
-// eslint-disable-next-line no-control-regex
+ 
 const ANSI_PATTERN = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 
 export function stripAnsi(text: string): string {

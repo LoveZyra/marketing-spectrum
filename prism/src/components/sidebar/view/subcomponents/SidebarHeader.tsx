@@ -1,12 +1,12 @@
-import { Activity, Archive, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { Activity, Archive, Folder, FolderPlus, MessageSquare, RefreshCw, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { Button, Input, Tooltip } from '../../../../shared/view/ui';
-import { WORDMARK_FONT_FAMILY } from '../../../../constants/branding';
+import { Input, Tooltip } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
+import { usePaletteOps } from '../../../../contexts/PaletteOpsContext';
 import type { SidebarSearchMode } from '../../types/types';
-
 import PrismLogo from '../../../PrismLogo';
+import PrismWordmark from '../../../PrismWordmark';
 
 
 const MOD_KEY =
@@ -28,9 +28,17 @@ type SidebarHeaderProps = {
   onRefresh: () => void;
   isRefreshing: boolean;
   onCreateProject: () => void;
-  onCollapseSidebar: () => void;
   t: TFunction;
 };
+
+/** 搜索模式分段按钮的选中态:8% 绿底 + 绿描边;浅色下文字用墨色保对比度。 */
+const SEGMENT_BASE_CLASS =
+  'flex items-center justify-center gap-1.5 rounded-md py-[5px] text-xs leading-4 transition-colors';
+/** 选中:32% 绿描边 + 8% 绿底;淡色下文字用墨色(浅底不做绿小字),深色下用绿。 */
+const SEGMENT_ACTIVE_CLASS =
+  'border border-primary/[0.32] bg-primary/[0.08] text-card-foreground dark:text-primary';
+const SEGMENT_IDLE_CLASS =
+  'border border-border text-muted-foreground hover:text-foreground';
 
 export default function SidebarHeader({
   isPWA,
@@ -48,9 +56,9 @@ export default function SidebarHeader({
   onRefresh,
   isRefreshing,
   onCreateProject,
-  onCollapseSidebar,
   t,
 }: SidebarHeaderProps) {
+  const paletteOps = usePaletteOps();
   const showSearchTools = (projectsCount > 0 || runningSessionsCount > 0 || archivedSessionsCount > 0 || isArchivedSessionsLoading) && !isLoading;
   const searchPlaceholder = searchMode === 'conversations'
     ? t('search.conversationsPlaceholder')
@@ -61,190 +69,160 @@ export default function SidebarHeader({
         : t('projects.searchPlaceholder');
   const runningBadgeText = runningSessionsCount > 99 ? '99+' : String(runningSessionsCount);
 
-  const LogoBlock = () => (
-    <div className="flex min-w-0 items-center gap-2.5">
-      <PrismLogo size={28} />
-      <h1
-        className="prism-gradient-text truncate text-sm font-bold tracking-tight"
-        style={{ fontFamily: WORDMARK_FONT_FAMILY }}
+  const searchModeSegments = (
+    <div className="flex gap-1.5">
+      <button
+        onClick={() => onSearchModeChange('projects')}
+        aria-pressed={searchMode === 'projects'}
+        className={cn(SEGMENT_BASE_CLASS, 'flex-1', searchMode === 'projects' ? SEGMENT_ACTIVE_CLASS : SEGMENT_IDLE_CLASS)}
       >
-        {t('app.title')}
-      </h1>
+        <Folder className="h-3 w-3" />
+        {t('search.modeProjects')}
+      </button>
+      <button
+        onClick={() => onSearchModeChange('conversations')}
+        aria-pressed={searchMode === 'conversations'}
+        className={cn(SEGMENT_BASE_CLASS, 'flex-1', searchMode === 'conversations' ? SEGMENT_ACTIVE_CLASS : SEGMENT_IDLE_CLASS)}
+      >
+        <MessageSquare className="h-3 w-3" />
+        {t('search.modeConversations')}
+      </button>
+      {/* 「运行中」原来是三个汉字挤在 1/3 宽的格子里,把前两个带图标的分段也压瘦了。
+          改成和归档同一档的图标按钮:有在跑的会话时才挂一个等宽计数。 */}
+      <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">
+        <button
+          onClick={() => onSearchModeChange('running')}
+          aria-pressed={searchMode === 'running'}
+          aria-label={t('search.runningTooltip', 'Running sessions')}
+          title={t('search.runningTooltip', 'Running sessions')}
+          className={cn(
+            SEGMENT_BASE_CLASS,
+            'min-w-9 flex-none gap-1 px-1.5',
+            searchMode === 'running' ? SEGMENT_ACTIVE_CLASS : SEGMENT_IDLE_CLASS,
+          )}
+        >
+          <Activity className="h-3 w-3" />
+          {runningSessionsCount > 0 && (
+            <span className="font-mono text-[11px] leading-none">{runningBadgeText}</span>
+          )}
+        </button>
+      </Tooltip>
+      <Tooltip content={t('search.archiveOnlyTooltip', 'Archive only')} position="top">
+        <button
+          onClick={() => onSearchModeChange('archived')}
+          aria-pressed={searchMode === 'archived'}
+          aria-label={t('search.archiveOnlyTooltip', 'Archive only')}
+          title={t('search.archiveOnlyTooltip', 'Archive only')}
+          className={cn(SEGMENT_BASE_CLASS, 'w-9 flex-none', searchMode === 'archived' ? SEGMENT_ACTIVE_CLASS : SEGMENT_IDLE_CLASS)}
+        >
+          <Archive className="h-3 w-3" />
+        </button>
+      </Tooltip>
+    </div>
+  );
+
+  const searchInput = (isMobileVariant: boolean) => (
+    <div className="relative">
+      <Input
+        type="text"
+        placeholder={searchPlaceholder}
+        value={searchFilter}
+        onChange={(event) => onSearchFilterChange(event.target.value)}
+        className={cn(
+          'rounded-md border border-input bg-card px-3 py-2 text-[13px] placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-0 focus-visible:ring-offset-0',
+          isMobileVariant ? 'h-11 pr-9' : 'h-[38px] pr-14',
+        )}
+      />
+      {searchFilter ? (
+        <button
+          onClick={onClearSearchFilter}
+          aria-label={t('tooltips.clearSearch')}
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+        >
+          <X className={cn('text-muted-foreground', isMobileVariant ? 'h-3.5 w-3.5' : 'h-3 w-3')} />
+        </button>
+      ) : !isMobileVariant ? (
+        // 键帽本来只是提示,点不动 —— 命令面板只有 ⌘K 一个入口。现在它是个真按钮,
+        // 外观一字不改(设计稿里搜索框右侧就是这枚等宽键帽)。
+        <button
+          type="button"
+          onClick={() => paletteOps.openPalette()}
+          title={t('tooltips.openCommandPalette')}
+          aria-label={t('tooltips.openCommandPalette')}
+          className="absolute right-2.5 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded-sm border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground md:inline-flex"
+        >
+          {MOD_KEY}
+          <span>K</span>
+        </button>
+      ) : null}
     </div>
   );
 
   return (
     <div className="flex-shrink-0">
-      {/* Prism spectral accent bar */}
-      <div className="prism-spectrum-bar h-0.5 w-full" aria-hidden="true" />
-      {/* Desktop header */}
-      <div
-        className="hidden px-3 pb-2 pt-3 md:block"
-        style={{}}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <LogoBlock />
-
-          <div className="flex flex-shrink-0 items-center gap-0.5">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-accent/80 hover:text-foreground"
-              onClick={onRefresh}
-              disabled={isRefreshing}
-              title={t('tooltips.refresh')}
-            >
-              <RefreshCw
-                className={`h-3.5 w-3.5 ${
-                  isRefreshing ? 'animate-spin' : ''
-                }`}
-              />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-accent/80 hover:text-foreground"
-              onClick={onCreateProject}
-              title={t('tooltips.createProject')}
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-accent/80 hover:text-foreground"
-              onClick={onCollapseSidebar}
-              title={t('tooltips.hideSidebar')}
-            >
-              <PanelLeftClose className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+      {/* Desktop header — 标记在图标轨上,这里只留字标。
+          开合入口只此一个,在图标轨上(见 AppRail);侧栏顶部不再重复放一个。 */}
+      <div className="hidden md:block">
+        <div className="flex items-center gap-2 px-3 pb-2.5 pt-[13px]">
+          <h1 className="flex min-w-0 items-center text-foreground" title={t('app.title')}>
+            <PrismWordmark height={19} />
+          </h1>
         </div>
 
-        {/* Search bar */}
+        {/* 搜索与模式分段只在有东西可搜时出现 */}
         {showSearchTools && (
-          <div className="mt-2.5 space-y-2">
-            {/* Search mode toggle */}
-            <div className="flex rounded-lg bg-muted/50 p-0.5">
-              <button
-                onClick={() => onSearchModeChange('projects')}
-                aria-pressed={searchMode === 'projects'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'projects'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <Folder className="h-3 w-3" />
-                {t('search.modeProjects')}
-              </button>
-              <button
-                onClick={() => onSearchModeChange('conversations')}
-                aria-pressed={searchMode === 'conversations'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'conversations'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <MessageSquare className="h-3 w-3" />
-                {t('search.modeConversations')}
-              </button>
-              <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">
-                <button
-                  onClick={() => onSearchModeChange('running')}
-                  aria-pressed={searchMode === 'running'}
-                  aria-label={t('search.runningTooltip', 'Running sessions')}
-                  title={t('search.runningTooltip', 'Running sessions')}
-                  className={cn(
-                    "flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                    searchMode === 'running'
-                      ? "bg-background shadow-sm text-foreground ring-1 ring-emerald-500/15"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <span className="relative flex h-3 w-3 items-center justify-center">
-                    <Activity className={cn("h-3 w-3", runningSessionsCount > 0 && "text-emerald-500")} />
-                    {runningSessionsCount > 0 && (
-                      <span className="absolute -right-2.5 -top-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-emerald-500 px-0.5 text-[8px] font-semibold leading-none text-white shadow-sm ring-1 ring-background">
-                        {runningBadgeText}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              </Tooltip>
-              <Tooltip content={t('search.archiveOnlyTooltip', 'Archive only')} position="top">
-                <button
-                  onClick={() => onSearchModeChange('archived')}
-                  aria-pressed={searchMode === 'archived'}
-                  aria-label={t('search.archiveOnlyTooltip', 'Archive only')}
-                  title={t('search.archiveOnlyTooltip', 'Archive only')}
-                  className={cn(
-                    "flex items-center justify-center rounded-md px-2.5 py-1.5 text-xs font-normal transition-all",
-                    searchMode === 'archived'
-                      ? "bg-background shadow-sm text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <Archive className="h-3 w-3" />
-                </button>
-              </Tooltip>
-            </div>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50" />
-              <Input
-                type="text"
-                placeholder={searchPlaceholder}
-                value={searchFilter}
-                onChange={(event) => onSearchFilterChange(event.target.value)}
-                className="nav-search-input h-9 rounded-xl border-0 pl-9 pr-14 text-sm transition-all duration-200 placeholder:text-muted-foreground/40 focus-visible:ring-0 focus-visible:ring-offset-0"
-              />
-              {searchFilter ? (
-                <button
-                  onClick={onClearSearchFilter}
-                  aria-label={t('tooltips.clearSearch')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-0.5 hover:bg-accent"
-                >
-                  <X className="h-3 w-3 text-muted-foreground" />
-                </button>
-              ) : (
-                <kbd
-                  aria-hidden
-                  title={t('tooltips.openCommandPalette')}
-                  className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground md:inline-flex"
-                >
-                  {MOD_KEY}
-                  <span>K</span>
-                </kbd>
-              )}
-            </div>
-          </div>
+          <>
+            <div className="px-3 pb-2">{searchInput(false)}</div>
+            <div className="px-3 pb-2.5">{searchModeSegments}</div>
+          </>
         )}
+
+        {/* 新建项目 + 刷新:**永远可见**。一个项目都没有时恰恰是最需要"新建"的
+            时候 —— 把它和搜索一起藏起来会让空状态变成死路。 */}
+        <div className="flex items-center gap-1.5 px-3 pb-3">
+          <button
+            type="button"
+            onClick={onCreateProject}
+            className="flex h-8 w-full items-center justify-center gap-2 rounded-md border border-border bg-transparent text-[13px] font-semibold leading-5 text-card-foreground transition-colors hover:border-border-strong active:translate-y-px"
+          >
+            {t('tooltips.createProject')}
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-[34px] w-[34px] flex-none items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground disabled:opacity-40"
+            onClick={onRefresh}
+            disabled={isRefreshing}
+            title={t('tooltips.refresh')}
+            aria-label={t('tooltips.refresh')}
+          >
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'text-primary' : ''}`} strokeWidth={2} />
+          </button>
+        </div>
       </div>
 
-      {/* Desktop divider */}
-      <div className="nav-divider hidden md:block" />
-
-      {/* Mobile header */}
+      {/* Mobile header — 无图标轨,标记保留 */}
       <div
         className="p-3 pb-2 md:hidden"
         style={isPWA && isMobile ? { paddingTop: '16px' } : {}}
       >
         <div className="flex items-center justify-between">
-          <LogoBlock />
+          <div className="flex min-w-0 items-center gap-2.5">
+            <PrismLogo size={42} />
+            <h1 className="flex min-w-0 items-center text-foreground" title={t('app.title')}>
+              <PrismWordmark height={21} />
+            </h1>
+          </div>
 
           <div className="flex flex-shrink-0 gap-1.5">
             <button
-              className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50 transition-all active:scale-95"
+              className="flex h-8 w-8 items-center justify-center rounded-md bg-muted active:translate-y-px"
               onClick={onRefresh}
               disabled={isRefreshing}
             >
-              <RefreshCw className={`h-4 w-4 text-muted-foreground ${isRefreshing ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'text-primary' : 'text-muted-foreground'}`} strokeWidth={2} />
             </button>
             <button
-              className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/90 text-primary-foreground transition-all active:scale-95"
+              className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground active:translate-y-px"
               onClick={onCreateProject}
             >
               <FolderPlus className="h-4 w-4" />
@@ -255,99 +233,14 @@ export default function SidebarHeader({
         {/* Mobile search */}
         {showSearchTools && (
           <div className="mt-2.5 space-y-2">
-            <div className="flex rounded-lg bg-muted/50 p-0.5">
-              <button
-                onClick={() => onSearchModeChange('projects')}
-                aria-pressed={searchMode === 'projects'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'projects'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <Folder className="h-3 w-3" />
-                {t('search.modeProjects')}
-              </button>
-              <button
-                onClick={() => onSearchModeChange('conversations')}
-                aria-pressed={searchMode === 'conversations'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'conversations'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <MessageSquare className="h-3 w-3" />
-                {t('search.modeConversations')}
-              </button>
-              <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">
-                <button
-                  onClick={() => onSearchModeChange('running')}
-                  aria-pressed={searchMode === 'running'}
-                  aria-label={t('search.runningTooltip', 'Running sessions')}
-                  title={t('search.runningTooltip', 'Running sessions')}
-                  className={cn(
-                    "flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                    searchMode === 'running'
-                      ? "bg-background shadow-sm text-foreground ring-1 ring-emerald-500/15"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <span className="relative flex h-3 w-3 items-center justify-center">
-                    <Activity className={cn("h-3 w-3", runningSessionsCount > 0 && "text-emerald-500")} />
-                    {runningSessionsCount > 0 && (
-                      <span className="absolute -right-2.5 -top-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-emerald-500 px-0.5 text-[8px] font-semibold leading-none text-white shadow-sm ring-1 ring-background">
-                        {runningBadgeText}
-                      </span>
-                    )}
-                  </span>
-                  <span className="sr-only">{t('search.modeRunning', 'Running')}</span>
-                </button>
-              </Tooltip>
-              <Tooltip content={t('search.archiveOnlyTooltip', 'Archive only')} position="top">
-                <button
-                  onClick={() => onSearchModeChange('archived')}
-                  aria-pressed={searchMode === 'archived'}
-                  aria-label={t('search.archiveOnlyTooltip', 'Archive only')}
-                  title={t('search.archiveOnlyTooltip', 'Archive only')}
-                  className={cn(
-                    "flex items-center justify-center rounded-md px-2.5 py-1.5 text-xs font-normal transition-all",
-                    searchMode === 'archived'
-                      ? "bg-background shadow-sm text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <Archive className="h-3 w-3" />
-                </button>
-              </Tooltip>
-            </div>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/50" />
-              <Input
-                type="text"
-                placeholder={searchPlaceholder}
-                value={searchFilter}
-                onChange={(event) => onSearchFilterChange(event.target.value)}
-                className="nav-search-input h-10 rounded-xl border-0 pl-10 pr-9 text-sm transition-all duration-200 placeholder:text-muted-foreground/40 focus-visible:ring-0 focus-visible:ring-offset-0"
-              />
-              {searchFilter && (
-                <button
-                  onClick={onClearSearchFilter}
-                  aria-label={t('tooltips.clearSearch')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 hover:bg-accent"
-                >
-                  <X className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
-              )}
-            </div>
+            {searchModeSegments}
+            {searchInput(true)}
           </div>
         )}
       </div>
 
       {/* Mobile divider */}
-      <div className="nav-divider md:hidden" />
+      <div className="h-px bg-border md:hidden" />
     </div>
   );
 }

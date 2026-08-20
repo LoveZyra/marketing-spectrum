@@ -1,6 +1,9 @@
 import React from 'react';
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../../../shared/view/ui';
+
+import { ClampedBlock, Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../../../shared/view/ui';
+
 import { CollapsibleSection } from './CollapsibleSection';
+import { JsonView } from './ContentRenderers/JsonView';
 
 interface CollapsibleDisplayProps {
   toolName: string;
@@ -18,14 +21,14 @@ interface CollapsibleDisplayProps {
 }
 
 const borderColorMap: Record<string, string> = {
-  edit: 'border-l-amber-500 dark:border-l-amber-400',
-  search: 'border-l-muted-foreground/40',
-  bash: 'border-l-green-500 dark:border-l-green-400',
-  todo: 'border-l-violet-500 dark:border-l-violet-400',
-  task: 'border-l-violet-500 dark:border-l-violet-400',
-  agent: 'border-l-purple-500 dark:border-l-purple-400',
-  plan: 'border-l-indigo-500 dark:border-l-indigo-400',
-  question: 'border-l-blue-500 dark:border-l-blue-400',
+  edit: 'border-l-primary',
+  search: 'border-l-border',
+  bash: 'border-l-primary',
+  todo: 'border-l-border',
+  task: 'border-l-border',
+  agent: 'border-l-border',
+  plan: 'border-l-primary',
+  question: 'border-l-primary',
   default: 'border-l-border',
 };
 
@@ -70,9 +73,14 @@ export const CollapsibleDisplay: React.FC<CollapsibleDisplayProps> = ({
               raw params
             </CollapsibleTrigger>
             <CollapsibleContent>
-              <pre className="mt-1 overflow-hidden whitespace-pre-wrap break-words rounded border border-border/40 bg-muted p-2 font-mono text-[11px] text-muted-foreground">
-                {rawContent}
-              </pre>
+              <ClampedBlock
+                className="mt-1"
+                maxHeight={200}
+                copyText={rawContent}
+                contentClassName="rounded-md border border-border bg-card px-3 py-2"
+              >
+                <JsonView text={rawContent} />
+              </ClampedBlock>
             </CollapsibleContent>
           </Collapsible>
         )}

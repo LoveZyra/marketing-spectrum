@@ -8,12 +8,15 @@ import type {
   ProjectSession,
   LLMProvider,
 } from '../../../../types/app';
+import { Shimmer } from '../../../../shared/view/ui';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
+import type { SessionActivity } from '../../../../hooks/useSessionProtection';
 import { groupConsecutiveTools, isToolGroupItem } from '../../utils/toolGrouping';
 
 import MessageComponent from './MessageComponent';
 import ChatEmptyState from './ChatEmptyState';
-import ToolGroupContainer from './ToolGroupContainer';
+import ActivityTimeline from './ActivityTimeline';
+import ActivityIndicator from './ActivityIndicator';
 import LoadAllMessagesOverlay from './LoadAllMessagesOverlay';
 
 interface ChatMessagesPaneProps {
@@ -23,8 +26,10 @@ interface ChatMessagesPaneProps {
   isLoadingSessionMessages: boolean;
   /** True while the viewed session has an active provider run in flight. */
   isProcessing?: boolean;
-  /** True while ChatComposer's floating activity/stop tab is rendered above the input. */
+  /** True while the run indicator occupies the tail of the stream(底部留白用)。 */
   hasActivityIndicator?: boolean;
+  /** 运行中指示器的数据;为空表示这一刻没有在跑的回合。 */
+  activity?: SessionActivity | null;
   chatMessages: ChatMessage[];
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
@@ -60,6 +65,7 @@ function ChatMessagesPane({
   isLoadingSessionMessages,
   isProcessing = false,
   hasActivityIndicator = false,
+  activity = null,
   chatMessages,
   selectedSession,
   currentSessionId,
@@ -138,10 +144,9 @@ function ChatMessagesPane({
     >
       <div className={`mx-auto w-full space-y-3 px-4 sm:space-y-4 ${chatMessages.length === 0 ? 'max-w-[68rem]' : 'max-w-[54.25rem]'}`}>
       {(isLoadingSessionMessages || isProcessing) && chatMessages.length === 0 ? (
-        <div className="mt-8 text-center text-gray-500 dark:text-gray-400">
+        <div className="mt-8 text-center text-muted-foreground">
           <div className="flex items-center justify-center space-x-2">
-            <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-gray-400" />
-            <p>{t('session.loading.sessionMessages')}</p>
+            <Shimmer as="p">{t('session.loading.sessionMessages')}</Shimmer>
           </div>
         </div>
       ) : chatMessages.length === 0 ? (
@@ -155,17 +160,16 @@ function ChatMessagesPane({
         <>
           {/* Loading indicator for older messages (hide when load-all is active) */}
           {isLoadingMoreMessages && !isLoadingAllMessages && !allMessagesLoaded && (
-            <div className="py-3 text-center text-gray-500 dark:text-gray-400">
+            <div className="py-3 text-center text-muted-foreground">
               <div className="flex items-center justify-center space-x-2">
-                <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-gray-400" />
-                <p className="text-sm">{t('session.loading.olderMessages')}</p>
+                <Shimmer as="p" className="text-sm">{t('session.loading.olderMessages')}</Shimmer>
               </div>
             </div>
           )}
 
           {/* Indicator showing there are more messages to load (hide when all loaded) */}
           {hasMoreMessages && !isLoadingMoreMessages && !allMessagesLoaded && (
-            <div className="border-b border-gray-200 py-2 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+            <div className="border-b border-border py-2 text-center text-sm text-muted-foreground">
               {totalMessages > 0 && (
                 <span>
                   {t('session.messages.showingOf', { shown: sessionMessagesCount, total: totalMessages })}{' '}
@@ -185,14 +189,14 @@ function ChatMessagesPane({
 
           {/* Legacy message count indicator (for non-paginated view) */}
           {!hasMoreMessages && chatMessages.length > visibleMessageCount && (
-            <div className="border-b border-gray-200 py-2 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+            <div className="border-b border-border py-2 text-center text-sm text-muted-foreground">
               {t('session.messages.showingLast', { count: visibleMessageCount, total: chatMessages.length })} |
-              <button className="ml-1 text-blue-600 underline hover:text-blue-700" onClick={loadEarlierMessages}>
+              <button className="ml-1 text-foreground underline hover:text-primary dark:text-primary" onClick={loadEarlierMessages}>
                 {t('session.messages.loadEarlier')}
               </button>
               {' | '}
               <button
-                className="text-blue-600 underline hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                className="text-foreground underline hover:text-primary dark:text-primary"
                 onClick={loadAllMessages}
               >
                 {t('session.messages.loadAll')}
@@ -209,8 +213,8 @@ function ChatMessagesPane({
                 prevMessage = item.messages[item.messages.length - 1] || prevMessage;
 
                 return (
-                  <ToolGroupContainer
-                    key={`tool-group-${getMessageKey(item.messages[0])}`}
+                  <ActivityTimeline
+                    key={`activity-${getMessageKey(item.messages[0])}`}
                     group={item}
                     prevMessage={groupPrevMessage}
                     createDiff={createDiff}
@@ -245,6 +249,9 @@ function ChatMessagesPane({
               );
             });
           })()}
+
+          {/* 运行中指示器站在消息流末尾 —— 输入框不再因为"在跑"而改形状 */}
+          <ActivityIndicator activity={activity} />
         </>
       )}
       </div>

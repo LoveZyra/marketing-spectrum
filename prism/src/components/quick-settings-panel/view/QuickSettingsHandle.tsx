@@ -8,6 +8,7 @@ import {
   GripVertical,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import type { QuickSettingsHandleStyle } from '../types';
 
 type QuickSettingsHandleProps = {
@@ -31,11 +32,11 @@ export default function QuickSettingsHandle({
 
   const placementClass = isOpen ? 'right-64' : 'right-0';
   const borderClass = isDragging
-    ? 'border-blue-500 dark:border-blue-400'
-    : 'border-gray-200 dark:border-gray-700';
+    ? 'border-primary/[0.32]'
+    : 'border-border';
   const transitionClass = isDragging
     ? ''
-    : 'transition-all duration-150 ease-out';
+    : 'transition-colors duration-150 ease-out';
   const cursorClass = isDragging ? 'cursor-grabbing' : 'cursor-pointer';
   const ariaLabel = isDragging
     ? t('quickSettings.dragHandle.dragging')
@@ -52,7 +53,7 @@ export default function QuickSettingsHandle({
       onClick={onClick}
       onMouseDown={onMouseDown}
       onTouchStart={onTouchStart}
-      className={`fixed ${placementClass} z-50 ${transitionClass} border bg-white dark:bg-gray-800 ${borderClass} rounded-l-md p-2 shadow-lg transition-colors hover:bg-gray-100 dark:hover:bg-gray-700 ${cursorClass} touch-none`}
+      className={`fixed ${placementClass} z-50 ${transitionClass} border bg-background ${borderClass} prism-modal-shadow rounded-l-md p-2 transition-colors hover:bg-muted ${cursorClass} touch-none`}
       style={{
         ...style,
         touchAction: 'none',
@@ -63,11 +64,11 @@ export default function QuickSettingsHandle({
       title={title}
     >
       {isDragging ? (
-        <GripVertical className="h-5 w-5 text-blue-500 dark:text-blue-400" />
+        <GripVertical className="h-5 w-5 text-primary" />
       ) : isOpen ? (
-        <ChevronRight className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+        <ChevronRight className="h-5 w-5 text-body" />
       ) : (
-        <ChevronLeft className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+        <ChevronLeft className="h-5 w-5 text-body" />
       )}
     </button>
   );

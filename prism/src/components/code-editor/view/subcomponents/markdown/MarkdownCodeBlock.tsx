@@ -26,7 +26,7 @@ export default function MarkdownCodeBlock({
   if (shouldRenderInline) {
     return (
       <code
-        className={`whitespace-pre-wrap break-words rounded-md border border-gray-200 bg-gray-100 px-1.5 py-0.5 font-mono text-[0.9em] text-gray-900 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-100 ${className || ''}`}
+        className={`whitespace-pre-wrap break-words rounded-md border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.9em] text-foreground ${className || ''}`}
         {...props}
       >
         {children}
@@ -40,7 +40,7 @@ export default function MarkdownCodeBlock({
   return (
     <div className="group relative my-2">
       {language !== 'text' && (
-        <div className="absolute left-3 top-2 z-10 text-xs font-medium uppercase text-gray-400">{language}</div>
+        <div className="absolute left-3 top-2 z-10 text-xs font-medium uppercase text-muted-foreground">{language}</div>
       )}
 
       <button
@@ -52,7 +52,7 @@ export default function MarkdownCodeBlock({
               setTimeout(() => setCopied(false), 2000);
             }
           })}
-        className="absolute right-2 top-2 z-10 rounded-md border border-border bg-card/90 px-2 py-1 text-xs text-foreground/80 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
+        className="absolute right-2 top-2 z-10 rounded-md border border-border bg-card px-2 py-1 text-xs text-foreground opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
       >
         {copied ? 'Copied!' : 'Copy'}
       </button>
@@ -61,7 +61,7 @@ export default function MarkdownCodeBlock({
         language={language}
         customStyle={{
           margin: 0,
-          borderRadius: '0.75rem',
+          borderRadius: '0.5rem',
           fontSize: '0.875rem',
           padding: language !== 'text' ? '2rem 1rem 1rem 1rem' : '1rem',
           ...(isDarkMode ? {} : { background: 'hsl(var(--muted))' }),

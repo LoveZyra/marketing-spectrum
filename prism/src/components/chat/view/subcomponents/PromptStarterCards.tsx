@@ -18,7 +18,6 @@ interface StarterCategory {
   key: string;
   label: string;
   icon: LucideIcon;
-  accent: string;
   prompts: string[];
 }
 
@@ -32,7 +31,6 @@ const CATEGORIES: StarterCategory[] = [
     key: 'campaign',
     label: '营销活动诊断',
     icon: Megaphone,
-    accent: 'text-violet-600 dark:text-violet-400',
     prompts: [
       '帮我诊断这个营销活动，评估人群圈选和触达链路是否合理',
       '复盘这个活动的转化漏斗，找出效果不佳的环节',
@@ -42,7 +40,6 @@ const CATEGORIES: StarterCategory[] = [
     key: 'diagnosis',
     label: '场景诊断',
     icon: Stethoscope,
-    accent: 'text-indigo-600 dark:text-indigo-400',
     prompts: [
       '帮我诊断这个先知场景的圈人逻辑，检查分支是否互斥完备',
       '检查这个场景的人群配置和标签口径有没有问题',
@@ -52,7 +49,6 @@ const CATEGORIES: StarterCategory[] = [
     key: 'analysis',
     label: '数据分析',
     icon: BarChart3,
-    accent: 'text-cyan-600 dark:text-cyan-400',
     prompts: [
       '分析这份用户行为数据，找出关键转化瓶颈',
       '对比 A/B 实验两组指标的显著性差异',
@@ -62,7 +58,6 @@ const CATEGORIES: StarterCategory[] = [
     key: 'modeling',
     label: '算法建模',
     icon: Binary,
-    accent: 'text-violet-600 dark:text-violet-400',
     prompts: [
       '构建一个用户流失预测模型，给出特征方案',
       '为这个推荐场景设计召回 + 排序链路',
@@ -72,7 +67,6 @@ const CATEGORIES: StarterCategory[] = [
     key: 'consulting',
     label: '方案咨询',
     icon: Lightbulb,
-    accent: 'text-indigo-600 dark:text-indigo-400',
     prompts: [
       '推荐一个适合冷启动推荐的算法方案',
       '这个排序场景该选什么模型，讲讲权衡',
@@ -82,7 +76,6 @@ const CATEGORIES: StarterCategory[] = [
     key: 'algomodel',
     label: '算法模型',
     icon: Network,
-    accent: 'text-cyan-600 dark:text-cyan-400',
     prompts: [
       '训练一个用户流失预测模型，评估 AUC 和特征重要性',
       '为这个分类任务做模型选型与调参，比较几种方案的效果',
@@ -106,7 +99,7 @@ export default function PromptStarterCards({ onPick }: PromptStarterCardsProps) 
 
   return (
     <div className="w-full">
-      <p className="mb-3 text-sm font-medium text-muted-foreground/80">
+      <p className="mb-3 text-[11px] font-medium uppercase tracking-[1.4px] text-muted-foreground">
         试试这些开始
       </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
@@ -115,11 +108,11 @@ export default function PromptStarterCards({ onPick }: PromptStarterCardsProps) 
           return (
             <div
               key={category.key}
-              className="rounded-2xl border border-border/60 bg-card/60 p-4 text-left shadow-sm"
+              className="prism-hover-glow rounded-lg border border-border p-4 text-left transition-shadow"
             >
               <div className="mb-3 flex items-center gap-2">
-                <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary/10">
-                  <Icon className={`h-5 w-5 ${category.accent}`} aria-hidden />
+                <span className="grid h-8 w-8 place-items-center rounded-sm bg-primary/8">
+                  <Icon className="h-5 w-5 text-primary" strokeWidth={2} aria-hidden />
                 </span>
                 <span className="text-sm font-semibold text-foreground">{category.label}</span>
               </div>
@@ -129,7 +122,7 @@ export default function PromptStarterCards({ onPick }: PromptStarterCardsProps) 
                     key={prompt}
                     type="button"
                     onClick={() => onPick(prompt)}
-                    className="block w-full rounded-xl border border-transparent bg-muted/40 px-3.5 py-2.5 text-left text-sm leading-relaxed text-muted-foreground transition-all hover:border-primary/20 hover:bg-primary/10 hover:text-foreground"
+                    className="block w-full rounded-md border border-transparent bg-card px-3.5 py-2.5 text-left text-sm leading-relaxed text-body transition-colors hover:border-primary/30 hover:bg-primary/8 hover:text-foreground"
                   >
                     {prompt}
                   </button>

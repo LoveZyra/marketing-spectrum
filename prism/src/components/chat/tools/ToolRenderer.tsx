@@ -1,10 +1,11 @@
 import React, { memo, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../../types/app';
 import type { SubagentChildTool } from '../types/types';
 
 import { getToolConfig } from './configs/toolConfigs';
-import { OneLineDisplay, BashCommandDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer } from './components';
+import { OneLineDisplay, BashCommandDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer, ParamsTable, ResultContent } from './components';
 import { PlanDisplay } from './components/PlanDisplay';
 import { ToolStatusBadge } from './components/ToolStatusBadge';
 import type { ToolStatus } from './components/ToolStatusBadge';
@@ -33,6 +34,12 @@ interface ToolRendererProps {
     isComplete: boolean;
   };
 }
+
+/** 兜底配置里的英文段名 → 中文。只在渲染处翻译,配置与键名都不动。 */
+const SECTION_TITLE_I18N: Record<string, { key: string; fallback: string }> = {
+  Parameters: { key: 'details.parameters', fallback: '参数' },
+  Details: { key: 'details.result', fallback: '返回' },
+};
 
 function getToolCategory(toolName: string): string {
   if (['Edit', 'Write', 'ApplyPatch'].includes(toolName)) return 'edit';
@@ -92,6 +99,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   isSubagentContainer,
   subagentState
 }) => {
+  const { t } = useTranslation('chat');
   const config = getToolConfig(toolName);
   const displayConfig: any = mode === 'input' ? config.input : config.result;
 
@@ -216,9 +224,11 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   }
 
   if (displayConfig.type === 'collapsible') {
-    const title = typeof displayConfig.title === 'function'
+    const rawTitle = typeof displayConfig.title === 'function'
       ? displayConfig.title(parsedData)
       : displayConfig.title || 'Details';
+    const localized = SECTION_TITLE_I18N[rawTitle as string];
+    const title = localized ? t(localized.key, { defaultValue: localized.fallback }) : rawTitle;
 
     const defaultOpen = displayConfig.defaultOpen !== undefined
       ? displayConfig.defaultOpen
@@ -292,10 +302,19 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         );
         break;
 
+      // 兜底工具的参数与返回:键值表 + 形态分型(见 utils/detailsFormatting.ts)
+      case 'params':
+        contentComponent = <ParamsTable input={contentProps.input} />;
+        break;
+
+      case 'result':
+        contentComponent = <ResultContent content={contentProps.content} isError={contentProps.isError} />;
+        break;
+
       case 'success-message': {
         const msg = displayConfig.getMessage?.(parsedData) || 'Success';
         contentComponent = (
-          <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+          <div className="flex items-center gap-1.5 text-xs text-foreground dark:text-primary">
             <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>

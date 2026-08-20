@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 
 import { describe, test } from 'vitest';
 
-import { SETTINGS_MAIN_TABS, SETTINGS_MAIN_TAB_IDS } from './constants';
 import type { SettingsMainTab } from '../types/types';
+
+import { SETTINGS_MAIN_TABS, SETTINGS_MAIN_TAB_IDS } from './constants';
 
 /**
  * 设置页标签清单的单一来源。

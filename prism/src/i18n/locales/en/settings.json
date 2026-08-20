@@ -29,7 +29,10 @@
       "done": "Password changed; all other devices signed out.",
       "working": "Changing…",
       "submit": "Change password"
-    }
+    },
+    "language": "Language",
+    "languageLabel": "Language",
+    "languageDescription": "Which language the interface is shown in"
   },
   "appearance": {
     "theme": "Theme"
@@ -331,17 +334,18 @@
   },
   "models": {
     "title": "Model mapping",
-    "description": "Edit the alias mapping in the server's settings.json directly. Saves take effect immediately (the next message uses the new mapping) — no restart; the probe cache is marked stale so you can re-verify gateway behavior on the model switcher.",
+    "description": "Map the Sonnet / Opus / Haiku / Fable tiers to the real model names on your gateway. Saves take effect immediately — the next message uses the new mapping, no restart needed.",
     "reload": "Reload",
-    "saved": "Written to settings.json — hot reload takes over; the next message uses the new mapping.",
-    "unsetPlaceholder": "Unset — CLI uses its built-in ID; the gateway decides",
-    "defaultPlaceholder": "Unset — CLI falls back to ANTHROPIC_MODEL/built-in chain",
-    "defaultHelp": "Enter an alias (e.g. sonnet) to make default follow that alias, or a gateway model name directly.",
+    "saved": "Written to settings.json — the next message uses the new mapping.",
+    "unsetPlaceholder": "Leave empty — the CLI uses its built-in ID and the gateway decides",
+    "defaultPlaceholder": "Leave empty — follow the CLI built-in chain",
+    "defaultHelp": "Enter an alias (e.g. sonnet) to follow that tier, or a gateway model name directly.",
     "gateway": "Gateway",
     "missingFile": "(file does not exist yet; saving will create it)",
     "saving": "Saving…",
     "save": "Save mapping",
-    "tokenNote": "This page only reads/writes mapping fields; the gateway URL and auth token in settings.json are preserved untouched and never sent to the browser."
+    "tokenNote": "This page only reads and writes mapping fields; the gateway URL and auth token in settings.json are left untouched and never reach the browser.",
+    "cacheNote": "After a change, the last probe result on the model-switch page no longer holds — re-run the probe there to confirm what the gateway actually does."
   },
   "server": {
     "title": "Server status",

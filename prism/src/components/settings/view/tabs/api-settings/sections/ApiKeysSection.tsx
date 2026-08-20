@@ -1,5 +1,6 @@
 import { ExternalLink, Key, Plus, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import { Button, Input } from '../../../../../../shared/view/ui';
 import type { ApiKeyItem } from '../types';
 
@@ -32,8 +33,8 @@ export default function ApiKeysSection({
     <div>
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Key className="h-5 w-5" />
-          <h3 className="text-lg font-semibold">{t('apiKeys.title')}</h3>
+          <Key className="h-3.5 w-3.5 text-muted-foreground" />
+          <h3 className="text-[11px] font-medium uppercase tracking-[1.4px] text-muted-foreground">{t('apiKeys.title')}</h3>
         </div>
         <Button size="sm" onClick={() => onShowNewKeyFormChange(!showNewKeyForm)}>
           <Plus className="mr-1 h-4 w-4" />
@@ -47,7 +48,7 @@ export default function ApiKeysSection({
           href="/api-docs.html"
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+          className="inline-flex items-center gap-1 text-sm text-card-foreground hover:underline dark:text-primary"
         >
           {t('apiKeys.apiDocsLink')}
           <ExternalLink className="h-3 w-3" />
@@ -55,7 +56,7 @@ export default function ApiKeysSection({
       </div>
 
       {showNewKeyForm && (
-        <div className="mb-4 rounded-lg border bg-card p-4">
+        <div className="mb-4 rounded-lg border border-border p-4">
           <Input
             placeholder={t('apiKeys.form.placeholder')}
             value={newKeyName}
@@ -76,10 +77,10 @@ export default function ApiKeysSection({
           <p className="text-sm italic text-muted-foreground">{t('apiKeys.empty')}</p>
         ) : (
           apiKeys.map((key) => (
-            <div key={key.id} className="flex items-center justify-between rounded-lg border p-3">
+            <div key={key.id} className="flex items-center justify-between rounded-lg border border-border p-3">
               <div className="flex-1">
                 <div className="font-medium">{key.key_name}</div>
-                <code className="text-xs text-muted-foreground">{key.api_key}</code>
+                <code className="font-mono text-xs text-muted-foreground">{key.api_key}</code>
                 <div className="mt-1 text-xs text-muted-foreground">
                   {t('apiKeys.list.created')} {new Date(key.created_at).toLocaleDateString()}
                   {key.last_used

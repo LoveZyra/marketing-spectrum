@@ -3,6 +3,7 @@ import { NotebookPen, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../utils/api';
+import { Shimmer } from '../../shared/view/ui';
 
 export type JupyterOpenTarget = {
   /** 要深链的绝对路径(null = 打开 lab 根)。 */
@@ -83,7 +84,7 @@ export default function JupyterPanel({ target }: JupyterPanelProps) {
     return (
       <div className="flex h-full items-center justify-center p-6">
         <div className="max-w-lg space-y-3 text-center">
-          <NotebookPen className="mx-auto h-8 w-8 text-muted-foreground/60" />
+          <NotebookPen className="mx-auto h-8 w-8 text-muted-foreground" />
           <p className="text-sm font-medium text-foreground">
             {isNotInstalled
               ? t('jupyter.notInstalled', { defaultValue: '服务器上没有找到 JupyterLab' })
@@ -115,10 +116,9 @@ export default function JupyterPanel({ target }: JupyterPanelProps) {
   return (
     <div className="flex h-full items-center justify-center p-6">
       <div className="space-y-3 text-center">
-        <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        <p className="text-sm text-muted-foreground">
+        <Shimmer as="p" className="text-sm">
           {t('jupyter.starting', { defaultValue: '正在启动 JupyterLab…首次启动可能需要半分钟' })}
-        </p>
+        </Shimmer>
       </div>
     </div>
   );

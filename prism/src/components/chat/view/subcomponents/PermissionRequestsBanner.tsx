@@ -1,5 +1,6 @@
 import React from 'react';
-import { ShieldAlertIcon } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import type { PendingPermissionRequest } from '../../types/types';
 import { buildClaudeToolPermissionEntry, formatToolInputForDisplay } from '../../utils/chatPermissions';
@@ -30,6 +31,7 @@ export default function PermissionRequestsBanner({
   handlePermissionDecision,
   handleGrantToolPermission,
 }: PermissionRequestsBannerProps) {
+  const { t } = useTranslation('chat');
   // Filter out plan tool requests — they are handled inline by PlanDisplay
   const filteredRequests = pendingPermissionRequests.filter(
     (r) => r.toolName !== 'ExitPlanMode' && r.toolName !== 'exit_plan_mode'
@@ -57,7 +59,9 @@ export default function PermissionRequestsBanner({
         const permissionEntry = buildClaudeToolPermissionEntry(request.toolName, rawInput);
         const settings = getClaudeSettings();
         const alreadyAllowed = permissionEntry ? settings.allowedTools.includes(permissionEntry) : false;
-        const rememberLabel = alreadyAllowed ? 'Allow (saved)' : 'Allow & remember';
+        const rememberLabel = alreadyAllowed
+          ? t('permission.allowSaved', { defaultValue: '已记住' })
+          : t('permission.allowRemember', { defaultValue: '允许并记住' });
         const matchingRequestIds = permissionEntry
           ? pendingPermissionRequests
               .filter(
@@ -69,40 +73,41 @@ export default function PermissionRequestsBanner({
 
         return (
           <Confirmation key={request.requestId} approval="pending">
-            <ConfirmationTitle className="flex items-start gap-3">
-              <ShieldAlertIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <ConfirmationTitle className="flex items-start gap-2.5">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" strokeWidth={2} />
               <ConfirmationRequest>
-                <div>
-                  <span className="font-medium text-foreground">Permission required</span>
-                  <span className="ml-2 text-muted-foreground">
-                    Tool: <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{request.toolName}</code>
+                <div className="flex min-w-0 flex-1 flex-col gap-[5px]">
+                  <span className="text-[13.5px] font-semibold leading-5 text-card-foreground">
+                    {t('permission.title', { defaultValue: '需要授权才能继续' })}
                   </span>
+                  {/* 工具名 + 规则合成一行等宽元信息 —— 整行已是等宽,不再套芯片底色 */}
+                  <span className="font-mono text-[11.5px] leading-[17px] text-muted-foreground">
+                    {t('permission.meta', {
+                      defaultValue: '工具 {{tool}}{{rule}}',
+                      tool: request.toolName,
+                      rule: permissionEntry ? ` · 规则 ${permissionEntry}` : '',
+                    })}
+                  </span>
+                  {rawInput && (
+                    <details>
+                      <summary className="cursor-pointer text-xs leading-[18px] text-muted-foreground hover:text-foreground">
+                        {t('permission.viewInput', { defaultValue: '查看工具输入' })}
+                      </summary>
+                      <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-card p-2 font-mono text-xs text-muted-foreground">
+                        {rawInput}
+                      </pre>
+                    </details>
+                  )}
                 </div>
-                {permissionEntry && (
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    Allow rule: <code className="rounded bg-muted px-1 py-0.5 text-xs">{permissionEntry}</code>
-                  </div>
-                )}
               </ConfirmationRequest>
             </ConfirmationTitle>
 
-            {rawInput && (
-              <details className="mt-2">
-                <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-                  View tool input
-                </summary>
-                <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/50 p-2 text-xs text-muted-foreground">
-                  {rawInput}
-                </pre>
-              </details>
-            )}
-
             <ConfirmationActions>
               <ConfirmationAction
-                variant="outline"
+                variant="ghost"
                 onClick={() => handlePermissionDecision(request.requestId, { allow: false, message: 'User denied tool use' })}
               >
-                Deny
+                {t('permission.deny', { defaultValue: '拒绝' })}
               </ConfirmationAction>
               <ConfirmationAction
                 variant="outline"
@@ -120,7 +125,7 @@ export default function PermissionRequestsBanner({
                 variant="default"
                 onClick={() => handlePermissionDecision(request.requestId, { allow: true })}
               >
-                Allow once
+                {t('permission.allowOnce', { defaultValue: '允许一次' })}
               </ConfirmationAction>
             </ConfirmationActions>
           </Confirmation>

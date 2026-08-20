@@ -1,6 +1,7 @@
 import { Suspense, type ReactNode } from 'react';
 
 import ErrorBoundary from './ErrorBoundary';
+import { Shimmer } from './ui/Shimmer';
 
 /**
  * Wrapper for the code-split panels that fill the main content area.
@@ -29,13 +30,12 @@ type LazyPanelProps = {
 
 export function PanelLoadingFallback({ fullHeight = true }: { fullHeight?: boolean }) {
   return (
-    <div className={`flex ${fullHeight ? 'h-full' : 'py-8'} items-center justify-center`}>
-      <div
-        className="h-8 w-8 rounded-full border-[3px] border-muted border-t-primary"
-        style={{ animation: 'spin 1s linear infinite' }}
-        role="status"
-        aria-label="Loading"
-      />
+    <div
+      className={`flex ${fullHeight ? 'h-full' : 'py-8'} items-center justify-center`}
+      role="status"
+      aria-label="Loading"
+    >
+      <Shimmer className="text-sm">Loading…</Shimmer>
     </div>
   );
 }
@@ -51,13 +51,12 @@ export function PanelLoadingFallback({ fullHeight = true }: { fullHeight?: boole
  */
 export function ModalLoadingFallback() {
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div
-        className="h-8 w-8 rounded-full border-[3px] border-white/30 border-t-white"
-        style={{ animation: 'spin 1s linear infinite' }}
-        role="status"
-        aria-label="Loading"
-      />
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-[rgba(16,16,16,0.72)]"
+      role="status"
+      aria-label="Loading"
+    >
+      <Shimmer className="text-sm">Loading…</Shimmer>
     </div>
   );
 }

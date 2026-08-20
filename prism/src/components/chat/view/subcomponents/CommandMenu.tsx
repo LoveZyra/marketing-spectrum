@@ -70,13 +70,13 @@ const namespaceIcons: Record<string, LucideIcon> = {
 };
 
 const namespaceAccentClasses: Record<string, string> = {
-  frequent: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200',
-  builtin: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-sky-200',
-  cli: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-400/20 dark:bg-violet-400/10 dark:text-violet-200',
-  skill: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200',
-  project: 'border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-400/20 dark:bg-indigo-400/10 dark:text-indigo-200',
-  user: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-200',
-  other: 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-500/20 dark:bg-gray-500/10 dark:text-gray-200',
+  frequent: 'border-border bg-transparent text-muted-foreground',
+  builtin: 'border-border bg-transparent text-muted-foreground',
+  cli: 'border-border bg-transparent text-muted-foreground',
+  skill: 'border-primary/[0.32] bg-transparent text-foreground dark:text-primary',
+  project: 'border-border bg-transparent text-muted-foreground',
+  user: 'border-border bg-transparent text-muted-foreground',
+  other: 'border-border bg-transparent text-muted-foreground',
 };
 
 const MENU_EDGE_GAP = 16;
@@ -229,7 +229,7 @@ export default function CommandMenu({
     return renderInPortal(
       <div
         ref={menuRef}
-        className="command-menu command-menu-empty border border-border bg-popover/95 text-sm text-muted-foreground"
+        className="command-menu command-menu-empty border border-border bg-popover text-sm text-muted-foreground"
         style={{
           ...menuBaseStyle,
           ...menuPosition,
@@ -250,7 +250,7 @@ export default function CommandMenu({
       ref={menuRef}
       role="listbox"
       aria-label="可用命令"
-      className="command-menu border border-border bg-popover/95 text-popover-foreground"
+      className="command-menu border border-border bg-popover text-popover-foreground"
       style={{ ...menuBaseStyle, ...menuPosition, opacity: 1, transform: 'translateY(0)' }}
     >
       {orderedNamespaces.map((namespace) => (
@@ -274,18 +274,15 @@ export default function CommandMenu({
                 ref={isSelected ? selectedItemRef : null}
                 role="option"
                 aria-selected={isSelected}
-                className={`command-item group relative mb-1 flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-all ${
+                className={`command-item group relative mb-1 flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-colors ${
                   isSelected
-                    ? 'border-primary/30 bg-primary/10 shadow-sm'
+                    ? 'border-primary/30 bg-primary/10'
                     : 'border-transparent bg-transparent hover:border-border hover:bg-accent'
                 }`}
                 onMouseEnter={() => onSelect && commandIndex >= 0 && onSelect(command, commandIndex, true)}
                 onClick={() => onSelect && commandIndex >= 0 && onSelect(command, commandIndex, false)}
                 onMouseDown={(event) => event.preventDefault()}
               >
-                {isSelected && (
-                  <span className="absolute bottom-1.5 left-1.5 top-1.5 w-0.5 rounded-full bg-primary" />
-                )}
                 <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${accentClass}`}>
                   <NamespaceIcon aria-hidden="true" size={14} strokeWidth={2.2} />
                 </span>
@@ -298,7 +295,7 @@ export default function CommandMenu({
                       {command.name}
                     </span>
                     {command.metadata?.type && (
-                      <span className="command-metadata-badge shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm">
+                      <span className="command-metadata-badge shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                         {command.metadata.type}
                       </span>
                     )}
@@ -313,7 +310,7 @@ export default function CommandMenu({
                   )}
                 </div>
                 {isSelected && (
-                  <span className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded border border-primary/30 bg-card text-primary shadow-sm">
+                  <span className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded border border-primary/30 bg-card text-foreground dark:text-primary">
                     <CornerDownLeft aria-hidden="true" size={13} strokeWidth={2.2} />
                   </span>
                 )}

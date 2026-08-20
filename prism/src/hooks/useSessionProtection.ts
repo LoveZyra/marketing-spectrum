@@ -3,6 +3,8 @@ import { useCallback, useState } from 'react';
 export interface SessionActivity {
   /** Provider-supplied status line; null renders the default activity label. */
   statusText: string | null;
+  /** 状态类别。'compacting' 时指示器换成"正在压缩上下文"的样子。 */
+  statusKind?: 'compacting' | null;
   canInterrupt: boolean;
   /**
    * When this request was first marked as processing (client clock). Drives
@@ -16,13 +18,14 @@ export type SessionActivityMap = ReadonlyMap<string, SessionActivity>;
 export type SessionActivitySnapshot = {
   sessionId: string;
   statusText?: string | null;
+  statusKind?: 'compacting' | null;
   canInterrupt?: boolean;
   startedAt?: number;
 };
 
 export type MarkSessionProcessing = (
   sessionId?: string | null,
-  activity?: { statusText?: string | null; canInterrupt?: boolean },
+  activity?: { statusText?: string | null; statusKind?: 'compacting' | null; canInterrupt?: boolean },
 ) => void;
 
 export type MarkSessionIdle = (
@@ -49,6 +52,7 @@ const sessionActivityMapsMatch = (
     if (
       !rightActivity
       || leftActivity.statusText !== rightActivity.statusText
+      || leftActivity.statusKind !== rightActivity.statusKind
       || leftActivity.canInterrupt !== rightActivity.canInterrupt
       || leftActivity.startedAt !== rightActivity.startedAt
     ) {
@@ -82,6 +86,8 @@ export function useSessionProtection() {
       const next: SessionActivity = {
         statusText:
           activity?.statusText !== undefined ? activity.statusText : existing?.statusText ?? null,
+        statusKind:
+          activity?.statusKind !== undefined ? activity.statusKind : existing?.statusKind ?? null,
         canInterrupt: activity?.canInterrupt ?? existing?.canInterrupt ?? true,
         startedAt: existing?.startedAt ?? Date.now(),
       };
@@ -89,6 +95,7 @@ export function useSessionProtection() {
       if (
         existing
         && existing.statusText === next.statusText
+        && existing.statusKind === next.statusKind
         && existing.canInterrupt === next.canInterrupt
       ) {
         return prev;

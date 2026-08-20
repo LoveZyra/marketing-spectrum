@@ -1,4 +1,4 @@
-import React, { lazy, useCallback, useEffect, useState } from 'react';
+import React, { lazy, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import ChatInterface from '../../chat/view/ChatInterface';
@@ -6,10 +6,8 @@ import type { MainContentProps } from '../types/types';
 import { usePaletteOpsRegister } from '../../../contexts/PaletteOpsContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useFileOpenResolver } from '../../../hooks/useFileOpenResolver';
-import { authenticatedFetch } from '../../../utils/api';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
-import type { Project } from '../../../types/app';
 import ErrorBoundary from '../../../shared/view/ErrorBoundary';
 import LazyPanel from '../../../shared/view/LazyPanel';
 
@@ -53,6 +51,16 @@ function MainContent({
   const { t } = useTranslation('common');
   const { preferences } = useUiPreferences();
   const { showRawParameters, showThinking, sendByCtrlEnter } = preferences;
+
+  // 「常驻会话」判定 —— 服务端把跑过一轮的会话留成常驻运行时(PRISM_PERSISTENT_SESSIONS
+  // 默认开),客户端没有直查接口,所以只认自己亲眼见过的:某个会话一旦进入过处理中,
+  // 它在服务端就有了运行时。刷新页面后这份记忆清空,宁可少显示也不谎报。
+  const residentSessionsRef = React.useRef<Set<string>>(new Set());
+  const activeSessionId = selectedSession?.id;
+  if (activeSessionId && processingSessions.has(activeSessionId)) {
+    residentSessionsRef.current.add(activeSessionId);
+  }
+  const isPersistentSession = Boolean(activeSessionId && residentSessionsRef.current.has(activeSessionId));
 
   // notebook 标签页首次激活后保持挂载(CSS 隐藏):iframe 卸载 = lab 界面重载,
   // 正在跑的 kernel 虽然不会死(在服务端),但界面状态全丢。与 chat 同一策略。
@@ -112,6 +120,7 @@ function MainContent({
         selectedSession={selectedSession}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
+        isPersistentSession={isPersistentSession}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">

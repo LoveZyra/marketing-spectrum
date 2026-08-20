@@ -351,6 +351,7 @@ export function useChatRealtimeHandlers({
           } else if (msg.text && sid) {
             onSessionProcessing?.(sid, {
               statusText: msg.text as string,
+              statusKind: (msg.statusKind as 'compacting' | undefined) ?? null,
               canInterrupt: msg.canInterrupt !== false,
             });
           }

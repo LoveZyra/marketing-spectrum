@@ -1,7 +1,9 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Copy, Download, FileText, FolderPlus, Pencil, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
+
 import { cn } from '../../../lib/utils';
+import { Shimmer } from '../../../shared/view/ui';
 
 type FileContextItem = {
   name: string;
@@ -268,15 +270,12 @@ export default function FileContextMenu({
           style={{ position: 'fixed', left: menuPosition.x, top: menuPosition.y, zIndex: 9999 }}
           className={cn(
             'min-w-[180px] py-1 px-1',
-            'bg-popover border border-border rounded-lg shadow-lg',
-            'animate-in fade-in-0 zoom-in-95',
-            'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
+            'bg-popover border border-border rounded-lg prism-modal-shadow',
           )}
         >
           {isLoading ? (
             <div className="flex items-center justify-center py-4">
-              <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
-              <span className="ml-2 text-sm text-muted-foreground">{t('fileTree.context.loading', 'Loading...')}</span>
+              <Shimmer className="text-sm">{t('fileTree.context.loading', 'Loading...')}</Shimmer>
             </div>
           ) : (
             menuActions.map((action) => (
@@ -293,7 +292,7 @@ export default function FileContextMenu({
                     action.isDisabled
                       ? 'opacity-50 cursor-not-allowed'
                       : action.isDanger
-                      ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950'
+                      ? 'text-destructive hover:bg-destructive/10'
                       : 'hover:bg-accent',
                     isLoading && 'pointer-events-none',
                   )}

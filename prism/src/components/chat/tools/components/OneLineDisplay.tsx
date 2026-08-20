@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
+
 import { copyTextToClipboard } from '../../../../utils/clipboard';
+
 import { ToolStatusBadge } from './ToolStatusBadge';
 import type { ToolStatus } from './ToolStatusBadge';
 
@@ -70,12 +72,12 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
   const renderCopyButton = () => (
     <button
       onClick={handleAction}
-      className="ml-1 flex-shrink-0 text-muted-foreground/40 opacity-0 transition-all hover:text-muted-foreground group-hover:opacity-100"
+      className="ml-1 flex-shrink-0 text-muted-foreground opacity-0 transition-colors hover:text-foreground group-hover:opacity-100"
       title="Copy to clipboard"
       aria-label="Copy to clipboard"
     >
       {copied ? (
-        <svg className="h-3 w-3 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="h-3 w-3 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
         </svg>
       ) : (
@@ -92,14 +94,14 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
       <div className="group my-1">
         <div className="flex items-start gap-2">
           <div className="flex flex-shrink-0 items-center gap-1.5 pt-0.5">
-            <svg className="h-3 w-3 text-green-500 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="h-3 w-3 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           </div>
           <div className="flex min-w-0 flex-1 items-start gap-2">
-            <div className="min-w-0 flex-1 rounded bg-gray-900 px-2.5 py-1 dark:bg-black">
-              <code className={`font-mono text-xs text-green-400 ${wrapText ? 'whitespace-pre-wrap break-all' : 'block truncate'}`}>
-                <span className="select-none text-green-600 dark:text-green-500">$ </span>{value}
+            <div className="min-w-0 flex-1 rounded bg-muted px-2.5 py-1 ">
+              <code className={`font-mono text-xs text-foreground dark:text-primary ${wrapText ? 'whitespace-pre-wrap break-all' : 'block truncate'}`}>
+                <span className="select-none text-foreground dark:text-primary">$ </span>{value}
               </code>
             </div>
             {status && <ToolStatusBadge status={status} className="mt-0.5" />}
@@ -108,7 +110,7 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
         </div>
         {secondary && (
           <div className="ml-7 mt-1">
-            <span className="text-[11px] italic text-muted-foreground/60">
+            <span className="text-[11px] italic text-muted-foreground">
               {secondary}
             </span>
           </div>
@@ -123,10 +125,10 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
     return (
       <div className={`group flex items-center gap-1.5 border-l-2 ${colorScheme.border} my-0.5 py-0.5 pl-3`}>
         <span className="flex-shrink-0 text-xs text-muted-foreground">{label || toolName}</span>
-        <span className="text-[10px] text-muted-foreground/40">/</span>
+        <span className="text-[10px] text-muted-foreground">/</span>
         <button
           onClick={handleAction}
-          className="truncate font-mono text-xs text-primary transition-colors hover:text-primary/80 hover:underline"
+          className="truncate font-mono text-xs text-foreground transition-colors hover:text-primary/80 hover:underline dark:text-primary"
           title={value}
         >
           {displayName}
@@ -141,12 +143,12 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
     return (
       <div className={`group flex items-center gap-1.5 border-l-2 ${colorScheme.border} my-0.5 py-0.5 pl-3`}>
         <span className="flex-shrink-0 text-xs text-muted-foreground">{label || toolName}</span>
-        <span className="text-[10px] text-muted-foreground/40">/</span>
+        <span className="text-[10px] text-muted-foreground">/</span>
         <span className={`min-w-0 flex-1 truncate font-mono text-xs ${colorScheme.primary}`}>
           {value}
         </span>
         {secondary && (
-          <span className="flex-shrink-0 text-[11px] italic text-muted-foreground/60">
+          <span className="flex-shrink-0 text-[11px] italic text-muted-foreground">
             {secondary}
           </span>
         )}
@@ -154,7 +156,7 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
         {toolResult && (
           <a
             href={`#tool-result-${toolId}`}
-            className="flex flex-shrink-0 items-center gap-0.5 text-[11px] text-primary transition-colors hover:text-primary/80"
+            className="flex flex-shrink-0 items-center gap-0.5 text-[11px] text-foreground transition-colors hover:text-primary/80 dark:text-primary"
           >
             <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -175,7 +177,7 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
         <span className="flex-shrink-0 text-xs text-muted-foreground">{label || toolName}</span>
       )}
       {(icon || label || toolName) && (
-        <span className="text-[10px] text-muted-foreground/40">/</span>
+        <span className="text-[10px] text-muted-foreground">/</span>
       )}
       <span className={`font-mono text-xs ${wrapText ? 'whitespace-pre-wrap break-all' : 'truncate'} min-w-0 flex-1 ${colorScheme.primary}`}>
         {value}

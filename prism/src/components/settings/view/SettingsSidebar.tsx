@@ -1,9 +1,8 @@
 
-import { SETTINGS_MAIN_TABS, type SettingsMainTabMeta } from '../constants/constants';
 import { useTranslation } from 'react-i18next';
 
+import { SETTINGS_MAIN_TABS, type SettingsMainTabMeta } from '../constants/constants';
 import { useAuth } from '../../auth/context/AuthContext';
-
 import { cn } from '../../../lib/utils';
 import { PillBar, Pill } from '../../../shared/view/ui';
 import type { SettingsMainTab } from '../types/types';
@@ -30,7 +29,7 @@ export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebar
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden w-56 flex-shrink-0 border-r border-border bg-muted/30 md:flex md:flex-col">
+      <aside className="hidden w-56 flex-shrink-0 border-r border-border md:flex md:flex-col">
         <nav className="flex flex-col gap-1 p-3">
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -41,13 +40,13 @@ export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebar
                 key={item.id}
                 onClick={() => onChange(item.id)}
                 className={cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors duration-150',
+                  'relative flex items-center gap-3 rounded-md px-2.5 py-2 text-left text-sm font-medium transition-colors',
                   isActive
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground active:bg-accent/50',
+                    ? 'prism-panel bg-card text-foreground dark:bg-muted'
+                    : 'text-body hover:bg-muted hover:text-foreground',
                 )}
               >
-                <Icon className="h-4 w-4 flex-shrink-0" />
+                <Icon className={cn('h-4 w-4 flex-shrink-0', isActive && 'text-primary')} />
                 {t(item.labelKey)}
               </button>
             );

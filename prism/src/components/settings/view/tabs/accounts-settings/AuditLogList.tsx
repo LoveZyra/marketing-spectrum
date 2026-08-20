@@ -78,22 +78,22 @@ export default function AuditLogList() {
         <button
           type="button"
           onClick={() => void load(page)}
-          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-accent"
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-body transition-colors hover:border-border-strong hover:bg-card hover:text-foreground"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'text-primary' : ''}`} />
           {t('audit.refresh', '刷新')}
         </button>
       </div>
 
       {error && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+        <p className="rounded-md border border-border bg-muted px-3 py-2 text-xs text-muted-foreground">
           {error}
         </p>
       )}
 
       <div className="overflow-x-auto rounded-lg border border-border">
         <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-xs text-muted-foreground">
+          <thead className="border-b border-border bg-card text-xs text-muted-foreground">
             <tr>
               <th className="px-3 py-2 text-left font-medium">{t('audit.columns.time', '时间')}</th>
               <th className="px-3 py-2 text-left font-medium">{t('audit.columns.user', '用户')}</th>
@@ -120,8 +120,8 @@ export default function AuditLogList() {
                   <span
                     className={`rounded px-1.5 py-0.5 font-mono text-[11px] ${
                       entry.outcome === 'failure'
-                        ? 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300'
-                        : 'bg-muted text-foreground/80'
+                        ? 'bg-muted text-muted-foreground'
+                        : 'bg-muted text-body'
                     }`}
                   >
                     {entry.event}
@@ -145,7 +145,7 @@ export default function AuditLogList() {
             type="button"
             disabled={page === 0 || loading}
             onClick={() => void load(page - 1)}
-            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 hover:bg-accent disabled:opacity-40"
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 transition-colors hover:border-border-strong hover:bg-card hover:text-foreground disabled:opacity-40"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
             {t('audit.prev', '上一页')}
@@ -157,7 +157,7 @@ export default function AuditLogList() {
             type="button"
             disabled={page + 1 >= totalPages || loading}
             onClick={() => void load(page + 1)}
-            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 hover:bg-accent disabled:opacity-40"
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 transition-colors hover:border-border-strong hover:bg-card hover:text-foreground disabled:opacity-40"
           >
             {t('audit.next', '下一页')}
             <ChevronRight className="h-3.5 w-3.5" />

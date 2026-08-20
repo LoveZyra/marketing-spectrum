@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Edit3, ShieldCheck, Star, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Edit3, Folder, Globe, Lock, Share2, ShieldCheck, Star, Trash2, UserCheck, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -60,6 +60,87 @@ const getSessionCountDisplay = (project: Project, sessions: SessionWithProvider[
   const total = Number(project.sessionMeta?.total ?? sessions.length);
   return String(total);
 };
+
+type VisibilityBadgeProps = {
+  isPublic: boolean;
+  isRootOnly: boolean;
+  isSharedToViewer: boolean;
+  sharedOutCount: number;
+  t: TFunction;
+};
+
+/**
+ * 项目可见性标记 —— **只给图标,不给文字**。
+ *
+ * 原来是四个带边框的文字胶囊(公共 / 仅 root / 共享 / 已共享·N)。侧栏内宽只有
+ * ~236px,一个「已共享·4」就要吃掉 56px,项目名被迫先截断 —— 而项目名才是这一行
+ * 真正要读的东西。换成 14px 图标之后,同样的信息占 ~18px。
+ *
+ * 含义不靠猜:每个图标都挂 `title` + `aria-label`,悬停出全句解释,读屏器也念得出。
+ * 「已共享」后面那个数字是共享人数,保留 —— 那是个量,不是个状态。
+ *
+ * 四个状态的分工:
+ * - 公共(Globe):无主且在公共目录下,对所有人可见
+ * - 仅 root(Lock):无主但没在公共目录下,只有 root 收得到
+ * - 他人共享给你(UserCheck)
+ * - 你共享出去了(Share2)+ 人数
+ */
+function ProjectVisibilityBadges({
+  isPublic,
+  isRootOnly,
+  isSharedToViewer,
+  sharedOutCount,
+  t,
+}: VisibilityBadgeProps) {
+  const marks: Array<{ key: string; Icon: typeof Globe; label: string; count?: number }> = [];
+
+  if (isPublic) {
+    marks.push({
+      key: 'public',
+      Icon: Globe,
+      label: t('project.publicHint', { defaultValue: '公共项目 —— 无主且在公共目录下,所有人可见' }),
+    });
+  }
+  if (isRootOnly) {
+    marks.push({
+      key: 'rootOnly',
+      Icon: Lock,
+      label: t('project.rootOnlyHint', { defaultValue: '仅 root 可见 —— 无主且不在公共目录下' }),
+    });
+  }
+  if (isSharedToViewer) {
+    marks.push({
+      key: 'shared',
+      Icon: UserCheck,
+      label: t('project.sharedHint', { defaultValue: '他人共享给你的项目' }),
+    });
+  }
+  if (sharedOutCount > 0) {
+    marks.push({
+      key: 'sharedOut',
+      Icon: Share2,
+      label: t('project.sharedOutHint', { count: sharedOutCount, defaultValue: '已共享给 {{count}} 人' }),
+      count: sharedOutCount,
+    });
+  }
+
+  if (marks.length === 0) {
+    return null;
+  }
+
+  return (
+    <span className="flex flex-none items-center gap-1.5 text-muted-foreground">
+      {marks.map(({ key, Icon, label, count }) => (
+        <span key={key} className="flex items-center gap-0.5" role="img" aria-label={label} title={label}>
+          <Icon className="h-3.5 w-3.5" strokeWidth={2} />
+          {count !== undefined && (
+            <span className="font-mono text-[10px] leading-none">{count}</span>
+          )}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 export default function SidebarProjectItem({
   project,
@@ -148,11 +229,11 @@ export default function SidebarProjectItem({
         <div className="md:hidden">
           <div
             className={cn(
-              'p-3 mx-3 my-1 rounded-lg bg-card border border-border/50 active:scale-[0.98] transition-all duration-150',
-              isSelected && 'bg-primary/5 border-primary/20',
+              'p-3 mx-3 my-1 rounded-md border border-border active:translate-y-px',
+              isSelected && 'bg-muted',
               isStarred &&
                 !isSelected &&
-                'bg-yellow-50/50 dark:bg-yellow-900/5 border-yellow-200/30 dark:border-yellow-800/30',
+                'border-border',
             )}
             onClick={toggleProject}
           >
@@ -160,10 +241,10 @@ export default function SidebarProjectItem({
               <div className="flex min-w-0 flex-1 items-center gap-3">
                 <button
                   className={cn(
-                    'w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 transition-all duration-150 border',
+                    'w-8 h-8 rounded-md flex items-center justify-center active:translate-y-px border',
                     isStarred
-                      ? 'bg-yellow-500/10 dark:bg-yellow-900/30 border-yellow-200 dark:border-yellow-800'
-                      : 'bg-gray-500/10 dark:bg-gray-900/30 border-gray-200 dark:border-gray-800',
+                      ? 'border-border bg-muted'
+                      : 'border-border bg-muted',
                   )}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -175,8 +256,8 @@ export default function SidebarProjectItem({
                     className={cn(
                       'w-4 h-4 transition-colors',
                       isStarred
-                        ? 'text-yellow-600 dark:text-yellow-400 fill-current'
-                        : 'text-gray-600 dark:text-gray-400',
+                        ? 'fill-primary text-primary'
+                        : 'text-body',
                     )}
                   />
                 </button>
@@ -187,7 +268,7 @@ export default function SidebarProjectItem({
                       type="text"
                       value={editingName}
                       onChange={(event) => onEditingNameChange(event.target.value)}
-                      className="w-full rounded-lg border-2 border-primary/40 bg-background px-3 py-2 text-sm text-foreground shadow-sm transition-all duration-200 focus:border-primary focus:shadow-md focus:outline-none"
+                      className="w-full rounded-md border border-primary/40 bg-background px-3 py-2 text-sm text-foreground transition-colors focus:border-primary focus:outline-none"
                       placeholder={t('projects.projectNamePlaceholder')}
                       autoFocus
                       autoComplete="off"
@@ -210,29 +291,16 @@ export default function SidebarProjectItem({
                   ) : (
                     <>
                       <div className="flex min-w-0 flex-1 items-center justify-between">
-                        <h3 className="truncate text-sm font-normal text-foreground">{project.displayName}</h3>
-                        {isPublicProject && (
-                          <span className="shrink-0 rounded bg-muted px-1 py-px text-[10px] text-muted-foreground">
-                            {t('project.public', { defaultValue: '公共' })}
-                          </span>
-                        )}
-                        {isRootOnlyUnclaimed && (
-                          <span className="shrink-0 rounded bg-amber-100 px-1 py-px text-[10px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                            {t('project.rootOnly', { defaultValue: '仅 root' })}
-                          </span>
-                        )}
-                        {isSharedToViewer && (
-                          <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[10px] text-primary">
-                            {t('project.shared', { defaultValue: '共享' })}
-                          </span>
-                        )}
-                        {sharedOutCount > 0 && (
-                          <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[10px] text-primary">
-                            {t('project.sharedOut', { defaultValue: '已共享' })}·{sharedOutCount}
-                          </span>
-                        )}
+                        <h3 className="truncate text-[13px] font-semibold text-foreground">{project.displayName}</h3>
+                        <ProjectVisibilityBadges
+                          isPublic={isPublicProject}
+                          isRootOnly={isRootOnlyUnclaimed}
+                          isSharedToViewer={isSharedToViewer}
+                          sharedOutCount={sharedOutCount}
+                          t={t}
+                        />
                       </div>
-                      <p className="text-xs text-muted-foreground">{sessionCountLabel}</p>
+                      <p className="truncate font-mono text-[10.5px] text-muted-foreground">{sessionCountLabel}</p>
                     </>
                   )}
                 </div>
@@ -242,38 +310,38 @@ export default function SidebarProjectItem({
                 {isEditing ? (
                   <>
                     <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg bg-green-500 shadow-sm transition-all duration-150 active:scale-90 active:shadow-none dark:bg-green-600"
+                      className="flex h-8 w-8 items-center justify-center rounded-md bg-primary active:translate-y-px"
                       onClick={(event) => {
                         event.stopPropagation();
                         saveProjectName();
                       }}
                     >
-                      <Check className="h-4 w-4 text-white" />
+                      <Check className="h-4 w-4 text-primary-foreground" />
                     </button>
                     <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-500 shadow-sm transition-all duration-150 active:scale-90 active:shadow-none dark:bg-gray-600"
+                      className="flex h-8 w-8 items-center justify-center rounded-md bg-muted active:translate-y-px"
                       onClick={(event) => {
                         event.stopPropagation();
                         onCancelEditingProject();
                       }}
                     >
-                      <X className="h-4 w-4 text-white" />
+                      <X className="h-4 w-4 text-foreground" />
                     </button>
                   </>
                 ) : (
                   <>
                     <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-500/10 active:scale-90 dark:border-red-800 dark:bg-red-900/30"
+                      className="flex h-8 w-8 items-center justify-center rounded-md border border-border active:translate-y-px"
                       onClick={(event) => {
                         event.stopPropagation();
                         onDeleteProject(project);
                       }}
                     >
-                      <Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" />
+                      <Trash2 className="h-4 w-4 text-muted-foreground" />
                     </button>
 
                     <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
+                      className="flex h-8 w-8 items-center justify-center rounded-md border border-border active:translate-y-px"
                       onClick={(event) => {
                         event.stopPropagation();
                         onStartEditingProject(project);
@@ -284,7 +352,7 @@ export default function SidebarProjectItem({
 
                     {canManagePermissions && (
                       <button
-                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
+                        className="flex h-8 w-8 items-center justify-center rounded-md border border-border active:translate-y-px"
                         onClick={(event) => {
                           event.stopPropagation();
                           setShowPermissions(true);
@@ -295,7 +363,7 @@ export default function SidebarProjectItem({
                       </button>
                     )}
 
-                    <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted/30">
+                    <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted">
                       {isExpanded ? (
                         <ChevronDown className="h-3 w-3 text-muted-foreground" />
                       ) : (
@@ -312,37 +380,16 @@ export default function SidebarProjectItem({
         <Button
           variant="ghost"
           className={cn(
-            'hidden md:flex w-full justify-between p-2 h-auto font-normal hover:bg-accent/50',
-            isSelected && 'bg-accent text-accent-foreground',
-            isStarred &&
-              !isSelected &&
-              'bg-yellow-50/50 dark:bg-yellow-900/10 hover:bg-yellow-100/50 dark:hover:bg-yellow-900/20',
+            'relative hidden md:flex w-full justify-between rounded-md px-2.5 py-2 h-auto font-normal hover:bg-muted',
+            isSelected && 'prism-panel bg-card dark:bg-muted',
           )}
           onClick={selectAndToggleProject}
         >
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <div
-              className={cn(
-                'w-6 h-6 flex items-center justify-center rounded cursor-pointer transition-all duration-200',
-                isStarred
-                  ? 'hover:bg-yellow-50 dark:hover:bg-yellow-900/20'
-                  : 'opacity-40 hover:opacity-100 hover:bg-accent',
-              )}
-              onClick={(event) => {
-                event.stopPropagation();
-                toggleStarProject();
-              }}
-              title={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
-            >
-              <Star
-                className={cn(
-                  'w-3 h-3 transition-colors',
-                  isStarred
-                    ? 'text-yellow-600 dark:text-yellow-400 fill-current'
-                    : 'text-muted-foreground',
-                )}
-              />
-            </div>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Folder
+              className={cn('h-4 w-4 flex-shrink-0', isSelected ? 'text-primary' : 'text-muted-foreground')}
+              strokeWidth={2}
+            />
             <div className="min-w-0 flex-1 text-left">
               {isEditing ? (
                 <div className="space-y-1">
@@ -369,42 +416,22 @@ export default function SidebarProjectItem({
               ) : (
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <div className="truncate text-sm font-normal text-foreground" title={project.displayName}>
+                    <div className={cn('truncate text-[13px] font-semibold', isSelected ? 'text-card-foreground' : 'text-body')} title={project.displayName}>
                       {project.displayName}
                     </div>
                     {/* 徽标含义:公共 = 无主且在公共目录下,对所有人可见;
                         仅 root = 无主但没在公共目录下,只有 root 收得到。
                         有主项目不打标 —— root 之外,后端从不把别人账号的项目发给你。 */}
-                    {isPublicProject && (
-                      <span className="shrink-0 rounded bg-muted px-1 py-px text-[10px] text-muted-foreground">
-                        {t('project.public', { defaultValue: '公共' })}
-                      </span>
-                    )}
-                    {isRootOnlyUnclaimed && (
-                      <span className="shrink-0 rounded bg-amber-100 px-1 py-px text-[10px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                        {t('project.rootOnly', { defaultValue: '仅 root' })}
-                      </span>
-                    )}
-                    {isSharedToViewer && (
-                      <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[10px] text-primary">
-                        {t('project.shared', { defaultValue: '共享' })}
-                      </span>
-                    )}
-                    {sharedOutCount > 0 && (
-                      <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[10px] text-primary">
-                        {t('project.sharedOut', { defaultValue: '已共享' })}·{sharedOutCount}
-                      </span>
-                    )}
+                    <ProjectVisibilityBadges
+                      isPublic={isPublicProject}
+                      isRootOnly={isRootOnlyUnclaimed}
+                      isSharedToViewer={isSharedToViewer}
+                      sharedOutCount={sharedOutCount}
+                      t={t}
+                    />
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    {sessionCountDisplay}
-                    {project.fullPath !== project.displayName && (
-                      <span className="ml-1 opacity-60" title={project.fullPath}>
-                        {' - '}
-                        {project.fullPath.length > 25 ? `...${project.fullPath.slice(-22)}` : project.fullPath}
-                      </span>
-                    )}
-                  </div>
+                  {/* 设计稿的项目行是单行:名称 + 徽标 + 箭头。会话数在展开后的会话行上,
+                      完整路径进 title,不再占第二行。 */}
                 </div>
               )}
             </div>
@@ -414,7 +441,7 @@ export default function SidebarProjectItem({
             {isEditing ? (
               <>
                 <div
-                  className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-green-600 transition-colors hover:bg-green-50 hover:text-green-700 dark:hover:bg-green-900/20"
+                  className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-foreground transition-colors hover:bg-muted dark:text-primary"
                   onClick={(event) => {
                     event.stopPropagation();
                     saveProjectName();
@@ -423,7 +450,7 @@ export default function SidebarProjectItem({
                   <Check className="h-3 w-3" />
                 </div>
                 <div
-                  className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-700 dark:hover:bg-gray-800"
+                  className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   onClick={(event) => {
                     event.stopPropagation();
                     onCancelEditingProject();
@@ -434,46 +461,75 @@ export default function SidebarProjectItem({
               </>
             ) : (
               <>
-                <div
-                  className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onStartEditingProject(project);
-                  }}
-                  title={t('tooltips.renameProject')}
-                >
-                  <Edit3 className="h-3 w-3" />
-                </div>
-                {canManagePermissions && (
-                  <div
-                    className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setShowPermissions(true);
-                    }}
-                    title={t('tooltips.managePermissions', { defaultValue: '项目权限' })}
-                  >
-                    <ShieldCheck className="h-3 w-3" />
-                  </div>
-                )}
-                <div
-                  className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-red-50 group-hover:opacity-100 dark:hover:bg-red-900/20"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDeleteProject(project);
-                  }}
-                  title={t('tooltips.deleteProject')}
-                >
-                  <Trash2 className="h-3 w-3 text-red-600 dark:text-red-400" />
-                </div>
+                {/* 收藏星也收进悬停浮层了 —— `sortProjects` 里收藏项无条件排在最前,
+                    位置本身就是状态,行里再挂一颗常驻的星是重复表达,还要占 24px。 */}
                 {isExpanded ? (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
+                  <ChevronDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" strokeWidth={2} />
                 ) : (
-                  <ChevronRight className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
+                  <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" strokeWidth={2} />
                 )}
               </>
             )}
           </div>
+
+          {/*
+            悬停动作浮在行上,**不参与行内布局**。
+            以前这四个按钮(星/改名/权限/删除)是 `opacity-0 group-hover:opacity-100` ——
+            看不见,但 4×24px + 间距 ≈ 96px 的宽度一直占着。侧栏内宽本来就只有
+            ~210px,再减掉文件夹图标与箭头,名字只剩 ~58px,于是 `chendongchao`
+            被截成 `chendo…`;再挂个「已共享·4」徽标,名字直接被挤到 0 宽度
+            (线上截图里那行只剩徽标,项目名整个不见了)。
+            改成绝对定位之后,这些按钮悬停时盖在名字尾部,而不是挤压它。
+          */}
+          {!isEditing && (
+            <div className="absolute right-8 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md bg-muted pl-3 group-hover:flex">
+              <div
+                className={cn(
+                  'flex h-6 w-6 cursor-pointer items-center justify-center rounded-sm transition-colors',
+                  isStarred ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
+                )}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggleStarProject();
+                }}
+                title={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
+              >
+                <Star className={cn('h-4 w-4', isStarred && 'fill-primary')} strokeWidth={2} />
+              </div>
+              <div
+                className="flex h-6 w-6 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onStartEditingProject(project);
+                }}
+                title={t('tooltips.renameProject')}
+              >
+                <Edit3 className="h-3.5 w-3.5" />
+              </div>
+              {canManagePermissions && (
+                <div
+                  className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setShowPermissions(true);
+                  }}
+                  title={t('tooltips.managePermissions', { defaultValue: '项目权限' })}
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                </div>
+              )}
+              <div
+                className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDeleteProject(project);
+                }}
+                title={t('tooltips.deleteProject')}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </div>
+            </div>
+          )}
         </Button>
       </div>
 

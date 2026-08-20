@@ -285,6 +285,9 @@ export type NormalizedMessage = {
   text?: string;
   tokens?: number;
   canInterrupt?: boolean;
+  /** 状态的类别。目前只有 'compacting' —— 让前端能本地化并单独造型,
+      而不是把英文状态原文摆到界面上。 */
+  statusKind?: 'compacting';
   requestId?: string;
   input?: unknown;
   context?: unknown;

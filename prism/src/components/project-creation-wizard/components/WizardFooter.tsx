@@ -1,5 +1,6 @@
-import { Check, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import { Button } from '../../../shared/view/ui';
 import type { WizardStep } from '../types';
 
@@ -23,7 +24,7 @@ export default function WizardFooter({
   const { t } = useTranslation();
 
   return (
-    <div className="flex items-center justify-between border-t border-gray-200 p-6 dark:border-gray-700">
+    <div className="flex items-center justify-between border-t border-border p-6">
       <Button variant="outline" onClick={step === 1 ? onClose : onBack} disabled={isCreating}>
         {step === 1 ? (
           t('projectWizard.buttons.cancel')
@@ -37,10 +38,7 @@ export default function WizardFooter({
 
       <Button onClick={step === 2 ? onCreate : onNext} disabled={isCreating}>
         {isCreating ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            {t('projectWizard.buttons.creating')}
-          </>
+          t('projectWizard.buttons.creating')
         ) : step === 2 ? (
           <>
             <Check className="mr-1 h-4 w-4" />

@@ -7,6 +7,7 @@ import { rgPath } from '@vscode/ripgrep';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { canViewerSeeProject } from '@/shared/project-visibility.js';
+import { isInternalContent } from '@/modules/providers/list/claude/transcript-provenance.js';
 
 type AnyRecord = Record<string, any>;
 type SearchableProvider = 'claude';
@@ -100,23 +101,6 @@ const RIPGREP_FILE_CHUNK_SIZE = 40;
 const RIPGREP_CHUNK_CONCURRENCY = 6;
 const UNKNOWN_PROJECT_KEY = '__unknown_project__';
 
-// 与 claude-sessions.provider.ts 的同名清单保持同义(那边多一条注释说明)。
-const INTERNAL_CONTENT_PREFIXES = [
-  '<system-reminder>',
-  'Caveat:',
-  '<local-command-caveat>',
-  'Invalid API key',
-  '[Request interrupted',
-  'Base directory for this skill:',
-  // 与 claude-sessions.provider.ts 的清单保持同步:SDK 的空响应/坏工具调用重试提示、
-  // 压缩/跨机续接注入、本地命令占位、工具打断占位。
-  '[Your previous response had no visible output',
-  'Your tool call was malformed',
-  'This session is being continued',
-  'No response requested.',
-  '[Tool use interrupted]',
-  '[Tool use removed]',
-] as const;
 
 function normalizeComparablePath(inputPath: string): string {
   if (!inputPath || typeof inputPath !== 'string') {
@@ -168,10 +152,6 @@ function toSummaryText(customName: string | null, fallback: string | null | unde
   }
 
   return trimmedFallback.length > 50 ? `${trimmedFallback.slice(0, 50)}...` : trimmedFallback;
-}
-
-function isInternalContent(content: string): boolean {
-  return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
 }
 
 function escapeRegex(value: string): string {

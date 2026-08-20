@@ -19,64 +19,67 @@ export default function NotificationsSettingsTab({
   return (
     <div className="space-y-6 md:space-y-8">
       <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <Bell className="h-5 w-5 text-blue-600" />
-          <h3 className="text-lg font-medium text-foreground">{t('notifications.title')}</h3>
+        <div className="flex items-center gap-2">
+          <Bell className="h-4 w-4 text-muted-foreground" />
+          <h3 className="text-base font-semibold text-foreground">{t('notifications.title')}</h3>
         </div>
         <p className="text-sm text-muted-foreground">{t('notifications.description')}</p>
       </div>
 
-      <div className="space-y-4 rounded-lg border border-border bg-card p-4">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <Volume2 className="h-4 w-4 text-blue-600" />
-              <h4 className="font-medium text-foreground">
-                {t('notifications.sound.title', { defaultValue: 'Sound' })}
-              </h4>
-            </div>
+      <div className="overflow-hidden rounded-lg border border-border">
+        <div className="flex items-center gap-2 border-b border-border bg-card px-4 py-2.5">
+          <Volume2 className="h-4 w-4 text-muted-foreground" />
+          <h4 className="text-sm font-medium text-foreground">
+            {t('notifications.sound.title', { defaultValue: 'Sound' })}
+          </h4>
+        </div>
+
+        <div className="space-y-4 p-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-muted-foreground">
               {t('notifications.sound.description', {
                 defaultValue: 'Play a short tone when a chat run finishes.',
               })}
             </p>
+
+            <label className="flex shrink-0 items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                checked={notificationPreferences.channels.sound}
+                onChange={(event) =>
+                  onNotificationPreferencesChange({
+                    ...notificationPreferences,
+                    channels: {
+                      ...notificationPreferences.channels,
+                      sound: event.target.checked,
+                    },
+                  })
+                }
+                className="h-4 w-4 accent-primary"
+              />
+              {t('notifications.sound.enabled', { defaultValue: 'Enabled' })}
+            </label>
           </div>
 
-          <label className="flex shrink-0 items-center gap-2 text-sm text-foreground">
-            <input
-              type="checkbox"
-              checked={notificationPreferences.channels.sound}
-              onChange={(event) =>
-                onNotificationPreferencesChange({
-                  ...notificationPreferences,
-                  channels: {
-                    ...notificationPreferences.channels,
-                    sound: event.target.checked,
-                  },
-                })
-              }
-              className="h-4 w-4"
-            />
-            {t('notifications.sound.enabled', { defaultValue: 'Enabled' })}
-          </label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void playChatCompletionSound({ force: true });
+            }}
+          >
+            <Play className="h-4 w-4" />
+            {t('notifications.sound.test', { defaultValue: 'Test sound' })}
+          </Button>
         </div>
-
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            void playChatCompletionSound({ force: true });
-          }}
-        >
-          <Play className="h-4 w-4" />
-          {t('notifications.sound.test', { defaultValue: 'Test sound' })}
-        </Button>
       </div>
 
-      <div className="space-y-4 rounded-lg border border-border bg-card p-4">
-        <h4 className="font-medium text-foreground">{t('notifications.events.title')}</h4>
-        <div className="space-y-3">
+      <div className="overflow-hidden rounded-lg border border-border">
+        <div className="border-b border-border bg-card px-4 py-2.5">
+          <h4 className="text-sm font-medium text-foreground">{t('notifications.events.title')}</h4>
+        </div>
+        <div className="space-y-3 p-4">
           <label className="flex items-center gap-2 text-sm text-foreground">
             <input
               type="checkbox"
@@ -90,7 +93,7 @@ export default function NotificationsSettingsTab({
                   },
                 })
               }
-              className="h-4 w-4"
+              className="h-4 w-4 accent-primary"
             />
             {t('notifications.events.actionRequired')}
           </label>
@@ -108,7 +111,7 @@ export default function NotificationsSettingsTab({
                   },
                 })
               }
-              className="h-4 w-4"
+              className="h-4 w-4 accent-primary"
             />
             {t('notifications.events.stop')}
           </label>
@@ -126,7 +129,7 @@ export default function NotificationsSettingsTab({
                   },
                 })
               }
-              className="h-4 w-4"
+              className="h-4 w-4 accent-primary"
             />
             {t('notifications.events.error')}
           </label>

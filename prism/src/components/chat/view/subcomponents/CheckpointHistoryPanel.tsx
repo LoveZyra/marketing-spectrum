@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangleIcon, History, RotateCcwIcon, XIcon, Loader2 } from 'lucide-react';
+import { AlertTriangleIcon, History, RotateCcwIcon, XIcon } from 'lucide-react';
 
 import { authenticatedFetch } from '../../../../utils/api';
+import { Shimmer } from '../../../../shared/view/ui';
 
 import { RestoreForceDialog } from './ChangedFilesCard';
 import type { RestoreBlockerPayload } from './ChangedFilesCard';
@@ -128,8 +129,8 @@ export default function CheckpointHistoryPanel({
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true">
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
-      <div className="relative flex h-full w-full max-w-md flex-col border-l border-border bg-card shadow-xl">
+      <div className="absolute inset-0 bg-[rgba(16,16,16,0.72)]" onClick={onClose} aria-hidden="true" />
+      <div className="prism-modal-shadow relative flex h-full w-full max-w-md flex-col border-l border-border bg-card">
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
           <History className="h-4 w-4 text-primary" />
           <h2 className="flex-1 text-sm font-medium text-foreground">
@@ -152,8 +153,7 @@ export default function CheckpointHistoryPanel({
         <div className="flex-1 overflow-y-auto p-3">
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {t('checkpoint.loading', { defaultValue: '加载中…' })}
+              <Shimmer>{t('checkpoint.loading', { defaultValue: '加载中…' })}</Shimmer>
             </div>
           ) : checkpoints.length === 0 ? (
             <div className="px-2 py-10 text-center text-sm text-muted-foreground">
@@ -164,10 +164,10 @@ export default function CheckpointHistoryPanel({
               {checkpoints.map((checkpoint, index) => (
                 <li
                   key={checkpoint.id}
-                  className="rounded-xl border border-border/70 bg-background/60 p-3"
+                  className="rounded-lg border border-border bg-background p-3"
                 >
                   <div className="flex items-start gap-2">
-                    <div className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-medium text-primary">
+                    <div className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-medium text-foreground dark:text-primary">
                       {checkpoints.length - index}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -182,7 +182,7 @@ export default function CheckpointHistoryPanel({
                           : ''}
                       </p>
                       {checkpoint.incomplete && (
-                        <p className="mt-0.5 flex items-center gap-1 text-[11px] text-orange-600 dark:text-orange-400">
+                        <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
                           <AlertTriangleIcon className="h-3 w-3 flex-shrink-0" aria-hidden />
                           {t('checkpoint.incompleteBadge', { defaultValue: 'incomplete snapshot' })}
                         </p>
@@ -192,10 +192,10 @@ export default function CheckpointHistoryPanel({
                       type="button"
                       disabled={isProcessing || busy !== null}
                       onClick={() => handleRestore(checkpoint)}
-                      className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-lg border border-orange-300/60 bg-orange-50 px-2 text-[11px] font-medium text-orange-700 transition-colors hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-orange-600/40 dark:bg-orange-900/15 dark:text-orange-300 dark:hover:bg-orange-900/25"
+                      className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-lg border border-border bg-muted px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {busy === checkpoint.id ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <span className="h-3 w-3 flex-none rounded-full border-[1.5px] border-primary" aria-hidden />
                       ) : (
                         <RotateCcwIcon className="h-3 w-3" />
                       )}

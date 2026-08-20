@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ChevronDown, Loader2, type LucideIcon } from 'lucide-react';
+import { ChevronDown, type LucideIcon } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
 
@@ -140,8 +140,7 @@ export default function ActionMenu({
           role="menu"
           tabIndex={-1}
           className={cn(
-            'absolute top-full z-50 mt-2 min-w-[220px] rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg',
-            'animate-in fade-in-0 zoom-in-95',
+            'absolute top-full z-50 mt-2 min-w-[220px] rounded-lg border border-border bg-popover p-1 text-popover-foreground prism-modal-shadow',
             align === 'right' ? 'right-0' : 'left-0',
           )}
         >
@@ -161,12 +160,12 @@ export default function ActionMenu({
                     item.disabled || item.loading
                       ? 'cursor-not-allowed opacity-50'
                       : item.isDanger
-                        ? 'text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950'
+                        ? 'text-destructive hover:bg-destructive/10'
                         : 'hover:bg-accent',
                   )}
                 >
                   {item.loading ? (
-                    <Loader2 className="mt-0.5 h-4 w-4 flex-shrink-0 animate-spin" />
+                    <span className="mt-0.5 h-4 w-4 flex-none rounded-full border-[1.5px] border-primary" aria-hidden />
                   ) : (
                     Icon && <Icon className="mt-0.5 h-4 w-4 flex-shrink-0" />
                   )}

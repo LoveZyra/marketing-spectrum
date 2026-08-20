@@ -54,7 +54,7 @@ export default function AuthInputField({
           autoComplete={autoComplete}
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className={`w-full rounded-xl border border-border bg-background/60 py-2.5 text-foreground shadow-sm transition-colors placeholder:text-muted-foreground/60 hover:border-foreground/20 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60 ${
+          className={`w-full rounded-lg border border-border bg-background py-2.5 text-foreground transition-colors placeholder:text-muted-foreground hover:border-border-strong focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60 ${
             Icon ? 'pl-10' : 'pl-3.5'
           } ${isPasswordField ? 'pr-11' : 'pr-3.5'}`}
           placeholder={placeholder}

@@ -52,7 +52,8 @@
     "clearInput": "清空輸入",
     "scrollToBottom": "捲動到底部",
     "attachmentPath": "路徑",
-    "modelHint": "目前模型：{{model}} · 點擊切換"
+    "modelHint": "目前模型：{{model}} · 點擊切換",
+    "queueShort": "加入佇列"
   },
   "thinkingMode": {
     "selector": {
@@ -153,7 +154,8 @@
     "elapsed": {
       "seconds": "{{count}} 秒",
       "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒"
-    }
+    },
+    "compacting": "正在壓縮上下文"
   },
   "projectSelection": {
     "startChatWithProvider": "選擇一個專案以開始與 {{provider}} 聊天"
@@ -168,5 +170,63 @@
     "acceptEdits": "改檔案不再詢問,執行指令仍然要確認。",
     "auto": "常規呼叫自行決定,其餘仍會詢問。",
     "bypassPermissions": "全部放行,不再詢問。只在可丟棄的工作上用。"
+  },
+  "permission": {
+    "title": "需要授權才能繼續",
+    "meta": "工具 {{tool}}{{rule}}",
+    "viewInput": "檢視工具輸入",
+    "deny": "拒絕",
+    "allowRemember": "允許並記住",
+    "allowSaved": "已記住",
+    "allowOnce": "允許一次"
+  },
+  "activity": {
+    "read": "讀取 {{target}}",
+    "write": "寫入 {{target}}",
+    "edit": "編輯 {{target}}",
+    "bash": "執行 {{target}}",
+    "search": "搜尋 {{target}}",
+    "glob": "比對 {{target}}",
+    "fetch": "抓取 {{target}}",
+    "agent": "子代理 {{target}}",
+    "todo": "更新任務清單",
+    "thinking": "思考",
+    "running": "執行中",
+    "failed": "失敗",
+    "summary": {
+      "bash": "執行 {{count}} 條命令",
+      "write": "新增 {{count}} 個檔案",
+      "edit": "編輯 {{count}} 處",
+      "read": "讀取 {{count}} 個檔案",
+      "search": "搜尋 {{count}} 次",
+      "glob": "列目錄 {{count}} 次",
+      "fetch": "抓取 {{count}} 個網頁",
+      "agent": "子代理 {{count}} 個",
+      "todo": "更新任務清單 {{count}} 次",
+      "mcp": "外部工具 {{count}} 次",
+      "tool": "其它工具 {{count}} 次",
+      "thinking": "思考 {{count}} 次"
+    },
+    "foldedCount": "+{{count}}",
+    "collapseRun": "收合"
+  },
+  "details": {
+    "parameters": "參數",
+    "result": "回傳",
+    "noParams": "無參數",
+    "noOutput": "無輸出",
+    "failed": "失敗",
+    "failedNoOutput": "失敗 · 無輸出",
+    "expandAll": "展開全部",
+    "expandAllWithCount": "展開全部 · {{count}} 行",
+    "collapse": "收合",
+    "copy": "複製",
+    "copied": "已複製"
+  },
+  "checkpoint": {
+    "changedFilesTitle": "本輪變更"
+  },
+  "compactSummary": {
+    "title": "上下文已壓縮 —— 早前的對話折成了一份摘要"
   }
 }

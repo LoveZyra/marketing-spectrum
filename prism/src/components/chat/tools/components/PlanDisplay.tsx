@@ -103,7 +103,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
                   raw params
                 </CollapsibleTrigger>
                 <CollapsibleContent>
-                  <pre className="mt-1 overflow-hidden whitespace-pre-wrap break-words rounded border border-border/40 bg-muted p-2 font-mono text-[11px] text-muted-foreground">
+                  <pre className="mt-1 overflow-hidden whitespace-pre-wrap break-words rounded border border-border bg-muted p-2 font-mono text-[11px] text-muted-foreground">
                     {rawContent}
                   </pre>
                 </CollapsibleContent>
@@ -114,7 +114,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
 
         {/* Footer — always visible when permission is pending */}
         {pendingRequest && (
-          <CardFooter className="justify-end gap-2 border-t border-border/40 px-4 pb-3 pt-3">
+          <CardFooter className="justify-end gap-2 border-t border-border px-4 pb-3 pt-3">
             <Button
               variant="ghost"
               size="sm"
@@ -125,7 +125,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
             </Button>
             <Button size="sm" onClick={handleBuild}>
               Build{' '}
-              <kbd className="ml-1 rounded bg-primary-foreground/20 px-1 py-0.5 font-mono text-[10px]">
+              <kbd className="ml-1 rounded-sm border border-primary-foreground px-1 py-0.5 font-mono text-[10px]">
                 ⌘↩
               </kbd>
             </Button>

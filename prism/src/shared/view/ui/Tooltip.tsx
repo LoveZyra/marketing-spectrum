@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { cn } from '../../../lib/utils';
@@ -16,15 +16,15 @@ type TooltipProps = {
 function getArrowClasses(position: TooltipPosition): string {
   switch (position) {
     case 'top':
-      return 'top-full left-1/2 transform -translate-x-1/2 border-t-gray-900 dark:border-t-gray-100';
+      return 'top-full left-1/2 transform -translate-x-1/2 border-t-popover';
     case 'bottom':
-      return 'bottom-full left-1/2 transform -translate-x-1/2 border-b-gray-900 dark:border-b-gray-100';
+      return 'bottom-full left-1/2 transform -translate-x-1/2 border-b-popover';
     case 'left':
-      return 'left-full top-1/2 transform -translate-y-1/2 border-l-gray-900 dark:border-l-gray-100';
+      return 'left-full top-1/2 transform -translate-y-1/2 border-l-popover';
     case 'right':
-      return 'right-full top-1/2 transform -translate-y-1/2 border-r-gray-900 dark:border-r-gray-100';
+      return 'right-full top-1/2 transform -translate-y-1/2 border-r-popover';
     default:
-      return 'top-full left-1/2 transform -translate-x-1/2 border-t-gray-900 dark:border-t-gray-100';
+      return 'top-full left-1/2 transform -translate-x-1/2 border-t-popover';
   }
 }
 
@@ -143,20 +143,21 @@ function Tooltip({
     return () => document.removeEventListener('pointerdown', handlePointerDown, true);
   }, [isVisible]);
 
-  useEffect(() => {
+  // 定位必须在**同一帧**完成 —— 用 useLayoutEffect 而不是 rAF。
+  // 以前是先渲染在待定坐标、下一帧再挪过去,浮层于是从屏幕角上滑进来。
+  useLayoutEffect(() => {
     if (!isVisible) {
       setTooltipStyle(null);
       return;
     }
 
-    const rafId = window.requestAnimationFrame(updateTooltipPosition);
+    updateTooltipPosition();
     const handleViewportChange = () => updateTooltipPosition();
 
     window.addEventListener('resize', handleViewportChange);
     window.addEventListener('scroll', handleViewportChange, true);
 
     return () => {
-      window.cancelAnimationFrame(rafId);
       window.removeEventListener('resize', handleViewportChange);
       window.removeEventListener('scroll', handleViewportChange, true);
     };
@@ -180,10 +181,10 @@ function Tooltip({
       {isVisible && typeof document !== 'undefined' && createPortal(
         <div
           ref={tooltipRef}
-          style={tooltipStyle || { position: 'fixed', top: '-9999px', left: '-9999px', opacity: 0 }}
+          style={tooltipStyle || { position: 'fixed', top: 0, left: 0, visibility: 'hidden' }}
           className={cn(
-            'px-2 py-1 text-xs font-medium text-white bg-gray-900 dark:bg-gray-100 dark:text-gray-900 rounded shadow-lg whitespace-nowrap pointer-events-none',
-            'animate-in fade-in-0 zoom-in-95 duration-200',
+            'pointer-events-none whitespace-nowrap rounded-sm border border-border bg-popover px-2 py-1 text-xs text-card-foreground prism-modal-shadow',
+            'tooltip-fade-in',
             className
           )}
         >

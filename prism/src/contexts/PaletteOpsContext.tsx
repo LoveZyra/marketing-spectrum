@@ -10,6 +10,8 @@ export type PaletteOps = {
   refreshProjects: () => Promise<void> | void;
   // 切到 notebook 标签页并把该文件在 JupyterLab 里打开(AppContent 注册)。
   openInJupyter: (path: string) => void;
+  // 打开命令面板 —— 面板自己监听 ⌘K,这个入口给鼠标用户(侧栏搜索框右侧的键帽)。
+  openPalette: () => void;
 };
 
 type Registry = MutableRefObject<Partial<PaletteOps>>;
@@ -22,6 +24,7 @@ const defaultOps: PaletteOps = {
   openSettings: () => undefined,
   refreshProjects: () => undefined,
   openInJupyter: () => undefined,
+  openPalette: () => undefined,
 };
 
 export function PaletteOpsProvider({ children }: { children: ReactNode }) {
@@ -39,6 +42,7 @@ export function usePaletteOps(): PaletteOps {
       openSettings: (tab) => (ref?.current.openSettings ?? defaultOps.openSettings)(tab),
       refreshProjects: () => (ref?.current.refreshProjects ?? defaultOps.refreshProjects)(),
       openInJupyter: (path) => (ref?.current.openInJupyter ?? defaultOps.openInJupyter)(path),
+      openPalette: () => (ref?.current.openPalette ?? defaultOps.openPalette)(),
     }),
     [ref],
   );
@@ -46,7 +50,7 @@ export function usePaletteOps(): PaletteOps {
 
 export function usePaletteOpsRegister(partial: Partial<PaletteOps>) {
   const ref = useContext(PaletteOpsContext);
-  const { openFile, openFileInEditor, openSettings, refreshProjects, openInJupyter } = partial;
+  const { openFile, openFileInEditor, openSettings, refreshProjects, openInJupyter, openPalette } = partial;
 
   useEffect(() => {
     if (!ref) return undefined;
@@ -56,12 +60,14 @@ export function usePaletteOpsRegister(partial: Partial<PaletteOps>) {
     if (openSettings) ref.current.openSettings = openSettings;
     if (refreshProjects) ref.current.refreshProjects = refreshProjects;
     if (openInJupyter) ref.current.openInJupyter = openInJupyter;
+    if (openPalette) ref.current.openPalette = openPalette;
     return () => {
       if (openFile && ref.current.openFile === openFile) ref.current.openFile = prev.openFile;
       if (openFileInEditor && ref.current.openFileInEditor === openFileInEditor) ref.current.openFileInEditor = prev.openFileInEditor;
       if (openSettings && ref.current.openSettings === openSettings) ref.current.openSettings = prev.openSettings;
       if (refreshProjects && ref.current.refreshProjects === refreshProjects) ref.current.refreshProjects = prev.refreshProjects;
       if (openInJupyter && ref.current.openInJupyter === openInJupyter) ref.current.openInJupyter = prev.openInJupyter;
+      if (openPalette && ref.current.openPalette === openPalette) ref.current.openPalette = prev.openPalette;
     };
-  }, [ref, openFile, openFileInEditor, openSettings, refreshProjects, openInJupyter]);
+  }, [ref, openFile, openFileInEditor, openSettings, refreshProjects, openInJupyter, openPalette]);
 }

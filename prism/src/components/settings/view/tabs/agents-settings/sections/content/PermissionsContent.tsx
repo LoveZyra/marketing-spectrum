@@ -87,23 +87,23 @@ export default function PermissionsContent({
   return (
     <div className="space-y-6">
       <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <AlertTriangle className="h-5 w-5 text-orange-500" />
-          <h3 className="text-lg font-medium text-foreground">{t('permissions.title')}</h3>
+        <div className="flex items-center gap-2">
+          <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />
+          <h3 className="text-[11px] font-medium uppercase tracking-[1.4px] text-muted-foreground">{t('permissions.title')}</h3>
         </div>
-        <div className="rounded-lg border border-orange-200 bg-orange-50 p-4 dark:border-orange-800 dark:bg-orange-900/20">
+        <div className="rounded-lg border border-border p-4">
           <label className="flex items-center gap-3">
             <input
               type="checkbox"
               checked={skipPermissions}
               onChange={(event) => onSkipPermissionsChange(event.target.checked)}
-              className="h-4 w-4 rounded border-input bg-card text-primary focus:ring-2 focus:ring-primary"
+              className="h-4 w-4 accent-primary"
             />
             <div>
-              <div className="font-medium text-orange-900 dark:text-orange-100">
+              <div className="font-medium text-foreground">
                 {t('permissions.skipPermissions.label')}
               </div>
-              <div className="text-sm text-orange-700 dark:text-orange-300">
+              <div className="text-sm text-muted-foreground">
                 {t('permissions.skipPermissions.claudeDescription')}
               </div>
             </div>
@@ -112,9 +112,9 @@ export default function PermissionsContent({
       </div>
 
       <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <Shield className="h-5 w-5 text-green-500" />
-          <h3 className="text-lg font-medium text-foreground">{t('permissions.allowedTools.title')}</h3>
+        <div className="flex items-center gap-2">
+          <Shield className="h-3.5 w-3.5 text-muted-foreground" />
+          <h3 className="text-[11px] font-medium uppercase tracking-[1.4px] text-muted-foreground">{t('permissions.allowedTools.title')}</h3>
         </div>
         <p className="text-sm text-muted-foreground">{t('permissions.allowedTools.description')}</p>
 
@@ -164,13 +164,13 @@ export default function PermissionsContent({
 
         <div className="space-y-2">
           {allowedTools.map((tool) => (
-            <div key={tool} className="flex items-center justify-between rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-800 dark:bg-green-900/20">
-              <span className="font-mono text-sm text-green-800 dark:text-green-200">{tool}</span>
+            <div key={tool} className="flex items-center justify-between rounded-lg border border-border p-3">
+              <span className="font-mono text-sm text-code">{tool}</span>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => onAllowedToolsChange(removeValue(allowedTools, tool))}
-                className="text-green-600 hover:text-green-700"
+                className="text-muted-foreground hover:text-foreground"
               >
                 <X className="h-4 w-4" />
               </Button>
@@ -185,9 +185,9 @@ export default function PermissionsContent({
       </div>
 
       <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <AlertTriangle className="h-5 w-5 text-red-500" />
-          <h3 className="text-lg font-medium text-foreground">{t('permissions.blockedTools.title')}</h3>
+        <div className="flex items-center gap-2">
+          <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />
+          <h3 className="text-[11px] font-medium uppercase tracking-[1.4px] text-muted-foreground">{t('permissions.blockedTools.title')}</h3>
         </div>
         <p className="text-sm text-muted-foreground">{t('permissions.blockedTools.description')}</p>
 
@@ -217,13 +217,13 @@ export default function PermissionsContent({
 
         <div className="space-y-2">
           {disallowedTools.map((tool) => (
-            <div key={tool} className="flex items-center justify-between rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
-              <span className="font-mono text-sm text-red-800 dark:text-red-200">{tool}</span>
+            <div key={tool} className="flex items-center justify-between rounded-lg border border-border p-3">
+              <span className="font-mono text-sm text-muted-foreground">{tool}</span>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => onDisallowedToolsChange(removeValue(disallowedTools, tool))}
-                className="text-red-600 hover:text-red-700"
+                className="text-muted-foreground hover:text-foreground"
               >
                 <X className="h-4 w-4" />
               </Button>
@@ -237,15 +237,17 @@ export default function PermissionsContent({
         </div>
       </div>
 
-      <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
-        <h4 className="mb-2 font-medium text-blue-900 dark:text-blue-100">
-          {t('permissions.toolExamples.title')}
-        </h4>
-        <ul className="space-y-1 text-sm text-blue-800 dark:text-blue-200">
-          <li><code className="rounded bg-blue-100 px-1 dark:bg-blue-800">"Bash(git log:*)"</code> {t('permissions.toolExamples.bashGitLog')}</li>
-          <li><code className="rounded bg-blue-100 px-1 dark:bg-blue-800">"Bash(git diff:*)"</code> {t('permissions.toolExamples.bashGitDiff')}</li>
-          <li><code className="rounded bg-blue-100 px-1 dark:bg-blue-800">"Write"</code> {t('permissions.toolExamples.write')}</li>
-          <li><code className="rounded bg-blue-100 px-1 dark:bg-blue-800">"Bash(rm:*)"</code> {t('permissions.toolExamples.bashRm')}</li>
+      <div className="overflow-hidden rounded-lg border border-border">
+        <div className="border-b border-border bg-card px-4 py-2.5">
+          <h4 className="text-sm font-medium text-foreground">
+            {t('permissions.toolExamples.title')}
+          </h4>
+        </div>
+        <ul className="space-y-1 p-4 text-sm text-body">
+          <li><code className="bg-primary/8 rounded px-1 font-mono text-code">"Bash(git log:*)"</code> {t('permissions.toolExamples.bashGitLog')}</li>
+          <li><code className="bg-primary/8 rounded px-1 font-mono text-code">"Bash(git diff:*)"</code> {t('permissions.toolExamples.bashGitDiff')}</li>
+          <li><code className="bg-primary/8 rounded px-1 font-mono text-code">"Write"</code> {t('permissions.toolExamples.write')}</li>
+          <li><code className="bg-primary/8 rounded px-1 font-mono text-code">"Bash(rm:*)"</code> {t('permissions.toolExamples.bashRm')}</li>
         </ul>
       </div>
 

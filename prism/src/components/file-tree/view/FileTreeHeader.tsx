@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import type { ChangeEvent } from 'react';
-import { ChevronDown, CornerLeftUp, Eye, FileText, FolderPlus, Home, List, Loader2, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
+import { ChevronDown, CornerLeftUp, Eye, FileText, FolderPlus, Home, List, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../../shared/view/ui';
@@ -154,15 +154,12 @@ export default function FileTreeHeader({
                 })}
                 disabled={operationLoading}
               >
-                {isUploading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Upload className="h-3.5 w-3.5" />
-                )}
+                {/* 上传中不转圈:图标改用主色 + 下方进度条,状态是静态可读的 */}
+                <Upload className={cn('w-3.5 h-3.5', isUploading && 'text-primary')} />
                 {isUploading && typeof uploadProgress === 'number' && (
-                  <span className="absolute bottom-0.5 left-1/2 h-0.5 w-4 -translate-x-1/2 overflow-hidden rounded-full bg-primary/20">
+                  <span className="absolute bottom-0.5 left-1/2 h-0.5 w-4 -translate-x-1/2 overflow-hidden rounded-full bg-border">
                     <span
-                      className="block h-full rounded-full bg-primary transition-[width] duration-150"
+                      className="block h-full rounded-full bg-primary"
                       style={{ width: `${uploadProgress}%` }}
                     />
                   </span>
@@ -206,7 +203,7 @@ export default function FileTreeHeader({
               aria-label={t('fileTree.refresh', 'Refresh')}
               disabled={operationLoading}
             >
-              <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
+              <RefreshCw className={cn('w-3.5 h-3.5', loading && 'text-primary')} />
             </Button>
           )}
           {onCollapseAll && (

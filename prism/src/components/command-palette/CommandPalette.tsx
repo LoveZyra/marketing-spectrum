@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useCommandState } from 'cmdk';
 import { useNavigate } from 'react-router-dom';
 import {
   ChevronRight,
@@ -22,7 +23,7 @@ import {
   DialogTitle,
 } from '../../shared/view/ui';
 import { useTheme } from '../../contexts/ThemeContext';
-import { usePaletteOps } from '../../contexts/PaletteOpsContext';
+import { usePaletteOps, usePaletteOpsRegister } from '../../contexts/PaletteOpsContext';
 import { SETTINGS_MAIN_TABS } from '../settings/constants/constants';
 import { useAuth } from '../auth/context/AuthContext';
 import type { AppTab, Project } from '../../types/app';
@@ -65,6 +66,10 @@ export default function CommandPalette({
   const navigate = useNavigate();
   const isRoot = Boolean(useAuth().user?.isRoot);
   const ops = usePaletteOps();
+
+  // 鼠标入口:侧栏搜索框右侧那个 ⌘K 键帽点一下就开(键盘仍走下面的全局监听)。
+  const openPalette = React.useCallback(() => setOpen(true), []);
+  usePaletteOpsRegister({ openPalette });
 
   const page = pages.at(-1);
 
@@ -148,12 +153,12 @@ export default function CommandPalette({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="max-w-xl overflow-hidden p-0">
+      <DialogContent className="max-w-xl overflow-hidden bg-background p-0">
         <DialogTitle>Command palette</DialogTitle>
         <Command label="Command palette" onKeyDown={handleKeyDown}>
           {page && (
-            <div className="flex items-center gap-2 border-b px-3 py-2">
-              <span className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground">
+            <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+              <span className="inline-flex items-center gap-1 rounded-sm border border-border px-2 py-0.5 text-[11px] text-card-foreground">
                 {PAGE_LABELS[page]}
                 <button
                   type="button"
@@ -164,14 +169,16 @@ export default function CommandPalette({
                   <X className="h-3 w-3" />
                 </button>
               </span>
-              <span className="text-xs text-muted-foreground">Backspace to go back</span>
+              <span className="font-mono text-[10.5px] text-muted-foreground">Backspace to go back</span>
             </div>
           )}
           <CommandInput
             placeholder={page ? `Search ${PAGE_LABELS[page].toLowerCase()}…` : 'Type to search anything…'}
             value={search}
             onValueChange={setSearch}
-          />
+          >
+            <ResultCount />
+          </CommandInput>
           <CommandList>
             <CommandEmpty>No results.</CommandEmpty>
 
@@ -243,11 +250,11 @@ export default function CommandPalette({
                     <div className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate">{s.label}</span>
                       {s.snippet && (
-                        <span className="truncate text-xs text-muted-foreground">{s.snippet}</span>
+                        <span className="truncate font-mono text-[10.5px] text-muted-foreground">{s.snippet}</span>
                       )}
                     </div>
                     {s.provider && (
-                      <span className="text-xs text-muted-foreground">{s.provider}</span>
+                      <span className="flex-none font-mono text-[10.5px] text-muted-foreground">{s.provider}</span>
                     )}
                   </CommandItem>
                 ))}
@@ -267,7 +274,7 @@ export default function CommandPalette({
                   >
                     <FileText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
                     <span className="flex-1 truncate">{f.name}</span>
-                    <span className="truncate text-xs text-muted-foreground">{f.path}</span>
+                    <span className="truncate font-mono text-xs text-muted-foreground">{f.path}</span>
                   </CommandItem>
                 ))}
                 {!page && files.length > browseLimit && (
@@ -277,10 +284,23 @@ export default function CommandPalette({
             )}
 
           </CommandList>
+
+          {/* 底部提示条(设计稿 2a/2b):等宽 10.5px,沉降底 */}
+          <div className="flex items-center gap-3 border-t border-border bg-card px-4 py-2.5 font-mono text-[10.5px] text-muted-foreground">
+            <span>↑↓ 选择</span>
+            <span>↵ 打开</span>
+            <span>esc 关闭</span>
+          </div>
         </Command>
       </DialogContent>
     </Dialog>
   );
+}
+
+/** 搜索行右侧的等宽结果计数(设计稿 2a/2b),读的是 cmdk 过滤后的真实条数。 */
+function ResultCount() {
+  const count = useCommandState((state) => state.filtered.count);
+  return <span className="flex-none font-mono text-[11px] text-muted-foreground">{count}</span>;
 }
 
 function BrowseAllItem({ label, onSelect }: { label: string; onSelect: () => void }) {

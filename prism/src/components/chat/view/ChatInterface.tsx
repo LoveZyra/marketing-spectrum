@@ -196,7 +196,6 @@ function ChatInterface({
     handlePermissionDecision,
     handleGrantToolPermission,
     handleInputFocusChange,
-    isInputFocused,
     commandModalPayload,
     closeCommandModal,
     showCostModal,
@@ -344,6 +343,7 @@ function ChatInterface({
           isLoadingSessionMessages={isLoadingSessionMessages}
           isProcessing={isProcessing}
           hasActivityIndicator={hasActivityIndicator}
+          activity={hasActivityIndicator ? sessionActivity : null}
           chatMessages={chatMessages}
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
@@ -389,7 +389,7 @@ function ChatInterface({
                 type="button"
                 onClick={scrollToBottomAndReset}
                 aria-label={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
-                className="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-full border border-border/50 bg-card text-muted-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:text-foreground"
+                className="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-full border border-border bg-popover text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 title={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
               >
                 <ArrowDownIcon className="h-4 w-4" aria-hidden />
@@ -401,7 +401,6 @@ function ChatInterface({
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
-          activity={sessionActivity}
           isLoading={isProcessing}
           onAbortSession={handleAbortSession}
           activeModel={activeSessionModel ?? claudeModel}
@@ -469,7 +468,6 @@ function ChatInterface({
           onTextareaPaste={handlePaste}
           onTextareaScrollSync={syncInputOverlayScroll}
           onTextareaInput={handleTextareaInput}
-          isInputFocused={isInputFocused}
           onInputFocusChange={handleInputFocusChange}
           placeholder={t('input.placeholder', {
             provider: t('messageTypes.claude'),

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Dispatch, KeyboardEvent, RefObject, SetStateAction } from 'react';
+
 import { api } from '../../../utils/api';
 import { escapeRegExp } from '../utils/chatFormatting';
 import type { Project } from '../../../types/app';
@@ -163,7 +164,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
         fileMentionSet.has(part) ? (
           <span
             key={`mention-${index}`}
-            className="-ml-0.5 rounded-md bg-blue-200/70 box-decoration-clone px-0.5 text-transparent dark:bg-blue-300/40"
+            className="-ml-0.5 rounded-md bg-primary/[0.08] box-decoration-clone px-0.5 text-transparent"
           >
             {part}
           </span>

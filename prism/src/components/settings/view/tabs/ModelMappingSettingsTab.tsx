@@ -120,37 +120,42 @@ export default function ModelMappingSettingsTab() {
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
             {t(
               'models.description',
-              '直接编辑服务器 settings.json 的别名映射。保存后立即生效(下一条消息就用新映射),无需重启;模型切换页的实测缓存会被标记过期,可去那里点实测验证网关行为。',
+              '把 Sonnet / Opus / Haiku / Fable 这几档,映射到网关上真实的模型名。保存即生效,下一条消息就走新映射,不用重启。',
             )}
           </p>
         </div>
         <button
           type="button"
           onClick={() => void load()}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-accent"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-body transition-colors hover:border-border-strong hover:bg-card hover:text-foreground"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'text-primary' : ''}`} />
           {t('models.reload', '重新读取')}
         </button>
       </div>
 
       {error && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+        <p className="rounded-md border border-border bg-muted px-3 py-2 text-xs text-muted-foreground">
           {error}
         </p>
       )}
       {saved && !dirty && (
-        <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">
+        <p className="bg-primary/8 rounded-md border border-primary/30 px-3 py-2 text-xs text-card-foreground dark:text-primary">
           {t('models.saved', '已写入 settings.json —— 热感知已接管,下一条消息即用新映射。')}
         </p>
       )}
 
-      <div className="space-y-3 rounded-xl border border-border/60 p-4">
+      <div className="space-y-3 rounded-lg border border-border p-4">
+        {/* 档名与环境变量名放在输入框**上面**一行:这些变量名有 30 个字符,
+            塞进左侧 88px 的列里必然压到输入框上(实测就是这么糊在一起的)。
+            提到上面之后,所有输入框左边界对齐,变量名也不用再截断。 */}
         {ALIASES.map((alias) => (
-          <div key={alias} className="grid grid-cols-[88px_1fr] items-center gap-3">
-            <div>
-              <div className="text-sm font-medium capitalize">{alias}</div>
-              <div className="font-mono text-[10px] text-muted-foreground/70">{ENV_KEYS[alias]}</div>
+          <div key={alias} className="min-w-0">
+            <div className="mb-1 flex min-w-0 items-baseline gap-2">
+              <span className="flex-none text-sm font-medium capitalize">{alias}</span>
+              <span className="min-w-0 truncate font-mono text-[10px] text-muted-foreground" title={ENV_KEYS[alias]}>
+                {ENV_KEYS[alias]}
+              </span>
             </div>
             <input
               type="text"
@@ -158,37 +163,35 @@ export default function ModelMappingSettingsTab() {
               onChange={(event) =>
                 setDraftMappings((previous) => ({ ...previous, [alias]: event.target.value }))
               }
-              placeholder={t('models.unsetPlaceholder', '未配置 —— CLI 用内置 ID,由网关决定')}
+              placeholder={t('models.unsetPlaceholder', '留空 —— 用 CLI 内置 ID,由网关决定')}
               spellCheck={false}
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none"
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm text-code transition-colors focus:border-primary focus:outline-none"
             />
           </div>
         ))}
 
-        <div className="grid grid-cols-[88px_1fr] items-center gap-3 border-t border-border/60 pt-3">
-          <div>
-            <div className="text-sm font-medium">default</div>
-            <div className="font-mono text-[10px] text-muted-foreground/70">settings.model</div>
+        <div className="min-w-0 border-t border-border pt-3">
+          <div className="mb-1 flex min-w-0 items-baseline gap-2">
+            <span className="flex-none text-sm font-medium">default</span>
+            <span className="min-w-0 truncate font-mono text-[10px] text-muted-foreground">settings.model</span>
           </div>
-          <div>
-            <input
-              type="text"
-              list="prism-default-model-options"
-              value={draftDefault}
-              onChange={(event) => setDraftDefault(event.target.value)}
-              placeholder={t('models.defaultPlaceholder', '未设置 —— CLI 走 ANTHROPIC_MODEL/内置链')}
-              spellCheck={false}
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none"
-            />
-            <datalist id="prism-default-model-options">
-              {ALIASES.map((alias) => (
-                <option key={alias} value={alias} />
-              ))}
-            </datalist>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t('models.defaultHelp', '填别名(如 sonnet)则 default 档跟随该别名的映射;也可直接填网关模型名。')}
-            </p>
-          </div>
+          <input
+            type="text"
+            list="prism-default-model-options"
+            value={draftDefault}
+            onChange={(event) => setDraftDefault(event.target.value)}
+            placeholder={t('models.defaultPlaceholder', '留空 —— 跟随 CLI 内置链')}
+            spellCheck={false}
+            className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm text-code transition-colors focus:border-primary focus:outline-none"
+          />
+          <datalist id="prism-default-model-options">
+            {ALIASES.map((alias) => (
+              <option key={alias} value={alias} />
+            ))}
+          </datalist>
+          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+            {t('models.defaultHelp', '填别名(如 sonnet)就跟着那一档走;也可以直接填网关的模型名。')}
+          </p>
         </div>
       </div>
 
@@ -203,7 +206,7 @@ export default function ModelMappingSettingsTab() {
                 </span>
               )}
               {!view.exists && (
-                <span className="ml-2 text-amber-600 dark:text-amber-400">
+                <span className="ml-2 text-muted-foreground">
                   {t('models.missingFile', '(文件尚不存在,保存时会创建)')}
                 </span>
               )}
@@ -214,7 +217,7 @@ export default function ModelMappingSettingsTab() {
           type="button"
           onClick={() => void save()}
           disabled={saving || loading || !dirty}
-          className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          className="inline-flex shrink-0 items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
           <Save className="h-4 w-4" />
           {saving ? t('models.saving', '保存中…') : t('models.save', '保存映射')}
@@ -223,8 +226,15 @@ export default function ModelMappingSettingsTab() {
 
       <p className="text-xs leading-relaxed text-muted-foreground">
         {t(
+          'models.cacheNote',
+          '改完之后,模型切换页上一次的实测结果就不作数了 —— 想确认网关的真实行为,去那页重新实测一次。',
+        )}
+      </p>
+
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {t(
           'models.tokenNote',
-          '此页只读写映射相关字段;settings.json 里的网关地址与鉴权 token 原样保留,且永远不会传到浏览器。',
+          '本页只读写映射字段;settings.json 里的网关地址与鉴权 token 原样保留,也不会传到浏览器。',
         )}
       </p>
     </div>

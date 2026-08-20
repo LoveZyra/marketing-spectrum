@@ -273,11 +273,11 @@ export default function CodeEditor({
 
   const outerContainerClassName = isSidebar
     ? 'w-full h-full flex flex-col'
-    : `fixed inset-0 z-[9999] md:bg-black/50 md:flex md:items-center md:justify-center md:p-4 ${isFullscreen ? 'md:p-0' : ''}`;
+    : `fixed inset-0 z-[9999] md:bg-[rgba(16,16,16,0.72)] md:flex md:items-center md:justify-center md:p-4 ${isFullscreen ? 'md:p-0' : ''}`;
 
   const innerContainerClassName = isSidebar
     ? 'bg-background flex flex-col w-full h-full'
-    : `bg-background shadow-2xl flex flex-col w-full h-full md:rounded-lg md:shadow-2xl${
+    : `bg-background prism-modal-shadow flex flex-col w-full h-full md:rounded-lg md:prism-modal-shadow${
       isFullscreen ? ' md:w-full md:h-full md:rounded-none' : ' md:w-full md:max-w-6xl md:h-[80vh] md:max-h-[80vh]'
     }`;
 
@@ -328,13 +328,13 @@ export default function CodeEditor({
           />
 
           {loadError && (
-            <div className="border-b border-amber-300/50 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-800/40 dark:bg-amber-900/20 dark:text-amber-300">
+            <div className="border-b border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
               文件加载失败:{loadError} —— 已禁止保存以免覆盖原文件,请关闭后重新打开。
             </div>
           )}
 
           {saveError && (
-            <div className="border-b border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+            <div className="border-b border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
               {saveError}
             </div>
           )}

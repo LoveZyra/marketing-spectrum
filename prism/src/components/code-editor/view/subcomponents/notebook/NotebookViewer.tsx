@@ -23,7 +23,7 @@ function HtmlOutput({ markup }: { markup: string }) {
       sandbox=""
       srcDoc={markup}
       title="notebook html output"
-      className="max-h-[520px] min-h-[120px] w-full rounded-md border border-border bg-white"
+      className="max-h-[520px] min-h-[120px] w-full rounded-md border border-border bg-background"
     />
   );
 }
@@ -34,8 +34,8 @@ function OutputBlock({ output }: { output: NotebookOutput }) {
       <pre
         className={`overflow-x-auto whitespace-pre-wrap rounded-md px-3 py-2 font-mono text-xs leading-relaxed ${
           output.name === 'stderr'
-            ? 'bg-amber-50 text-amber-900 dark:bg-amber-900/15 dark:text-amber-200'
-            : 'bg-muted/60 text-foreground/90'
+            ? 'bg-muted text-muted-foreground'
+            : 'bg-muted text-code'
         }`}
       >
         {output.text}
@@ -45,7 +45,7 @@ function OutputBlock({ output }: { output: NotebookOutput }) {
 
   if (output.kind === 'error') {
     return (
-      <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-red-50 px-3 py-2 font-mono text-xs leading-relaxed text-red-700 dark:bg-red-900/15 dark:text-red-300">
+      <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted px-3 py-2 font-mono text-xs leading-relaxed text-muted-foreground">
         {output.traceback || `${output.ename}: ${output.evalue}`}
       </pre>
     );
@@ -56,7 +56,7 @@ function OutputBlock({ output }: { output: NotebookOutput }) {
       <img
         src={`data:${output.mime};base64,${output.data}`}
         alt="notebook output"
-        className="max-w-full rounded-md border border-border/50 bg-white"
+        className="max-w-full rounded-md border border-border bg-background"
       />
     );
   }
@@ -67,7 +67,7 @@ function OutputBlock({ output }: { output: NotebookOutput }) {
       <img
         src={`data:image/svg+xml;utf8,${encodeURIComponent(output.markup)}`}
         alt="notebook output"
-        className="max-w-full rounded-md border border-border/50 bg-white"
+        className="max-w-full rounded-md border border-border bg-background"
       />
     );
   }
@@ -85,7 +85,7 @@ function OutputBlock({ output }: { output: NotebookOutput }) {
   }
 
   return (
-    <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted/60 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/90">
+    <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted px-3 py-2 font-mono text-xs leading-relaxed text-code">
       {output.text}
     </pre>
   );
@@ -102,7 +102,7 @@ function CellBlock({ cell, language, isDarkMode }: { cell: NotebookCell; languag
 
   if (cell.type === 'raw') {
     return (
-      <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
+      <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">
         {cell.source}
       </pre>
     );
@@ -112,10 +112,10 @@ function CellBlock({ cell, language, isDarkMode }: { cell: NotebookCell; languag
     <div className="space-y-2">
       <div className="flex gap-2">
         {/* 执行序号沿用 Jupyter 的 [n]/[ ] 习惯,一眼能对上执行顺序。 */}
-        <div className="w-10 shrink-0 pt-2 text-right font-mono text-[11px] text-muted-foreground/70">
+        <div className="w-10 shrink-0 pt-2 text-right font-mono text-[11px] text-muted-foreground">
           [{cell.executionCount ?? ' '}]
         </div>
-        <div className="min-w-0 flex-1 overflow-hidden rounded-md border border-border/60">
+        <div className="min-w-0 flex-1 overflow-hidden rounded-md border border-border">
           <CodeHighlighter
             language={language}
             customStyle={{
@@ -161,7 +161,7 @@ export default function NotebookViewer({ content }: NotebookViewerProps) {
           });
     return (
       <div className="h-full overflow-y-auto p-4">
-        <p className="rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/40 dark:bg-amber-900/20 dark:text-amber-300">
+        <p className="rounded-lg border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
           {message}
         </p>
       </div>

@@ -50,15 +50,15 @@ const formatUptime = (seconds: number): string => {
 function StatCard({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: 'ok' | 'warn' | 'bad' }) {
   const toneClass =
     tone === 'bad'
-      ? 'text-red-600 dark:text-red-400'
+      ? 'text-muted-foreground'
       : tone === 'warn'
-        ? 'text-amber-600 dark:text-amber-400'
+        ? 'text-muted-foreground'
         : 'text-foreground';
   return (
-    <div className="rounded-xl border border-border/60 p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className={`mt-1 text-lg font-semibold tabular-nums ${toneClass}`}>{value}</div>
-      {hint && <div className="mt-0.5 text-[11px] text-muted-foreground/80">{hint}</div>}
+    <div className="rounded-lg border border-border p-3">
+      <div className="text-[11px] font-medium uppercase tracking-[1.4px] text-muted-foreground">{label}</div>
+      <div className={`mt-1 font-mono text-lg font-semibold ${toneClass}`}>{value}</div>
+      {hint && <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{hint}</div>}
     </div>
   );
 }
@@ -115,15 +115,15 @@ export default function ServerStatusTab() {
         <button
           type="button"
           onClick={() => void load()}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-accent"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-body transition-colors hover:border-border-strong hover:bg-card hover:text-foreground"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'text-primary' : ''}`} />
           {t('server.refresh', '刷新')}
         </button>
       </div>
 
       {error && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+        <p className="rounded-md border border-border bg-muted px-3 py-2 text-xs text-muted-foreground">
           {error}
         </p>
       )}
@@ -140,7 +140,7 @@ export default function ServerStatusTab() {
             <StatCard
               label={t('server.memory', '内存')}
               value={`${memUsedPct}%`}
-              hint={`${formatBytes(status.memory.totalBytes - status.memory.freeBytes)} / ${formatBytes(status.memory.totalBytes)} · Prism ${formatBytes(status.memory.processRssBytes)}`}
+              hint={`${formatBytes(status.memory.totalBytes - status.memory.freeBytes)} / ${formatBytes(status.memory.totalBytes)} · 棱镜 ${formatBytes(status.memory.processRssBytes)}`}
               tone={memUsedPct > 90 ? 'bad' : memUsedPct > 75 ? 'warn' : 'ok'}
             />
             <StatCard
@@ -152,19 +152,19 @@ export default function ServerStatusTab() {
             <StatCard
               label={t('server.uptime', '运行时长')}
               value={formatUptime(status.processUptimeSec)}
-              hint={`${t('server.osUptime', '主机')} ${formatUptime(status.osUptimeSec)} · Prism v${status.appVersion ?? '?'} · Node ${status.nodeVersion}`}
+              hint={`${t('server.osUptime', '主机')} ${formatUptime(status.osUptimeSec)} · 棱镜 v${status.appVersion ?? '?'} · Node ${status.nodeVersion}`}
             />
           </div>
 
-          <div className="space-y-2 rounded-xl border border-border/60 p-4 text-sm">
+          <div className="space-y-2 rounded-lg border border-border p-4 text-sm">
             <div className="flex items-center justify-between gap-3">
               <span className="font-medium">JupyterLab</span>
               <span
                 className={`rounded px-2 py-0.5 text-xs ${
                   status.jupyter.ready
-                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300'
+                    ? 'bg-primary/8 text-card-foreground dark:text-primary'
                     : status.jupyter.starting
-                      ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300'
+                      ? 'bg-muted text-muted-foreground'
                       : 'bg-muted text-muted-foreground'
                 }`}
               >
@@ -183,14 +183,14 @@ export default function ServerStatusTab() {
               </pre>
             )}
 
-            <div className="flex items-center justify-between gap-3 border-t border-border/50 pt-2">
+            <div className="flex items-center justify-between gap-3 border-t border-border pt-2">
               <span className="font-medium">{t('server.gateway', '模型网关')}</span>
               {status.gateway ? (
                 <span
                   className={`rounded px-2 py-0.5 font-mono text-xs ${
                     status.gateway.reachable
-                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300'
-                      : 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300'
+                      ? 'bg-primary/8 text-card-foreground dark:text-primary'
+                      : 'bg-muted text-muted-foreground'
                   }`}
                 >
                   {status.gateway.host}

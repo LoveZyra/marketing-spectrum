@@ -12,17 +12,20 @@
     "runClaudeCli": "在项目目录中运行 Claude CLI 以开始使用"
   },
   "app": {
-    "title": "Prism"
+    "title": "棱镜"
   },
   "sessions": {
     "newSession": "新建会话",
     "noSessions": "暂无会话",
     "loadingSessions": "加载会话中...",
     "unnamed": "未命名",
-    "loading": "加载中..."
+    "loading": "加载中...",
+    "runningMeta": "运行中 · {{age}}",
+    "messageCount": "{{count}} 条"
   },
   "tooltips": {
     "hideSidebar": "隐藏侧边栏",
+    "showSidebar": "显示侧边栏",
     "createProject": "创建新项目",
     "refresh": "刷新项目和会话 (Ctrl+R)",
     "renameProject": "重命名项目 (F2)",
@@ -93,6 +96,10 @@
       "loadFailed": "权限加载失败",
       "saveFailed": "保存失败",
       "needUsers": "选择「指定用户」时至少勾选一位用户"
-    }
+    },
+    "publicHint": "公共项目 —— 无主且在公共目录下,所有人可见",
+    "rootOnlyHint": "仅 root 可见 —— 无主且不在公共目录下",
+    "sharedHint": "他人共享给你的项目",
+    "sharedOutHint": "已共享给 {{count}} 人"
   }
 }

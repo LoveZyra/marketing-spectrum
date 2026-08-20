@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Ban, Check, KeyRound, Loader2, RefreshCw, Undo2, X } from 'lucide-react';
+import { Ban, Check, KeyRound, RefreshCw, Undo2, X } from 'lucide-react';
 
 import { useAuth } from '../../../../auth/context/AuthContext';
 import { useAccountApprovals, type AdminUser } from '../../../hooks/useAccountApprovals';
@@ -8,9 +8,9 @@ import { useAccountApprovals, type AdminUser } from '../../../hooks/useAccountAp
 import AuditLogList from './AuditLogList';
 
 const STATUS_STYLES: Record<AdminUser['approval_status'], string> = {
-  pending: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300',
-  approved: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300',
-  rejected: 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300',
+  pending: 'bg-muted text-body',
+  approved: 'bg-primary/8 text-card-foreground dark:text-primary',
+  rejected: 'border border-border text-muted-foreground',
 };
 
 const formatDate = (value: string | null): string => {
@@ -63,34 +63,34 @@ export default function AccountsSettingsTab() {
         <button
           type="button"
           onClick={() => void refresh()}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-accent"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-body transition-colors hover:border-border-strong hover:bg-card hover:text-foreground"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'text-primary' : ''}`} />
           {t('accounts.refresh', '刷新')}
         </button>
       </div>
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+        <div className="rounded-md border border-border bg-muted px-3 py-2 text-xs text-muted-foreground">
           {error}
         </div>
       )}
 
       {resetDoneFor && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">
+        <div className="bg-primary/8 rounded-md border border-primary/30 px-3 py-2 text-xs text-card-foreground dark:text-primary">
           {t('accounts.resetDone', { name: resetDoneFor, defaultValue: `已重置 ${resetDoneFor} 的密码,其所有设备已退出登录。` })}
         </div>
       )}
 
       {pendingCount > 0 && (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+        <div className="rounded-md border border-border bg-muted px-3 py-2 text-xs text-muted-foreground">
           {t('accounts.pendingCount', { count: pendingCount, defaultValue: `${pendingCount} 个账号待审批` })}
         </div>
       )}
 
       <div className="overflow-hidden rounded-lg border border-border">
         <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-xs text-muted-foreground">
+          <thead className="border-b border-border bg-card text-xs text-muted-foreground">
             <tr>
               <th className="px-3 py-2 text-left font-medium">{t('accounts.columns.username', '用户名')}</th>
               <th className="px-3 py-2 text-left font-medium">{t('accounts.columns.status', '状态')}</th>
@@ -114,7 +114,7 @@ export default function AccountsSettingsTab() {
                   <td className="px-3 py-2 font-medium">
                     {user.username}
                     {!user.is_active && (
-                      <span className="ml-2 rounded bg-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                      <span className="ml-2 rounded-sm border border-border px-1.5 py-px text-[10px] leading-[14px] text-muted-foreground">
                         {t('accounts.disabled', '已停用')}
                       </span>
                     )}
@@ -131,14 +131,14 @@ export default function AccountsSettingsTab() {
                   <td className="px-3 py-2">
                     <div className="flex items-center justify-end gap-1.5">
                       {busyUserId === user.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        <span className="h-4 w-4 flex-none rounded-full border-[1.5px] border-primary" aria-hidden />
                       ) : (
                         <>
                           {user.approval_status !== 'approved' && (
                             <button
                               type="button"
                               onClick={() => void decide(user.id, 'approve')}
-                              className="inline-flex items-center gap-1 rounded border border-emerald-300/60 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-900/20"
+                              className="hover:bg-primary/8 inline-flex items-center gap-1 rounded border border-primary/30 px-2 py-1 text-xs text-card-foreground transition-colors dark:text-primary"
                             >
                               <Check className="h-3 w-3" />
                               {t('accounts.actions.approve', '通过')}
@@ -148,7 +148,7 @@ export default function AccountsSettingsTab() {
                             <button
                               type="button"
                               onClick={() => void decide(user.id, 'reject')}
-                              className="inline-flex items-center gap-1 rounded border border-red-300/60 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-900/20"
+                              className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-body transition-colors hover:bg-card hover:text-foreground"
                             >
                               <X className="h-3 w-3" />
                               {t('accounts.actions.reject', '驳回')}
@@ -162,7 +162,7 @@ export default function AccountsSettingsTab() {
                               setResetTargetId(resetTargetId === user.id ? null : user.id);
                             }}
                             title={t('accounts.actions.resetPassword', '重置密码')}
-                            className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-foreground/80 hover:bg-accent"
+                            className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-body transition-colors hover:bg-card hover:text-foreground"
                           >
                             <KeyRound className="h-3 w-3" />
                             {t('accounts.actions.resetPassword', '重置密码')}
@@ -173,7 +173,7 @@ export default function AccountsSettingsTab() {
                                 type="button"
                                 onClick={() => void setActive(user.id, false)}
                                 title={t('accounts.actions.deactivate', '停用')}
-                                className="inline-flex items-center gap-1 rounded border border-red-300/60 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-900/20"
+                                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-body transition-colors hover:bg-card hover:text-foreground"
                               >
                                 <Ban className="h-3 w-3" />
                                 {t('accounts.actions.deactivate', '停用')}
@@ -184,7 +184,7 @@ export default function AccountsSettingsTab() {
                               type="button"
                               onClick={() => void setActive(user.id, true)}
                               title={t('accounts.actions.activate', '启用')}
-                              className="inline-flex items-center gap-1 rounded border border-emerald-300/60 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-900/20"
+                              className="hover:bg-primary/8 inline-flex items-center gap-1 rounded border border-primary/30 px-2 py-1 text-xs text-card-foreground transition-colors dark:text-primary"
                             >
                               <Undo2 className="h-3 w-3" />
                               {t('accounts.actions.activate', '启用')}
@@ -196,7 +196,7 @@ export default function AccountsSettingsTab() {
                   </td>
                 </tr>
                 {resetTargetId === user.id && (
-                  <tr className="border-t border-border/50 bg-muted/30">
+                  <tr className="border-t border-border bg-muted">
                     <td colSpan={5} className="px-3 py-2">
                       <div className="flex items-center justify-end gap-2">
                         <span className="text-xs text-muted-foreground">
@@ -208,7 +208,7 @@ export default function AccountsSettingsTab() {
                           onChange={(event) => setResetValue(event.target.value)}
                           placeholder={t('accounts.resetPlaceholder', '新密码(至少 6 位)')}
                           autoFocus
-                          className="w-52 rounded-md border border-border bg-background px-2 py-1 text-xs focus:border-primary focus:outline-none"
+                          className="w-52 rounded-md border border-input bg-transparent px-2 py-1 text-xs transition-colors focus:border-primary focus:outline-none"
                           onKeyDown={(event) => {
                             if (event.key === 'Enter' && resetValue.length >= 6) void submitReset(user);
                             if (event.key === 'Escape') setResetTargetId(null);
@@ -218,14 +218,14 @@ export default function AccountsSettingsTab() {
                           type="button"
                           disabled={resetValue.length < 6 || busyUserId === user.id}
                           onClick={() => void submitReset(user)}
-                          className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                          className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
                         >
                           {t('accounts.resetConfirm', '确认重置')}
                         </button>
                         <button
                           type="button"
                           onClick={() => setResetTargetId(null)}
-                          className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+                          className="rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
                         >
                           {t('accounts.resetCancel', '取消')}
                         </button>

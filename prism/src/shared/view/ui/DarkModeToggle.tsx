@@ -42,14 +42,14 @@ function DarkModeToggle({
       <span className="sr-only">{ariaLabel}</span>
       <span
         className={cn(
-          'flex h-5 w-5 transform items-center justify-center rounded-full shadow-sm transition-transform duration-200',
-          isEnabled ? 'translate-x-[22px] bg-white' : 'translate-x-[2px] bg-foreground/60 dark:bg-foreground/80',
+          'flex h-5 w-5 transform items-center justify-center rounded-full transition-transform duration-200',
+          isEnabled ? 'translate-x-[22px] bg-background' : 'translate-x-[2px] bg-muted-foreground',
         )}
       >
         {isEnabled ? (
           <Moon className="h-3 w-3 text-primary" />
         ) : (
-          <Sun className="h-3 w-3 text-white dark:text-background" />
+          <Sun className="h-3 w-3 text-primary-foreground dark:text-background" />
         )}
       </span>
     </button>

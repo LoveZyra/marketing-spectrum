@@ -43,7 +43,7 @@ export default function UserMessageBody({ content }: UserMessageBodyProps) {
             <div
               key={index}
               dir="auto"
-              className="whitespace-pre-wrap break-words font-serif text-sm"
+              className="whitespace-pre-wrap break-words"
             >
               {segment.text}
             </div>
@@ -53,19 +53,19 @@ export default function UserMessageBody({ content }: UserMessageBodyProps) {
         const isOpen = expanded.has(index);
         const Icon = segment.source === 'url' ? LinkIcon : FileText;
         return (
-          <div key={index} className="rounded-lg bg-white/10">
+          <div key={index} className="rounded-md border border-border">
             <button
               type="button"
               onClick={() => toggle(index)}
               aria-expanded={isOpen}
-              className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/10"
+              className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
               {isOpen
-                ? <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 opacity-80" />
-                : <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 opacity-80" />}
-              <Icon className="h-3.5 w-3.5 flex-shrink-0 opacity-80" />
+                ? <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" />
+                : <ChevronRight className="h-3.5 w-3.5 flex-shrink-0" />}
+              <Icon className="h-3.5 w-3.5 flex-shrink-0" />
               <span className="min-w-0 flex-1 truncate">{segment.name}</span>
-              <span className="flex-shrink-0 opacity-70">
+              <span className="flex-shrink-0">
                 {formatChars(segment.text.length)}
                 {segment.truncated
                   ? ` · ${t('attachments.truncated', { defaultValue: 'truncated' })}`
@@ -75,7 +75,7 @@ export default function UserMessageBody({ content }: UserMessageBodyProps) {
             {isOpen && (
               <div
                 dir="auto"
-                className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words border-t border-white/15 px-2 py-1.5 font-mono text-[11px] leading-relaxed opacity-90"
+                className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words border-t border-border px-2 py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground"
               >
                 {segment.text}
               </div>

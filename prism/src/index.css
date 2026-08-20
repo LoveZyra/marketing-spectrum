@@ -2,60 +2,67 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Global spinner animation - defined early to ensure it loads */
-@keyframes spin {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
-@-webkit-keyframes spin {
-  0% {
-    -webkit-transform: rotate(0deg);
-  }
-  100% {
-    -webkit-transform: rotate(360deg);
-  }
-}
-
 @layer base {
+  /* ==========================================================================
+     Prism · VoltAgent 设计语言
+     取值直接来自设计稿 Prism-2a-淡色.html / Prism-2b-深色.html 的内联样式。
+     变量名沿用 shadcn 那套,只换值;界面里不允许再出现绕过这些变量的写死颜色。
+     ========================================================================== */
   :root {
-    /* Prism spectral-violet theme (light) */
-    --background: 260 30% 97%;
-    --foreground: 258 28% 8%;
-    --card: 0 0% 100%;
-    --card-foreground: 258 28% 8%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 258 28% 8%;
-    --primary: 262 83% 58%;
-    --primary-foreground: 260 40% 98%;
-    --secondary: 258 22% 92%;
-    --secondary-foreground: 258 18% 20%;
-    --muted: 258 22% 92%;
-    --muted-foreground: 257 8% 45%;
-    --accent: 258 22% 92%;
-    --accent-foreground: 258 18% 20%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 258 20% 88%;
-    --input: 258 20% 88%;
-    --ring: 262 83% 58%;
-    --radius: 0.5rem;
+    /* ------------------------------------------------------------------
+       淡色主场 = 「暖白纸感」
+       暖白画布上浮着纯白卡片,层级靠**两层极软投影**拉开(1px 贴地 + 大范围
+       扩散),不靠边框。发丝线只在真的需要"这是两段内容"时才出现。
+       ------------------------------------------------------------------ */
+    --background: 40 20% 98%;         /* #faf9f7  暖白画布 */
+    --foreground: 40 8% 9%;           /* #171614  最强墨色 */
+    --body: 30 5% 27%;                /* #48443f  正文 */
+    --card: 0 0% 100%;                /* #ffffff  卡片浮在暖白之上,靠"更白"抬起来 */
+    --card-foreground: 40 8% 9%;      /* #171614 */
+    --popover: 0 0% 100%;             /* #ffffff */
+    --popover-foreground: 40 8% 9%;
 
-    /* Nav design tokens */
-    --nav-glass-bg: 260 30% 97% / 0.7;
-    --nav-glass-blur: 20px;
-    --nav-glass-saturate: 1.8;
-    --nav-tab-glow: 262 83% 58% / 0.18;
-    --nav-tab-ring: 262 83% 58% / 0.10;
-    --nav-float-shadow: 0 0% 0% / 0.06;
-    --nav-float-ring: 258 20% 88% / 0.5;
-    --nav-divider-color: 258 20% 88% / 0.5;
-    --nav-input-bg: 258 22% 92% / 0.5;
-    --nav-input-focus-ring: 262 83% 58% / 0.22;
+    --primary: 160 84% 39%;           /* #10b981  淡底上取同族最深 */
+    --primary-foreground: 0 0% 6%;    /* #101010  绿底文字恒为深墨,不要改白 */
+    --primary-hover: 162 84% 35%;     /* #0ea371  淡色 hover */
+
+    --secondary: 40 14% 96%;          /* #f6f4f1 */
+    --secondary-foreground: 40 8% 9%;
+    --muted: 40 14% 96%;              /* #f6f4f1  行的 hover / 选中底 */
+    --muted-foreground: 33 5% 42%;    /* #737069  次级文字。暖白底上 #928d87 只有 3.1:1,
+                                         压在 bg-muted(#f6f5f3)上也要够 4.5:1,所以取到 42% */
+    --accent: 40 14% 96%;
+    --accent-foreground: 40 8% 9%;
+
+    --border: 36 11% 89%;             /* #e6e3df  发丝线 */
+    --border-strong: 33 7% 64%;       /* #a9a49d  outline hover(淡色) */
+    --input: 36 11% 89%;
+    --ring: 160 84% 39%;
+
+    /* 代码/等宽文字色 —— 淡色近墨,深色近白 */
+    --code-foreground: 40 8% 12%;
+
+    /* 调色板里没有红。仅保留给不可逆的销毁确认 */
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 100%;
+
+    --radius: 0.75rem;                /* 12px 卡片 / 10px 按钮输入 / 8px 芯片 */
+    --radius-panel: 14px;             /* 输入框、大面板 */
+    --radius-bubble: 18px;            /* 用户气泡 */
+
+    /* 面板抬升:淡色是两层投影(1px 贴地 + 大范围扩散),深色换成绿调描边。
+       全库只此两个变量,组件侧只写 .prism-panel / .prism-raised。 */
+    --shadow-panel: 0 1px 2px rgba(23, 22, 20, 0.06), 0 12px 30px -18px rgba(23, 22, 20, 0.38);
+    --shadow-raised: 0 1px 2px rgba(23, 22, 20, 0.07), 0 18px 44px -24px rgba(23, 22, 20, 0.5);
+    /* 强调色当"光"用的三档 —— 淡色不发光,留空由深色覆盖 */
+    --glow-dot: none;
+    --glow-accent: none;
+
+    /* 动效常量:只允许颜色/描边/阴影/透明度参与过渡 */
+    --motion-fast: 120ms;
+    --motion-base: 180ms;
+    --motion-slow: 280ms;
+    --motion-ease: cubic-bezier(0.4, 0, 0.2, 1);
 
     /* Safe area CSS variables */
     --safe-area-inset-top: env(safe-area-inset-top);
@@ -64,7 +71,6 @@
     --safe-area-inset-left: env(safe-area-inset-left);
 
     /* Mobile navigation dimensions - Single source of truth */
-    /* Floating nav: ~52px bar + 8px bottom margin + 12px px-3 top spacing */
     --mobile-nav-height: 52px;
     --mobile-nav-padding: 20px;
     --mobile-nav-total: calc(var(--mobile-nav-height) + var(--mobile-nav-padding) + env(safe-area-inset-bottom, 0px));
@@ -74,7 +80,7 @@
     --header-base-padding: 8px;
     --header-total-padding: calc(var(--header-safe-area-top) + var(--header-base-padding));
   }
-  
+
   /* Fallback for older iOS versions */
   @supports (padding-top: constant(safe-area-inset-top)) {
     :root {
@@ -86,38 +92,53 @@
   }
 
   .dark {
-    /* Prism spectral-violet theme (dark) */
-    --background: 253 24% 8%;
-    --foreground: 258 15% 93%;
-    --card: 253 20% 12%;
-    --card-foreground: 258 15% 93%;
-    --popover: 253 20% 12%;
-    --popover-foreground: 258 15% 93%;
-    --primary: 258 90% 68%;
-    --primary-foreground: 253 24% 8%;
-    --secondary: 254 16% 17%;
-    --secondary-foreground: 258 15% 93%;
-    --muted: 254 16% 17%;
-    --muted-foreground: 256 8% 62%;
-    --accent: 254 16% 17%;
-    --accent-foreground: 258 15% 93%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 258 15% 93%;
-    --border: 254 16% 18%;
-    --input: 254 14% 23%;
-    --ring: 258 90% 68%;
+    /* ------------------------------------------------------------------
+       深色主场 = 「霓虹终端」
+       近黑画布 + 28px 点阵栅格,强调色当**光源**用而不只是颜色:状态点发光、
+       时间轴竖线走完一段就"充能"、运行指示器带一道扫描线。描边带 12% 绿调,
+       圆角收到 6px —— 要的是设备感,不是卡片感。
+       ------------------------------------------------------------------ */
+    --background: 210 17% 2%;         /* #050607  近黑画布 */
+    --foreground: 0 0% 100%;          /* #ffffff */
+    --body: 168 8% 78%;               /* #c2cdca  正文,带一丝青 */
+    --card: 168 24% 5%;               /* #0a100e  面板 */
+    --card-foreground: 0 0% 95%;      /* #f2f2f2 */
+    --popover: 168 24% 5%;            /* #0a100e */
+    --popover-foreground: 0 0% 95%;
 
-    /* Nav design tokens — dark overrides */
-    --nav-glass-bg: 253 20% 12% / 0.55;
-    --nav-glass-blur: 24px;
-    --nav-glass-saturate: 1.6;
-    --nav-tab-glow: 258 90% 68% / 0.25;
-    --nav-tab-ring: 258 90% 68% / 0.15;
-    --nav-float-shadow: 253 30% 2% / 0.45;
-    --nav-float-ring: 254 16% 18% / 0.3;
-    --nav-divider-color: 254 16% 18% / 0.5;
-    --nav-input-bg: 254 16% 17% / 0.5;
-    --nav-input-focus-ring: 258 90% 68% / 0.25;
+    --primary: 160 100% 43%;          /* #00d992 */
+    --primary-foreground: 0 0% 6%;    /* #101010 */
+    --primary-hover: 160 66% 51%;     /* #2fd6a1 */
+
+    --secondary: 168 24% 5%;
+    --secondary-foreground: 0 0% 95%;
+    --muted: 156 39% 9%;              /* #0e2018  选中/hover 的绿调底,比面板再亮一档 */
+    --muted-foreground: 170 10% 57%;  /* #849894 */
+    --accent: 156 39% 9%;
+    --accent-foreground: 0 0% 95%;
+
+    /* 描边压到很低:界面里几乎每个控件都带一圈 border,描边一旦亮起来,
+       近黑画布上就会变成一屏绿框 —— 那正是要消灭的"同级方框"。
+       取 rgba(0,217,146,.16) 压在 #050607 上的实色。 */
+    --border: 167 82% 9%;             /* #042820 */
+    --border-strong: 162 45% 26%;     /* #245f4a  outline hover(深色) */
+    --input: 167 82% 9%;
+    --ring: 160 100% 43%;
+
+    --code-foreground: 165 20% 92%;   /* #e8f2ef */
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 95%;
+
+    --radius: 0.375rem;               /* 6px 卡片 / 4px 按钮输入 / 2px 芯片 —— 设备感 */
+    --radius-panel: 8px;
+    --radius-bubble: 8px;
+
+    /* 深色不用投影,抬升靠"绿调描边 + 一圈极淡外光" */
+    --shadow-panel: inset 0 0 0 1px hsl(var(--primary) / 0.08);
+    --shadow-raised: inset 0 0 0 1px hsl(var(--primary) / 0.16), 0 0 30px -14px hsl(var(--primary) / 0.55);
+    --glow-dot: 0 0 10px hsl(var(--primary) / 0.9);
+    --glow-accent: 0 0 16px -4px hsl(var(--primary) / 0.85);
   }
 }
 
@@ -125,17 +146,35 @@
   * {
     @apply border-border;
     box-sizing: border-box;
-    transition: none;
   }
-  
-  body {
-    @apply bg-background text-foreground;
 
-    font-family: "Encode Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Hiragino Sans GB", "Source Han Sans SC";
+  /* 设计系统只允许颜色 / 描边 / 阴影 / 透明度参与过渡 */
+  button,
+  a,
+  input,
+  textarea,
+  select,
+  [role="button"] {
+    transition: color var(--motion-fast) var(--motion-ease),
+                background-color var(--motion-fast) var(--motion-ease),
+                border-color var(--motion-fast) var(--motion-ease),
+                box-shadow var(--motion-fast) var(--motion-ease);
+  }
+
+  body {
+    @apply bg-background text-body;
+
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Hiragino Sans GB", "Source Han Sans SC";
+    font-feature-settings: "calt" 1, "rlig" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     margin: 0;
     padding: 0;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.32);
+    color: hsl(var(--foreground));
   }
 
   html, body {
@@ -149,7 +188,7 @@
     overflow: hidden;
     overscroll-behavior-y: contain;
   }
-  
+
   /* Root element with safe area padding for PWA */
   #root {
     min-height: 100vh;
@@ -157,7 +196,7 @@
     padding: 0;
     box-sizing: border-box;
   }
-  
+
   /* Apply safe area padding in standalone mode */
   @supports (padding-top: env(safe-area-inset-top)) {
     @media (display-mode: standalone) {
@@ -184,49 +223,20 @@
     right: var(--safe-area-inset-right);
     bottom: 0;
   }
-  
-  /* Global transition defaults */
-  button, 
-  a, 
-  input, 
-  textarea, 
-  select,
-  [role="button"],
-  .transition-all {
-    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 输入区文字与占位符走 token,不再有写死的 rgb 覆盖 */
+  textarea,
+  input {
+    color: hsl(var(--foreground));
+    caret-color: hsl(var(--foreground));
   }
-  
-  /* Color transitions for theme switching - exclude interactive elements */
-  body, div, section, article, aside, header, footer, nav, main,
-  h1, h2, h3, h4, h5, h6, p, span, blockquote,
-  ul, ol, li, dl, dt, dd,
-  table, thead, tbody, tfoot, tr, td, th,
-  form, fieldset, legend, label {
-    transition: background-color 200ms ease-in-out, 
-                border-color 200ms ease-in-out,
-                color 200ms ease-in-out;
+
+  textarea::placeholder,
+  input::placeholder {
+    color: hsl(var(--muted-foreground));
+    opacity: 1;
   }
-  
-  /* Transform transitions */
-  .transition-transform {
-    transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  
-  /* Opacity transitions */
-  .transition-opacity {
-    transition: opacity 200ms ease-in-out;
-  }
-  
-  /* Scale transitions for interactions */
-  .transition-scale {
-    transition: transform 100ms cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  
-  /* Shadow transitions */
-  .transition-shadow {
-    transition: box-shadow 200ms ease-in-out;
-  }
-  
+
   /* Respect reduced motion preference */
   @media (prefers-reduced-motion: reduce) {
     *,
@@ -241,331 +251,316 @@
 }
 
 @layer utilities {
-  /* Smooth hover transitions for interactive elements */
-  button:hover,
-  a:hover,
-  [role="button"]:hover {
-    transition-duration: 100ms;
+  /* 唯一允许的投影:模态 / 下拉 / 浮层(volt-elev-3)。
+     放在 @layer utilities 里,Tailwind 会自动为它生成 md: 之类的变体。 */
+  .prism-modal-shadow {
+    box-shadow: 0 24px 64px -24px rgba(23, 22, 20, 0.4), 0 2px 6px rgba(23, 22, 20, 0.08);
   }
-  
-  /* Active state transitions */
-  button:active,
-  a:active,
-  [role="button"]:active {
-    transition-duration: 50ms;
+
+  .dark .prism-modal-shadow {
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85), inset 0 0 0 1px hsl(var(--primary) / 0.16);
   }
-  
-  /* Focus transitions */
-  button:focus-visible,
-  a:focus-visible,
-  input:focus-visible,
-  textarea:focus-visible,
-  select:focus-visible {
-    transition: outline-offset 150ms ease-out, box-shadow 150ms ease-out;
+
+  /* 面板抬升。同一个类名,淡色打投影、深色打绿调描边 —— 组件侧不用分主题写。 */
+  .prism-panel {
+    box-shadow: var(--shadow-panel);
   }
-  
-  /* Sidebar transitions */
+
+  /* 主角面板(输入框、浮起来的卡片):淡色投影更深一档,深色多一圈外光 */
+  .prism-raised {
+    box-shadow: var(--shadow-raised);
+  }
+
+  /* 状态点:深色把强调色当光源用,淡色老老实实是个点 */
+  .prism-dot {
+    box-shadow: var(--glow-dot);
+  }
+
+  /* 强调色作为"光"打在图标 / 按钮上(深色专用,淡色为 none) */
+  .prism-glow {
+    box-shadow: var(--glow-accent);
+  }
+
+  /* 可交互卡片的 hover 微光(volt-elev-2) */
+  .prism-hover-glow:hover {
+    box-shadow: 0 0 15px rgba(92, 88, 85, 0.2);
+  }
+
+  /* ------------------------------------------------------------------
+     深色画布的点阵栅格 + 顶部环境光。
+     栅格挂在所有 `bg-background` 面上,并用 background-attachment: fixed
+     把原点钉在视口 —— 否则轨、侧栏、主区各以自己的左上角起算,三条竖线
+     会错开半格,一眼就穿帮。小控件(输入框、按钮)上的栅格因此正好和画布
+     接得上,看起来像是透明的。
+     ------------------------------------------------------------------ */
+  .dark [class~="bg-background"] {
+    background-image:
+      radial-gradient(120% 62% at 50% -8%, hsl(var(--primary) / 0.07), transparent 62%),
+      linear-gradient(hsl(var(--primary) / 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--primary) / 0.05) 1px, transparent 1px);
+    background-size: 100vw 100vh, 28px 28px, 28px 28px;
+    background-attachment: fixed;
+  }
+
+  /* 过渡工具类:时长统一到设计系统三档 */
+  .transition-opacity {
+    transition: opacity var(--motion-base) var(--motion-ease);
+  }
+
+  .transition-shadow {
+    transition: box-shadow var(--motion-base) var(--motion-ease);
+  }
+
+  .transition-transform {
+    transition: transform var(--motion-fast) var(--motion-ease);
+  }
+
   .sidebar-transition {
-    transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1),
-                opacity 300ms ease-in-out;
+    transition: opacity var(--motion-slow) var(--motion-ease);
   }
 
-  /* Nav glass surface — uses theme tokens */
-  .nav-glass {
-    background: hsl(var(--nav-glass-bg));
-    backdrop-filter: blur(var(--nav-glass-blur)) saturate(var(--nav-glass-saturate));
-    -webkit-backdrop-filter: blur(var(--nav-glass-blur)) saturate(var(--nav-glass-saturate));
-  }
-
-  /* Nav tab active pill glow — uses theme tokens */
-  .nav-tab-active {
-    box-shadow: 0 1px 8px hsl(var(--nav-tab-glow)),
-                0 0 0 1px hsl(var(--nav-tab-ring));
-  }
-
-  /* Floating mobile nav bar — uses theme tokens */
-  .mobile-nav-float {
-    box-shadow: 0 -1px 20px hsl(var(--nav-float-shadow)),
-                0 0 0 1px hsl(var(--nav-float-ring));
-  }
-
-  /* Subtle sidebar divider — uses theme tokens */
-  .nav-divider {
-    height: 1px;
-    background: linear-gradient(90deg, transparent, hsl(var(--nav-divider-color)) 20%, hsl(var(--nav-divider-color)) 80%, transparent);
-  }
-
-  /* Nav search input surface — uses theme tokens */
-  .nav-search-input {
-    background: hsl(var(--nav-input-bg));
-    border: none;
-  }
-
-  .nav-search-input:focus-within {
-    background: hsl(var(--background));
-    box-shadow: 0 0 0 2px hsl(var(--nav-input-focus-ring));
-  }
-  
-  /* Modal and dropdown transitions */
   .modal-transition {
-    transition: opacity 200ms ease-in-out,
-                transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: opacity var(--motion-base) var(--motion-ease);
   }
-  
-  /* Chat message transitions */
+
   .message-transition {
-    transition: opacity 300ms ease-in-out,
-                transform 300ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: opacity var(--motion-slow) var(--motion-ease);
   }
-  
-  /* Height transitions for expanding elements */
+
   .height-transition {
-    transition: height 200ms ease-in-out,
-                max-height 200ms ease-in-out;
+    transition: height var(--motion-base) var(--motion-ease),
+                max-height var(--motion-base) var(--motion-ease);
   }
-  
+
   .scrollbar-thin {
     scrollbar-width: thin;
     scrollbar-color: hsl(var(--muted-foreground)) transparent;
   }
-  
+
   .scrollbar-thin::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
-  
+
   .scrollbar-thin::-webkit-scrollbar-track {
     background: transparent;
   }
-  
+
   .scrollbar-thin::-webkit-scrollbar-thumb {
     background-color: hsl(var(--muted-foreground));
     border-radius: 3px;
   }
-  
+
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background-color: hsl(var(--muted-foreground) / 0.8);
   }
-  
-  /* Dark mode scrollbar styles */
-  .dark .scrollbar-thin {
-    scrollbar-color: rgba(156, 163, 175, 0.5) transparent;
+
+  /* Hide scrollbar utility for horizontal scroll */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
-  
-  .dark .scrollbar-thin::-webkit-scrollbar-track {
-    background: rgba(38, 38, 38, 0.3);
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
   }
-  
-  .dark .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: rgba(156, 163, 175, 0.5);
-    border-radius: 3px;
-  }
-  
-  .dark .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(156, 163, 175, 0.7);
-  }
-  
-  /* Global scrollbar styles for main content areas */
-  .dark::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-  
-  .dark::-webkit-scrollbar-track {
-    background: rgba(38, 38, 38, 0.5);
-  }
-  
-  .dark::-webkit-scrollbar-thumb {
-    background-color: rgba(107, 114, 128, 0.5);
-    border-radius: 4px;
-  }
-  
-  .dark::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(107, 114, 128, 0.7);
-  }
-  
-  /* Firefox scrollbar styles */
-  .dark {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(115, 115, 115, 0.5) rgba(38, 38, 38, 0.5);
-  }
-  
-  /* Ensure checkbox styling is preserved */
-  input[type="checkbox"] {
+
+  /* checkbox / radio 走 token */
+  input[type="checkbox"],
+  input[type="radio"] {
     accent-color: hsl(var(--primary));
     opacity: 1;
   }
-  
-  input[type="checkbox"]:focus {
-    opacity: 1;
+
+  input[type="checkbox"]:focus,
+  input[type="radio"]:focus {
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
   }
-  
-  /* Fix checkbox appearance in dark mode */
-  .dark input[type="checkbox"] {
-    background-color: rgb(31 41 55); /* gray-800 */
-    border-color: rgb(75 85 99); /* gray-600 */
-    color: hsl(var(--primary));
-    color-scheme: dark;
+
+  [class*="ring-offset"] {
+    --tw-ring-offset-color: hsl(var(--background));
   }
-  
-  .dark input[type="checkbox"]:checked {
-    background-color: hsl(var(--primary));
-    border-color: hsl(var(--primary));
+
+  /* select 的下拉箭头:两版共用一张 SVG,颜色由 currentColor 无法作用于
+     background-image,所以按明暗各写一条,取值即 volt-mute */
+  select {
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236f6d6c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
+    background-size: 1.5em 1.5em;
+    padding-right: 2.5rem;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
   }
-  
-  .dark input[type="checkbox"]:focus {
-    --tw-ring-color: rgb(59 130 246); /* blue-500 */
-    --tw-ring-offset-color: rgb(31 41 55); /* gray-800 */
+
+  .dark select {
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
   }
-  
-  /* Fix radio button appearance in dark mode */
-  .dark input[type="radio"] {
-    background-color: rgb(31 41 55); /* gray-800 */
-    border-color: rgb(75 85 99); /* gray-600 */
-    color: hsl(var(--primary));
-    color-scheme: dark;
+
+  select option {
+    background-color: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
   }
-  
-  .dark input[type="radio"]:checked {
-    background-color: hsl(var(--primary));
-    border-color: hsl(var(--primary));
-  }
-  
-  .dark input[type="radio"]:focus {
-    --tw-ring-color: rgb(59 130 246); /* blue-500 */
-    --tw-ring-offset-color: rgb(31 41 55); /* gray-800 */
-  }
-  
-  /* Ensure textarea text is always visible in dark mode */
-  textarea {
-    color-scheme: light dark;
-  }
-  
-  .dark textarea {
-    color: rgb(243 244 246) !important; /* gray-100 */
-    -webkit-text-fill-color: rgb(243 244 246) !important;
-    caret-color: rgb(243 244 246) !important;
-  }
-  
-  /* Fix for focus state in dark mode */
-  .dark textarea:focus {
-    color: rgb(243 244 246) !important;
-    -webkit-text-fill-color: rgb(243 244 246) !important;
-  }
-  
-  /* Fix for iOS/Safari dark mode textarea issues */
+
+  /* Fix mobile select dropdown sizing */
   @supports (-webkit-touch-callout: none) {
-    .dark textarea {
-      background-color: transparent !important;
-      color: rgb(243 244 246) !important;
-      -webkit-text-fill-color: rgb(243 244 246) !important;
-    }
-    
-    .dark textarea:focus {
-      background-color: transparent !important;
-      color: rgb(243 244 246) !important;
-      -webkit-text-fill-color: rgb(243 244 246) !important;
+    select {
+      font-size: 16px !important;
     }
   }
-  
-  /* Ensure parent container doesn't override textarea styles */
-  .dark .bg-gray-800 textarea {
-    color: rgb(243 244 246) !important;
-    -webkit-text-fill-color: rgb(243 244 246) !important;
-  }
-  
-  /* Fix focus-within container issues in dark mode */
-  .dark .focus-within\:ring-2:focus-within {
-    background-color: rgb(20 20 20) !important;
-  }
-  
-  /* Ensure textarea remains transparent with visible text */
-  .dark textarea.bg-transparent {
-    background-color: transparent !important;
-    color: rgb(243 244 246) !important;
-    -webkit-text-fill-color: rgb(243 244 246) !important;
-  }
-  
-  /* Fix placeholder text color to be properly gray */
-  textarea::placeholder {
-    color: rgb(156 163 175) !important; /* gray-400 */
-    opacity: 1 !important;
-  }
-  
-  .dark textarea::placeholder {
-    color: rgb(75 85 99) !important; /* gray-600 - darker gray */
-    opacity: 1 !important;
-  }
-  
-  /* More specific selector for chat input textarea */
-  .dark .bg-gray-800 textarea::placeholder,
-  .dark textarea.bg-transparent::placeholder {
-    color: rgb(75 85 99) !important; /* gray-600 - darker gray */
-    opacity: 1 !important;
-    -webkit-text-fill-color: rgb(75 85 99) !important;
-  }
-  
-  /* Custom class for chat input placeholder */
-  .chat-input-placeholder::placeholder {
-    color: rgb(156 163 175) !important;
-    opacity: 1 !important;
+
+  /* Tool details chevron animation */
+  details[open] .details-chevron,
+  details[open] summary svg[class*="group-open"] {
+    transform: rotate(180deg);
   }
 
-  .dark .chat-input-placeholder::placeholder {
-    color: rgb(75 85 99) !important;
-    opacity: 1 !important;
-    -webkit-text-fill-color: rgb(75 85 99) !important;
+  .details-chevron,
+  summary svg[class*="transition-transform"] {
+    transition: transform var(--motion-base) var(--motion-ease);
   }
 
-  .chat-input-placeholder::-webkit-input-placeholder {
-    color: rgb(156 163 175) !important;
-    opacity: 1 !important;
+  /* Settings content fade-in — 只做透明度 */
+  @keyframes settings-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
-  .dark .chat-input-placeholder::-webkit-input-placeholder {
-    color: rgb(75 85 99) !important;
-    opacity: 1 !important;
-    -webkit-text-fill-color: rgb(75 85 99) !important;
+  .settings-content-enter {
+    animation: settings-fade-in var(--motion-base) var(--motion-ease);
   }
-  
-  /* WebKit specific placeholder styles */
-  textarea::-webkit-input-placeholder {
-    color: rgb(156 163 175) !important;
-    opacity: 1 !important;
+
+  /* 活动指示器入场/退场 —— 只做透明度 */
+  @keyframes chat-activity-enter {
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
-  
-  .dark textarea::-webkit-input-placeholder {
-    color: rgb(75 85 99) !important; /* gray-600 - darker gray */
-    opacity: 1 !important;
+
+  @keyframes chat-activity-exit {
+    from { opacity: 1; }
+    to { opacity: 0; }
   }
-  
-  /* Mozilla specific placeholder styles */
-  textarea::-moz-placeholder {
-    color: rgb(156 163 175) !important;
-    opacity: 1 !important;
+
+  /* 浮层(Tooltip)入场 —— 只做透明度。
+     位置由 JS 在同一帧算好,绝不能让它参与过渡:一旦 left/top 被动画,
+     浮层就会从初始坐标"飞"到目标位置。 */
+  @keyframes tooltip-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
-  
-  .dark textarea::-moz-placeholder {
-    color: rgb(75 85 99) !important; /* gray-600 - darker gray */
-    opacity: 1 !important;
+
+  .tooltip-fade-in {
+    animation: tooltip-fade-in var(--motion-fast) var(--motion-ease);
   }
-  
-  /* IE/Edge specific placeholder styles */
-  textarea:-ms-input-placeholder {
-    color: rgb(156 163 175) !important;
-    opacity: 1 !important;
+
+  /* 活动时间轴的竖线:走完的那一段"充能"——上端亮、下端暗,读起来有方向。
+     淡色没有光可发,就退回一条普通发丝线。 */
+  .prism-rail-line {
+    background: hsl(var(--border));
   }
-  
-  .dark textarea:-ms-input-placeholder {
-    color: rgb(75 85 99) !important; /* gray-600 - darker gray */
-    opacity: 1 !important;
+
+  .dark .prism-rail-line {
+    background: linear-gradient(180deg, hsl(var(--primary) / 0.55), hsl(var(--primary) / 0.12));
   }
+
+  .dark .prism-rail-line[data-state="pending"] {
+    background: hsl(var(--border));
+  }
+
+  /* 运行指示器的扫描线:一道极淡的高光从左扫到右,2.4s 一轮。
+     只做 background-position,不动布局;淡色与 reduce-motion 下不出现。 */
+  @keyframes prism-scan {
+    0% { background-position: -140% 0; }
+    100% { background-position: 240% 0; }
+  }
+
+  .dark .prism-scan {
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      hsl(var(--primary) / 0.14) 45%,
+      hsl(var(--primary) / 0.22) 50%,
+      hsl(var(--primary) / 0.14) 55%,
+      transparent 100%
+    );
+    background-size: 60% 100%;
+    background-repeat: no-repeat;
+    animation: prism-scan 2.4s linear infinite;
+  }
+
+  /* 搜索命中提示:发丝线级别的两段环,1.2s */
+  .search-highlight-flash {
+    animation: search-flash 1.2s var(--motion-ease);
+  }
+
+  @keyframes search-flash {
+    0%, 50% {
+      box-shadow: 0 0 0 1px hsl(var(--primary)), 0 0 0 4px hsl(var(--primary) / 0.32);
+      border-radius: 8px;
+    }
+    100% {
+      box-shadow: 0 0 0 1px transparent, 0 0 0 4px transparent;
+    }
+  }
+
 }
 
 /* Mobile optimizations and components */
 @layer components {
+  /* 正文回复 —— 全页唯一"给人读的长文",排印单独一档:
+     比时间轴大一号、走最强的墨色、限制行长。双写类名是为了压过
+     @tailwindcss/typography 的 `.prose` 根规则(两者特异性本来相同,
+     靠源码顺序决胜太脆)。 */
+  .chat-answer.chat-answer {
+    font-size: 15px;
+    line-height: 26px;
+    color: hsl(var(--foreground));
+    /* 行长写满整列。以前压到 78%,右边空出一大片,读起来像被截了一刀;
+       消息列本身已经有左右留白,不需要再收一次。 */
+    max-width: 100%;
+    text-wrap: pretty;
+  }
+
+  .chat-answer :is(p, li, blockquote) {
+    color: hsl(var(--foreground));
+  }
+
+  .chat-answer :is(h1, h2, h3, h4, h5, h6) {
+    color: hsl(var(--foreground));
+    font-weight: 600;
+  }
+
+  .chat-answer strong {
+    color: hsl(var(--foreground));
+    font-weight: 600;
+  }
+
+  .chat-answer :is(code, kbd) {
+    color: hsl(var(--code-foreground));
+    font-weight: 400;
+  }
+
+  .chat-answer a {
+    color: hsl(var(--foreground));
+    text-decoration-color: hsl(var(--border-strong));
+  }
+
+  .dark .chat-answer a {
+    color: hsl(var(--primary));
+  }
+
+  .chat-answer :is(ul, ol) {
+    margin-top: 0.6em;
+    margin-bottom: 0.6em;
+  }
+
+  .chat-answer li {
+    margin-top: 0.25em;
+    margin-bottom: 0.25em;
+  }
+
   .chat-messages-pane {
     contain: layout style paint;
   }
@@ -575,19 +570,11 @@
   }
 
   .chat-activity-enter {
-    animation: chat-activity-enter 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
-    transform-origin: bottom center;
-    will-change: transform, opacity, filter;
+    animation: chat-activity-enter var(--motion-base) var(--motion-ease) both;
   }
 
   .chat-activity-exit {
-    animation: chat-activity-exit 220ms cubic-bezier(0.4, 0, 1, 1) both;
-    transform-origin: bottom center;
-    will-change: transform, opacity, filter;
-  }
-
-  .chat-activity-tab {
-    clip-path: inset(-8px -8px 0 -8px);
+    animation: chat-activity-exit var(--motion-fast) var(--motion-ease) both;
   }
 
   .chat-message {
@@ -606,26 +593,45 @@
     contain-intrinsic-size: auto 96px;
   }
 
+  /* 输入框滚动条 */
+  .chat-input-placeholder {
+    display: block !important;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
+  }
+
+  .chat-input-placeholder:not(:focus) {
+    height: auto;
+  }
+
+  .chat-input-placeholder::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .chat-input-placeholder::-webkit-scrollbar-track {
+    background: transparent;
+    margin: 8px 0;
+  }
+
+  .chat-input-placeholder::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.4);
+    border-radius: 3px;
+  }
+
   /* Mobile touch optimization and safe areas */
   @media (max-width: 768px) {
     * {
       touch-action: manipulation;
       -webkit-tap-highlight-color: transparent;
     }
-    
+
     /* Allow vertical scrolling in scroll containers */
     .overflow-y-auto, [data-scroll-container] {
       touch-action: pan-y;
       -webkit-overflow-scrolling: touch;
     }
-    
-    /* Preserve checkbox visibility */
-    input[type="checkbox"] {
-      -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1);
-      opacity: 1 !important;
-    }
-    
-    button, 
+
+    button,
     [role="button"],
     .clickable,
     a,
@@ -635,32 +641,32 @@
       -webkit-user-select: none;
       touch-action: manipulation;
     }
-    
+
     /* Better mobile touch targets */
     .mobile-touch-target {
       @apply min-h-[44px] min-w-[44px];
     }
-    
+
     /* Chat message improvements */
     .chat-message.user {
       @apply justify-end;
     }
-    
+
     .chat-message.user > div {
       @apply max-w-[85%];
     }
-    
+
     .chat-message.assistant > div,
     .chat-message.error > div {
       @apply w-full sm:max-w-[95%];
     }
-    
+
     /* Session name truncation on mobile */
     .session-name-mobile {
       @apply truncate;
-      max-width: calc(100vw - 120px); /* Account for sidebar padding and buttons */
+      max-width: calc(100vw - 120px);
     }
-    
+
     /* Enable text selection on mobile for terminal */
     .xterm,
     .xterm .xterm-viewport {
@@ -668,107 +674,63 @@
       user-select: text !important;
       -webkit-touch-callout: default !important;
     }
-    
-    /* Fix mobile scrolling */
-    .overflow-y-auto {
-      touch-action: pan-y;
-      -webkit-overflow-scrolling: touch;
-    }
-    
+
     .chat-message {
       touch-action: pan-y;
     }
-    
+
     /* Fix hover states on mobile */
     .group:active .group-hover\:opacity-100,
     .group .group-hover\:opacity-100 {
       opacity: 1 !important;
     }
-    
-    @media (hover: none) and (pointer: coarse) {
-      .group-hover\:opacity-100 {
-        opacity: 1 !important;
-      }
-      
-      .hover\:bg-gray-50:hover,
-      .hover\:bg-gray-100:hover,
-      .hover\:bg-red-200:hover,
-      .dark\:hover\:bg-gray-700:hover,
-      .dark\:hover\:bg-red-900\/50:hover {
-        background-color: inherit;
-      }
-    }
   }
-  
+
   /* Touch device optimizations for all screen sizes */
   @media (hover: none) and (pointer: coarse) {
-    .touch\:opacity-100 {
+    .touch\:opacity-100,
+    .group-hover\:opacity-100 {
       opacity: 1 !important;
     }
-    
-    /* Completely disable hover states on touch devices */
+
     * {
       -webkit-tap-highlight-color: transparent !important;
     }
-    
-    /* Preserve checkbox visibility on touch devices */
-    input[type="checkbox"] {
-      -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1) !important;
-      opacity: 1 !important;
-    }
-    
-    /* Only disable hover states for interactive elements, not containers */
+
     button:hover,
     [role="button"]:hover,
     .cursor-pointer:hover,
-    a:hover,
-    .hover\:bg-gray-50:hover,
-    .hover\:bg-gray-100:hover,
-    .hover\:text-gray-900:hover,
-    .hover\:opacity-100:hover {
+    a:hover {
       background-color: inherit !important;
       color: inherit !important;
       opacity: inherit !important;
-      transform: inherit !important;
     }
-    
-    /* Force buttons to be immediately clickable */
+
     button, [role="button"], .cursor-pointer {
       cursor: pointer !important;
       pointer-events: auto !important;
     }
-    
-    /* Keep active states for immediate feedback */
-    .active\:scale-\[0\.98\]:active,
-    .active\:scale-95:active {
-      transform: scale(0.98) !important;
-    }
   }
-  
+
   /* Safe area support for iOS devices */
   .ios-bottom-safe {
     padding-bottom: env(safe-area-inset-bottom);
   }
-  
-  /* PWA specific header adjustments - uses CSS variables for consistency */
+
+  /* PWA specific header adjustments */
   .pwa-header-safe {
     padding-top: var(--header-base-padding);
   }
 
-  /* When PWA mode is detected by JavaScript */
   body.pwa-mode .pwa-header-safe {
-    /* Reset padding since #root already handles safe area */
     padding-top: 0px !important;
   }
 
-  /* For mobile PWA, add bottom padding for better spacing */
   @media screen and (max-width: 768px) {
     body.pwa-mode .pwa-header-safe {
       padding-bottom: 8px;
     }
-  }
-  
-  @media screen and (max-width: 768px) {
+
     .chat-input-mobile {
       padding-bottom: calc(60px + env(safe-area-inset-bottom));
     }
@@ -781,7 +743,6 @@
     hyphens: auto;
   }
 
-  /* Force wrap long URLs and code */
   .chat-message pre,
   .chat-message code {
     white-space: pre-wrap !important;
@@ -789,20 +750,9 @@
     overflow-wrap: break-word;
   }
 
-  /* Prevent horizontal scroll in chat area */
   .chat-message * {
     max-width: 100%;
     box-sizing: border-box;
-  }
-
-  /* Hide scrollbar utility for horizontal scroll */
-  .scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
-
-  .scrollbar-hide::-webkit-scrollbar {
-    display: none;
   }
 }
 
@@ -811,243 +761,4 @@
 .prose code::after {
   content: "" !important;
   display: none !important;
-}
-
-/* Custom spinner animation for mobile compatibility */
-@layer utilities {
-  @keyframes spin {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-    }
-  }
-  
-  .animate-spin {
-    animation: spin 1s linear infinite;
-  }
-  
-  /* Force hardware acceleration for smoother animation on mobile */
-  .loading-spinner {
-    animation: spin 1s linear infinite;
-    will-change: transform;
-    transform: translateZ(0);
-    -webkit-transform: translateZ(0);
-    backface-visibility: hidden;
-    -webkit-backface-visibility: hidden;
-  }
-  
-  /* Improved textarea styling */
-  .chat-input-placeholder {
-    display: block !important;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(156, 163, 175, 0.3) transparent;
-  }
-
-  /* Ensure container fits textarea tightly */
-  .chat-input-placeholder:not(:focus) {
-    height: auto;
-  }
-  
-  .chat-input-placeholder::-webkit-scrollbar {
-    width: 6px;
-  }
-  
-  .chat-input-placeholder::-webkit-scrollbar-track {
-    background: transparent;
-    margin: 8px 0;
-  }
-  
-  .chat-input-placeholder::-webkit-scrollbar-thumb {
-    background-color: rgba(156, 163, 175, 0.3);
-    border-radius: 3px;
-    transition: background-color 0.2s;
-  }
-  
-  .chat-input-placeholder::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(156, 163, 175, 0.5);
-  }
-  
-  .dark .chat-input-placeholder {
-    scrollbar-color: rgba(107, 114, 128, 0.3) transparent;
-  }
-  
-  .dark .chat-input-placeholder::-webkit-scrollbar-thumb {
-    background-color: rgba(107, 114, 128, 0.3);
-  }
-  
-  .dark .chat-input-placeholder::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(107, 114, 128, 0.5);
-  }
-  
-  /* Enhanced box shadow when textarea expands */
-  .chat-input-expanded {
-    box-shadow: 0 -5px 15px -3px rgba(0, 0, 0, 0.1), 0 -4px 6px -2px rgba(0, 0, 0, 0.05);
-  }
-  
-  .dark .chat-input-expanded {
-    box-shadow: 0 -5px 15px -3px rgba(0, 0, 0, 0.3), 0 -4px 6px -2px rgba(0, 0, 0, 0.2);
-  }
-  
-  /* Fix focus ring offset color in dark mode */
-  .dark [class*="ring-offset"] {
-    --tw-ring-offset-color: rgb(20 20 20);
-  }
-
-  /* Ensure buttons don't show white backgrounds in dark mode */
-  .dark button:focus {
-    --tw-ring-offset-color: rgb(20 20 20);
-  }
-  
-  /* Fix mobile select dropdown styling */
-  @supports (-webkit-touch-callout: none) {
-    select {
-      font-size: 16px !important;
-      -webkit-appearance: none;
-    }
-  }
-  
-  /* Improve select appearance in dark mode */
-  .dark select {
-    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239CA3AF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
-    background-repeat: no-repeat;
-    background-position: right 0.5rem center;
-    background-size: 1.5em 1.5em;
-    padding-right: 2.5rem;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    appearance: none;
-  }
-  
-  select {
-    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236B7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
-    background-repeat: no-repeat;
-    background-position: right 0.5rem center;
-    background-size: 1.5em 1.5em;
-    padding-right: 2.5rem;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    appearance: none;
-  }
-  
-  /* Fix select option text in mobile */
-  select option {
-    font-size: 16px !important;
-    padding: 8px !important;
-    background-color: var(--background) !important;
-    color: var(--foreground) !important;
-  }
-  
-  .dark select option {
-    background-color: rgb(31 31 31) !important;
-    color: rgb(237 235 230) !important;
-  }
-
-  /* Tool details chevron animation */
-  details[open] .details-chevron,
-  details[open] summary svg[class*="group-open"] {
-    transform: rotate(180deg);
-  }
-
-  /* Smooth chevron transition */
-  .details-chevron,
-  summary svg[class*="transition-transform"] {
-    transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
-  /* Settings content fade-in transition */
-  @keyframes settings-fade-in {
-    from { opacity: 0; transform: translateY(4px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  .settings-content-enter {
-    animation: settings-fade-in 150ms ease-out;
-  }
-
-  @keyframes chat-activity-enter {
-    0% {
-      opacity: 0;
-      filter: blur(3px);
-      transform: translateY(18px) scaleY(0.92);
-    }
-    65% {
-      opacity: 1;
-      filter: blur(0);
-      transform: translateY(-2px) scaleY(1.01);
-    }
-    100% {
-      opacity: 1;
-      filter: blur(0);
-      transform: translateY(0) scaleY(1);
-    }
-  }
-
-  @keyframes chat-activity-exit {
-    0% {
-      opacity: 1;
-      filter: blur(0);
-      transform: translateY(0) scaleY(1);
-    }
-    100% {
-      opacity: 0;
-      filter: blur(2px);
-      transform: translateY(14px) scaleY(0.96);
-    }
-  }
-
-  /* Search result highlight flash */
-  .search-highlight-flash {
-    animation: search-flash 4s ease-out;
-  }
-
-  @keyframes search-flash {
-    0%, 50% {
-      outline: 3px solid hsl(var(--primary));
-      outline-offset: 4px;
-      border-radius: 8px;
-      background-color: hsl(var(--primary) / 0.06);
-    }
-    100% {
-      outline: 3px solid transparent;
-      outline-offset: 4px;
-      background-color: transparent;
-    }
-  }
-}
-
-/* ===== Prism spectral brand utilities ===== */
-@layer components {
-  .prism-gradient {
-    background-image: linear-gradient(135deg, #7c3aed 0%, #6366f1 45%, #06b6d4 100%);
-  }
-  .prism-gradient:hover {
-    filter: brightness(1.08);
-  }
-  .prism-gradient-text {
-    background-image: linear-gradient(90deg, #7c3aed 0%, #6366f1 45%, #06b6d4 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .dark .prism-gradient-text {
-    background-image: linear-gradient(90deg, #a78bfa 0%, #818cf8 45%, #22d3ee 100%);
-  }
-  .prism-spectrum-bar {
-    background-image: linear-gradient(90deg, #7c3aed, #8b5cf6, #6366f1, #0ea5e9, #06b6d4, #10b981, #f59e0b, #ef4444);
-    opacity: 0.9;
-  }
-  .prism-aurora {
-    background-image:
-      radial-gradient(38rem 20rem at 18% -4%, hsl(262 83% 58% / 0.16), transparent 62%),
-      radial-gradient(32rem 18rem at 88% 12%, hsl(190 95% 45% / 0.13), transparent 62%),
-      radial-gradient(34rem 20rem at 55% 108%, hsl(330 81% 60% / 0.10), transparent 62%);
-  }
-  .dark .prism-aurora {
-    background-image:
-      radial-gradient(38rem 20rem at 18% -4%, hsl(262 83% 62% / 0.22), transparent 62%),
-      radial-gradient(32rem 18rem at 88% 12%, hsl(190 95% 50% / 0.16), transparent 62%),
-      radial-gradient(34rem 20rem at 55% 108%, hsl(330 81% 60% / 0.13), transparent 62%);
-  }
 }

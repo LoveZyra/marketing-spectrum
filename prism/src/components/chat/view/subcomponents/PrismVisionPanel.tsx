@@ -1,4 +1,5 @@
 import PrismLogo from '../../../PrismLogo';
+import PrismWordmark from '../../../PrismWordmark';
 
 /**
  * Prism welcome-screen vision panel (left column of the two-column empty
@@ -13,17 +14,15 @@ export default function PrismVisionPanel() {
   ];
 
   return (
-    <div className="prism-aurora relative flex h-full min-h-0 flex-col justify-center overflow-hidden rounded-2xl border border-border/60 p-6">
-      <div className="flex items-center gap-2.5">
-        <PrismLogo size={30} />
-        <span
-          className="prism-gradient-text text-lg font-semibold tracking-tight"
-        >
-          Prism
+    <div className="relative flex h-full min-h-0 flex-col justify-center overflow-hidden rounded-lg border border-border p-6">
+      <div className="flex items-center gap-3.5">
+        <PrismLogo size={56} />
+        <span className="inline-flex items-center text-foreground">
+          <PrismWordmark height={30} />
         </span>
       </div>
 
-      <p className="prism-gradient-text mt-4 text-[1.3rem] font-medium leading-snug">
+      <p className="mt-4 text-[1.3rem] font-medium leading-snug text-foreground">
         把复杂的算法与数据问题，<br className="hidden sm:block" />分解为清晰、可执行、可回溯的智能工作流
       </p>
 
@@ -39,7 +38,7 @@ export default function PrismVisionPanel() {
         ))}
       </div>
 
-      <p className="mt-5 text-xs italic text-muted-foreground/60">
+      <p className="mt-5 text-xs italic text-muted-foreground">
         Split complexity into insight.
       </p>
     </div>

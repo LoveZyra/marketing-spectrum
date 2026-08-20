@@ -1,4 +1,6 @@
-import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
+
+import { Shimmer } from '../../../../shared/view/ui';
 
 type HtmlPreviewProps = {
   previewUrl: string | null;
@@ -35,7 +37,7 @@ export default function HtmlPreview({
   if (error) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-        <AlertTriangle className="h-6 w-6 text-amber-500" />
+        <AlertTriangle className="h-6 w-6 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">{error}</p>
         <button
           type="button"
@@ -51,9 +53,8 @@ export default function HtmlPreview({
 
   if (isLoading || !previewUrl) {
     return (
-      <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        {labels.loading}
+      <div className="flex h-full items-center justify-center text-sm">
+        <Shimmer>{labels.loading}</Shimmer>
       </div>
     );
   }
@@ -61,12 +62,12 @@ export default function HtmlPreview({
   return (
     <div className="flex h-full flex-col">
       {hasUnsavedChanges && (
-        <div className="flex items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+        <div className="flex items-center justify-between gap-2 border-b border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
           <span>{labels.unsavedNotice}</span>
           <button
             type="button"
             onClick={onReload}
-            className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium hover:bg-amber-100 dark:hover:bg-amber-900/40"
+            className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium hover:bg-muted"
           >
             <RefreshCw className="h-3 w-3" />
             {labels.reload}
@@ -78,7 +79,7 @@ export default function HtmlPreview({
         title="HTML preview"
         src={previewUrl}
         sandbox="allow-scripts allow-forms allow-modals allow-popups"
-        className="h-full w-full flex-1 border-0 bg-white"
+        className="h-full w-full flex-1 border-0 bg-background"
       />
     </div>
   );

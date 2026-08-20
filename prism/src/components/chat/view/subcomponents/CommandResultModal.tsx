@@ -107,16 +107,16 @@ function MetricCard({
     tone === 'primary'
       ? 'border-primary/35 bg-primary/10 text-primary'
       : tone === 'success'
-        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
-        : 'border-border/70 bg-background/75 text-muted-foreground';
+        ? 'border-primary/[0.32] bg-primary/[0.08] text-primary'
+        : 'border-border bg-background text-muted-foreground';
 
   return (
     <div
-      className={`group rounded-2xl border border-border/70 bg-background/75 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-md ${
+      className={`group rounded-lg border border-border bg-card transition-colors duration-200 hover:border-primary/25 ${
         compact ? 'p-3' : 'p-4'
       }`}
     >
-      <div className={`inline-flex rounded-xl border ${compact ? 'mb-2 p-1.5' : 'mb-3 p-2'} ${toneClass}`}>
+      <div className={`inline-flex rounded-lg border ${compact ? 'mb-2 p-1.5' : 'mb-3 p-2'} ${toneClass}`}>
         <Icon className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
       </div>
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
@@ -141,7 +141,7 @@ function SearchField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-10 rounded-xl border-border/70 bg-background/75 pl-9 pr-3 shadow-none focus-visible:ring-primary/40"
+        className="h-10 rounded-lg border-border bg-card pl-9 pr-3 shadow-none focus-visible:ring-primary/40"
       />
     </div>
   );
@@ -175,11 +175,11 @@ function HelpContent({ data }: { data: HelpCommandData }) {
             {filteredCommands.map((command, index) => (
               <div
                 key={`${command.namespace || 'builtin'}-${command.name}`}
-                className="settings-content-enter rounded-2xl border border-border/70 bg-background/75 p-3 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:bg-muted/25"
+                className="settings-content-enter rounded-lg border border-border bg-card p-3 transition-colors duration-200 hover:border-primary/30"
                 style={{ animationDelay: `${Math.min(index * 18, 160)}ms` }}
               >
                 <div className="flex items-start justify-between gap-3">
-                  <code className="rounded-lg border border-primary/20 bg-primary/10 px-2 py-1 text-xs font-semibold text-primary">
+                  <code className="rounded-lg border border-primary/20 bg-primary/10 px-2 py-1 text-xs font-semibold text-foreground dark:text-primary">
                     {command.name}
                   </code>
                   <Badge variant="secondary" className="shrink-0 text-[10px] capitalize">
@@ -194,7 +194,7 @@ function HelpContent({ data }: { data: HelpCommandData }) {
           </div>
 
           {filteredCommands.length === 0 && (
-            <div className="rounded-2xl border border-dashed border-border bg-muted/20 px-4 py-10 text-center text-sm text-muted-foreground">
+            <div className="rounded-lg border border-dashed border-border bg-card px-4 py-10 text-center text-sm text-muted-foreground">
               No commands match that filter.
             </div>
           )}
@@ -202,7 +202,7 @@ function HelpContent({ data }: { data: HelpCommandData }) {
       </div>
 
       <aside className="space-y-3">
-        <div className="rounded-2xl border border-border/70 bg-muted/20 p-4">
+        <div className="rounded-lg border border-border bg-card p-4">
           <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
             <TerminalSquare className="h-4 w-4 text-primary" />
             Syntax
@@ -215,7 +215,7 @@ function HelpContent({ data }: { data: HelpCommandData }) {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-primary/25 bg-primary/10 p-4">
+        <div className="rounded-lg border border-primary/25 bg-primary/10 p-4">
           <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
             <Sparkles className="h-4 w-4 text-primary" />
             Quick tip
@@ -232,9 +232,9 @@ function HelpContent({ data }: { data: HelpCommandData }) {
 /**
  * 别名 → 真实模型的实测结果,由后端探测(逐别名各发一次最小请求)后缓存。
  *
- * 卡片上的描述是 Anthropic 官方口径;ANTHROPIC_BASE_URL 指向自定义网关时,
- * 界面上选 "sonnet" 实际由哪个模型来答是网关说了算 —— 本部署就是活例子
- * (实际服务的是 deepseek-v4-flash)。这块 UI 的职责就是把这件事直接摆在卡片上。
+ * ANTHROPIC_BASE_URL 指向自定义网关时,界面上选 "sonnet" 实际由哪个模型来答
+ * 是网关说了算。所以卡片第一行直接摆**配置里的真实模型名**,Claude 侧的档名
+ * 退到第二行 —— 挑模型时先要知道的是"会打到哪个模型上"。
  */
 type ModelMappingEntry = {
   actualModel: string | null;
@@ -385,10 +385,12 @@ function ModelsContent({
     }
 
     return availableOptions.filter((option) => {
-      const haystack = `${option.value} ${option.label || ''} ${option.description || ''}`.toLowerCase();
+      // 卡片第一行现在是配置的真实模型名,搜索也得能按它命中。
+      const configured = mappingsState.configMappings[option.value]?.configuredModel || '';
+      const haystack = `${option.value} ${option.label || ''} ${configured} ${option.description || ''}`.toLowerCase();
       return haystack.includes(normalized);
     });
-  }, [availableOptions, query]);
+  }, [availableOptions, query, mappingsState.configMappings]);
 
   const hasConcreteSessionId = typeof currentSessionId === 'string' && currentSessionId.trim().length > 0;
   const showSearch = availableOptions.length > 6;
@@ -429,7 +431,7 @@ function ModelsContent({
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       {/* Compact context bar: active model + refresh, no clutter */}
-      <div className="flex items-center justify-between gap-3 rounded-2xl border border-border/70 bg-muted/20 px-3.5 py-2.5">
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card px-3.5 py-2.5">
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
             Active model · {providerLabel}
@@ -437,7 +439,7 @@ function ModelsContent({
           <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <span className="break-all font-mono text-sm font-semibold text-foreground">{currentModel}</span>
             {pendingSessionModel && pendingSessionModel !== currentModel && (
-              <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-500 dark:text-emerald-400">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground dark:text-primary">
                 → {pendingSessionModel} next
               </span>
             )}
@@ -451,9 +453,9 @@ function ModelsContent({
             onClick={handleProbeMappings}
             disabled={probing}
             title="对每个别名各发一次最小请求,读出网关实际使用的模型"
-            className="h-9 shrink-0 gap-1.5 rounded-xl px-2.5 text-xs text-muted-foreground hover:text-foreground"
+            className="h-9 shrink-0 gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground hover:text-foreground"
           >
-            <Radar className={`h-4 w-4 ${probing ? 'animate-pulse text-primary' : ''}`} />
+            <Radar className={`h-4 w-4 ${probing ? 'text-primary' : ''}`} />
             {probing ? '实测中…' : '实测真实模型'}
           </Button>
           <Button
@@ -464,28 +466,27 @@ function ModelsContent({
             disabled={providerModelsRefreshing}
             title="Refresh model list from providers"
             aria-label="Refresh model list from providers"
-            className="h-9 w-9 shrink-0 rounded-xl text-muted-foreground hover:text-foreground"
+            className="h-9 w-9 shrink-0 rounded-lg text-muted-foreground hover:text-foreground"
           >
-            <RefreshCw className={`h-4 w-4 ${providerModelsRefreshing ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 ${providerModelsRefreshing ? 'text-primary' : ''}`} />
           </Button>
         </div>
       </div>
 
       {/* settings.json 在上次实测后改过 —— 实测值可能已过期,提醒重测。 */}
       {mappingsState.stale && (
-        <p className="shrink-0 rounded-xl border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+        <p className="shrink-0 rounded-lg border border-border bg-muted px-3 py-2 text-[11px] leading-4 text-muted-foreground">
           模型配置(settings.json)在上次实测后已变更 —— 下方「实际模型」可能过期。
           点右上「实测真实模型」重测一次即可更新。
         </p>
       )}
 
-      {/* 自定义网关提示:卡片描述是官方口径,实际映射由网关决定。
-          官方 API(gatewayHost 为空)下不显示 —— 那时描述本来就是对的。 */}
+      {/* 自定义网关提示。官方 API(gatewayHost 为空)下不显示 —— 那时不存在改写。 */}
       {mappingsState.gatewayHost && (
-        <p className="shrink-0 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+        <p className="shrink-0 rounded-lg border border-border bg-muted px-3 py-2 text-[11px] leading-4 text-muted-foreground">
           本部署经由网关 <span className="font-mono">{mappingsState.gatewayHost}</span> 转发。
-          卡片上的模型说明与价格是 Anthropic 官方口径,实际由哪个模型回答由网关决定 ——
-          以下方每张卡片的「实际模型」实测值为准(没有的话点右上「实测真实模型」)。
+          每张卡片第一行是这一档在 settings.json 里配到的真实模型,第二行是它在 Claude 侧的档名。
+          想确认网关真的这么走,点右上「实测真实模型」。
         </p>
       )}
 
@@ -500,6 +501,15 @@ function ModelsContent({
               const isCurrent = option.value === currentModel;
               const isPendingSelection = option.value === pendingSessionModel;
               const isChanging = option.value === changingModel;
+              // 卡片第一行是**这一档实际会用到的模型**(settings.json 里配的那个),
+              // Claude 侧的档名退到第二行当注脚 —— 挑模型时先看的是"会打到哪个模型上",
+              // 而不是"这一档在 Claude 那边叫什么"。没配映射时第一行就退回档名本身。
+              const cardConfig = mappingsState.configMappings[option.value];
+              const cardConfigModel = cardConfig?.configuredModel ?? null;
+              const cardAliasLine = cardConfigModel
+                ? [option.value, option.label && option.label !== option.value ? option.label : null]
+                  .filter(Boolean).join(' · ')
+                : (option.label && option.label !== option.value ? option.label : '');
               return (
                 <button
                   key={option.value}
@@ -507,50 +517,39 @@ function ModelsContent({
                   onClick={() => handleSelectModel(option.value)}
                   disabled={Boolean(changingModel)}
                   aria-label={`Select model ${option.value}`}
-                  className={`settings-content-enter group flex min-h-16 flex-col rounded-2xl border p-3 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-60 ${
+                  className={`settings-content-enter group flex min-h-16 flex-col rounded-lg border p-3 text-left transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-60 ${
                     isCurrent
                       ? 'border-primary/45 bg-primary/10'
                       : isPendingSelection
-                        ? 'border-emerald-500/35 bg-emerald-500/10'
-                        : 'border-border/70 bg-background/80 hover:border-primary/30 hover:bg-background'
+                        ? 'border-primary/[0.32] bg-primary/[0.08]'
+                        : 'border-border bg-card hover:border-primary/30 hover:bg-background'
                   }`}
                   style={{ animationDelay: `${Math.min(index * 14, 180)}ms` }}
                 >
                   <span className="flex items-center justify-between gap-2">
-                    <span className="break-all font-mono text-sm font-semibold text-foreground">{option.value}</span>
+                    <span
+                      className="break-all font-mono text-sm font-semibold text-foreground"
+                      title={cardConfig?.source ? `来源:${cardConfig.source}(settings.json,实时)` : undefined}
+                    >
+                      {cardConfigModel ?? option.value}
+                    </span>
                     {isCurrent ? (
                       <BadgeCheck className="h-4 w-4 shrink-0 text-primary" />
                     ) : isChanging ? (
-                      <RefreshCw className="h-4 w-4 shrink-0 animate-spin text-primary" />
+                      <RefreshCw className="h-4 w-4 shrink-0 text-primary" />
                     ) : null}
                   </span>
-                  {option.label && option.label !== option.value && (
-                    <span className="mt-1 text-xs font-medium text-foreground/85">{option.label}</span>
-                  )}
-                  {option.description && (
-                    <span className="mt-1 text-xs leading-5 text-muted-foreground">{option.description}</span>
+                  {cardAliasLine && (
+                    <span className="mt-1 break-all font-mono text-[11px] leading-4 text-muted-foreground">
+                      {cardAliasLine}
+                    </span>
                   )}
                   {(() => {
                     const mapping = mappingsState.mappings[option.value];
-                    const config = mappingsState.configMappings[option.value];
-                    const configModel = config?.configuredModel ?? null;
-                    // 实测过期时不展示实测行 —— 配置行此刻才是新值。
+                    const configModel = cardConfigModel;
+                    // 实测过期时不展示实测行 —— 第一行的配置值此刻才是新值。
                     const probedModel = !mappingsState.stale && mapping?.actualModel ? mapping.actualModel : null;
                     const rows: ReactNode[] = [];
-
-                    // 配置行:读 settings.json 直接解析,改完配置立刻是新值,零成本。
-                    if (configModel) {
-                      rows.push(
-                        <span
-                          key="config"
-                          className="mt-1.5 flex flex-wrap items-baseline gap-x-1.5 text-[11px] leading-4"
-                          title={config?.source ? `来源:${config.source}(settings.json,实时)` : undefined}
-                        >
-                          <span className="text-muted-foreground">配置</span>
-                          <span className="font-mono font-semibold text-foreground">{configModel}</span>
-                        </span>,
-                      );
-                    }
 
                     // 实测行:端到端验证(网关那一跳)。与配置一致就不重复占一行。
                     if (probedModel && probedModel !== configModel) {
@@ -559,13 +558,13 @@ function ModelsContent({
                         <span key="probe" className="mt-1 flex flex-wrap items-baseline gap-x-1.5 text-[11px] leading-4">
                           <span className="text-muted-foreground">实测</span>
                           <span className="font-mono font-semibold text-foreground">{probedModel}</span>
-                          {ago && <span className="text-muted-foreground/70">· {ago}</span>}
+                          {ago && <span className="text-muted-foreground">· {ago}</span>}
                         </span>,
                       );
                       if (configModel) {
                         // 两层不一致 = 网关在改写 CLI 发出的名字 —— 这是重要信号,不是显示错误。
                         rows.push(
-                          <span key="mismatch" className="mt-1 text-[11px] leading-4 text-amber-600 dark:text-amber-400">
+                          <span key="mismatch" className="mt-1 text-[11px] leading-4 text-muted-foreground">
                             ⚠ 实测与配置不一致:网关把「{configModel}」改写成了「{probedModel}」
                           </span>,
                         );
@@ -573,13 +572,13 @@ function ModelsContent({
                     } else if (probedModel && probedModel === configModel) {
                       const ago = mapping ? formatCheckedAgo(mapping.checkedAt) : '';
                       rows.push(
-                        <span key="verified" className="mt-1 text-[11px] leading-4 text-muted-foreground/70">
+                        <span key="verified" className="mt-1 text-[11px] leading-4 text-muted-foreground">
                           实测一致{ago ? ` · ${ago}` : ''}
                         </span>,
                       );
                     } else if (!probedModel && !configModel && mapping && !mapping.actualModel) {
                       rows.push(
-                        <span key="error" className="mt-1.5 text-[11px] leading-4 text-red-500/90">
+                        <span key="error" className="mt-1.5 text-[11px] leading-4 text-muted-foreground">
                           实测失败:{mapping.error || '未知原因'}
                         </span>,
                       );
@@ -588,10 +587,10 @@ function ModelsContent({
                     return rows.length > 0 ? <>{rows}</> : null;
                   })()}
                   {isCurrent && (
-                    <span className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">Current selection</span>
+                    <span className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground dark:text-primary">Current selection</span>
                   )}
                   {isPendingSelection && !isCurrent && (
-                    <span className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-500 dark:text-emerald-400">
+                    <span className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground dark:text-primary">
                       Applies next response
                     </span>
                   )}
@@ -601,7 +600,7 @@ function ModelsContent({
           </div>
         </div>
       ) : (
-        <div className="rounded-2xl border border-dashed border-border bg-background/60 px-4 py-10 text-center text-sm text-muted-foreground">
+        <div className="rounded-lg border border-dashed border-border bg-card px-4 py-10 text-center text-sm text-muted-foreground">
           No models match that search.
         </div>
       )}
@@ -657,17 +656,17 @@ function CostContent({ data }: { data: CostCommandData }) {
 
   return (
     <div className="space-y-4">
-      <div className="overflow-hidden rounded-2xl border border-border/70 bg-background/75">
+      <div className="overflow-hidden rounded-lg border border-border bg-card">
         {usageRows.map((row) => {
           const Icon = row.icon;
 
           return (
             <div
               key={row.label}
-              className="flex items-center justify-between gap-4 border-b border-border/60 px-4 py-3 last:border-b-0"
+              className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 last:border-b-0"
             >
               <div className="flex min-w-0 items-center gap-3">
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-primary/20 bg-primary/10 text-foreground dark:text-primary">
                   <Icon className="h-4 w-4" />
                 </span>
                 <span className="truncate text-sm font-medium text-foreground">{row.label}</span>
@@ -678,7 +677,7 @@ function CostContent({ data }: { data: CostCommandData }) {
         })}
       </div>
 
-      <div className="rounded-2xl border border-border/70 bg-muted/20 p-4">
+      <div className="rounded-lg border border-border bg-card p-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Provider</p>
@@ -709,18 +708,18 @@ function StatusContent({ data }: { data: StatusCommandData }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between rounded-3xl border border-emerald-500/25 bg-emerald-500/10 p-4">
+      <div className="flex items-center justify-between rounded-lg border border-border p-4">
         <div className="flex items-center gap-3">
           <span className="relative flex h-3 w-3">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-500" />
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+            <span className="relative inline-flex h-3 w-3 rounded-full bg-primary" />
           </span>
           <div>
             <p className="text-sm font-semibold text-foreground">Runtime online</p>
             <p className="text-xs text-muted-foreground">Process {data.pid ? `#${data.pid}` : 'status'} is responding.</p>
           </div>
         </div>
-        <Badge className="rounded-full bg-emerald-500 text-white hover:bg-emerald-500">Healthy</Badge>
+        <Badge className="rounded-full bg-primary text-primary-foreground hover:bg-primary">Healthy</Badge>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -777,7 +776,7 @@ export default function CommandResultModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex h-[min(92dvh,48rem)] w-[calc(100vw-1rem)] max-w-5xl flex-col overflow-hidden rounded-3xl border-border/80 bg-popover/95 p-0 shadow-2xl backdrop-blur-xl sm:w-[min(94vw,64rem)]">
+      <DialogContent className="prism-modal-shadow flex h-[min(92dvh,48rem)] w-[calc(100vw-1rem)] max-w-5xl flex-col overflow-hidden rounded-lg border-border bg-popover p-0 sm:w-[min(94vw,64rem)]">
         <DialogTitle>{activeMeta?.title || 'Command Result'}</DialogTitle>
 
         <div
@@ -787,7 +786,7 @@ export default function CommandResultModal({
         >
           <div className="flex min-w-0 items-center gap-3">
             <div
-              className={`flex shrink-0 items-center justify-center rounded-xl border border-border bg-muted text-foreground ${
+              className={`flex shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-foreground ${
                 isModelsModal ? 'h-9 w-9' : 'h-10 w-10'
               }`}
             >
@@ -835,12 +834,12 @@ export default function CommandResultModal({
           {payload?.kind === 'status' && <StatusContent data={payload.data as StatusCommandData} />}
         </div>
 
-        <div className="flex shrink-0 flex-col gap-3 border-t border-border/70 bg-muted/20 px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <div className="flex shrink-0 flex-col gap-3 border-t border-border bg-card px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <div className="flex items-center gap-2">
             <Gauge className="h-3.5 w-3.5" />
             <span>Esc closes the modal.</span>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={onClose} className="rounded-xl">
+          <Button type="button" variant="outline" size="sm" onClick={onClose} className="rounded-lg">
             Close
           </Button>
         </div>

@@ -1,4 +1,5 @@
 import React from 'react';
+
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 
@@ -45,11 +46,11 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
             <span className="flex-shrink-0 font-medium text-muted-foreground">{toolName}</span>
           )}
           {toolName && (
-            <span className="flex-shrink-0 text-[10px] text-muted-foreground/40">/</span>
+            <span className="flex-shrink-0 text-[10px] text-muted-foreground">/</span>
           )}
           <button
             onClick={onTitleClick}
-            className="flex-1 truncate text-left font-mono text-primary transition-colors hover:text-primary/80 hover:underline"
+            className="flex-1 truncate text-left font-mono text-foreground transition-colors hover:text-primary/80 hover:underline dark:text-primary"
           >
             {title}
           </button>
@@ -70,7 +71,7 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
             <span className="flex-shrink-0 font-medium">{toolName}</span>
           )}
           {toolName && (
-            <span className="flex-shrink-0 text-[10px] text-muted-foreground/40">/</span>
+            <span className="flex-shrink-0 text-[10px] text-muted-foreground">/</span>
           )}
           <span className="flex-1 truncate text-left">{title}</span>
           {badge && <span className="ml-auto flex-shrink-0">{badge}</span>}

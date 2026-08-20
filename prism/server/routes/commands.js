@@ -523,8 +523,11 @@ router.post("/execute", async (req, res) => {
       });
     }
 
-    // Handle built-in commands
-    const handler = builtInHandlers[commandName];
+    // Handle built-in commands.
+    // 查表对前导斜杠不敏感:handler 以 "/help" 为键,但调用方传 "help" 也该认。
+    const handler =
+      builtInHandlers[commandName] ||
+      builtInHandlers[commandName.startsWith("/") ? commandName.slice(1) : `/${commandName}`];
     if (handler) {
       try {
         const result = await handler(args, context);
@@ -547,8 +550,15 @@ router.post("/execute", async (req, res) => {
 
     // Handle custom commands
     if (!commandPath) {
+      // 走到这里说明:既不是内置命令,又没带 path。最典型的来源是 CLI 自带的
+      // 斜杠命令(/compact、/clear、/init…)—— 那些该由 Claude CLI 自己解释,
+      // 前端应当把它们打进输入框当提示词发出去,而不是送到这个端点。
       return res.status(400).json({
         error: "Command path is required for custom commands",
+        message:
+          `「${commandName}」既不是内置命令,也没有对应的命令文件。` +
+          `CLI 自带的斜杠命令请直接在输入框里发送,由 Claude CLI 执行。`,
+        command: commandName,
       });
     }
 

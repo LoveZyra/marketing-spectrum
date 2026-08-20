@@ -4,6 +4,7 @@ export type { ActionMenuItem } from './ActionMenu';
 export { Badge, badgeVariants } from './Badge';
 export { Button, buttonVariants } from './Button';
 export { Confirmation, ConfirmationTitle, ConfirmationRequest, ConfirmationAccepted, ConfirmationRejected, ConfirmationActions, ConfirmationAction } from './Confirmation';
+export { ClampedBlock } from './ClampedBlock';
 export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, CardAction } from './Card';
 export { Collapsible, CollapsibleTrigger, CollapsibleContent } from './Collapsible';
 export { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandSeparator } from './Command';

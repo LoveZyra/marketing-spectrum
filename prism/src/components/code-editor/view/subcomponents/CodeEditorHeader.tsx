@@ -74,14 +74,14 @@ export default function CodeEditorHeader({
       <div className="flex min-w-0 flex-1 shrink items-center gap-2">
         <div className="min-w-0 shrink">
           <div className="flex min-w-0 items-center gap-2">
-            <h3 className="truncate text-sm font-medium text-gray-900 dark:text-white">{file.name}</h3>
+            <h3 className="truncate text-sm font-medium text-foreground">{file.name}</h3>
             {file.diffInfo && (
-              <span className="shrink-0 whitespace-nowrap rounded bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-600 dark:bg-blue-900 dark:text-blue-300">
+              <span className="shrink-0 whitespace-nowrap rounded bg-primary/[0.08] px-1.5 py-0.5 text-[10px] text-card-foreground dark:text-primary">
                 {labels.showingChanges}
               </span>
             )}
           </div>
-          <p className="truncate text-xs text-gray-500 dark:text-gray-400">{file.path}</p>
+          <p className="truncate font-mono text-xs text-muted-foreground">{file.path}</p>
         </div>
       </div>
 
@@ -93,8 +93,8 @@ export default function CodeEditorHeader({
             onClick={onToggleMarkdownPreview}
             className={`flex items-center justify-center rounded-md p-1.5 transition-colors ${
               markdownPreview
-                ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
+                ? 'bg-primary/[0.08] text-card-foreground dark:text-primary'
+                : 'text-body hover:bg-muted hover:text-foreground'
             }`}
             title={markdownPreview ? labels.editMarkdown : labels.previewMarkdown}
           >
@@ -109,8 +109,8 @@ export default function CodeEditorHeader({
               onClick={onToggleNotebookRaw}
               className={`flex items-center justify-center rounded-md p-1.5 transition-colors ${
                 !notebookRaw
-                  ? 'bg-orange-50 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400'
-                  : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
+                  ? 'bg-muted text-muted-foreground'
+                  : 'text-body hover:bg-muted hover:text-foreground'
               }`}
               title={notebookRaw ? labels.previewNotebook : labels.editNotebook}
             >
@@ -119,7 +119,7 @@ export default function CodeEditorHeader({
             <button
               type="button"
               onClick={onOpenInJupyter}
-              className="flex items-center justify-center rounded-md p-1.5 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+              className="flex items-center justify-center rounded-md p-1.5 text-body transition-colors hover:bg-muted hover:text-foreground"
               title={labels.openInJupyter}
             >
               <ExternalLink className="h-4 w-4" />
@@ -134,7 +134,7 @@ export default function CodeEditorHeader({
             className={`flex items-center justify-center rounded-md p-1.5 ${
               htmlPreview
                 ? 'bg-accent text-foreground'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
+                : 'text-body hover:bg-muted hover:text-foreground'
             }`}
             title={htmlPreview ? labels.editHtml : labels.previewHtml}
           >
@@ -145,7 +145,7 @@ export default function CodeEditorHeader({
         <button
           type="button"
           onClick={onOpenSettings}
-          className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+          className="flex items-center justify-center rounded-md p-1.5 text-body hover:bg-muted hover:text-foreground"
           title={labels.settings}
         >
           <SettingsIcon className="h-4 w-4" />
@@ -154,7 +154,7 @@ export default function CodeEditorHeader({
         <button
           type="button"
           onClick={onDownload}
-          className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+          className="flex items-center justify-center rounded-md p-1.5 text-body hover:bg-muted hover:text-foreground"
           title={labels.download}
         >
           <Download className="h-4 w-4" />
@@ -166,8 +166,8 @@ export default function CodeEditorHeader({
           disabled={saving}
           className={`flex items-center justify-center rounded-md p-1.5 transition-colors disabled:opacity-50 ${
             saveSuccess
-              ? 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400'
-              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
+              ? 'bg-primary/[0.08] text-card-foreground dark:text-primary'
+              : 'text-body hover:bg-muted hover:text-foreground'
           }`}
           title={saveTitle}
         >
@@ -184,7 +184,7 @@ export default function CodeEditorHeader({
           <button
             type="button"
             onClick={onToggleFullscreen}
-            className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+            className="flex items-center justify-center rounded-md p-1.5 text-body hover:bg-muted hover:text-foreground"
             title={isFullscreen ? labels.exitFullscreen : labels.fullscreen}
           >
             {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
@@ -194,7 +194,7 @@ export default function CodeEditorHeader({
         <button
           type="button"
           onClick={onClose}
-          className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+          className="flex items-center justify-center rounded-md p-1.5 text-body hover:bg-muted hover:text-foreground"
           title={labels.close}
         >
           <X className="h-4 w-4" />

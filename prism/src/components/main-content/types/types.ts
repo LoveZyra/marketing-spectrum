@@ -46,6 +46,8 @@ export type MainContentHeaderProps = {
   selectedSession: ProjectSession | null;
   isMobile: boolean;
   onMenuClick: () => void;
+  /** 当前会话在服务端挂着常驻运行时 —— 顶栏右侧显示「常驻会话」胶囊。 */
+  isPersistentSession?: boolean;
 };
 
 export type MainContentStateViewProps = {

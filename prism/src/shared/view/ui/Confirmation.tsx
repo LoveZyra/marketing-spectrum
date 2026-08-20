@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { cn } from '../../../lib/utils';
+
 import { Alert } from './Alert';
 import { Button } from './Button';
 
@@ -38,7 +39,8 @@ export const Confirmation: React.FC<ConfirmationProps> = ({
 
   return (
     <ConfirmationContext.Provider value={contextValue}>
-      <Alert className={cn('flex flex-col gap-2', className)} {...props}>
+      {/* 设计稿:32% 绿描边、14px 16px、无底色无阴影,内部 11px 纵向间距 */}
+      <Alert className={cn('flex flex-col gap-[11px] rounded-lg border-primary/[0.32] bg-transparent px-4 py-3.5', className)} {...props}>
         {children}
       </Alert>
     </ConfirmationContext.Provider>
@@ -56,7 +58,7 @@ export const ConfirmationTitle: React.FC<ConfirmationTitleProps> = ({
 }) => (
   <div
     data-slot="confirmation-title"
-    className={cn('text-muted-foreground inline text-sm', className)}
+    className={cn('inline text-sm text-muted-foreground', className)}
     {...props}
   />
 );
@@ -132,7 +134,8 @@ export const ConfirmationAction: React.FC<ConfirmationActionProps> = ({
   variant = 'default',
   ...props
 }) => (
-  <Button className="h-8 px-3 text-sm" variant={variant} type="button" {...props} />
+  /* 设计稿的按钮:6px 12px / 13px / 600 / 6px 圆角 */
+  <Button className="h-8 px-3 text-[13px] font-semibold leading-5" variant={variant} type="button" {...props} />
 );
 ConfirmationAction.displayName = 'ConfirmationAction';
 

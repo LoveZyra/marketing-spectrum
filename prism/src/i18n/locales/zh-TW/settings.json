@@ -28,7 +28,10 @@
       "done": "密碼已修改,其他裝置已全部登出。",
       "working": "修改中…",
       "submit": "修改密碼"
-    }
+    },
+    "language": "語言",
+    "languageLabel": "語言選擇",
+    "languageDescription": "介面顯示用哪種語言"
   },
   "appearance": {
     "theme": "佈景主題"
@@ -327,17 +330,18 @@
   },
   "models": {
     "title": "模型映射",
-    "description": "直接編輯伺服器 settings.json 的別名映射。儲存後立即生效(下一條訊息就用新映射),無需重啟;模型切換頁的實測快取會被標記過期,可去那裡點實測驗證閘道行為。",
+    "description": "把 Sonnet / Opus / Haiku / Fable 這幾檔,對應到閘道上真實的模型名。儲存即生效,下一條訊息就走新對應,不用重啟。",
     "reload": "重新讀取",
-    "saved": "已寫入 settings.json —— 熱感知已接管,下一條訊息即用新映射。",
-    "unsetPlaceholder": "未配置 —— CLI 用內建 ID,由閘道決定",
-    "defaultPlaceholder": "未設定 —— CLI 走 ANTHROPIC_MODEL/內建鏈",
-    "defaultHelp": "填別名(如 sonnet)則 default 檔跟隨該別名的映射;也可直接填閘道模型名。",
+    "saved": "已寫入 settings.json,下一條訊息即用新對應。",
+    "unsetPlaceholder": "留空 —— 用 CLI 內建 ID,由閘道決定",
+    "defaultPlaceholder": "留空 —— 跟隨 CLI 內建鏈",
+    "defaultHelp": "填別名(如 sonnet)就跟著那一檔走;也可以直接填閘道的模型名。",
     "gateway": "閘道",
     "missingFile": "(檔案尚不存在,儲存時會建立)",
     "saving": "儲存中…",
     "save": "儲存映射",
-    "tokenNote": "此頁只讀寫映射相關欄位;settings.json 裡的閘道位址與鑑權 token 原樣保留,且永遠不會傳到瀏覽器。"
+    "tokenNote": "本頁只讀寫對應欄位;settings.json 裡的閘道位址與鑑權 token 原樣保留,也不會傳到瀏覽器。",
+    "cacheNote": "改完之後,模型切換頁上一次的實測結果就不作數了 —— 想確認閘道的真實行為,去那頁重新實測一次。"
   },
   "server": {
     "title": "伺服器狀態",

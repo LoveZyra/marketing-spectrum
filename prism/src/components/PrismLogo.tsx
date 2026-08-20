@@ -1,67 +1,63 @@
-import { useId } from 'react';
-
 interface PrismLogoProps {
   /** Pixel size of the square mark. */
   size?: number;
-  /** Render the rounded gradient tile behind the prism mark. */
+  /** Render a rounded 8% 绿 tile behind the mark(新体系里基本不用,默认关)。 */
   tile?: boolean;
   className?: string;
 }
 
 /**
- * Prism brand mark: a light beam entering a triangular prism and leaving as
- * a color spectrum. Pure SVG, no external assets; gradient ids are scoped
- * via useId so multiple instances can coexist.
+ * 品牌标记 —— `design_handoff_prism_ui/数据查询.svg`,矢量原图直接用。
+ *
+ * 换成 SVG 是为了清晰度:原来的两张 PNG 在 2× 屏与放大尺寸下都会糊,
+ * 矢量在任何倍率下都是实边。写死的 `width/height="200"` 已经在资产里去掉,
+ * 尺寸完全交给这里的 `size`。
+ *
+ * 明暗仍然是两份资产,但**不是两张图** —— 深色那份只把线稿的板岩灰
+ * `#495460` 提亮到 `#93A3B1`,形状一笔没动。原色压在近黑画布上只有 2.6:1,
+ * 整张纸的轮廓基本看不见;提亮后约 5.9:1,读起来才是同一张图。
  */
-export default function PrismLogo({ size = 28, tile = true, className }: PrismLogoProps) {
-  const uid = useId().replace(/[^a-zA-Z0-9]/g, '');
-  const tileGradient = `prism-tile-${uid}`;
+export default function PrismLogo({ size = 32, tile = false, className }: PrismLogoProps) {
+  const markSize = tile ? Math.round(size * 0.62) : size;
 
   const mark = (
-    <svg
-      width={tile ? size * 0.62 : size}
-      height={tile ? size * 0.62 : size}
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden="true"
-    >
-      {/* incoming beam */}
-      <line x1="1" y1="12.5" x2="8.6" y2="12.5" stroke={tile ? 'rgba(255,255,255,0.95)' : 'currentColor'} strokeWidth="1.7" strokeLinecap="round" />
-      {/* prism triangle */}
-      <polygon
-        points="12,4.5 19.5,19 4.5,19"
-        stroke={tile ? '#ffffff' : 'currentColor'}
-        strokeWidth="1.9"
-        strokeLinejoin="round"
-        fill={tile ? 'rgba(255,255,255,0.14)' : 'none'}
+    <>
+      <img
+        src="/brand/logo.svg"
+        width={markSize}
+        height={markSize}
+        alt=""
+        aria-hidden="true"
+        className="block select-none dark:hidden"
+        draggable={false}
       />
-      {/* spectrum rays */}
-      <line x1="15.6" y1="13.2" x2="23" y2="9.4" stroke="#f0abfc" strokeWidth="1.6" strokeLinecap="round" />
-      <line x1="16.2" y1="14.6" x2="23" y2="13.2" stroke="#67e8f9" strokeWidth="1.6" strokeLinecap="round" />
-      <line x1="16.6" y1="16" x2="23" y2="17" stroke="#6ee7b7" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
+      <img
+        src="/brand/logo-dark.svg"
+        width={markSize}
+        height={markSize}
+        alt=""
+        aria-hidden="true"
+        className="hidden select-none dark:block"
+        draggable={false}
+      />
+    </>
   );
 
   if (!tile) {
-    return <span className={className}>{mark}</span>;
+    return <span className={`inline-flex flex-shrink-0 ${className || ''}`}>{mark}</span>;
   }
 
   return (
     <span
-      className={`inline-flex flex-shrink-0 items-center justify-center shadow-sm ${className || ''}`}
-      style={{ width: size, height: size, borderRadius: Math.max(6, size * 0.28) }}
+      className={`inline-flex flex-shrink-0 items-center justify-center ${className || ''}`}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.max(6, size * 0.28),
+        backgroundColor: 'hsl(var(--primary) / 0.08)',
+      }}
     >
-      <svg width={size} height={size} viewBox="0 0 32 32" style={{ position: 'absolute' }} aria-hidden="true">
-        <defs>
-          <linearGradient id={tileGradient} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#7c3aed" />
-            <stop offset="55%" stopColor="#6366f1" />
-            <stop offset="100%" stopColor="#06b6d4" />
-          </linearGradient>
-        </defs>
-        <rect width="32" height="32" rx={Math.max(6, size * 0.28) * (32 / size)} fill={`url(#${tileGradient})`} />
-      </svg>
-      <span style={{ position: 'relative', display: 'inline-flex' }}>{mark}</span>
+      {mark}
     </span>
   );
 }

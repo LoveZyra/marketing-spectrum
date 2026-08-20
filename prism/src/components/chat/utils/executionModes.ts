@@ -26,44 +26,46 @@ export type ExecutionModeMeta = {
   dotClassName: string;
 };
 
+/**
+ * 设计语言:单一绿色强调,权限档不再一档一色。区分交给文字标签与点的形态:
+ * default = 弱化灰点;plan/acceptEdits/auto = 绿点(有授权在身);
+ * bypassPermissions = 前景色实点 + 描边加重(最高权限,视觉上最"重")。
+ */
 export const EXECUTION_MODES: ExecutionModeMeta[] = [
   {
     mode: 'default',
     labelKey: 'permissionModes.default',
     descriptionKey: 'executionModes.default',
-    chipClassName: 'border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted',
+    chipClassName: 'border-border text-card-foreground hover:border-border-strong',
     dotClassName: 'bg-muted-foreground',
   },
   {
     mode: 'plan',
     labelKey: 'permissionModes.plan',
     descriptionKey: 'executionModes.plan',
-    chipClassName: 'border-primary/20 bg-primary/5 text-primary hover:bg-primary/10',
+    chipClassName: 'border-primary/30 text-foreground hover:bg-primary/8 dark:text-primary',
     dotClassName: 'bg-primary',
   },
   {
     mode: 'acceptEdits',
     labelKey: 'permissionModes.acceptEdits',
     descriptionKey: 'executionModes.acceptEdits',
-    chipClassName:
-      'border-green-300/60 bg-green-50 text-green-700 hover:bg-green-100 dark:border-green-600/40 dark:bg-green-900/15 dark:text-green-300 dark:hover:bg-green-900/25',
-    dotClassName: 'bg-green-500',
+    chipClassName: 'border-primary/30 text-foreground hover:bg-primary/8 dark:text-primary',
+    dotClassName: 'bg-primary',
   },
   {
     mode: 'auto',
     labelKey: 'permissionModes.auto',
     descriptionKey: 'executionModes.auto',
-    chipClassName:
-      'border-blue-300/60 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-600/40 dark:bg-blue-900/15 dark:text-blue-300 dark:hover:bg-blue-900/25',
-    dotClassName: 'bg-blue-500',
+    chipClassName: 'border-primary/30 text-foreground hover:bg-primary/8 dark:text-primary',
+    dotClassName: 'bg-primary',
   },
   {
     mode: 'bypassPermissions',
     labelKey: 'permissionModes.bypassPermissions',
     descriptionKey: 'executionModes.bypassPermissions',
-    chipClassName:
-      'border-orange-300/60 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-600/40 dark:bg-orange-900/15 dark:text-orange-300 dark:hover:bg-orange-900/25',
-    dotClassName: 'bg-orange-500',
+    chipClassName: 'border-border-strong font-semibold text-foreground hover:bg-card',
+    dotClassName: 'bg-foreground',
   },
 ];
 

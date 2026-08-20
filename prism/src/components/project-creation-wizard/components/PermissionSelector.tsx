@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Globe, Lock, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import { fetchShareableUsers } from '../data/workspaceApi';
 import type { ProjectVisibilityChoice, ShareableUser } from '../types';
 
@@ -67,7 +68,7 @@ export default function PermissionSelector({
 
   return (
     <div>
-      <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+      <label className="mb-2 block text-sm font-medium text-body">
         {t('projectWizard.permission.label')}
       </label>
 
@@ -84,35 +85,35 @@ export default function PermissionSelector({
               className={`flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors disabled:opacity-60 ${
                 isActive
                   ? 'border-primary bg-primary/10'
-                  : 'border-gray-200 hover:border-primary/40 dark:border-gray-700'
+                  : 'border-border hover:border-primary/40'
               }`}
             >
-              <span className="flex items-center gap-1.5 text-sm font-medium text-gray-900 dark:text-white">
-                <Icon className={`h-3.5 w-3.5 ${isActive ? 'text-primary' : 'text-gray-400'}`} />
+              <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                <Icon className={`h-3.5 w-3.5 ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
                 {t(option.labelKey)}
               </span>
-              <span className="text-xs leading-4 text-gray-500 dark:text-gray-400">{t(option.helpKey)}</span>
+              <span className="text-xs leading-4 text-muted-foreground">{t(option.helpKey)}</span>
             </button>
           );
         })}
       </div>
 
       {visibility === 'shared' && (
-        <div className="mt-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-          <p className="mb-2 text-xs font-medium text-gray-700 dark:text-gray-300">
+        <div className="mt-3 rounded-lg border border-border p-3">
+          <p className="mb-2 text-xs font-medium text-body">
             {t('projectWizard.permission.pickUsers')}
             {sharedUserIds.length > 0 && (
-              <span className="ml-2 text-primary">
+              <span className="ml-2 text-foreground dark:text-primary">
                 {t('projectWizard.permission.sharedCount', { count: sharedUserIds.length })}
               </span>
             )}
           </p>
           {loadError ? (
-            <p className="text-xs text-red-500">{t('projectWizard.permission.loadUsersFailed')}</p>
+            <p className="text-xs text-muted-foreground">{t('projectWizard.permission.loadUsersFailed')}</p>
           ) : users === null ? (
-            <p className="text-xs text-gray-400">…</p>
+            <p className="text-xs text-muted-foreground">…</p>
           ) : users.length === 0 ? (
-            <p className="text-xs text-gray-400">{t('projectWizard.permission.noUsers')}</p>
+            <p className="text-xs text-muted-foreground">{t('projectWizard.permission.noUsers')}</p>
           ) : (
             <div className="flex max-h-36 flex-wrap gap-2 overflow-y-auto">
               {users.map((user) => {
@@ -125,8 +126,8 @@ export default function PermissionSelector({
                     onClick={() => toggleUser(user.id)}
                     className={`rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-60 ${
                       checked
-                        ? 'border-primary bg-primary/15 text-primary'
-                        : 'border-gray-300 text-gray-600 hover:border-primary/40 dark:border-gray-600 dark:text-gray-300'
+                        ? 'border-primary bg-primary/15 text-foreground dark:text-primary'
+                        : 'border-border text-body hover:border-primary/40'
                     }`}
                   >
                     {user.username}

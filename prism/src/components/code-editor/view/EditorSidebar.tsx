@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useRef } from 'react';
 import type { MouseEvent, MutableRefObject } from 'react';
+
 import type { CodeEditorFile } from '../types/types';
 import { PanelLoadingFallback } from '../../../shared/view/LazyPanel';
 
@@ -116,15 +117,19 @@ export default function EditorSidebar({
         <div
           ref={resizeHandleRef}
           onMouseDown={onResizeStart}
-          className="group relative w-1 flex-shrink-0 cursor-col-resize bg-gray-200 transition-colors hover:bg-blue-500 dark:bg-gray-700 dark:hover:bg-blue-600"
+          className="group relative w-px flex-shrink-0 cursor-col-resize bg-border transition-colors hover:bg-border-strong"
           title="Drag to resize"
         >
-          <div className="absolute inset-y-0 left-1/2 w-1 -translate-x-1/2 bg-blue-500 opacity-0 transition-opacity group-hover:opacity-100 dark:bg-blue-600" />
+          {/* 命中区比可见的 1px 发丝线宽,但发丝线本身不做加宽动画 */}
+          <div className="absolute inset-y-0 left-1/2 w-2 -translate-x-1/2" />
         </div>
       )}
 
       <div
-        className={`h-full overflow-hidden border-l border-gray-200 dark:border-gray-700 ${useFlexLayout ? 'min-w-0 flex-1' : `min-w-[ flex-shrink-0${MIN_EDITOR_WIDTH}px]`}`}
+        // 固定宽度分支的最小宽度交给下面的 inline style —— 之前这里的动态
+        // 任意值类名被 tailwind 排序器拆坏过(min-w-[ flex-shrink-0…px]),
+        // 类名里不再放模板变量。
+        className={`h-full overflow-hidden border-l border-border ${useFlexLayout ? 'min-w-0 flex-1' : 'flex-shrink-0'}`}
         style={useFlexLayout ? undefined : { width: `${effectiveWidth}px`, minWidth: `${MIN_EDITOR_WIDTH}px` }}
       >
         <Suspense fallback={<PanelLoadingFallback />}>

@@ -21,7 +21,7 @@ function HighlightedSnippet({ snippet, highlights }: { snippet: string; highligh
       parts.push(snippet.slice(cursor, h.start));
     }
     parts.push(
-      <mark key={h.start} className="rounded-sm bg-yellow-200 px-0.5 text-foreground dark:bg-yellow-800">
+      <mark key={h.start} className="rounded-sm bg-transparent px-0 font-semibold text-foreground dark:text-primary">
         {snippet.slice(h.start, h.end)}
       </mark>
     );
@@ -138,7 +138,6 @@ type SidebarContentProps = {
   onRefresh: () => void;
   isRefreshing: boolean;
   onCreateProject: () => void;
-  onCollapseSidebar: () => void;
   onShowSettings: () => void;
   notificationCount?: number;
   projectListProps: SidebarProjectListProps;
@@ -171,7 +170,6 @@ export default function SidebarContent({
   onRefresh,
   isRefreshing,
   onCreateProject,
-  onCollapseSidebar,
   onShowSettings,
   notificationCount,
   projectListProps,
@@ -183,7 +181,7 @@ export default function SidebarContent({
 
   return (
     <div
-      className="flex h-full flex-col bg-background/80 backdrop-blur-sm md:w-72 md:select-none"
+      className="flex h-full flex-col bg-background md:w-[248px] md:select-none"
       style={{}}
     >
       <SidebarHeader
@@ -202,7 +200,6 @@ export default function SidebarContent({
         onRefresh={onRefresh}
         isRefreshing={isRefreshing}
         onCreateProject={onCreateProject}
-        onCollapseSidebar={onCollapseSidebar}
         t={t}
       />
 
@@ -211,11 +208,11 @@ export default function SidebarContent({
           isSearching && !hasPartialResults ? (
             <div className="px-4 py-12 text-center md:py-8">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-muted md:mb-3">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+                <div className="h-6 w-6 flex-none rounded-full border-[1.5px] border-primary" aria-hidden />
               </div>
               <p className="text-sm text-muted-foreground">{t('search.searching')}</p>
               {searchProgress && (
-                <p className="mt-1 text-xs text-muted-foreground/60">
+                <p className="mt-1 text-xs text-muted-foreground">
                   {t('search.projectsScanned', { count: searchProgress.scannedProjects })}/{searchProgress.totalProjects}
                 </p>
               )}
@@ -236,8 +233,8 @@ export default function SidebarContent({
                 </p>
                 {isSearching && searchProgress && (
                   <div className="flex items-center gap-1.5">
-                    <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-muted-foreground/40 border-t-primary" />
-                    <p className="text-[10px] text-muted-foreground/60">
+                    <div className="h-3 w-3 flex-none rounded-full border-[1.5px] border-primary" aria-hidden />
+                    <p className="text-[10px] text-muted-foreground">
                       {searchProgress.scannedProjects}/{searchProgress.totalProjects}
                     </p>
                   </div>
@@ -246,7 +243,7 @@ export default function SidebarContent({
               {isSearching && searchProgress && (
                 <div className="mx-1 h-0.5 overflow-hidden rounded-full bg-muted">
                   <div
-                    className="h-full rounded-full bg-primary/60 transition-all duration-300"
+                    className="h-full rounded-full bg-primary/60 transition-colors duration-300"
                     style={{ width: `${Math.round((searchProgress.scannedProjects / searchProgress.totalProjects) * 100)}%` }}
                   />
                 </div>
@@ -262,7 +259,7 @@ export default function SidebarContent({
                   {projectResult.sessions.map((session) => (
                     <button
                       key={`${projectResult.projectId ?? projectResult.projectName}-${session.sessionId}`}
-                      className="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/50"
+                      className="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent"
                       onClick={() => onConversationResultClick(
                         // Pass the DB projectId (preferred) so the parent can
                         // cross-reference with the loaded projects list.
@@ -287,7 +284,7 @@ export default function SidebarContent({
                       <div className="space-y-1 pl-4">
                         {session.matches.map((match, idx) => (
                           <div key={idx} className="flex items-start gap-1">
-                            <span className="mt-0.5 flex-shrink-0 text-[10px] font-normal uppercase text-muted-foreground/60">
+                            <span className="mt-0.5 flex-shrink-0 text-[10px] font-normal uppercase text-muted-foreground">
                               {match.role === 'user' ? 'U' : 'A'}
                             </span>
                             <HighlightedSnippet
@@ -306,7 +303,7 @@ export default function SidebarContent({
         ) : searchMode === 'running' ? (
           projectListProps.filteredProjects.length === 0 ? (
             <div className="px-4 py-12 text-center md:py-8">
-              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg border border-border/70 bg-muted/50 md:mb-3">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg border border-border bg-muted md:mb-3">
                 <Activity className="h-6 w-6 text-muted-foreground" />
               </div>
               <h3 className="mb-2 text-base font-medium text-foreground md:mb-1">
@@ -320,16 +317,16 @@ export default function SidebarContent({
             </div>
           ) : (
             <div className="space-y-2">
-              <div className="mx-2 flex items-center justify-between rounded-lg border border-border/60 bg-card/50 px-3 py-2 shadow-sm">
+              <div className="mx-2 flex items-center justify-between rounded-lg border border-border px-3 py-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/[0.08] text-foreground dark:text-primary">
                     <Activity className="h-3.5 w-3.5" />
                   </span>
                   <span className="truncate text-xs font-normal text-foreground">
                     {t('running.title', 'Running now')}
                   </span>
                 </div>
-                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-normal text-emerald-700 dark:text-emerald-300">
+                <span className="rounded-full border border-primary/[0.32] px-2 py-0.5 font-mono text-[11px] font-normal text-foreground dark:text-primary">
                   {runningSessionsCount}
                 </span>
               </div>
@@ -340,7 +337,7 @@ export default function SidebarContent({
           isArchivedSessionsLoading ? (
             <div className="px-4 py-12 text-center md:py-8">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-muted md:mb-3">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+                <div className="h-6 w-6 flex-none rounded-full border-[1.5px] border-primary" aria-hidden />
               </div>
               <h3 className="mb-2 text-base font-medium text-foreground md:mb-1">
                 {t('archived.loadingTitle', 'Loading archive...')}
@@ -379,8 +376,8 @@ export default function SidebarContent({
                 const projectSessions = getAllSessions(project);
 
                 return (
-                  <div key={project.projectId} className="overflow-hidden rounded-xl border border-border/70 bg-card/60 shadow-sm">
-                    <div className="flex items-start justify-between gap-3 border-b border-border/60 px-3 py-2.5">
+                  <div key={project.projectId} className="overflow-hidden rounded-lg border border-border">
+                    <div className="flex items-start justify-between gap-3 border-b border-border px-3 py-2.5">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <Folder className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
@@ -391,12 +388,12 @@ export default function SidebarContent({
                             {t('archived.projectArchived', 'Project archived')}
                           </span>
                         </div>
-                        <p className="mt-1 truncate text-xs text-muted-foreground/70" title={project.fullPath}>
+                        <p className="mt-1 truncate text-xs text-muted-foreground" title={project.fullPath}>
                           {project.fullPath}
                         </p>
                       </div>
                       <button
-                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 transition-colors hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
+                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-primary/[0.08] text-foreground transition-colors hover:bg-primary/[0.16] dark:text-primary"
                         onClick={() => onRestoreArchivedProject(project.projectId)}
                         title={t('archived.restoreProject', 'Restore workspace')}
                       >
@@ -404,11 +401,11 @@ export default function SidebarContent({
                       </button>
                     </div>
                     {projectSessions.length > 0 && (
-                      <div className="divide-y divide-border/50">
+                      <div className="divide-y divide-border">
                         {projectSessions.map((session) => (
                           <button
                             key={String(session.id)}
-                            className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-accent/40"
+                            className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-accent"
                             onClick={() => onArchivedSessionClick({
                               sessionId: String(session.id),
                               provider: session.__provider,
@@ -456,7 +453,7 @@ export default function SidebarContent({
                                   )}
                                 </span>
                               </div>
-                              <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground/70">
+                              <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
                                 {session.__provider}
                               </p>
                             </div>
@@ -468,8 +465,8 @@ export default function SidebarContent({
                 );
               })}
               {groupedArchivedSessions.map((group) => (
-                <div key={group.key} className="overflow-hidden rounded-xl border border-border/70 bg-card/60 shadow-sm">
-                  <div className="flex items-start justify-between gap-3 border-b border-border/60 px-3 py-2.5">
+                <div key={group.key} className="overflow-hidden rounded-lg border border-border">
+                  <div className="flex items-start justify-between gap-3 border-b border-border px-3 py-2.5">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <Folder className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
@@ -483,7 +480,7 @@ export default function SidebarContent({
                         )}
                       </div>
                       {group.projectPath && (
-                        <p className="mt-1 truncate text-xs text-muted-foreground/70" title={group.projectPath}>
+                        <p className="mt-1 truncate text-xs text-muted-foreground" title={group.projectPath}>
                           {group.projectPath}
                         </p>
                       )}
@@ -492,7 +489,7 @@ export default function SidebarContent({
                       {group.sessions.length}
                     </span>
                   </div>
-                  <div className="divide-y divide-border/50">
+                  <div className="divide-y divide-border">
                     {group.sessions.map((session) => (
                       <div key={session.sessionId} className="flex items-center gap-2 px-3 py-2.5">
                         <button
@@ -511,20 +508,20 @@ export default function SidebarContent({
                                 </span>
                               )}
                             </div>
-                            <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground/70">
+                            <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
                               {session.provider}
                             </p>
                           </div>
                         </button>
                         <button
-                          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 transition-colors hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
+                          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-primary/[0.08] text-foreground transition-colors hover:bg-primary/[0.16] dark:text-primary"
                           onClick={() => onRestoreArchivedSession(session.sessionId)}
                           title={t('archived.restore', 'Restore session')}
                         >
                           <RotateCcw className="h-3.5 w-3.5" />
                         </button>
                         <button
-                          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-700 transition-colors hover:bg-red-100 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
+                          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                           onClick={() => onDeleteArchivedSession(session)}
                           title={t('archived.deletePermanently', 'Delete permanently')}
                         >

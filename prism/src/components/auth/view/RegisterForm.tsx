@@ -1,9 +1,10 @@
 import { useCallback, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle2, Loader2, Lock, User } from 'lucide-react';
+import { CheckCircle2, Lock, User } from 'lucide-react';
 
 import { useAuth } from '../context/AuthContext';
+
 import AuthErrorAlert from './AuthErrorAlert';
 import AuthInputField from './AuthInputField';
 import AuthScreenLayout from './AuthScreenLayout';
@@ -72,15 +73,15 @@ export default function RegisterForm({ onBackToLogin }: RegisterFormProps) {
         description={t('register.pendingDescription')}
       >
         <div className="space-y-4">
-          <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3.5 dark:border-emerald-900/40 dark:bg-emerald-900/20">
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-            <p className="text-sm text-emerald-800 dark:text-emerald-200">{pendingMessage}</p>
+          <div className="flex items-start gap-3 rounded-lg border border-border p-3.5">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <p className="text-sm text-foreground dark:text-primary">{pendingMessage}</p>
           </div>
 
           <button
             type="button"
             onClick={onBackToLogin}
-            className="w-full rounded-xl border border-border px-4 py-2.5 text-sm font-medium transition-colors hover:bg-accent"
+            className="w-full rounded-lg border border-border px-4 py-2.5 text-sm font-medium transition-colors hover:bg-accent"
           >
             {t('register.backToLogin')}
           </button>
@@ -123,16 +124,9 @@ export default function RegisterForm({ onBackToLogin }: RegisterFormProps) {
         <button
           type="submit"
           disabled={isSubmitting}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 font-medium text-primary-foreground shadow-lg shadow-primary/25 transition-all duration-200 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-2 focus:ring-offset-card active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+          className="prism-modal-shadow flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 font-medium text-primary-foreground transition-colors duration-200 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-2 focus:ring-offset-card active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isSubmitting ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {t('login.loading')}
-            </>
-          ) : (
-            t('register.submit')
-          )}
+          {isSubmitting ? t('login.loading') : t('register.submit')}
         </button>
 
         <button

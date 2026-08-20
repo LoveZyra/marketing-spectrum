@@ -478,6 +478,13 @@ function mapCliOptionsToSDK(options = {}, stderrTail = null) {
   };
 
   sdkOptions.settingSources = ['project', 'user', 'local'];
+  // 子代理(Task/Agent)的对话不往主流里转发。
+  // SDK 的 forwardSubagentText 默认值随 CLI 版本变过:一旦为 true,子代理的
+  // prompt 与回复会带着 parent_tool_use_id 以 assistant/**user** 帧发过来,
+  // 聊天里就会凭空冒出"用户消息"(界面上见过的那句 Reply with exactly …)。
+  // 子代理的工具调用另有正路(agent-*.jsonl → subagentTools),不缺信息。
+  // 显式钉成 false,不吃默认值。
+  sdkOptions.forwardSubagentText = false;
 
   if (sessionId) {
     sdkOptions.resume = sessionId;
@@ -1370,6 +1377,13 @@ function buildPersistentSdkOptions(options, runtime) {
   sdkOptions.systemPrompt = { type: 'preset', preset: 'claude_code' };
   sdkOptions.settingSources = ['project', 'user', 'local'];
   sdkOptions.includePartialMessages = false;
+  // 子代理(Task/Agent)的对话不往主流里转发。
+  // SDK 的 forwardSubagentText 默认值随 CLI 版本变过:一旦为 true,子代理的
+  // prompt 与回复会带着 parent_tool_use_id 以 assistant/**user** 帧发过来,
+  // 聊天里就会凭空冒出"用户消息"(界面上见过的那句 Reply with exactly …)。
+  // 子代理的工具调用另有正路(agent-*.jsonl → subagentTools),不缺信息。
+  // 显式钉成 false,不吃默认值。
+  sdkOptions.forwardSubagentText = false;
   sdkOptions.maxTurns = 100;
 
   if (options.resumeSessionId) sdkOptions.resume = options.resumeSessionId;
@@ -1534,6 +1548,8 @@ async function readPersistentRuntime(runtime) {
           turn.ws.send(createNormalizedMessage({
             kind: 'status',
             text: 'Compacting context…',
+            // 文案由前端按 statusKind 本地化,这里的 text 只作为兜底。
+            statusKind: 'compacting',
             canInterrupt: false,
             sessionId: runtime.sessionId || null,
             provider: 'claude'
@@ -2098,6 +2114,7 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
     ws.send(createNormalizedMessage({
       kind: 'status',
       text: `Context at ${Math.round(runtime.lastContextUsage.ratio * 100)}% — compacting before sending…`,
+      statusKind: 'compacting',
       canInterrupt: false,
       sessionId: runtime.sessionId || sessionId || null,
       provider: 'claude',
@@ -2115,17 +2132,9 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
       if (!wasRunAborted()) {
         const usage = await readRuntimeContextUsage(runtime);
         sendContextUsageEvent(ws, runtime.sessionId || sessionId || null, usage);
-        // The single user-visible auto-compact notice (the internal turn's own
-        // output is suppressed by the reader, so this cannot double up).
-        ws.send(createNormalizedMessage({
-          kind: 'text',
-          role: 'assistant',
-          content: usage
-            ? `🗜️ Context auto-compacted — now at ${Math.round(usage.ratio * 100)}% of the window.`
-            : '🗜️ Context auto-compacted.',
-          sessionId: runtime.sessionId || sessionId || null,
-          provider: 'claude',
-        }));
+        // 压缩完成不再往流里发播报正文。压缩是维护动作,不是对话内容 ——
+        // 进行中已经有状态行在转,完事直接接着干活就行;上下文占比也已经
+        // 通过 sendContextUsageEvent 更新到那个环上了。
       }
     } catch (error) {
       console.warn('[Claude SDK] Auto-compact failed, continuing with the user turn:', error?.message || error);

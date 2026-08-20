@@ -20,10 +20,10 @@ export default function AgentCategoryTabsSection({
             aria-selected={selectedCategory === category}
             onClick={() => onSelectCategory(category)}
             className={cn(
-              'whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium touch-manipulation transition-colors duration-150',
+              'whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium touch-manipulation transition-colors',
               selectedCategory === category
-                ? 'border-primary text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground',
+                ? 'border-primary text-card-foreground dark:text-primary'
+                : 'border-transparent text-body hover:text-foreground',
             )}
           >
             {category === 'account' && t('tabs.account')}

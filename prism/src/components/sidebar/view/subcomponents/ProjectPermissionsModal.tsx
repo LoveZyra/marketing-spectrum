@@ -83,8 +83,8 @@ export default function ProjectPermissionsModal({ project, onClose, onSaved }: P
   };
 
   return ReactDOM.createPortal(
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-lg overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[rgba(16,16,16,0.72)] p-4">
+      <div className="prism-modal-shadow w-full max-w-lg overflow-hidden rounded-lg border border-border bg-card">
         <div className="flex items-center justify-between border-b border-border px-5 py-3">
           <div className="flex min-w-0 items-center gap-2">
             <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
@@ -105,7 +105,7 @@ export default function ProjectPermissionsModal({ project, onClose, onSaved }: P
 
         <div className="max-h-[70vh] overflow-y-auto p-5">
           {error && (
-            <p className="mb-3 rounded-lg border border-red-300/60 bg-red-50 px-3 py-2 text-xs text-red-600 dark:border-red-900/40 dark:bg-red-900/15 dark:text-red-400">
+            <p className="mb-3 rounded-md border border-border bg-card px-3 py-2 text-xs text-body">
               {error}
             </p>
           )}
@@ -122,7 +122,7 @@ export default function ProjectPermissionsModal({ project, onClose, onSaved }: P
           )}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-border bg-muted/30 px-5 py-3">
+        <div className="flex justify-end gap-2 border-t border-border bg-card px-5 py-3">
           <button
             type="button"
             onClick={onClose}

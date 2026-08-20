@@ -11,10 +11,9 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { ImageIcon, MessageSquareIcon, XIcon, Loader2, ChevronDown, Check, ArrowUpIcon, Cpu, FileTextIcon, LinkIcon, History, Paperclip } from 'lucide-react';
+import { ImageIcon, MessageSquareIcon, XIcon, ChevronDown, Check, ArrowUpIcon, Cpu, FileTextIcon, LinkIcon, History, Paperclip, SquareIcon } from 'lucide-react';
 
 import type { AttachedDoc, DocUploadProgress, QueuedDraft } from '../../hooks/useChatComposerState';
-import type { SessionActivity } from '../../../../hooks/useSessionProtection';
 import type { PendingPermissionRequest, PermissionMode } from '../../types/types';
 import { executionModeMeta, orderedExecutionModes } from '../../utils/executionModes';
 import type { ProviderModelOption } from '../../../../types/app';
@@ -30,7 +29,6 @@ import {
 } from '../../../../shared/view/ui';
 
 import CommandMenu from './CommandMenu';
-import ActivityIndicator from './ActivityIndicator';
 import ImageAttachment from './ImageAttachment';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
 import TokenUsageSummary from './TokenUsageSummary';
@@ -58,7 +56,6 @@ interface ChatComposerProps {
     decision: { allow?: boolean; message?: string; rememberEntry?: string | null; updatedInput?: unknown },
   ) => void;
   handleGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
-  activity: SessionActivity | null;
   isLoading: boolean;
   onAbortSession: () => void;
   /** Model alias this conversation is running (what the user picks). Null while unknown. */
@@ -127,18 +124,28 @@ interface ChatComposerProps {
   onTextareaPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   onTextareaScrollSync: (target: HTMLTextAreaElement) => void;
   onTextareaInput: (event: FormEvent<HTMLTextAreaElement>) => void;
-  isInputFocused?: boolean;
   onInputFocusChange?: (focused: boolean) => void;
   placeholder: string;
   isTextareaExpanded: boolean;
   sendByCtrlEnter?: boolean;
 }
 
+/**
+ * 占位文案里的 `/` 与 `@` 按设计稿走等宽墨色,其余仍是弱化正文。
+ * 只切这两个字符,不改文案本身(i18n 键不动)。
+ */
+function renderPlaceholderWithKeys(text: string) {
+  return text.split(/([/@])/).map((part, index) => (
+    part === '/' || part === '@'
+      ? <span key={index} className="font-mono text-xs text-foreground">{part}</span>
+      : <span key={index}>{part}</span>
+  ));
+}
+
 export default function ChatComposer({
   pendingPermissionRequests,
   handlePermissionDecision,
   handleGrantToolPermission,
-  activity,
   isLoading,
   onAbortSession,
   activeModel,
@@ -196,7 +203,6 @@ export default function ChatComposer({
   onTextareaPaste,
   onTextareaScrollSync,
   onTextareaInput,
-  isInputFocused = false,
   onInputFocusChange,
   placeholder,
   isTextareaExpanded,
@@ -367,9 +373,6 @@ export default function ChatComposer({
     (r) => r.toolName === 'AskUserQuestion'
   );
 
-  // Hide the thinking/status bar while any permission request is pending
-  const hasPendingPermissions = pendingPermissionRequests.length > 0;
-  const hasActivityIndicator = Boolean(activity && !hasPendingPermissions);
 
   const hasQueuedDraft = Boolean(queuedDraft);
   const canQueueDraft = isLoading && Boolean(input.trim());
@@ -388,18 +391,10 @@ export default function ChatComposer({
     ? hasQueuedDraft
       ? t('input.queue.update', { defaultValue: 'Update queued message' })
       : t('input.queue.sendNext', { defaultValue: 'Queue next message' })
-    : isLoading
-      ? t('input.stop')
-      : t('input.send');
+    : t('input.send');
 
   return (
     <div className="chat-composer-shell relative flex-shrink-0 px-2 pb-2 pt-0 sm:px-4 sm:pb-4 md:px-4 md:pb-6">
-      {!hasPendingPermissions && (
-        <div className="pointer-events-none absolute bottom-full left-1/2 z-10 w-[calc(100%-1rem)] max-w-[54.25rem] -translate-x-1/2 translate-y-px bg-transparent sm:w-[calc(100%-2rem)]">
-          <ActivityIndicator activity={activity} onAbort={onAbortSession} isInputFocused={isInputFocused} />
-        </div>
-      )}
-
       {pendingPermissionRequests.length > 0 && (
         <div className="mx-auto mb-3 max-w-[54.25rem]">
           <PermissionRequestsBanner
@@ -421,14 +416,14 @@ export default function ChatComposer({
 
       {!hasQuestionPanel && <div className="relative mx-auto max-w-[54.25rem]">
         {showFileDropdown && filteredFiles.length > 0 && (
-          <div className="absolute bottom-full left-0 right-0 z-50 mb-2 max-h-48 overflow-y-auto rounded-xl border border-border/50 bg-card/95 shadow-lg backdrop-blur-md">
+          <div className="prism-modal-shadow absolute bottom-full left-0 right-0 z-50 mb-2 max-h-48 overflow-y-auto rounded-lg border border-border bg-popover">
             {filteredFiles.map((file, index) => (
               <div
                 key={file.path}
-                className={`cursor-pointer touch-manipulation border-b border-border/30 px-4 py-3 last:border-b-0 ${
+                className={`cursor-pointer touch-manipulation border-b border-border px-4 py-3 last:border-b-0 ${
                   index === selectedFileIndex
-                    ? 'bg-primary/8 text-primary'
-                    : 'text-foreground hover:bg-accent/50'
+                    ? 'bg-primary/8 text-foreground dark:text-primary'
+                    : 'text-foreground hover:bg-accent'
                 }`}
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -460,15 +455,12 @@ export default function ChatComposer({
         <PromptInput
           onSubmit={onSubmit as (event: FormEvent<HTMLFormElement>) => void}
           status={isLoading ? 'streaming' : 'ready'}
-          className={[
-            isTextareaExpanded ? 'chat-input-expanded' : '',
-            hasActivityIndicator ? 'rounded-t-none' : '',
-          ].filter(Boolean).join(' ')}
+          className={isTextareaExpanded ? 'chat-input-expanded' : ''}
           {...getRootProps()}
         >
           {isDragActive && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/50 bg-primary/15">
-              <div className="rounded-xl border border-border/30 bg-card p-4 shadow-lg">
+            <div className="absolute inset-0 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-primary/[0.32] bg-primary/[0.08]">
+              <div className="prism-modal-shadow rounded-lg border border-border bg-popover p-4">
                 <svg className="mx-auto mb-2 h-8 w-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
                     strokeLinecap="round"
@@ -484,7 +476,7 @@ export default function ChatComposer({
 
           {(attachedImages.length > 0 || attachedDocs.length > 0 || parsingDocs) && (
             <PromptInputHeader>
-              <div className="rounded-xl bg-muted/40 p-2">
+              <div className="rounded-md bg-transparent p-2">
                 <div className="flex flex-wrap gap-2">
                   {attachedImages.map((file, index) => (
                     <ImageAttachment
@@ -498,7 +490,7 @@ export default function ChatComposer({
                   {attachedDocs.map((doc, index) => (
                     <span
                       key={`${doc.name}-${index}`}
-                      className="inline-flex max-w-56 items-center gap-1.5 rounded-lg border border-border/60 bg-background/80 px-2 py-1 text-xs text-foreground shadow-sm"
+                      className="inline-flex max-w-56 items-center gap-1.5 rounded-sm border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground"
                       title={
                         /* A landed file has no extracted body, so a character
                            count would describe the path string rather than the
@@ -535,12 +527,12 @@ export default function ChatComposer({
                          real bar instead of the bare spinner: the filename says
                          which file, the percentage says it is still moving. */
                       <span
-                        className="inline-flex min-w-48 max-w-64 flex-col gap-1 rounded-lg border border-border/60 bg-background/80 px-2 py-1 text-xs text-muted-foreground"
+                        className="inline-flex min-w-48 max-w-64 flex-col gap-1 rounded-sm border border-border bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground"
                         role="status"
                         aria-live="polite"
                       >
                         <span className="flex items-center gap-1.5">
-                          <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin" />
+                          <span className="h-3.5 w-3.5 flex-none rounded-full border-[1.5px] border-primary" aria-hidden />
                           <span className="truncate" title={docUploadProgress.fileName}>
                             {docUploadProgress.fileName}
                           </span>
@@ -559,15 +551,15 @@ export default function ChatComposer({
                               // Before the first progress event there is no ratio to
                               // render, so the bar pulses rather than showing a
                               // stalled-looking empty track.
-                              docUploadProgress.percent === null ? 'w-1/3 animate-pulse' : 'transition-[width] duration-200'
+                              docUploadProgress.percent === null ? 'w-1/3' : 'transition-[width] duration-200'
                             }`}
                             style={docUploadProgress.percent === null ? undefined : { width: `${docUploadProgress.percent}%` }}
                           />
                         </span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-background/80 px-2 py-1 text-xs text-muted-foreground">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground">
+                        <span className="h-3.5 w-3.5 flex-none rounded-full border-[1.5px] border-primary" aria-hidden />
                         {t('input.parsingDocument', { defaultValue: 'Parsing document…' })}
                       </span>
                     )
@@ -609,11 +601,24 @@ export default function ChatComposer({
           )}
 
           <PromptInputBody>
-            <div ref={inputHighlightRef} aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl">
-              <div className="chat-input-placeholder block w-full whitespace-pre-wrap break-words px-4 py-2 text-sm leading-6 text-transparent">
+            {/* @提及高亮层必须和 textarea 逐像素同源:同样 p-0 / 14px / 23px 行高。
+                容器内边距在 form 上,这一层再补 padding 就会整体错位。 */}
+            <div ref={inputHighlightRef} aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden rounded-lg">
+              <div className="chat-input-placeholder block w-full whitespace-pre-wrap break-words p-0 text-sm leading-[23px] text-transparent">
                 {renderInputWithMentions(input)}
               </div>
             </div>
+
+            {/* 占位文案:设计稿里 `/` 与 `@` 是等宽墨色,原生 placeholder 无法分段
+                着色,所以空输入时改用同源的覆盖层,textarea 只留 aria-label。 */}
+            {!input && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 overflow-hidden text-sm leading-[23px] text-muted-foreground"
+              >
+                {renderPlaceholderWithKeys(placeholder)}
+              </div>
+            )}
 
             <PromptInputTextarea
               ref={textareaRef}
@@ -627,7 +632,8 @@ export default function ChatComposer({
               onFocus={() => onInputFocusChange?.(true)}
               onBlur={() => onInputFocusChange?.(false)}
               onInput={onTextareaInput}
-              placeholder={placeholder}
+              placeholder=""
+              aria-label={placeholder}
             />
         </PromptInputBody>
 
@@ -721,10 +727,10 @@ export default function ChatComposer({
               <button
                 type="button"
                 onClick={onShowModelPicker}
-                className={`inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border px-2 text-xs font-medium transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-2.5 ${
+                className={`inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   modelJustChanged
-                    ? 'border-primary bg-primary/15 text-primary ring-2 ring-primary/40'
-                    : 'border-border/60 bg-muted/40 text-muted-foreground hover:border-primary/40 hover:bg-muted hover:text-foreground'
+                    ? 'border-primary/30 bg-primary/8 text-foreground ring-2 ring-primary/30 dark:text-primary'
+                    : 'border-border text-card-foreground hover:border-border-strong'
                 }`}
                 title={
                   activeModelRealName
@@ -763,7 +769,7 @@ export default function ChatComposer({
                   updateModeDropdownPosition();
                   setIsModeDropdownOpen((current) => !current);
                 }}
-                className={`inline-flex h-8 items-center rounded-lg border px-2 text-xs font-medium transition-all duration-200 sm:px-2.5 ${activeMode.chipClassName}`}
+                className={`inline-flex items-center rounded-md border px-2.5 py-1 text-xs transition-colors ${activeMode.chipClassName}`}
                 aria-haspopup="menu"
                 aria-expanded={isModeDropdownOpen}
                 aria-label={t('executionModes.title', { defaultValue: 'Execution mode' })}
@@ -779,7 +785,7 @@ export default function ChatComposer({
               {isModeDropdownOpen && modeDropdownPosition && createPortal(
                 <div
                   ref={modeDropdownMenuRef}
-                  className="fixed z-[100] w-72 overflow-y-auto rounded-lg border border-border bg-card p-1 shadow-lg"
+                  className="prism-modal-shadow fixed z-[100] w-72 overflow-y-auto rounded-lg border border-border bg-popover p-1"
                   style={{
                     left: modeDropdownPosition.left,
                     top: modeDropdownPosition.top,
@@ -801,7 +807,7 @@ export default function ChatComposer({
                           setIsModeDropdownOpen(false);
                         }}
                         className={`flex w-full items-start gap-2 rounded px-2 py-1.5 text-left transition-colors ${
-                          isSelected ? 'bg-accent text-foreground' : 'hover:bg-accent/70'
+                          isSelected ? 'bg-accent text-foreground' : 'hover:bg-accent'
                         }`}
                       >
                         <span className="flex h-4 w-3 shrink-0 items-center justify-center">
@@ -833,7 +839,7 @@ export default function ChatComposer({
                     updateEffortDropdownPosition();
                     setIsEffortDropdownOpen((current) => !current);
                   }}
-                  className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-muted/40 px-2 text-xs font-medium text-foreground transition-all duration-200 hover:bg-muted"
+                  className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-card-foreground transition-colors hover:border-border-strong"
                   aria-haspopup="menu"
                   aria-expanded={isEffortDropdownOpen}
                   aria-label="Select reasoning effort"
@@ -847,7 +853,7 @@ export default function ChatComposer({
                 {isEffortDropdownOpen && effortDropdownPosition && createPortal(
                   <div
                     ref={effortDropdownMenuRef}
-                    className="fixed z-[100] min-w-36 overflow-y-auto rounded-lg border border-border bg-card p-1 shadow-lg"
+                    className="prism-modal-shadow fixed z-[100] min-w-36 overflow-y-auto rounded-lg border border-border bg-popover p-1"
                     style={{
                       left: effortDropdownPosition.left,
                       top: effortDropdownPosition.top,
@@ -872,7 +878,7 @@ export default function ChatComposer({
                           className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs capitalize transition-colors ${
                             isSelected
                               ? 'bg-accent text-foreground'
-                              : 'text-muted-foreground hover:bg-accent/70 hover:text-foreground'
+                              : 'text-muted-foreground hover:bg-accent hover:text-foreground'
                           }`}
                         >
                           <span className="flex h-3 w-3 items-center justify-center">
@@ -892,33 +898,51 @@ export default function ChatComposer({
 
           </PromptInputTools>
 
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="ml-auto flex min-w-0 flex-none items-center justify-end gap-2">
             {/* 底栏高度必须恒定:这里只放"排队"这类当下才成立的短提示,强制单行 +
                 截断,绝不折行。静态快捷键说明在发送按钮的 title 里。 */}
             {canQueueDraft && (
-              <div className="hidden min-w-0 max-w-64 truncate whitespace-nowrap text-xs text-muted-foreground/60 lg:block">
+              <div className="hidden min-w-0 max-w-64 truncate whitespace-nowrap text-xs text-muted-foreground lg:block">
                 {submitHint}
               </div>
             )}
-            <PromptInputSubmit
-              onClick={
-                canQueueDraft
-                  ? (e: MouseEvent<HTMLButtonElement>) => {
-                      e.preventDefault();
-                      onSubmit(e);
-                    }
-                  : isLoading
-                    ? onAbortSession
+            {/* 中止:跑起来才出现,描边方块。它和发送并排 ——
+                这样"有草稿时点发送=排队、想停就点方块"两件事各有各的按钮,
+                不用再让同一个按钮身兼二职。 */}
+            {isLoading && (
+              <button
+                type="button"
+                onClick={onAbortSession}
+                aria-label={t('input.stop', { defaultValue: '停止' })}
+                title={t('input.stop', { defaultValue: '停止' })}
+                className="grid h-8 w-8 flex-none place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground active:translate-y-px"
+              >
+                <SquareIcon className="h-3.5 w-3.5" strokeWidth={2} />
+              </button>
+            )}
+
+            {/* 三种状态,按钮数量跟着变:
+                没在跑 → 只有发送;在跑且没草稿 → 只有停止;在跑且有草稿 → 两个都在。
+                在跑且没草稿时留一个禁用的发送按钮没有意义,只会让人误点。 */}
+            {(!isLoading || canQueueDraft) && (
+              <PromptInputSubmit
+                onClick={
+                  canQueueDraft
+                    ? (e: MouseEvent<HTMLButtonElement>) => {
+                        e.preventDefault();
+                        onSubmit(e);
+                      }
                     : undefined
-              }
-              disabled={isLoading ? false : !input.trim()}
-              aria-label={submitAriaLabel}
-              // 悬停提示带上完整快捷键说明(底栏那段长文案删了,信息收到这里)。
-              title={`${submitAriaLabel} · ${submitHint}`}
-              className="h-10 w-10 sm:h-10 sm:w-10"
-            >
-              {canQueueDraft ? <ArrowUpIcon className="h-4 w-4" /> : undefined}
-            </PromptInputSubmit>
+                }
+                disabled={!input.trim()}
+                aria-label={submitAriaLabel}
+                // 悬停提示带上完整快捷键说明(底栏那段长文案删了,信息收到这里)。
+                title={`${submitAriaLabel} · ${submitHint}`}
+                className="h-8 w-8 flex-none px-0"
+              >
+                <ArrowUpIcon className="h-4 w-4" strokeWidth={2} />
+              </PromptInputSubmit>
+            )}
           </div>
         </PromptInputFooter>
       </PromptInput>

@@ -4,6 +4,7 @@ import * as React from 'react';
 import { SendHorizonalIcon, SquareIcon } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
+
 import { Button } from './Button';
 import Tooltip from './Tooltip';
 
@@ -41,10 +42,13 @@ export const PromptInput = React.forwardRef<HTMLFormElement, PromptInputProps>(
           ref={ref}
           data-slot="prompt-input"
           className={cn(
-            // 只过渡聚焦相关的边框/阴影(含 ring,ring 本质是 box-shadow),
-            // **不要**用 transition-all —— 那会把 textarea 自适应高度带来的高度变化
-            // 也一起做 200ms 动画,表现为"打字时输入框缓慢放大"。高度改成瞬时生效。
-            'relative overflow-hidden rounded-xl border border-border/50 bg-card/80 shadow-sm backdrop-blur-sm transition-[border-color,box-shadow] duration-200 focus-within:border-primary/30 focus-within:shadow-md focus-within:ring-1 focus-within:ring-primary/15',
+            // 只过渡聚焦相关的边框 —— **不要**用 transition-all,那会把 textarea
+            // 自适应高度也做成动画,表现为"打字时输入框缓慢放大"。高度瞬时生效。
+            // 输入框是这一屏的主角面板,**四角同一档圆角**:
+            // 淡色靠两层软投影从暖白画布上浮起来,深色靠一圈绿调描边 + 极淡外光。
+            // (设计稿原本把左上角切方给活动标签停靠;实测那一个直角在四个圆角里
+            //  很扎眼,改成活动标签往右让 12px,四角就能一致。)
+            'prism-raised relative overflow-hidden rounded-[var(--radius-panel)] border border-border bg-card px-3.5 py-3 transition-[border-color] duration-[120ms] focus-within:border-primary',
             className
           )}
           {...props}
@@ -66,7 +70,7 @@ export const PromptInputHeader = React.forwardRef<
   <div
     ref={ref}
     data-slot="prompt-input-header"
-    className={cn('px-3 pt-3', className)}
+    className={cn('pb-3', className)}
     {...props}
   />
 ));
@@ -97,7 +101,7 @@ export const PromptInputTextarea = React.forwardRef<
     ref={ref}
     data-slot="prompt-input-textarea"
     className={cn(
-      'chat-input-placeholder block max-h-[40vh] w-full resize-none overflow-y-auto bg-transparent px-4 py-2 text-sm leading-6 text-foreground placeholder-muted-foreground/50 focus:outline-none sm:max-h-[300px]',
+      'chat-input-placeholder block max-h-[40vh] w-full resize-none overflow-y-auto bg-transparent p-0 text-sm leading-[23px] text-foreground placeholder-muted-foreground focus:outline-none sm:max-h-[300px]',
       className
     )}
     {...props}
@@ -114,7 +118,7 @@ export const PromptInputFooter = React.forwardRef<
   <div
     ref={ref}
     data-slot="prompt-input-footer"
-    className={cn('flex items-center justify-between border-t border-border/30 px-3 py-2', className)}
+    className={cn('flex items-center gap-2.5 pt-3', className)}
     {...props}
   />
 ));
@@ -155,7 +159,7 @@ export const PromptInputButton = React.forwardRef<HTMLButtonElement, PromptInput
         type="button"
         variant="ghost"
         size="icon"
-        className={cn('h-8 w-8 [&_svg]:size-4', className)}
+        className={cn('h-8 w-8 text-muted-foreground hover:text-foreground [&_svg]:size-4', className)}
         {...props}
       >
         {children}
@@ -169,7 +173,7 @@ export const PromptInputButton = React.forwardRef<HTMLButtonElement, PromptInput
             tooltip.shortcut ? (
               <span className="flex items-center gap-1.5">
                 {tooltip.content}
-                <kbd className="rounded bg-white/20 px-1 text-[10px]">{tooltip.shortcut}</kbd>
+                <kbd className="rounded-sm border border-border px-1 font-mono text-[10px]">{tooltip.shortcut}</kbd>
               </span>
             ) : (
               tooltip.content
@@ -206,9 +210,8 @@ export const PromptInputSubmit = React.forwardRef<HTMLButtonElement, PromptInput
         variant="default"
         size="icon"
         className={cn(
-          'h-8 w-8 shrink-0 rounded-lg',
-          // Prism: spectral gradient on the ready-to-send state
-          !isActive && 'prism-gradient border-0 text-white',
+          // 设计稿:发送是带文字的 primary 按钮,6px 14px / 13px / 600
+          'h-8 shrink-0 rounded-md px-3.5 text-[13px] font-semibold',
           className,
         )}
         {...props}

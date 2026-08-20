@@ -45,10 +45,10 @@ function SessionListSkeleton() {
       {Array.from({ length: 3 }).map((_, index) => (
         <div key={index} className="rounded-md p-2">
           <div className="flex items-start gap-2">
-            <div className="mt-0.5 h-3 w-3 animate-pulse rounded-full bg-muted" />
+            <div className="mt-0.5 h-3 w-3 rounded-full bg-muted" />
             <div className="flex-1 space-y-1">
-              <div className="h-3 animate-pulse rounded bg-muted" style={{ width: `${60 + index * 15}%` }} />
-              <div className="h-2 w-1/2 animate-pulse rounded bg-muted" />
+              <div className="h-3 rounded bg-muted" style={{ width: `${60 + index * 15}%` }} />
+              <div className="h-2 w-1/2 rounded bg-muted" />
             </div>
           </div>
         </div>
@@ -92,24 +92,24 @@ export default function SidebarProjectSessions({
     <div className="ml-3 space-y-1 border-l border-border pl-3">
       <div className="px-3 pb-1 pt-1 md:hidden">
         <button
-          className="flex h-8 w-full items-center justify-center gap-2 rounded-md bg-primary text-xs font-medium text-primary-foreground transition-all duration-150 hover:bg-primary/90 active:scale-[0.98]"
+          className="flex h-11 w-full items-center justify-center gap-2 rounded-md border border-border text-xs font-semibold text-card-foreground transition-colors hover:border-border-strong active:translate-y-px"
           onClick={() => {
             onProjectSelect(project);
             onNewSession(project);
           }}
         >
-          <Plus className="h-3 w-3" />
+          <Plus className="h-3.5 w-3.5" strokeWidth={2} />
           {t('sessions.newSession')}
         </button>
       </div>
 
       <Button
-        variant="default"
+        variant="outline"
         size="sm"
-        className="hidden h-8 w-full justify-start gap-2 bg-primary text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 md:flex"
+        className="hidden h-8 w-full justify-start gap-2 border-border text-[13px] font-semibold text-card-foreground transition-colors hover:border-border-strong md:flex"
         onClick={() => onNewSession(project)}
       >
-        <Plus className="h-3 w-3" />
+        <Plus className="h-3.5 w-3.5" strokeWidth={2} />
         {t('sessions.newSession')}
       </Button>
 
@@ -148,7 +148,7 @@ export default function SidebarProjectSessions({
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 w-full justify-center text-xs text-muted-foreground hover:text-foreground"
+              className="h-8 w-full justify-center font-mono text-[11px] text-muted-foreground hover:text-foreground"
               onClick={() => onLoadMoreSessions(project.projectId)}
               disabled={isLoadingMoreSessions}
             >

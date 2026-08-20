@@ -33,22 +33,23 @@ const readUsageNumber = (value: unknown) => {
 /**
  * Context-usage ring (prism): shown when the backend reports exact native
  * context usage (`contextExact`, from the persistent runtime's
- * `getContextUsage()`). Green → amber (≥60%) → red (≥80%, auto-compact zone).
+ * `getContextUsage()`). 三档改配色(设计语言无告警红):
+ * <60% 绿 → ≥60% 弱化灰描边 → ≥80% 前景色描边 + 百分比加粗(auto-compact 区)。
  */
 function ContextRing({ ratio }: { ratio: number }) {
   const clamped = Math.max(0, Math.min(1, ratio));
   const radius = 7;
   const circumference = 2 * Math.PI * radius;
   const tone = clamped >= 0.8
-    ? 'text-red-500'
+    ? 'stroke-foreground'
     : clamped >= 0.6
-      ? 'text-amber-500'
-      : 'text-primary';
+      ? 'stroke-muted-foreground'
+      : 'stroke-primary';
 
   return (
-    <span className="relative grid h-5 w-5 place-items-center">
-      <svg viewBox="0 0 20 20" className="h-5 w-5 -rotate-90">
-        <circle cx="10" cy="10" r={radius} fill="none" strokeWidth="2.5" className="stroke-border/60" />
+    <span className="relative grid h-[18px] w-[18px] place-items-center">
+      <svg viewBox="0 0 20 20" className="h-[18px] w-[18px] -rotate-90">
+        <circle cx="10" cy="10" r={radius} fill="none" strokeWidth="2.5" className="stroke-border" />
         <circle
           cx="10"
           cy="10"
@@ -58,7 +59,7 @@ function ContextRing({ ratio }: { ratio: number }) {
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={circumference * (1 - clamped)}
-          className={`${tone} stroke-current transition-all duration-500`}
+          className={`${tone} transition-colors duration-500`}
         />
       </svg>
     </span>
@@ -85,24 +86,22 @@ export default function TokenUsageSummary({ usage, onClick }: TokenUsageSummaryP
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border/70 bg-background/70 px-2 text-xs text-muted-foreground shadow-sm transition-colors hover:border-primary/25 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:gap-2 sm:px-2.5"
+      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-transparent px-2.5 py-1 font-mono text-xs text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:gap-2"
       title={title}
       aria-label="Show token usage"
     >
       {contextExact ? (
         <ContextRing ratio={ratio} />
       ) : (
-        <span className="grid h-5 w-5 place-items-center rounded-md bg-primary/10 text-primary">
-          <ActivityIcon className="h-3.5 w-3.5" />
-        </span>
+        <ActivityIcon className="h-4 w-4 text-muted-foreground" strokeWidth={2} />
       )}
-      <span className="font-medium text-foreground">{formatTokenCount(usedTokens)}</span>
+      <span className="font-mono font-medium text-foreground">{formatTokenCount(usedTokens)}</span>
       {contextExact ? (
-        <span className={`hidden sm:inline ${ratio >= 0.8 ? 'font-medium text-red-500' : 'text-muted-foreground/70'}`}>
+        <span className={`hidden font-mono sm:inline ${ratio >= 0.8 ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>
           {Math.round(ratio * 100)}%
         </span>
       ) : (
-        <span className="hidden text-muted-foreground/70 sm:inline">tokens</span>
+        <span className="hidden font-mono text-muted-foreground sm:inline">tokens</span>
       )}
     </button>
   );

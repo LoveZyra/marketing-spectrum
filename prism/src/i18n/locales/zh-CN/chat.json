@@ -62,7 +62,8 @@
       "delete": "删除排队消息"
     },
     "attachmentPath": "路径",
-    "modelHint": "当前模型：{{model}} · 点击切换"
+    "modelHint": "当前模型：{{model}} · 点击切换",
+    "queueShort": "加入队列"
   },
   "providerSelection": {
     "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜索会话、文件和提交"
@@ -117,18 +118,19 @@
   },
   "claudeStatus": {
     "actions": {
-      "thinking": "Thinking",
-      "processing": "Processing",
-      "analyzing": "Analyzing",
-      "working": "Working",
-      "computing": "Computing",
-      "reasoning": "Reasoning"
+      "thinking": "思考中",
+      "processing": "处理中",
+      "analyzing": "分析中",
+      "working": "执行中",
+      "computing": "运算中",
+      "reasoning": "推理中"
     },
     "elapsed": {
       "seconds": "{{count}}s",
       "minutesSeconds": "{{minutes}}m {{seconds}}s"
     },
-    "stop": "停止"
+    "stop": "停止",
+    "compacting": "正在压缩上下文"
   },
   "projectSelection": {
     "startChatWithProvider": "选择一个项目以开始与 {{provider}} 聊天"
@@ -166,7 +168,8 @@
       "incompleteSkipNote": "为安全起见，回滚不会删除任何未跟踪文件，只会恢复已跟踪的改动和已保存的快照。",
       "forceRestore": "仍然回滚",
       "cancel": "取消"
-    }
+    },
+    "changedFilesTitle": "本轮改动"
   },
   "attachments": {
     "truncated": "已截断"
@@ -178,5 +181,60 @@
     "acceptEdits": "改文件不再询问,执行命令仍然要确认。",
     "auto": "常规调用自行决定,其余仍会询问。",
     "bypassPermissions": "全部放行,不再询问。只在可丢弃的工作上用。"
+  },
+  "permission": {
+    "title": "需要授权才能继续",
+    "meta": "工具 {{tool}}{{rule}}",
+    "viewInput": "查看工具输入",
+    "deny": "拒绝",
+    "allowRemember": "允许并记住",
+    "allowSaved": "已记住",
+    "allowOnce": "允许一次"
+  },
+  "activity": {
+    "read": "读取 {{target}}",
+    "write": "写入 {{target}}",
+    "edit": "编辑 {{target}}",
+    "bash": "执行 {{target}}",
+    "search": "搜索 {{target}}",
+    "glob": "匹配 {{target}}",
+    "fetch": "抓取 {{target}}",
+    "agent": "子代理 {{target}}",
+    "todo": "更新任务清单",
+    "thinking": "思考",
+    "running": "运行中",
+    "failed": "失败",
+    "summary": {
+      "bash": "执行 {{count}} 条命令",
+      "write": "新建 {{count}} 个文件",
+      "edit": "编辑 {{count}} 处",
+      "read": "读取 {{count}} 个文件",
+      "search": "搜索 {{count}} 次",
+      "glob": "列目录 {{count}} 次",
+      "fetch": "抓取 {{count}} 个网页",
+      "agent": "子代理 {{count}} 个",
+      "todo": "更新任务清单 {{count}} 次",
+      "mcp": "外部工具 {{count}} 次",
+      "tool": "其它工具 {{count}} 次",
+      "thinking": "思考 {{count}} 次"
+    },
+    "foldedCount": "+{{count}}",
+    "collapseRun": "收起"
+  },
+  "details": {
+    "parameters": "参数",
+    "result": "返回",
+    "noParams": "无参数",
+    "noOutput": "无输出",
+    "failed": "失败",
+    "failedNoOutput": "失败 · 无输出",
+    "expandAll": "展开全部",
+    "expandAllWithCount": "展开全部 · {{count}} 行",
+    "collapse": "收起",
+    "copy": "复制",
+    "copied": "已复制"
+  },
+  "compactSummary": {
+    "title": "上下文已压缩 —— 早前的对话折成了一份摘要"
   }
 }

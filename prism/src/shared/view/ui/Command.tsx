@@ -19,18 +19,20 @@ Command.displayName = CommandPrimitive.displayName;
 const CommandInput = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive.Input>,
   React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
->(({ className, ...props }, ref) => (
-  <div className="flex items-center border-b px-3">
-    <Search className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+>(({ className, children, ...props }, ref) => (
+  // children 渲染在输入框右侧 —— 设计稿那里放结果计数
+  <div className="flex items-center gap-2.5 border-b border-border px-4 py-3.5">
+    <Search className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={2} aria-hidden />
     <CommandPrimitive.Input
       ref={ref}
       className={cn(
-        'flex h-11 w-full rounded-md bg-transparent py-3 text-sm outline-none',
+        'w-full bg-transparent p-0 text-[15px] leading-5 text-foreground outline-none',
         'placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
         className,
       )}
       {...props}
     />
+    {children}
   </div>
 ));
 CommandInput.displayName = CommandPrimitive.Input.displayName;
@@ -67,7 +69,8 @@ const CommandGroup = React.forwardRef<
     ref={ref}
     className={cn(
       'overflow-hidden p-1 text-foreground',
-      '[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground',
+      // 分区小标题:11px / 字距 1.4px / 大写 / 弱化灰
+      '[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:leading-4 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[1.4px] [&_[cmdk-group-heading]]:text-muted-foreground',
       className,
     )}
     {...props}
@@ -82,8 +85,9 @@ const CommandItem = React.forwardRef<
   <CommandPrimitive.Item
     ref={ref}
     className={cn(
-      'relative flex cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none',
-      'data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground',
+      'relative flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-2 text-sm outline-none',
+      // 选中态:沉降底 + 图标转绿
+      'data-[selected=true]:bg-card data-[selected=true]:text-foreground data-[selected=true]:[&_svg]:text-primary',
       'data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50',
       className,
     )}

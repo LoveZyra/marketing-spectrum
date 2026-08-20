@@ -19,10 +19,13 @@
     "noSessions": "No sessions yet",
     "loadingSessions": "Loading sessions...",
     "unnamed": "Unnamed",
-    "loading": "Loading..."
+    "loading": "Loading...",
+    "runningMeta": "Running · {{age}}",
+    "messageCount": "{{count}} msgs"
   },
   "tooltips": {
     "hideSidebar": "Hide sidebar",
+    "showSidebar": "Show sidebar",
     "createProject": "Create new project",
     "refresh": "Refresh projects and sessions (Ctrl+R)",
     "renameProject": "Rename project (F2)",
@@ -93,6 +96,10 @@
       "loadFailed": "Failed to load permissions",
       "saveFailed": "Failed to save",
       "needUsers": "Select at least one user for \"Specific users\""
-    }
+    },
+    "publicHint": "Public project — unowned and under the public directory, visible to everyone",
+    "rootOnlyHint": "Visible to root only — unowned and outside the public directory",
+    "sharedHint": "Shared with you by someone else",
+    "sharedOutHint": "Shared with {{count}} people"
   }
 }

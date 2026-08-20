@@ -1,43 +1,14 @@
 import { useEffect, useRef } from 'react';
-import { Check, Edit2, FileDown, Loader2, Trash2, X } from 'lucide-react';
+import { Check, Edit2, FileDown, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { Badge, Tooltip, buttonVariants } from '../../../../shared/view/ui';
-import { authenticatedFetch } from '../../../../utils/api';
+import { Tooltip, buttonVariants } from '../../../../shared/view/ui';
+import { downloadSessionExport } from '../../../../utils/session-export';
 import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
 import { createSessionViewModel } from '../../utils/utils';
 import ClaudeLogo from '../../../llm-logo-provider/ClaudeLogo';
-
-/**
- * 导出会话为 Markdown 并触发浏览器下载。
- * 走 authenticatedFetch(带 JWT)→ blob → objectURL —— 不能用裸 <a href>,
- * 那样带不上 Authorization。文件名交给服务端的 Content-Disposition。
- */
-async function downloadSessionExport(sessionId: string, fallbackName: string): Promise<void> {
-  const response = await authenticatedFetch(
-    `/api/providers/sessions/${encodeURIComponent(sessionId)}/export?format=md`,
-  );
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const blob = await response.blob();
-  const disposition = response.headers.get('content-disposition') ?? '';
-  const utf8Match = /filename\*=UTF-8''([^;]+)/.exec(disposition);
-  const asciiMatch = /filename="([^"]+)"/.exec(disposition);
-  const fileName = utf8Match
-    ? decodeURIComponent(utf8Match[1])
-    : asciiMatch
-      ? asciiMatch[1]
-      : `${fallbackName}.md`;
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-}
 
 type SidebarSessionItemProps = {
   project: Project;
@@ -130,6 +101,14 @@ export default function SidebarSessionItem({
   const showRecentIndicator =
     !showApprovalIndicator && !showAttentionIndicator && !isProcessing && sessionView.isActive;
 
+  const statusIndicatorLabel = showApprovalIndicator
+    ? t('tooltips.approvalPendingIndicator', { defaultValue: '等待你确认工具权限' })
+    : isProcessing
+      ? t('tooltips.processingSessionIndicator', { defaultValue: '会话运行中' })
+      : showAttentionIndicator
+        ? t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })
+        : t('tooltips.activeSessionIndicator');
+
   // The rename panel sits inside a group-hover opacity wrapper, so leaving the row
   // would visually hide it. While editing, dismiss only when the user clicks outside
   // the panel (matches Escape / cancel-button behaviour).
@@ -166,45 +145,11 @@ export default function SidebarSessionItem({
 
   return (
     <div className="group relative">
-      {(showApprovalIndicator || showAttentionIndicator || showRecentIndicator) && (
-        <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
-          <Tooltip
-            content={showApprovalIndicator
-              ? t('tooltips.approvalPendingIndicator', { defaultValue: '等待你确认工具权限' })
-              : showAttentionIndicator
-                ? t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })
-                : t('tooltips.activeSessionIndicator')}
-            position="right"
-          >
-            <div
-              role="status"
-              aria-label={showApprovalIndicator
-                ? t('tooltips.approvalPendingIndicator', { defaultValue: '等待你确认工具权限' })
-                : showAttentionIndicator
-                  ? t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })
-                  : t('tooltips.activeSessionIndicator')}
-              className={cn(
-                'h-2 w-2 animate-pulse rounded-full',
-                showApprovalIndicator
-                  // 红色而不是琥珀 —— 这条是阻塞的,不是"有点动静"。
-                  ? 'bg-red-500 ring-2 ring-red-500/30'
-                  : showAttentionIndicator ? 'bg-amber-500' : 'bg-green-500',
-              )}
-            />
-          </Tooltip>
-        </div>
-      )}
-
       <div className="md:hidden">
         <div
           className={cn(
-            'p-2 mx-3 my-0.5 rounded-md bg-card border active:scale-[0.98] transition-all duration-150 relative',
-            isSelected ? 'bg-primary/5 border-primary/20' : '',
-            !isSelected && isProcessing
-              ? 'border-border/60 bg-muted/20'
-              : !isSelected && sessionView.isActive
-              ? 'border-green-500/30 bg-green-50/5 dark:bg-green-900/5'
-              : 'border-border/30',
+            'p-2 mx-3 my-0.5 rounded-md border active:translate-y-px relative',
+            isSelected ? 'bg-muted border-border' : 'border-border',
           )}
           onClick={selectMobileSession}
         >
@@ -212,7 +157,7 @@ export default function SidebarSessionItem({
             <div
               className={cn(
                 'w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0',
-                isSelected ? 'bg-primary/10' : 'bg-muted/50',
+                isSelected ? 'bg-primary/[0.16]' : 'bg-muted',
               )}
             >
               <ClaudeLogo className="h-3 w-3" />
@@ -220,37 +165,36 @@ export default function SidebarSessionItem({
 
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <div className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{sessionView.sessionName}</div>
+                <div className="min-w-0 flex-1 truncate text-[12.5px] font-normal leading-[17px] text-foreground">{sessionView.sessionName}</div>
                 {isProcessing ? (
                   <span className="ml-auto flex-shrink-0">
                     <Tooltip content={t('tooltips.processingSessionIndicator', 'Processing session')} position="top">
-                      <span className="flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground">
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                      {/* 运行中:6px 实心绿点,不转圈(设计系统禁旋转) */}
+                      <span className="flex h-5 w-5 items-center justify-center">
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary" />
                       </span>
                     </Tooltip>
                   </span>
                 ) : compactSessionAge && (
-                  <span className="ml-auto flex-shrink-0 text-[11px] text-muted-foreground">{compactSessionAge}</span>
+                  <span className="ml-auto flex-shrink-0 font-mono text-[10.5px] text-muted-foreground">{compactSessionAge}</span>
                 )}
               </div>
               <div className="mt-0.5 flex items-center">
                 {sessionView.messageCount > 0 && (
-                  <Badge variant="secondary" className="px-1 py-0 text-xs">
-                    {sessionView.messageCount}
-                  </Badge>
+                  <span className="font-mono text-[10.5px] text-muted-foreground">{sessionView.messageCount}</span>
                 )}
               </div>
             </div>
 
             {!isProcessing && (
               <button
-                className="ml-1 flex h-5 w-5 items-center justify-center rounded-md bg-red-50 opacity-70 transition-transform active:scale-95 dark:bg-red-900/20"
+                className="ml-1 flex h-5 w-5 items-center justify-center rounded-md opacity-70 active:translate-y-px"
                 onClick={(event) => {
                   event.stopPropagation();
                   requestDeleteSession();
                 }}
               >
-                <Trash2 className="h-2.5 w-2.5 text-red-600 dark:text-red-400" />
+                <Trash2 className="h-2.5 w-2.5 text-muted-foreground" />
               </button>
             )}
           </div>
@@ -262,13 +206,8 @@ export default function SidebarSessionItem({
           href={`/session/${session.id}`}
           className={cn(
             buttonVariants({ variant: 'ghost' }),
-            'h-auto w-full justify-start rounded-md border bg-card p-2 text-left font-normal transition-all duration-150',
-            isSelected ? 'border-primary/20 bg-primary/5' : 'border-border/30',
-            !isSelected && isProcessing
-              ? 'border-border/60 bg-muted/20 hover:bg-muted/25'
-              : !isSelected && sessionView.isActive
-                ? 'border-green-500/30 bg-green-50/5 hover:bg-green-50/10 dark:bg-green-900/5 dark:hover:bg-green-900/10'
-                : 'hover:bg-accent/50',
+            'relative h-auto w-full justify-start rounded-md px-2.5 py-[7px] text-left font-normal',
+            isSelected ? 'prism-panel bg-card dark:bg-muted' : 'hover:bg-muted',
           )}
           // Left-click keeps in-app navigation; Ctrl/Cmd/middle-click and the
           // native right-click menu use the href to open a new tab/window.
@@ -278,53 +217,54 @@ export default function SidebarSessionItem({
             onSessionSelect(session, project.projectId);
           }}
         >
-          <div className="flex w-full min-w-0 items-center gap-2">
-            <div
+          {/* 设计稿的会话行是两行:标题(运行中带 6px 绿点 / 等待授权带空心圈)+ 等宽元信息 */}
+          <div className="flex w-full min-w-0 flex-col gap-0.5">
+            <span
               className={cn(
-                'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md',
-                isSelected ? 'bg-primary/10' : 'bg-muted/50',
+                'flex min-w-0 items-center gap-1.5 truncate text-[12.5px] leading-[17px]',
+                isSelected ? 'text-card-foreground' : 'text-body',
               )}
             >
-              <ClaudeLogo className="h-3 w-3" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <div className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{sessionView.sessionName}</div>
-                {isProcessing ? (
-                  <span
-                    className={cn(
-                      'ml-auto flex-shrink-0 transition-opacity duration-200',
-                      isEditing ? 'opacity-0' : 'group-hover:opacity-0',
-                    )}
-                  >
-                    <Tooltip content={t('tooltips.processingSessionIndicator', 'Processing session')} position="top">
-                      <span className="flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      </span>
-                    </Tooltip>
-                  </span>
-                ) : compactSessionAge && (
-                  <span
-                    className={cn(
-                      'ml-auto flex-shrink-0 text-[11px] text-muted-foreground transition-opacity duration-200',
-                      isEditing ? 'opacity-0' : 'group-hover:opacity-0',
-                    )}
-                  >
-                    {compactSessionAge}
-                  </span>
-                )}
-              </div>
-              <div className="mt-0.5 flex items-center">
-                {sessionView.messageCount > 0 && <Badge variant="secondary" className="px-1 py-0 text-xs">{sessionView.messageCount}</Badge>}
-              </div>
-            </div>
+              {/* 状态点全库只此一处:空心圈=等授权,实心点=运行中/有动静。
+                  以前行外还挂了一个绝对定位的同义点,于是一行冒出两颗绿点。 */}
+              {(showApprovalIndicator || isProcessing || showRecentIndicator || showAttentionIndicator) && (
+                <span
+                  role="status"
+                  aria-label={statusIndicatorLabel}
+                  title={statusIndicatorLabel}
+                  className={cn(
+                    'h-1.5 w-1.5 flex-none rounded-full',
+                    showApprovalIndicator ? 'border-[1.5px] border-primary' : 'bg-primary prism-dot',
+                  )}
+                />
+              )}
+              <span className="truncate">{sessionView.sessionName}</span>
+            </span>
+            <span
+              className={cn(
+                'truncate font-mono text-[10.5px]',
+                // 运行中那行用强调色;淡色模式下绿色不做小字,改墨色
+                isProcessing ? 'text-card-foreground dark:text-primary' : 'text-muted-foreground',
+              )}
+            >
+              {isProcessing
+                ? t('sessions.runningMeta', {
+                    defaultValue: '运行中 · {{age}}',
+                    age: compactSessionAge || '—',
+                  })
+                : [compactSessionAge, sessionView.messageCount > 0
+                    ? t('sessions.messageCount', { defaultValue: '{{count}} 条', count: sessionView.messageCount })
+                    : null]
+                    .filter(Boolean)
+                    .join(' · ')}
+            </span>
           </div>
         </a>
 
         <div
           ref={editingContainerRef}
           className={cn(
-            'absolute right-2 top-1/2 flex -translate-y-1/2 transform items-center gap-1 transition-all duration-200',
+            'absolute right-2 top-1/2 flex -translate-y-1/2 transform items-center gap-1 transition-colors duration-200',
             isEditing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
           )}
         >
@@ -347,30 +287,30 @@ export default function SidebarSessionItem({
                   autoFocus
                 />
                 <button
-                  className="flex h-6 w-6 items-center justify-center rounded bg-green-50 hover:bg-green-100 dark:bg-green-900/20 dark:hover:bg-green-900/40"
+                  className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
                   onClick={(event) => {
                     event.stopPropagation();
                     saveEditedSession();
                   }}
                   title={t('tooltips.save')}
                 >
-                  <Check className="h-3 w-3 text-green-600 dark:text-green-400" />
+                  <Check className="h-3 w-3 text-primary" />
                 </button>
                 <button
-                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                  className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
                   onClick={(event) => {
                     event.stopPropagation();
                     onCancelEditingSession();
                   }}
                   title={t('tooltips.cancel')}
                 >
-                  <X className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                  <X className="h-3 w-3 text-muted-foreground" />
                 </button>
               </>
             ) : (
               <>
                 <button
-                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                  className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
                   onClick={(event) => {
                     event.stopPropagation();
                     void downloadSessionExport(session.id, sessionView.sessionName).catch(() => {
@@ -379,28 +319,28 @@ export default function SidebarSessionItem({
                   }}
                   title={t('tooltips.exportSession', { defaultValue: '导出会话 (Markdown)' })}
                 >
-                  <FileDown className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                  <FileDown className="h-3 w-3 text-muted-foreground" />
                 </button>
                 <button
-                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                  className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
                   onClick={(event) => {
                     event.stopPropagation();
                     onStartEditingSession(session.id, sessionView.sessionName);
                   }}
                   title={t('tooltips.editSessionName')}
                 >
-                  <Edit2 className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                  <Edit2 className="h-3 w-3 text-muted-foreground" />
                 </button>
                 {!isProcessing && (
                   <button
-                    className="flex h-6 w-6 items-center justify-center rounded bg-red-50 hover:bg-red-100 dark:bg-red-900/20 dark:hover:bg-red-900/40"
+                    className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
                     onClick={(event) => {
                       event.stopPropagation();
                       requestDeleteSession();
                     }}
                     title={t('tooltips.deleteSessionOptions', 'Archive or permanently delete this session')}
                   >
-                    <Trash2 className="h-3 w-3 text-red-600 dark:text-red-400" />
+                    <Trash2 className="h-3 w-3 text-muted-foreground hover:text-foreground" />
                   </button>
                 )}
               </>

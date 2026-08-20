@@ -24,7 +24,7 @@ export interface ToolDisplayConfig {
     // Collapsible config
     title?: string | ((input: any) => string);
     defaultOpen?: boolean;
-    contentType?: 'diff' | 'markdown' | 'file-list' | 'todo-list' | 'text' | 'task' | 'question-answer';
+    contentType?: 'diff' | 'markdown' | 'file-list' | 'todo-list' | 'text' | 'task' | 'question-answer' | 'params';
     getContentProps?: (input: any, helpers?: any) => any;
     actionButton?: 'file-button' | 'none';
   };
@@ -35,7 +35,7 @@ export interface ToolDisplayConfig {
     title?: string | ((result: any) => string);
     defaultOpen?: boolean;
     // Special result handlers
-    contentType?: 'markdown' | 'file-list' | 'todo-list' | 'text' | 'success-message' | 'task' | 'question-answer';
+    contentType?: 'markdown' | 'file-list' | 'todo-list' | 'text' | 'success-message' | 'task' | 'question-answer' | 'result';
     getMessage?: (result: any) => string;
     getContentProps?: (result: any) => any;
   };
@@ -56,11 +56,11 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       style: 'terminal',
       wrapText: true,
       colorScheme: {
-        primary: 'text-green-400 font-mono',
-        secondary: 'text-gray-400',
+        primary: 'text-primary font-mono',
+        secondary: 'text-muted-foreground',
         background: '',
-        border: 'border-green-500 dark:border-green-400',
-        icon: 'text-green-500 dark:text-green-400'
+        border: 'border-primary',
+        icon: 'text-primary'
       }
     },
     result: {
@@ -80,10 +80,10 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       getValue: (input) => input.file_path || '',
       action: 'open-file',
       colorScheme: {
-        primary: 'text-gray-700 dark:text-gray-300',
+        primary: 'text-body',
         background: '',
-        border: 'border-gray-300 dark:border-gray-600',
-        icon: 'text-gray-500 dark:text-gray-400'
+        border: 'border-border',
+        icon: 'text-muted-foreground'
       }
     },
     result: {
@@ -172,11 +172,11 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       getSecondary: (input) => input.path ? `in ${input.path}` : undefined,
       action: 'jump-to-results',
       colorScheme: {
-        primary: 'text-gray-700 dark:text-gray-300',
-        secondary: 'text-gray-500 dark:text-gray-400',
+        primary: 'text-body',
+        secondary: 'text-muted-foreground',
         background: '',
-        border: 'border-gray-400 dark:border-gray-500',
-        icon: 'text-gray-500 dark:text-gray-400'
+        border: 'border-border',
+        icon: 'text-muted-foreground'
       }
     },
     result: {
@@ -205,11 +205,11 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       getSecondary: (input) => input.path ? `in ${input.path}` : undefined,
       action: 'jump-to-results',
       colorScheme: {
-        primary: 'text-gray-700 dark:text-gray-300',
-        secondary: 'text-gray-500 dark:text-gray-400',
+        primary: 'text-body',
+        secondary: 'text-muted-foreground',
         background: '',
-        border: 'border-gray-400 dark:border-gray-500',
-        icon: 'text-gray-500 dark:text-gray-400'
+        border: 'border-border',
+        icon: 'text-muted-foreground'
       }
     },
     result: {
@@ -258,8 +258,8 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       getValue: () => 'reading list',
       action: 'none',
       colorScheme: {
-        primary: 'text-gray-500 dark:text-gray-400',
-        border: 'border-violet-400 dark:border-violet-500'
+        primary: 'text-muted-foreground',
+        border: 'border-border'
       }
     },
     result: {
@@ -293,9 +293,9 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       getSecondary: (input) => input.status || undefined,
       action: 'none',
       colorScheme: {
-        primary: 'text-gray-700 dark:text-gray-300',
-        border: 'border-violet-400 dark:border-violet-500',
-        icon: 'text-violet-500 dark:text-violet-400'
+        primary: 'text-body',
+        border: 'border-border',
+        icon: 'text-muted-foreground'
       }
     },
     result: {
@@ -316,9 +316,9 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       },
       action: 'none',
       colorScheme: {
-        primary: 'text-gray-700 dark:text-gray-300',
-        border: 'border-violet-400 dark:border-violet-500',
-        icon: 'text-violet-500 dark:text-violet-400'
+        primary: 'text-body',
+        border: 'border-border',
+        icon: 'text-muted-foreground'
       }
     },
     result: {
@@ -333,9 +333,9 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       getValue: () => 'listing tasks',
       action: 'none',
       colorScheme: {
-        primary: 'text-gray-500 dark:text-gray-400',
-        border: 'border-violet-400 dark:border-violet-500',
-        icon: 'text-violet-500 dark:text-violet-400'
+        primary: 'text-muted-foreground',
+        border: 'border-border',
+        icon: 'text-muted-foreground'
       }
     },
     result: {
@@ -356,9 +356,9 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       getValue: (input) => input.taskId ? `#${input.taskId}` : 'fetching',
       action: 'none',
       colorScheme: {
-        primary: 'text-gray-700 dark:text-gray-300',
-        border: 'border-violet-400 dark:border-violet-500',
-        icon: 'text-violet-500 dark:text-violet-400'
+        primary: 'text-body',
+        border: 'border-border',
+        icon: 'text-muted-foreground'
       }
     },
     result: {
@@ -419,8 +419,8 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
         };
       },
       colorScheme: {
-        border: 'border-purple-500 dark:border-purple-400',
-        icon: 'text-purple-500 dark:text-purple-400'
+        border: 'border-border',
+        icon: 'text-primary'
       }
     },
     result: {
@@ -531,19 +531,20 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
     input: {
       type: 'collapsible',
       title: 'Parameters',
-      defaultOpen: false,
-      contentType: 'text',
-      getContentProps: (input) => ({
-        content: typeof input === 'string' ? input : JSON.stringify(input, null, 2),
-        format: 'code'
-      })
+      // 用户已经点开这一步了,不该再让他点第二次才看见参数
+      defaultOpen: true,
+      // 参数摊成键值表,不是一整块 JSON
+      contentType: 'params',
+      getContentProps: (input) => ({ input })
     },
     result: {
       type: 'collapsible',
-      contentType: 'text',
+      defaultOpen: true,
+      // 返回按形态分型:空 / JSON / 一句话 / 长文本
+      contentType: 'result',
       getContentProps: (result) => ({
-        content: String(result?.content || ''),
-        format: 'plain'
+        content: result?.content,
+        isError: Boolean(result?.isError)
       })
     }
   }

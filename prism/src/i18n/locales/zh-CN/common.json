@@ -17,15 +17,19 @@
     "version": "版本"
   },
   "mainContent": {
-    "loading": "正在加载 Prism",
+    "loading": "正在加载棱镜",
     "settingUpWorkspace": "正在设置您的工作空间...",
     "chooseProject": "选择您的项目",
-    "selectProjectDescription": "从侧边栏选择一个项目以开始使用 Claude 进行编程。每个项目包含您的聊天会话和文件历史。",
+    "selectProjectDescription": "从左侧选择一个项目，会话与文件会出现在这里。",
     "tip": "提示",
     "createProjectMobile": "点击上方的菜单按钮以访问项目",
-    "createProjectDesktop": "点击侧边栏中的文件夹图标以创建新项目",
+    "createProjectDesktop": "点击侧边栏中的「创建新项目」按钮以创建新项目",
     "newSession": "新会话",
-    "projectFiles": "项目文件"
+    "projectFiles": "项目文件",
+    "export": "导出",
+    "persistentSession": "常驻会话",
+    "persistentSessionHint": "这段对话在服务端挂着常驻运行时，下一轮无需重建进程",
+    "exporting": "导出中…"
   },
   "fileTree": {
     "loading": "正在加载文件...",

@@ -6,7 +6,6 @@ import {
   FileText,
   FileUp,
   FolderUp,
-  Loader2,
   Plus,
   RefreshCw,
   Search,
@@ -23,6 +22,7 @@ import {
   DialogContent,
   DialogTitle,
   Input,
+  Shimmer,
 } from '../../../shared/view/ui';
 import { useProviderSkills } from '../hooks/useProviderSkills';
 import type {
@@ -68,9 +68,9 @@ const SCOPE_LABELS: Record<SkillsScope, string> = {
 };
 
 const SCOPE_BADGE_CLASSES: Record<SkillsScope, string> = {
-  user: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-  plugin: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300',
-  project: 'border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-300',
+  user: 'border-primary/[0.32] bg-primary/[0.08] text-foreground dark:text-primary',
+  plugin: 'border-primary/[0.32] bg-primary/[0.08] text-foreground dark:text-primary',
+  project: 'border-border bg-muted text-muted-foreground',
 };
 
 const SCOPE_ORDER: SkillsScope[] = ['user', 'plugin', 'project'];
@@ -381,8 +381,8 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
         className={cn(
           'rounded-lg border border-dashed p-4 transition-colors sm:p-5',
           isDragActive
-            ? 'border-foreground/40 bg-muted/35'
-            : 'border-border/70 bg-muted/15 hover:border-foreground/25 hover:bg-muted/25',
+            ? 'border-primary bg-card'
+            : 'border-border bg-card hover:border-border-strong',
         )}
       >
         <input
@@ -446,9 +446,9 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
             {queuedFiles.map((queuedFile) => (
               <div
                 key={queuedFile.id}
-                className="flex items-center gap-3 rounded-lg border border-border/70 bg-background/70 px-3 py-2"
+                className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2"
               >
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-muted/60 text-muted-foreground">
+                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
                   {queuedFile.kind === 'folder' ? <FolderUp className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
                 </div>
                 <div className="min-w-0 flex-1">
@@ -489,7 +489,7 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
             {showInstallPath ? 'Hide install location' : 'Where will this install?'}
           </button>
           {showInstallPath && (
-            <div className="rounded-lg border border-border/60 bg-muted/15 p-3">
+            <div className="rounded-lg border border-border bg-card p-3">
               <code className="block whitespace-normal break-all text-xs text-foreground">{providerPath}</code>
             </div>
           )}
@@ -502,7 +502,7 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
   return (
     <div className="min-w-0 space-y-4 overflow-x-hidden">
       <div className="flex min-w-0 items-start gap-3">
-        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/20 text-muted-foreground">
+        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground">
           <FileCode2 className="h-4 w-4" strokeWidth={1.7} />
         </div>
         <div className="min-w-0 space-y-1">
@@ -552,14 +552,13 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
             className="w-full sm:w-auto"
             disabled={isLoading || isLoadingProjectScopes}
           >
-            <RefreshCw className={cn('h-4 w-4', (isLoading || isLoadingProjectScopes) && 'animate-spin')} />
+            <RefreshCw className={cn('h-4 w-4', (isLoading || isLoadingProjectScopes) && 'text-primary')} />
             Refresh
           </Button>
         </div>
         {isLoadingProjectScopes && (
           <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Scanning project skills...
+            <Shimmer>Scanning project skills...</Shimmer>
           </div>
         )}
       </div>
@@ -570,9 +569,9 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
           className="flex h-[calc(100vh-2rem)] max-h-[760px] w-[calc(100vw-2rem)] max-w-4xl flex-col overflow-hidden p-0 sm:h-[720px]"
         >
           <DialogTitle>Add {providerName} Skill</DialogTitle>
-          <div className="flex-shrink-0 border-b border-border/60 px-4 py-4">
+          <div className="flex-shrink-0 border-b border-border px-4 py-4">
             <div className="flex items-start gap-3">
-              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/20 text-muted-foreground">
+              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground">
                 <FileUp className="h-4 w-4" />
               </div>
               <div className="min-w-0 flex-1">
@@ -599,14 +598,14 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
             {uploadPanel}
           </div>
 
-          <div className="flex flex-shrink-0 flex-col gap-3 border-t border-border/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-shrink-0 flex-col gap-3 border-t border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 flex-1">
               {(submitError || loadError || (justInstalled && saveStatus === 'success')) ? (
                 <div className={cn(
                   'max-h-24 overflow-y-auto whitespace-pre-wrap rounded-lg border px-3 py-2 text-sm',
                   submitError || loadError
-                    ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-800/60 dark:bg-red-900/20 dark:text-red-200'
-                    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+                    ? 'border-border bg-card text-body'
+                    : 'border-primary/[0.32] bg-primary/[0.08] text-foreground dark:text-primary',
                 )}>
                   {submitError || loadError || 'Skills saved successfully.'}
                 </div>
@@ -634,7 +633,15 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
                 onClick={() => void handleUploadInstall()}
                 disabled={isSubmitting || queuedFiles.length === 0}
               >
-                {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                {isSubmitting ? (
+                  // 绿底按钮上环色走 primary-foreground,绿描边在绿底上看不见
+                  <span
+                    className="h-4 w-4 flex-none rounded-full border-[1.5px] border-primary-foreground"
+                    aria-hidden
+                  />
+                ) : (
+                  <Upload className="h-4 w-4" />
+                )}
                 Install {queuedFiles.length > 0 ? `${queuedFiles.length} Skill${queuedFiles.length === 1 ? '' : 's'}` : 'Skill'}
               </Button>
             </div>
@@ -643,13 +650,13 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
       </Dialog>
 
       {!isAddDialogOpen && (submitError || loadError) && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800/60 dark:bg-red-900/20 dark:text-red-200">
+        <div className="rounded-md border border-border bg-card px-3 py-2 text-sm text-body">
           {submitError || loadError}
         </div>
       )}
 
       {justInstalled && saveStatus === 'success' && !isAddDialogOpen && (
-        <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+        <div className="inline-flex items-center gap-2 rounded-full border border-primary/[0.32] bg-primary/[0.08] px-3 py-1 text-xs font-medium text-foreground dark:text-primary">
           <CheckCircle2 className="h-4 w-4" />
           Skills saved successfully.
         </div>
@@ -663,8 +670,8 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
         )}
 
         {!isLoading && skills.length === 0 && (
-          <div className="rounded-lg border border-dashed border-border/70 bg-muted/15 px-4 py-10 text-center">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-lg border border-border/60 bg-background/80 text-muted-foreground">
+          <div className="rounded-lg border border-dashed border-border bg-card px-4 py-10 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground">
               <FileText className="h-6 w-6" />
             </div>
             <div className="mt-4 text-sm font-medium text-foreground">No skills discovered yet</div>
@@ -675,7 +682,7 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
         )}
 
         {!isLoading && skills.length > 0 && filteredSkills.length === 0 && (
-          <div className="rounded-lg border border-dashed border-border/70 bg-muted/15 px-4 py-10 text-center">
+          <div className="rounded-lg border border-dashed border-border bg-card px-4 py-10 text-center">
             <Search className="mx-auto h-6 w-6 text-muted-foreground" />
             <div className="mt-3 text-sm font-medium text-foreground">No matching skills</div>
             <div className="mt-1 text-sm text-muted-foreground">
@@ -699,7 +706,7 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
               {group.skills.map((skill) => (
                 <div
                   key={`${skill.command}:${skill.sourcePath}:${skill.projectPath || 'global'}`}
-                  className="min-w-0 rounded-lg border border-border bg-card/50 p-4"
+                  className="min-w-0 rounded-lg border border-border bg-card p-4"
                 >
                   <div className="min-w-0 space-y-1">
                     <div className="break-all font-mono text-sm font-semibold text-foreground">{skill.command}</div>
@@ -712,18 +719,18 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
 
                   <div className="mt-4 flex flex-wrap items-center gap-2">
                     {skill.pluginName && (
-                      <Badge variant="outline" className="rounded-full bg-background/70">
+                      <Badge variant="outline" className="rounded-full bg-background">
                         Plugin: {skill.pluginName}
                       </Badge>
                     )}
                     {skill.projectDisplayName && (
-                      <Badge variant="outline" className="rounded-full bg-background/70">
+                      <Badge variant="outline" className="rounded-full bg-background">
                         Project: {skill.projectDisplayName}
                       </Badge>
                     )}
                   </div>
 
-                  <div className="mt-4 min-w-0 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+                  <div className="mt-4 min-w-0 rounded-lg border border-border bg-card px-3 py-2">
                     <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Source</div>
                     <code className="mt-1 block whitespace-normal break-all text-xs text-foreground">{skill.sourcePath}</code>
                   </div>

@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next';
 
-import ClaudeLogo from '../../../llm-logo-provider/ClaudeLogo';
 import type { AppTab, Project, ProjectSession } from '../../../../types/app';
 
 type MainContentTitleProps = {
@@ -26,6 +25,11 @@ function getSessionTitle(session: ProjectSession): string {
   return (session.summary as string) || 'New Session';
 }
 
+/**
+ * 顶栏标题块(设计稿 2a / 2b):
+ * 第一行 15px / 600 / 21px 的标题,第二行等宽 11px / 16px 的坐标
+ * ——「项目 · 路径 · 会话短 id」,上边距 3px。两行都单行省略。
+ */
 export default function MainContentTitle({
   activeTab,
   selectedProject,
@@ -33,38 +37,24 @@ export default function MainContentTitle({
 }: MainContentTitleProps) {
   const { t } = useTranslation();
 
-  const showSessionIcon = activeTab === 'chat' && Boolean(selectedSession);
-  const showChatNewSession = activeTab === 'chat' && !selectedSession;
+  const title = activeTab === 'chat'
+    ? (selectedSession ? getSessionTitle(selectedSession) : t('mainContent.newSession'))
+    : getTabTitle(activeTab, t);
+
+  const projectPath = selectedProject.fullPath || selectedProject.path || '';
+  const coordinates = [
+    selectedProject.displayName,
+    projectPath,
+    selectedSession?.id ? `sess_${String(selectedSession.id).slice(-6)}` : null,
+  ].filter(Boolean).join(' · ');
 
   return (
-    <div className="scrollbar-hide flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
-      {showSessionIcon && (
-        <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
-          <ClaudeLogo className="h-4 w-4" />
-        </div>
-      )}
-
-      <div className="min-w-0 flex-1">
-        {activeTab === 'chat' && selectedSession ? (
-          <div className="min-w-0">
-            <h2 title={getSessionTitle(selectedSession)} className="truncate text-sm font-semibold leading-tight text-foreground">
-              {getSessionTitle(selectedSession)}
-            </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
-          </div>
-        ) : showChatNewSession ? (
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold leading-tight text-foreground">{t('mainContent.newSession')}</h2>
-            <div className="truncate text-xs leading-tight text-muted-foreground">{selectedProject.displayName}</div>
-          </div>
-        ) : (
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold leading-tight text-foreground">
-              {getTabTitle(activeTab, t)}
-            </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
-          </div>
-        )}
+    <div className="min-w-0 flex-1">
+      <h2 title={title} className="truncate text-[15px] font-semibold leading-[21px] text-foreground">
+        {title}
+      </h2>
+      <div title={coordinates} className="mt-[3px] truncate font-mono text-[11px] leading-4 text-muted-foreground">
+        {coordinates}
       </div>
     </div>
   );

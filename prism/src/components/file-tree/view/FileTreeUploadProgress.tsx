@@ -51,20 +51,19 @@ export default function FileTreeUploadProgress({ upload }: FileTreeUploadProgres
       className={cn(
         'border-b px-3 py-2 transition-colors',
         isError
-          ? 'border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-300'
-          : isComplete
-          ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-          : 'border-primary/20 bg-primary/10 text-foreground',
+          ? 'border-border bg-muted text-muted-foreground'
+          // 淡色下绿色不做小字,数值/状态文字走墨色,深色里才是绿
+          : 'border-primary/[0.32] bg-primary/[0.08] text-card-foreground dark:text-primary',
       )}
     >
       <div className="flex min-h-[36px] items-center gap-2">
         <div
           className={cn(
             'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
-            isError ? 'bg-red-500/15' : isComplete ? 'bg-emerald-500/15' : 'bg-primary/15',
+            isError ? 'bg-muted' : 'bg-primary/[0.08]',
           )}
         >
-          <Icon className={cn('h-3.5 w-3.5', isUploading && 'animate-pulse')} />
+          <Icon className="h-3.5 w-3.5" />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
@@ -76,11 +75,11 @@ export default function FileTreeUploadProgress({ upload }: FileTreeUploadProgres
           <div className="mt-1 truncate text-[11px] text-muted-foreground">{detail}</div>
         </div>
       </div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-background/80">
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-background">
         <div
           className={cn(
-            'h-full rounded-full transition-[width] duration-200',
-            isError ? 'bg-red-500' : isComplete ? 'bg-emerald-500' : 'bg-primary',
+            'h-full rounded-full',
+            isError ? 'bg-muted-foreground' : 'bg-primary',
           )}
           style={{ width: `${isError ? Math.max(progress, 8) : progress}%` }}
         />

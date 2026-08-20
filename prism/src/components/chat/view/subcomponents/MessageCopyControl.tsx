@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 
 const COPY_SUCCESS_TIMEOUT_MS = 2000;
@@ -161,8 +162,8 @@ const MessageCopyControl = ({
   };
 
   const toneClass = messageType === 'user'
-    ? 'text-blue-100 hover:text-white'
-    : 'text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300';
+    ? 'text-primary-foreground hover:text-foreground'
+    : 'text-muted-foreground hover:text-body';
   const copyTitle = copied ? t('copyMessage.copied') : t('copyMessage.copy');
   const rootClassName = canSelectCopyFormat
     ? 'relative flex min-w-0 flex-1 items-center gap-0.5 sm:min-w-max sm:flex-none sm:w-auto'
@@ -226,7 +227,7 @@ const MessageCopyControl = ({
             <div
               ref={menuRef}
               style={menuStyle}
-              className="min-w-36 rounded-md border border-border bg-popover p-1 shadow-lg"
+              className="prism-modal-shadow min-w-36 rounded-md border border-border bg-popover p-1"
             >
               {copyFormatOptions.map((option) => {
                 const isSelected = option.format === selectedFormat;

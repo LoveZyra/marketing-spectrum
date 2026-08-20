@@ -97,7 +97,7 @@ const CodeBlock = ({ node, inline, className, children, ...props }: CodeBlockPro
             }
           })
         }
-        className="absolute right-2 top-2 z-10 rounded-md border border-border bg-card/90 px-2 py-1 text-xs text-foreground/80 opacity-0 transition-opacity hover:bg-muted focus:opacity-100 active:opacity-100 group-hover:opacity-100"
+        className="absolute right-2 top-2 z-10 rounded-md border border-border bg-card px-2 py-1 text-xs text-body opacity-0 transition-opacity hover:bg-muted focus:opacity-100 active:opacity-100 group-hover:opacity-100"
         title={copied ? t('codeBlock.copied') : t('codeBlock.copyCode')}
         aria-label={copied ? t('codeBlock.copied') : t('codeBlock.copyCode')}
       >
@@ -203,7 +203,7 @@ export function Markdown({ children, className }: MarkdownProps) {
           return (
             <a
               href={href || fileRef}
-              className="cursor-pointer text-primary hover:underline"
+              className="cursor-pointer text-foreground hover:underline dark:text-primary"
               onClick={(event) => {
                 event.preventDefault();
                 openFileInEditor(stripLineSuffix(fileRef));
@@ -217,7 +217,7 @@ export function Markdown({ children, className }: MarkdownProps) {
         return (
           <a
             href={href}
-            className="text-primary hover:underline"
+            className="text-foreground hover:underline dark:text-primary"
             target="_blank"
             rel="noopener noreferrer"
           >

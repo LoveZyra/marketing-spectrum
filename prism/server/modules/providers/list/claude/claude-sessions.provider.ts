@@ -9,6 +9,12 @@ import { createNormalizedMessage, generateMessageId, readObjectRecord, sliceTail
 import { sessionsDb } from '@/modules/database/index.js';
 import { FetchHistoryCache, type CachedHistory } from '@/modules/providers/list/claude/history-cache.js';
 
+import {
+  isInternalContent,
+  nonHumanUserTurnReason,
+  stripInjectedBlocks,
+} from './transcript-provenance.js';
+
 const PROVIDER = 'claude';
 
 type ClaudeToolResult = {
@@ -143,7 +149,12 @@ async function getSessionMessages(
 
       try {
         const entry = JSON.parse(line) as AnyRecord;
-        if (entry.sessionId === providerSessionId) {
+        // 子代理(Task/Agent)自己的那段对话有时被 CLI 直接写进主 transcript
+        // (`isSidechain: true`)。它跟主线程共用 sessionId,只按 id 收就会把
+        // 子代理的 prompt 与回复一起铺进聊天里 —— 用户看到的就是"凭空冒出来的
+        // 一堆用户消息"。子代理的工具调用另有正路:`subagents/agent-*.jsonl`
+        // 会被 parseAgentTools 单独收进 `subagentTools`,所以这里丢掉不会缺信息。
+        if (entry.sessionId === providerSessionId && entry.isSidechain !== true) {
           messages.push(entry);
         }
       } catch {
@@ -224,35 +235,11 @@ async function getSessionMessages(
  *
  * Important distinction:
  * - system reminders / caveats / interruption banners should stay hidden
+ *   (see `transcript-provenance.ts` —— 清单与出处判定都收在那一个文件里)
  * - local command payloads (`<command-name>...`) and stdout wrappers
  *   (`<local-command-stdout>...`) should be remapped into normal chat messages
  *   instead of being discarded as internal content
  */
-const INTERNAL_CONTENT_PREFIXES = [
-  '<system-reminder>',
-  'Caveat:',
-  '<local-command-caveat>',
-  '[Request interrupted',
-  // Skill 被调用时,CLI 把整份 SKILL.md 连同"Base directory for this skill: …"
-  // 前缀注入成一条 user 消息喂给模型 —— 那是给模型看的说明书,不是用户发言。
-  // 不滤掉它,聊天里就会凭空出现一大段紫色"用户消息"(技能全文)。
-  'Base directory for this skill:',
-  // SDK 的自动重试提示:模型给了空响应 / 吐了解析不了的工具调用时,CLI 会以
-  // user 身份注入这两句催它重来。是机器对机器的耳语,不是用户发言。
-  '[Your previous response had no visible output',
-  'Your tool call was malformed',
-  // 压缩续接(耗尽上下文后 CLI 注入的"本会话接续自…"+全文摘要)与跨机续接。
-  'This session is being continued',
-  // 本地命令执行后 CLI 注入的"不用回应"占位。
-  'No response requested.',
-  // 工具调用被打断/移除时的占位说明。
-  '[Tool use interrupted]',
-  '[Tool use removed]',
-] as const;
-
-function isInternalContent(content: string): boolean {
-  return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
-}
 
 /**
  * Claude wraps local slash-command metadata in lightweight XML-like tags inside
@@ -417,6 +404,16 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const baseId = raw.uuid || generateMessageId('claude');
 
     if (raw.message?.role === 'user' && raw.message?.content && raw.isMeta !== true) {
+      /**
+       * `role: 'user'` ≠ 用户说的。子代理(Task/Agent)的对话、SDK 自造的续写、
+       * CLI 的机器耳语,统统走 user 帧。判定收在 `transcript-provenance.ts`。
+       *
+       * 注意这里只压住「把 text 渲染成用户气泡」—— 同一条记录里的 `tool_result`
+       * 照常抽出来,否则子代理的工具调用会从时间轴上整片消失。
+       */
+      const nonHumanReason = nonHumanUserTurnReason(raw);
+      const suppressUserText = nonHumanReason !== null;
+
       if (Array.isArray(raw.message.content)) {
         // Image attachments sent through the SDK are persisted as base64
         // `image` blocks next to the prompt text. Collect them so the UI can
@@ -445,8 +442,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               subagentTools: raw.subagentTools,
               toolUseResult: raw.toolUseResult,
             }));
-          } else if (part.type === 'text') {
-            const text = part.text || '';
+          } else if (part.type === 'text' && !suppressUserText) {
+            const text = stripInjectedBlocks(part.text || '');
             if (text && !isInternalContent(text)) {
               messages.push(createNormalizedMessage({
                 id: `${baseId}_text_${partIndex}`,
@@ -463,12 +460,12 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           }
         }
 
-        if (messages.length === 0) {
-          const textParts = raw.message.content
+        if (messages.length === 0 && !suppressUserText) {
+          const textParts = stripInjectedBlocks(raw.message.content
             .filter((part: AnyRecord) => part.type === 'text')
             .map((part: AnyRecord) => part.text)
             .filter(Boolean)
-            .join('\n');
+            .join('\n'));
           if (textParts && !isInternalContent(textParts)) {
             messages.push(createNormalizedMessage({
               id: `${baseId}_text`,
@@ -485,7 +482,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         }
 
         // Image-only turns still deserve a user bubble even without text.
-        if (!imagesAttached && imageAttachments.length > 0) {
+        if (!imagesAttached && imageAttachments.length > 0 && !suppressUserText) {
           messages.push(createNormalizedMessage({
             id: `${baseId}_images`,
             sessionId,
@@ -531,7 +528,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         const localCommandPayload = parseLocalCommandPayload(text);
         if (localCommandPayload) {
           const displayText = buildLocalCommandDisplayText(localCommandPayload);
-          if (displayText) {
+          if (displayText && !suppressUserText) {
             messages.push(createNormalizedMessage({
               id: baseId,
               sessionId,
@@ -573,7 +570,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           return messages;
         }
 
-        if (text && !isInternalContent(text)) {
+        const visibleText = stripInjectedBlocks(text);
+        if (visibleText && !suppressUserText && !isInternalContent(visibleText)) {
           messages.push(createNormalizedMessage({
             id: baseId,
             sessionId,
@@ -581,7 +579,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             provider: PROVIDER,
             kind: 'text',
             role: 'user',
-            content: text,
+            content: visibleText,
           }));
         }
       }

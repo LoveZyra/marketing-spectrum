@@ -71,6 +71,28 @@ const isPromiseLike = (value: unknown): value is Promise<unknown> =>
 const isSkillCommand = (command: SlashCommand) =>
   command.type === 'skill' || command.metadata?.type === 'skill';
 
+const isBuiltinCommand = (command: SlashCommand) =>
+  command.type === 'builtin' || command.namespace === 'builtin' || command.metadata?.type === 'builtin';
+
+/**
+ * 这条命令该由谁来跑?
+ *
+ * `/api/commands/execute` 只认两种:**六个内置命令**(服务端有 handler),
+ * 以及**带 path 的自定义命令**(服务端去 `.claude/commands/` 读文件)。
+ * 除此之外的一律得**打进输入框、当成提示词发给 CLI 去解释**。
+ *
+ * 之前只挑出了技能,于是从 `/api/claude/slash-commands` 拿回来的那批 **CLI 自带
+ * 命令**(`/compact`、`/clear`、`/init`…)也被送去 execute 端点 ——
+ * 它们既没有 handler 也没有 path,一律撞在
+ * 「Command path is required for custom commands」上。
+ */
+export const isPromptCommand = (command: SlashCommand) => {
+  if (isSkillCommand(command)) return true;
+  if (command.type === 'cli' || command.namespace === 'cli') return true;
+  // 自定义命令没有 path,服务端读不到文件 —— 交给模型总比报错强。
+  return !isBuiltinCommand(command) && !command.path;
+};
+
 const dedupeProviderSkills = (skills: ProviderSkill[]): ProviderSkill[] => {
   const seenCommands = new Set<string>();
 
@@ -373,9 +395,18 @@ export function useSlashCommands({
     [onExecuteCommand, resetCommandMenuState],
   );
 
+  /**
+   * 键盘选中一条命令。
+   *
+   * `mode` 区分 **Tab 与 Enter**:
+   * - `complete`(Tab):**只把命令补进输入框**,任何类型都一样。以前 Tab 走的是
+   *   和 Enter 完全相同的分支 —— 于是只有技能"像补全",其余的一按 Tab 就直接执行了,
+   *   看起来就是"除了 skill 都不支持 tab 补全"。
+   * - `submit`(Enter):技能与 CLI 命令进输入框,内置/自定义命令交服务端执行。
+   */
   const selectCommandFromKeyboard = useCallback(
-    (command: SlashCommand) => {
-      if (isSkillCommand(command)) {
+    (command: SlashCommand, mode: 'complete' | 'submit') => {
+      if (mode === 'complete' || isPromptCommand(command)) {
         insertCommandIntoInput(command);
         return;
       }
@@ -397,7 +428,7 @@ export function useSlashCommands({
       }
 
       trackCommandUsage(command);
-      if (isSkillCommand(command)) {
+      if (isPromptCommand(command)) {
         insertCommandIntoInput(command);
         return;
       }
@@ -494,10 +525,12 @@ export function useSlashCommands({
 
       if (event.key === 'Tab' || event.key === 'Enter') {
         event.preventDefault();
-        if (selectedCommandIndex >= 0) {
-          selectCommandFromKeyboard(filteredCommands[selectedCommandIndex]);
-        } else if (filteredCommands.length > 0) {
-          selectCommandFromKeyboard(filteredCommands[0]);
+        const mode = event.key === 'Tab' ? 'complete' : 'submit';
+        const target = selectedCommandIndex >= 0
+          ? filteredCommands[selectedCommandIndex]
+          : filteredCommands[0];
+        if (target) {
+          selectCommandFromKeyboard(target, mode);
         }
         return true;
       }

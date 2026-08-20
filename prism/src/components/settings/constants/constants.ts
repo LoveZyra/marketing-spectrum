@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import { Activity, Bell, Bot, Info, KeyRound, ListChecks, Mic, MonitorPlay, Palette, Plug, Shuffle, UserRound, Users } from 'lucide-react';
+import { Activity, Bell, Bot, Info, KeyRound, Palette, Shuffle, UserRound, Users } from 'lucide-react';
 
 import type {
   CodeEditorSettingsState,

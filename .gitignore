@@ -33,3 +33,4 @@ ma-env.local.sh
 .DS_Store
 Thumbs.db
 /prism/prism-upload-chunk.tar.gz
+/design_handoff_prism_ui

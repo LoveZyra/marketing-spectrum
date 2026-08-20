@@ -128,7 +128,7 @@ const landFileInChunks = async (
 };
 
 import { useFileMentions } from './useFileMentions';
-import { type SlashCommand, useSlashCommands } from './useSlashCommands';
+import { isPromptCommand, type SlashCommand, useSlashCommands } from './useSlashCommands';
 
 /**
  * prism: in-flight transfer state for the generic attach button.
@@ -1026,7 +1026,19 @@ export function useChatComposerState({
                 metadata: { type: 'builtin' },
               } as SlashCommand)
             : undefined);
-        if (matchedCommand && matchedCommand.type !== 'skill') {
+        /**
+         * 只有**服务端跑得动**的命令才在这里截胡。
+         *
+         * 原来的判断是 `type !== 'skill'` —— 和菜单里那处犯的是同一个错:
+         * 除了技能之外全都送去 `/api/commands/execute`。CLI 自带命令
+         * (`/compact`、`/clear`、`/init`…)在那个端点既没有 handler 也没有 path,
+         * 于是一路撞到「Command path is required for custom commands」。
+         *
+         * ax 轮修了菜单那处,反而让这条路更容易走到:菜单现在会把 `/compact`
+         * **稳稳地放进输入框**,用户再按一次回车发送 —— 正好落进这个截胡分支。
+         * 两处必须用同一个判据。
+         */
+        if (matchedCommand && !isPromptCommand(matchedCommand)) {
           executeCommand(matchedCommand, isHelpAlias ? '/help' : commandInput);
           setInput('');
           inputValueRef.current = '';

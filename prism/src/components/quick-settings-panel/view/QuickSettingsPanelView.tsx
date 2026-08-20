@@ -1,9 +1,10 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useTheme } from '../../../contexts/ThemeContext';
+import { QUICK_SETTINGS_TOGGLE_EVENT } from '../constants';
 import { useQuickSettingsDrag } from '../hooks/useQuickSettingsDrag';
 import type { PreferenceToggleKey, QuickSettingsPreferences } from '../types';
 
@@ -13,6 +14,13 @@ import QuickSettingsPanelHeader from './QuickSettingsPanelHeader';
 
 export default function QuickSettingsPanelView() {
   const [isOpen, setIsOpen] = useState(false);
+
+  // 图标轨上的扳手入口通过 window 事件开关面板(原有拖拽手柄不受影响)。
+  useEffect(() => {
+    const onToggle = () => setIsOpen((previous) => !previous);
+    window.addEventListener(QUICK_SETTINGS_TOGGLE_EVENT, onToggle);
+    return () => window.removeEventListener(QUICK_SETTINGS_TOGGLE_EVENT, onToggle);
+  }, []);
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { isDarkMode } = useTheme();
   const { preferences, setPreference } = useUiPreferences();
@@ -65,7 +73,7 @@ export default function QuickSettingsPanelView() {
       />
 
       <div
-        className={`fixed right-0 top-0 z-40 h-full w-64 transform border-l border-border bg-background shadow-xl transition-transform duration-150 ease-out ${isOpen ? 'translate-x-0' : 'translate-x-full'} ${isMobile ? 'h-screen' : ''}`}
+        className={`prism-modal-shadow fixed right-0 top-0 z-40 h-full w-64 transform border-l border-border bg-background transition-transform duration-150 ease-out ${isOpen ? 'translate-x-0' : 'translate-x-full'} ${isMobile ? 'h-screen' : ''}`}
       >
         <div className="flex h-full flex-col">
           <QuickSettingsPanelHeader />
@@ -79,7 +87,7 @@ export default function QuickSettingsPanelView() {
 
       {isOpen && (
         <div
-          className="fixed inset-0 z-30 bg-background/80 backdrop-blur-sm transition-opacity duration-150 ease-out"
+          className="fixed inset-0 z-30 bg-[rgba(16,16,16,0.72)] transition-opacity duration-150 ease-out"
           onClick={() => setIsOpen(false)}
         />
       )}

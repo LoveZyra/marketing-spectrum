@@ -12,17 +12,20 @@
     "runClaudeCli": "在專案目錄中執行 Claude CLI 以開始使用"
   },
   "app": {
-    "title": "Prism"
+    "title": "稜鏡"
   },
   "sessions": {
     "newSession": "新增工作階段",
     "noSessions": "暫無工作階段",
     "loadingSessions": "載入工作階段中...",
     "unnamed": "未命名",
-    "loading": "載入中..."
+    "loading": "載入中...",
+    "runningMeta": "執行中 · {{age}}",
+    "messageCount": "{{count}} 條"
   },
   "tooltips": {
     "hideSidebar": "隱藏側邊欄",
+    "showSidebar": "顯示側邊欄",
     "createProject": "建立新專案",
     "refresh": "重新整理專案和工作階段 (Ctrl+R)",
     "renameProject": "重新命名專案 (F2)",
@@ -92,6 +95,10 @@
       "loadFailed": "權限載入失敗",
       "saveFailed": "儲存失敗",
       "needUsers": "選擇「指定使用者」時至少勾選一位使用者"
-    }
+    },
+    "publicHint": "公共專案 —— 無主且在公共目錄下,所有人可見",
+    "rootOnlyHint": "僅 root 可見 —— 無主且不在公共目錄下",
+    "sharedHint": "他人共享給你的專案",
+    "sharedOutHint": "已共享給 {{count}} 人"
   }
 }

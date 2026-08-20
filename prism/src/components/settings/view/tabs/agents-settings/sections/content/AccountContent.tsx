@@ -22,21 +22,21 @@ export default function AccountContent({ authStatus, onLogin }: AccountContentPr
       <div className="mb-4 flex items-center gap-3">
         <ClaudeLogo className="h-6 w-6" />
         <div>
-          <h3 className="text-lg font-medium text-foreground">Claude</h3>
+          <h3 className="text-base font-semibold text-foreground">Claude</h3>
           <p className="text-sm text-muted-foreground">
             {t('agents.account.claude.description', { defaultValue: 'Anthropic Claude AI assistant' })}
           </p>
         </div>
       </div>
 
-      <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+      <div className="rounded-lg border border-border p-4">
         <div className="space-y-4">
           <div className="flex items-center gap-3">
             <div className="flex-1">
-              <div className="font-medium text-blue-900 dark:text-blue-100">
+              <div className="font-medium text-foreground">
                 {t('agents.connectionStatus')}
               </div>
-              <div className="text-sm text-blue-700 dark:text-blue-300">
+              <div className="text-sm text-muted-foreground">
                 {authStatus.loading ? (
                   t('agents.authStatus.checkingAuth')
                 ) : authStatus.authenticated ? (
@@ -54,11 +54,11 @@ export default function AccountContent({ authStatus, onLogin }: AccountContentPr
                   {t('agents.authStatus.checking')}
                 </Badge>
               ) : authStatus.authenticated ? (
-                <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300">
+                <Badge variant="secondary" className="border border-primary/30 bg-transparent text-card-foreground dark:text-primary">
                   {t('agents.authStatus.connected')}
                 </Badge>
               ) : (
-                <Badge variant="secondary" className="bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300">
+                <Badge variant="secondary" className="bg-muted text-foreground">
                   {t('agents.authStatus.disconnected')}
                 </Badge>
               )}
@@ -66,13 +66,13 @@ export default function AccountContent({ authStatus, onLogin }: AccountContentPr
           </div>
 
           {authStatus.method !== 'api_key' && (
-            <div className="border-t border-border/50 pt-4">
+            <div className="border-t border-border pt-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="font-medium text-blue-900 dark:text-blue-100">
+                  <div className="font-medium text-foreground">
                     {authStatus.authenticated ? t('agents.login.reAuthenticate') : t('agents.login.title')}
                   </div>
-                  <div className="text-sm text-blue-700 dark:text-blue-300">
+                  <div className="text-sm text-muted-foreground">
                     {authStatus.authenticated
                       ? t('agents.login.reAuthDescription')
                       : t('agents.login.description', { agent: 'Claude' })}
@@ -80,7 +80,7 @@ export default function AccountContent({ authStatus, onLogin }: AccountContentPr
                 </div>
                 <Button
                   onClick={onLogin}
-                  className="bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800"
+                  className="bg-primary text-primary-foreground hover:bg-primary/90"
                   size="sm"
                 >
                   <LogIn className="mr-2 h-4 w-4" />
@@ -91,8 +91,8 @@ export default function AccountContent({ authStatus, onLogin }: AccountContentPr
           )}
 
           {authStatus.error && (
-            <div className="border-t border-border/50 pt-4">
-              <div className="text-sm text-red-600 dark:text-red-400">
+            <div className="border-t border-border pt-4">
+              <div className="text-sm text-muted-foreground">
                 {t('agents.error', { error: authStatus.error })}
               </div>
             </div>

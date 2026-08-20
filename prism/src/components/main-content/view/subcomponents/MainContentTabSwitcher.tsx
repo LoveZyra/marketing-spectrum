@@ -1,4 +1,4 @@
-import { MessageSquare, Terminal, Folder, NotebookPen, ClipboardCheck, MonitorPlay, type LucideIcon } from 'lucide-react';
+import { MessageSquare, Terminal, Folder, NotebookPen, type LucideIcon } from 'lucide-react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -51,9 +51,9 @@ export default function MainContentTabSwitcher({
             <Pill
               isActive={isActive}
               onClick={() => setActiveTab(tab.id)}
-              className="px-2.5 py-[5px]"
+              className="px-3 py-2.5"
             >
-              <tab.icon className="h-3.5 w-3.5" strokeWidth={isActive ? 2.2 : 1.8} />
+              <tab.icon className="h-4 w-4" strokeWidth={2} />
               <span className="hidden lg:inline">{displayLabel}</span>
             </Pill>
           </Tooltip>

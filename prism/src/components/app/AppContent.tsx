@@ -5,13 +5,18 @@ import { useTranslation } from 'react-i18next';
 import Sidebar from '../sidebar/view/Sidebar';
 import MainContent from '../main-content/view/MainContent';
 import CommandPalette from '../command-palette/CommandPalette';
+import { useAuth } from '../auth/context/AuthContext';
+import { usePendingApprovalCount } from '../../hooks/usePendingApprovalCount';
 import { useWebSocket } from '../../contexts/WebSocketContext';
 import { PaletteOpsProvider, usePaletteOpsRegister } from '../../contexts/PaletteOpsContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
+import { useUiPreferences } from '../../hooks/useUiPreferences';
 import { useProjectsState } from '../../hooks/useProjectsState';
 import { useQueuedMessageAutoSend } from '../../hooks/useQueuedMessageAutoSend';
 import { api } from '../../utils/api';
+
+import AppRail from './AppRail';
 
 type RunningSessionApiItem = {
   sessionId?: unknown;
@@ -53,6 +58,10 @@ function AppContentInner() {
   const { t } = useTranslation('common');
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { sendMessage, subscribe, isConnected } = useWebSocket();
+  const pendingApprovalCount = usePendingApprovalCount(Boolean(useAuth().user?.isRoot));
+  const { preferences: uiPreferences } = useUiPreferences();
+  // 折叠后只留图标轨:侧栏与它的外层边框一起不渲染
+  const isSidebarCollapsed = !isMobile && !uiPreferences.sidebarVisible;
 
   const {
     processingSessions,
@@ -184,17 +193,27 @@ function AppContentInner() {
 
   return (
     <div className="fixed inset-0 flex bg-background" style={{ bottom: 'var(--keyboard-height, 0px)' }}>
+      {!isMobile && (
+        <AppRail
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          onShowSettings={openSettings}
+          pendingApprovalCount={pendingApprovalCount}
+        />
+      )}
       {!isMobile ? (
-        <div className="h-full flex-shrink-0 border-r border-border/50">
-          <Sidebar {...sidebarSharedProps} />
-        </div>
+        isSidebarCollapsed ? null : (
+          <div className="h-full flex-shrink-0 border-r border-border">
+            <Sidebar {...sidebarSharedProps} />
+          </div>
+        )
       ) : (
         <div
-          className={`fixed inset-0 z-50 flex transition-all duration-150 ease-out ${sidebarOpen ? 'visible opacity-100' : 'invisible opacity-0'
+          className={`fixed inset-0 z-50 flex transition-colors duration-150 ease-out ${sidebarOpen ? 'visible opacity-100' : 'invisible opacity-0'
             }`}
         >
           <button
-            className="fixed inset-0 bg-background/60 backdrop-blur-sm transition-opacity duration-150 ease-out"
+            className="fixed inset-0 bg-[rgba(16,16,16,0.72)] transition-opacity duration-150 ease-out"
             onClick={(event) => {
               event.stopPropagation();
               setSidebarOpen(false);
@@ -207,7 +226,7 @@ function AppContentInner() {
             aria-label={t('versionUpdate.ariaLabels.closeSidebar')}
           />
           <div
-            className={`relative h-full w-[85vw] max-w-sm transform border-r border-border/40 bg-card transition-transform duration-150 ease-out sm:w-80 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+            className={`relative h-full w-[85vw] max-w-sm transform border-r border-border bg-card transition-transform duration-150 ease-out sm:w-80 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
               }`}
             onClick={(event) => event.stopPropagation()}
             onTouchStart={(event) => event.stopPropagation()}

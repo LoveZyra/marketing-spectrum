@@ -4,8 +4,7 @@ import {
   AlertTriangleIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  FileDiffIcon,
-  History,
+  GitBranchIcon,
   RotateCcwIcon,
   XIcon,
 } from 'lucide-react';
@@ -67,15 +66,16 @@ const FORCE_CONFIRMABLE_CODES = new Set(['COMMITS_AFTER_CHECKPOINT', 'CHECKPOINT
 function DiffView({ diff }: { diff: string }) {
   const lines = useMemo(() => diff.split('\n'), [diff]);
   return (
-    <pre className="mt-1 max-h-64 overflow-auto rounded-lg border border-border/50 bg-muted/30 p-2 text-[11px] leading-relaxed">
+    <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-border bg-card px-3 py-2.5 font-mono text-[11px] leading-[17px]">
       {lines.map((line, index) => {
-        const tone = line.startsWith('+') && !line.startsWith('+++')
-          ? 'text-green-600 dark:text-green-400'
-          : line.startsWith('-') && !line.startsWith('---')
-            ? 'text-red-600 dark:text-red-400'
-            : line.startsWith('@@')
-              ? 'text-blue-600 dark:text-blue-400'
-              : 'text-muted-foreground';
+        const isAdd = line.startsWith('+') && !line.startsWith('+++');
+        const isDel = line.startsWith('-') && !line.startsWith('---');
+        // 增行给 8% 绿底 + 代码墨色;删行不用红底,只弱化 + 删除线
+        const tone = isAdd
+          ? 'bg-primary/8 text-code'
+          : isDel
+            ? 'text-muted-foreground line-through'
+            : 'text-muted-foreground';
         return (
           <div key={index} className={`whitespace-pre-wrap break-all ${tone}`}>
             {line || ' '}
@@ -118,7 +118,7 @@ export function RestoreForceDialog({
       <DialogContent className="max-w-md p-4">
         <DialogTitle>{title}</DialogTitle>
         <div className="flex items-start gap-2">
-          <AlertTriangleIcon className="mt-0.5 h-5 w-5 flex-shrink-0 text-orange-500" aria-hidden />
+          <AlertTriangleIcon className="mt-0.5 h-5 w-5 flex-shrink-0 text-muted-foreground" aria-hidden />
           <div className="min-w-0 flex-1 space-y-2">
             <h3 className="text-sm font-semibold text-foreground">{title}</h3>
 
@@ -130,10 +130,10 @@ export function RestoreForceDialog({
                     count: blocker.commitCount ?? blocker.commits?.length ?? 0,
                   })}
                 </p>
-                <ul className="max-h-40 space-y-0.5 overflow-y-auto rounded-lg border border-border/60 bg-muted/30 p-2">
+                <ul className="max-h-40 space-y-0.5 overflow-y-auto rounded-md border border-border bg-card p-2">
                   {(blocker.commits || []).map((commit) => (
                     <li key={commit.hash} className="flex items-baseline gap-2 text-[11px]">
-                      <code className="flex-shrink-0 font-mono text-orange-600 dark:text-orange-400">
+                      <code className="flex-shrink-0 font-mono text-muted-foreground">
                         {commit.hash.slice(0, 7)}
                       </code>
                       <span className="truncate text-foreground">{commit.subject || '—'}</span>
@@ -150,7 +150,7 @@ export function RestoreForceDialog({
                     ? t('checkpoint.confirm.incompleteReasonBudget', { defaultValue: "The untracked files exceeded the checkpoint's size budget, so not every file's content was saved." })
                     : t('checkpoint.confirm.incompleteReasonTooMany', { defaultValue: 'This turn had more untracked files than the checkpoint could record, so the snapshot does not list every file that existed.' })}
                 </p>
-                <p className="text-xs font-medium text-orange-600 dark:text-orange-400">
+                <p className="text-xs font-medium text-foreground">
                   {t('checkpoint.confirm.incompleteSkipNote', { defaultValue: 'For safety, rolling back will NOT delete any untracked files; only tracked changes and saved snapshots will be restored.' })}
                 </p>
               </div>
@@ -173,6 +173,9 @@ export function RestoreForceDialog({
   );
 }
 
+/** 超过这个文件数就默认收起 —— 再多就该点开看,而不是霸着屏幕。 */
+const COLLAPSE_ABOVE = 3;
+
 /**
  * Post-turn summary of files Claude changed, with per-file revert and a
  * transactional whole-turn rollback (git checkpoint, prism feature).
@@ -183,7 +186,9 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [revertedPaths, setRevertedPaths] = useState<Set<string>>(new Set());
-  const [collapsed, setCollapsed] = useState(false);
+  // 文件一多,这块面板就长在输入框正上方顶掉半屏正文 —— 超过 3 个默认收起,
+  // 抬头那一行(文件数 + 总增删 + 回滚)本来就把要紧的都说完了。
+  const [collapsed, setCollapsed] = useState(() => (state.files || []).length > COLLAPSE_ABOVE);
   const [restoreBlocker, setRestoreBlocker] = useState<RestoreBlockerPayload | null>(null);
   const [metaFlags, setMetaFlags] = useState<CheckpointMetaFlags | null>(null);
 
@@ -309,28 +314,37 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
   if (files.length === 0) return null;
 
   return (
-    <div className="mx-3 mb-2 rounded-xl border border-border/70 bg-card/95 shadow-sm">
-      <div className="flex items-center gap-2 px-3 py-2">
+    <div className="mx-3 mb-2 overflow-hidden rounded-lg border border-border">
+      {/* 标头(设计稿 2a/2b):分支图标 → 本轮改动 → 文件数 → 总增删 → ml-auto → ckpt → 回滚本轮 */}
+      <div className="flex items-center gap-2.5 border-b border-border bg-card px-3.5 py-2">
         <button
           type="button"
           onClick={() => setCollapsed((value) => !value)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+          aria-expanded={!collapsed}
         >
           {collapsed
-            ? <ChevronRightIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-            : <ChevronDownIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />}
-          <FileDiffIcon className="h-4 w-4 flex-shrink-0 text-primary" />
-          <span className="truncate text-xs font-medium text-foreground">
+            ? <ChevronRightIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" strokeWidth={2} />
+            : <ChevronDownIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" strokeWidth={2} />}
+          <GitBranchIcon className="h-4 w-4 flex-shrink-0 text-primary" strokeWidth={2} />
+          <span className="flex-shrink-0 text-xs font-semibold leading-4 text-card-foreground">
+            {t('checkpoint.changedFilesTitle', { defaultValue: '本轮改动' })}
+          </span>
+          <span className="flex-shrink-0 font-mono text-[11px] text-muted-foreground">
             {t('checkpoint.changedFiles', {
               defaultValue: '{{count}} file(s) changed this turn',
               count: files.length,
             })}
           </span>
-          <span className="hidden flex-shrink-0 text-[11px] text-muted-foreground sm:inline">
-            <span className="text-green-600 dark:text-green-400">+{totalAdditions}</span>
-            {' '}
-            <span className="text-red-600 dark:text-red-400">−{totalDeletions}</span>
+          {/* 淡色下绿色不做小字,改墨色;深色沿用强调绿 */}
+          <span className="hidden flex-shrink-0 font-mono text-[11px] text-card-foreground dark:text-primary sm:inline">
+            +{totalAdditions} −{totalDeletions}
           </span>
+          {state.checkpointId && (
+            <span className="ml-auto hidden flex-shrink-0 truncate font-mono text-[11px] text-muted-foreground sm:inline">
+              {`ckpt_${state.checkpointId.slice(-6)}`}
+            </span>
+          )}
         </button>
 
         {state.checkpointId && (
@@ -338,10 +352,10 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
             type="button"
             disabled={isProcessing || busy !== null}
             onClick={handleRestore}
-            className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-lg border border-orange-300/60 bg-orange-50 px-2 text-[11px] font-medium text-orange-700 transition-colors hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-orange-600/40 dark:bg-orange-900/15 dark:text-orange-300 dark:hover:bg-orange-900/25"
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-[3px] text-[11.5px] text-card-foreground transition-colors hover:border-border-strong disabled:cursor-not-allowed disabled:opacity-50"
             title={t('checkpoint.restoreTitle', { defaultValue: 'Transactional rollback to the pre-turn git checkpoint' })}
           >
-            <History className="h-3 w-3" />
+            <RotateCcwIcon className="h-4 w-4" strokeWidth={2} />
             {busy === '__restore__'
               ? t('checkpoint.restoring', { defaultValue: 'Rolling back…' })
               : t('checkpoint.restore', { defaultValue: 'Roll back turn' })}
@@ -351,23 +365,23 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
         <button
           type="button"
           onClick={onDismiss}
-          className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="grid h-6 w-6 flex-shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           aria-label={t('checkpoint.dismiss', { defaultValue: 'Dismiss' })}
         >
-          <XIcon className="h-3.5 w-3.5" />
+          <XIcon className="h-3.5 w-3.5" strokeWidth={2} />
         </button>
       </div>
 
       {(hasSubmodules || isIncomplete) && (
-        <div className="flex flex-col gap-0.5 border-t border-border/50 px-3 py-1.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-border px-3.5 py-1">
           {hasSubmodules && (
-            <p className="flex items-center gap-1.5 text-[11px] text-orange-600 dark:text-orange-400">
+            <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <AlertTriangleIcon className="h-3 w-3 flex-shrink-0" aria-hidden />
               {t('checkpoint.submoduleWarning', { defaultValue: 'Submodule changes are not covered by rollback.' })}
             </p>
           )}
           {isIncomplete && (
-            <p className="flex items-center gap-1.5 text-[11px] text-orange-600 dark:text-orange-400">
+            <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <AlertTriangleIcon className="h-3 w-3 flex-shrink-0" aria-hidden />
               {t('checkpoint.incompleteBadge', { defaultValue: 'incomplete snapshot' })}
             </p>
@@ -376,46 +390,38 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
       )}
 
       {notice && (
-        <div className="border-t border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">{notice}</div>
+        <div className="border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground">{notice}</div>
       )}
 
       {!collapsed && (
-        <div className="max-h-72 overflow-y-auto border-t border-border/50 px-2 py-1.5">
-          {files.map((file) => {
+        <div className="scrollbar-thin max-h-52 overflow-y-auto">
+          {files.map((file, index) => {
             const reverted = revertedPaths.has(file.path);
             const expanded = expandedPath === file.path;
+            const status = (file.status || 'modified').slice(0, 1).toUpperCase();
+            // 淡色下 M 用墨色(绿色不在浅底做小字),A/D/R 一律弱化
+            const statusTone = file.status === 'added' || file.status === 'deleted' || file.status === 'renamed'
+              ? 'text-muted-foreground'
+              : 'text-card-foreground dark:text-primary';
             return (
-              <div key={file.path} className="rounded-lg px-1 py-0.5">
-                <div className="flex items-center gap-2">
+              <div key={file.path} className={index === files.length - 1 ? '' : 'border-b border-border'}>
+                <div className="flex items-center gap-2.5 px-3.5 py-[5px]">
                   <button
                     type="button"
                     onClick={() => setExpandedPath(expanded ? null : file.path)}
-                    className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left hover:bg-accent/60"
+                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                    aria-expanded={expanded}
                   >
-                    {expanded
-                      ? <ChevronDownIcon className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
-                      : <ChevronRightIcon className="h-3 w-3 flex-shrink-0 text-muted-foreground" />}
-                    <span className={`truncate font-mono text-[11px] ${reverted ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+                    <span className={`w-3.5 flex-none font-mono text-[11px] ${statusTone}`} title={file.status || 'modified'}>
+                      {status}
+                    </span>
+                    <span className={`min-w-0 flex-1 truncate font-mono text-[11.5px] ${reverted ? 'text-muted-foreground line-through' : 'text-code'}`}>
                       {file.status === 'renamed' && file.oldPath
                         ? `${file.oldPath} → ${file.path}`
                         : file.path}
                     </span>
-                    <span className={`flex-shrink-0 rounded px-1 text-[10px] uppercase ${
-                      file.status === 'added'
-                        ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                        : file.status === 'deleted'
-                          ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-                          : file.status === 'renamed'
-                            ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400'
-                            : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                    }`}
-                    >
-                      {file.status || 'modified'}
-                    </span>
-                    <span className="hidden flex-shrink-0 text-[10px] text-muted-foreground sm:inline">
-                      <span className="text-green-600 dark:text-green-400">+{file.additions ?? '?'}</span>
-                      {' '}
-                      <span className="text-red-600 dark:text-red-400">−{file.deletions ?? '?'}</span>
+                    <span className="hidden flex-none font-mono text-[11px] text-muted-foreground sm:inline">
+                      +{file.additions ?? '?'} −{file.deletions ?? '?'}
                     </span>
                   </button>
 
@@ -424,10 +430,9 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
                       type="button"
                       disabled={isProcessing || busy !== null}
                       onClick={() => handleRevertFile(file)}
-                      className="inline-flex h-6 flex-shrink-0 items-center gap-1 rounded-md px-1.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex-none text-[11.5px] text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                       title={t('checkpoint.revertFileTitle', { defaultValue: 'Revert only this file to its pre-turn state' })}
                     >
-                      <RotateCcwIcon className="h-3 w-3" />
                       {busy === file.path
                         ? t('checkpoint.reverting', { defaultValue: 'Reverting…' })
                         : t('checkpoint.revertFile', { defaultValue: 'Revert' })}
@@ -435,22 +440,27 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
                   )}
                 </div>
 
-                {expanded && file.status === 'renamed' && file.oldPath && (
-                  <p className="mt-0.5 px-1 font-mono text-[10px] text-muted-foreground">
-                    {t('checkpoint.renamedFrom', { defaultValue: 'renamed from {{path}}', path: file.oldPath })}
-                  </p>
-                )}
-                {expanded && file.diff && <DiffView diff={file.diff} />}
-                {expanded && !file.diff && (
-                  <p className="mt-1 px-1 text-[11px] text-muted-foreground">
-                    {t('checkpoint.diffUnavailable', { defaultValue: 'Diff unavailable (binary or truncated).' })}
-                  </p>
+                {expanded && (
+                  <div className="px-3.5 pb-2.5">
+                    {file.status === 'renamed' && file.oldPath && (
+                      <p className="font-mono text-[10px] text-muted-foreground">
+                        {t('checkpoint.renamedFrom', { defaultValue: 'renamed from {{path}}', path: file.oldPath })}
+                      </p>
+                    )}
+                    {file.diff
+                      ? <DiffView diff={file.diff} />
+                      : (
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          {t('checkpoint.diffUnavailable', { defaultValue: 'Diff unavailable (binary or truncated).' })}
+                        </p>
+                      )}
+                  </div>
                 )}
               </div>
             );
           })}
           {state.truncated && (
-            <p className="px-2 py-1 text-[10px] text-muted-foreground">
+            <p className="border-t border-border px-3.5 py-1.5 text-[10px] text-muted-foreground">
               {t('checkpoint.truncated', { defaultValue: 'Some diffs were truncated due to size limits.' })}
             </p>
           )}

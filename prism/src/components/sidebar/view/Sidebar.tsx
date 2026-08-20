@@ -1,17 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { usePendingApprovalCount } from '../../../hooks/usePendingApprovalCount';
 import { useAuth } from '../../auth/context/AuthContext';
-import { useTranslation } from 'react-i18next';
-
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useSidebarController } from '../hooks/useSidebarController';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
-import type { Project, LLMProvider } from '../../../types/app';
-import type { MCPServerStatus, SidebarProps } from '../types/types';
+import type { LLMProvider } from '../../../types/app';
+import type { SidebarProps } from '../types/types';
 
-import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
@@ -97,8 +95,6 @@ function Sidebar({
     restoreArchivedSession,
     refreshProjects,
     updateSessionSummary,
-    collapseSidebar: handleCollapseSidebar,
-    expandSidebar: handleExpandSidebar,
     setShowNewProject,
     setEditingName,
     setEditingSession,
@@ -209,13 +205,7 @@ function Sidebar({
         t={t}
       />
 
-      {isSidebarCollapsed ? (
-        <SidebarCollapsed
-          onExpand={handleExpandSidebar}
-          onShowSettings={onShowSettings}
-          t={t}
-        />
-      ) : (
+      {isSidebarCollapsed ? null : (
         <>
         <SidebarContent
             isPWA={isPWA}
@@ -282,7 +272,6 @@ function Sidebar({
             }}
             isRefreshing={isRefreshing}
             onCreateProject={() => setShowNewProject(true)}
-            onCollapseSidebar={handleCollapseSidebar}
             onShowSettings={onShowSettings}
           notificationCount={pendingApprovalCount}
             projectListProps={projectListProps}

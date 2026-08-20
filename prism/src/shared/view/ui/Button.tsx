@@ -9,13 +9,14 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground shadow hover:bg-primary/90 active:bg-primary/80',
+        // 设计语言:按钮不带投影,按下态 1px 下沉;primary = 绿底深墨字。
+        default: 'bg-primary text-primary-foreground hover:bg-primary/90 active:translate-y-px',
         destructive:
-          'bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90 active:bg-destructive/80',
+          'bg-destructive text-destructive-foreground hover:bg-destructive/90 active:translate-y-px',
         outline:
-          'border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground active:bg-accent/80',
-        secondary: 'bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 active:bg-secondary/70',
-        ghost: 'hover:bg-accent hover:text-accent-foreground active:bg-accent/80',
+          'border border-input bg-transparent hover:bg-accent hover:text-accent-foreground active:translate-y-px',
+        secondary: 'bg-secondary text-secondary-foreground hover:bg-accent active:translate-y-px',
+        ghost: 'hover:bg-accent hover:text-accent-foreground active:translate-y-px',
         link: 'text-primary underline-offset-4 hover:underline',
       },
       size: {
