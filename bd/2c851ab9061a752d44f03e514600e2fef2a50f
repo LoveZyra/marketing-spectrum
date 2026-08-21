@@ -1,0 +1,54 @@
+prism/CHANGELOG.md
+  h_4e3a4dcdcf415f 11-238
+prism/server/modules/database/migrations.ts
+  h_4e3a4dcdcf415f 29-30,484-491,519-596
+prism/server/modules/database/tests/api-keys-legacy-notnull.test.ts
+  h_4e3a4dcdcf415f 1-119
+prism/src/components/chat/view/ChatInterface.tsx
+  h_4e3a4dcdcf415f 374-375,377,387
+prism/src/components/chat/view/subcomponents/ChangedFilesCard.tsx
+  h_4e3a4dcdcf415f 317-328
+prism/src/components/main-content/types/types.ts
+  h_4e3a4dcdcf415f 57-63
+prism/src/components/main-content/view/MainContent.tsx
+  h_4e3a4dcdcf415f 111-113
+prism/src/components/main-content/view/subcomponents/MainContentStateView.tsx
+  h_4e3a4dcdcf415f 9-16,20-28,55-62
+prism/src/components/settings/hooks/useCredentialsSettings.ts
+  h_4e3a4dcdcf415f 50-57,87,96-98,109,111,247,285
+prism/src/components/settings/view/tabs/api-settings/CredentialsSettingsTab.tsx
+  h_4e3a4dcdcf415f 30,68
+prism/src/components/settings/view/tabs/api-settings/sections/ApiKeysSection.tsx
+  h_4e3a4dcdcf415f 11-12,25,75-80
+prism/src/components/sidebar/utils/visibilityMarks.test.ts
+  h_4e3a4dcdcf415f 1-49
+prism/src/components/sidebar/utils/visibilityMarks.ts
+  h_4e3a4dcdcf415f 1-58
+prism/src/components/sidebar/view/subcomponents/SidebarProjectItem.tsx
+  h_4e3a4dcdcf415f 11,96-101,103-108,110-129,133-144
+prism/src/hooks/useProjectsState.ts
+  h_4e3a4dcdcf415f 4,71-109,372-379,622-635,637-639,641,643-654
+prism/src/i18n/locales/en/common.json
+  h_4e3a4dcdcf415f 32-33
+prism/src/i18n/locales/en/sidebar.json
+  h_4e3a4dcdcf415f 103-104
+prism/src/i18n/locales/zh-CN/common.json
+  h_4e3a4dcdcf415f 32-33
+prism/src/i18n/locales/zh-CN/sidebar.json
+  h_4e3a4dcdcf415f 103-104
+prism/src/i18n/locales/zh-TW/common.json
+  h_4e3a4dcdcf415f 32-33
+prism/src/i18n/locales/zh-TW/sidebar.json
+  h_4e3a4dcdcf415f 102-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "bd2c851ab9061a752d44f03e514600e2fef2a50f",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
