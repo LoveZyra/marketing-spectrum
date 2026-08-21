@@ -15,6 +15,7 @@ import { useUiPreferences } from '../../hooks/useUiPreferences';
 import { useProjectsState } from '../../hooks/useProjectsState';
 import { useQueuedMessageAutoSend } from '../../hooks/useQueuedMessageAutoSend';
 import { api } from '../../utils/api';
+import SettingsModalHost from '../settings/view/SettingsModalHost';
 
 import AppRail from './AppRail';
 
@@ -71,6 +72,7 @@ function AppContentInner() {
   } = useSessionProtection();
 
   const {
+    projects,
     selectedProject,
     selectedSession,
     activeTab,
@@ -78,9 +80,12 @@ function AppContentInner() {
     isLoadingProjects,
     externalMessageUpdate,
     newSessionTrigger,
+    showSettings,
+    settingsInitialTab,
     setActiveTab,
     setSidebarOpen,
     setIsInputFocused,
+    setShowSettings,
     openSettings,
     refreshProjectsSilently,
     registerOptimisticSession,
@@ -263,6 +268,18 @@ function AppContentInner() {
           jupyterTarget={jupyterTarget}
         />
       </div>
+
+      {/* 设置弹窗挂在这里,**不在侧栏里**。
+          侧栏折叠时 `<Sidebar/>` 整棵都不渲染,而设置的三个入口(轨上的齿轮、
+          命令面板、主区)都在侧栏之外 —— 弹窗跟着侧栏一起消失,表现就是
+          "折叠后点设置没反应"。它本来就是 portal 到 body 的,住在侧栏子树里
+          只是历史位置。 */}
+      <SettingsModalHost
+        isOpen={showSettings}
+        initialTab={settingsInitialTab}
+        onClose={() => setShowSettings(false)}
+        projects={projects}
+      />
 
       <CommandPalette
         selectedProject={selectedProject}

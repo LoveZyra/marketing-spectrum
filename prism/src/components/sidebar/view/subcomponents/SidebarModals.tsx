@@ -1,25 +1,24 @@
-import { lazy, Suspense, useEffect, useMemo } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import ReactDOM from 'react-dom';
 import { AlertTriangle, EyeOff, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
-import type { Project } from '../../../../types/app';
-import { normalizeProjectForSettings } from '../../utils/utils';
-import type { DeleteProjectConfirmation, SessionDeleteConfirmation, SettingsProject } from '../../types/types';
+import type { DeleteProjectConfirmation, SessionDeleteConfirmation } from '../../types/types';
 import { ModalLoadingFallback } from '../../../../shared/view/LazyPanel';
 
-// Both are already gated behind an explicit boolean, so deferring their modules
-// is free. Settings in particular reaches the MCP, skills, permissions and
-// API-key screens, which is a large graph for something most sessions never open.
-const Settings = lazy(() => import('../../../settings/view/Settings'));
+/**
+ * 侧栏自己的弹窗。
+ *
+ * **设置弹窗不在这里** —— 它搬去了 `settings/view/SettingsModalHost`,挂在应用外层。
+ * 原因是侧栏折叠时 `AppContent` 压根不渲染 `<Sidebar/>`,而设置的三个入口
+ * (轨上的齿轮、命令面板、主区)全在侧栏之外:住在这里等于"折叠后按了没反应"。
+ *
+ * 留在这里的三个弹窗唯一入口都在侧栏内部,侧栏没渲染时本来也点不到。
+ */
 const ProjectCreationWizard = lazy(() => import('../../../project-creation-wizard/ProjectCreationWizard'));
 
 type SidebarModalsProps = {
-  projects: Project[];
-  showSettings: boolean;
-  settingsInitialTab: string;
-  onCloseSettings: () => void;
   showNewProject: boolean;
   onCloseNewProject: () => void;
   onProjectCreated: () => void;
@@ -32,24 +31,7 @@ type SidebarModalsProps = {
   t: TFunction;
 };
 
-type TypedSettingsProps = {
-  isOpen: boolean;
-  onClose: () => void;
-  projects: SettingsProject[];
-  initialTab: string;
-};
-
-const SettingsComponent = Settings as unknown as (props: TypedSettingsProps) => JSX.Element;
-
-function TypedSettings(props: TypedSettingsProps) {
-  return <SettingsComponent {...props} />;
-}
-
 export default function SidebarModals({
-  projects,
-  showSettings,
-  settingsInitialTab,
-  onCloseSettings,
   showNewProject,
   onCloseNewProject,
   onProjectCreated,
@@ -61,22 +43,11 @@ export default function SidebarModals({
   onConfirmDeleteSession,
   t,
 }: SidebarModalsProps) {
-  // Settings expects project identity/path fields to be present for dropdown labels and local-scope MCP config.
-  const settingsProjects = useMemo(
-    () => projects.map(normalizeProjectForSettings),
-    [projects],
-  );
-
-  // 首次点「设置」的抖动来自懒加载:点开时代码块还没到,先显示 fallback 遮罩,
-  // 到货后再换成真弹窗——这一"遮罩→真弹窗(背景色 + 模糊 + 入场动画都不同)"的
-  // 切换就是那一下抖动/动画不稳。这里在浏览器空闲时预取这两个弹窗的代码块,等用户
-  // 真的点开时模块已就位,React.lazy 同步渲染,不再闪 fallback,首次和后续一样顺。
-  // 放在空闲期,不影响首屏加载,也不改变"大多数会话不会打开设置"的分包收益太多。
+  // 空闲时预取新建项目向导的代码块,免得第一次点开先闪一下 fallback 遮罩。
   useEffect(() => {
     let cancelled = false;
     const prefetch = () => {
       if (cancelled) return;
-      void import('../../../settings/view/Settings');
       void import('../../../project-creation-wizard/ProjectCreationWizard');
     };
     const scheduler = window as typeof window & {
@@ -109,19 +80,6 @@ export default function SidebarModals({
             <ProjectCreationWizard
               onClose={onCloseNewProject}
               onProjectCreated={onProjectCreated}
-            />
-          </Suspense>,
-          document.body,
-        )}
-
-      {showSettings &&
-        ReactDOM.createPortal(
-          <Suspense fallback={<ModalLoadingFallback />}>
-            <TypedSettings
-              isOpen={showSettings}
-              onClose={onCloseSettings}
-              projects={settingsProjects}
-              initialTab={settingsInitialTab}
             />
           </Suspense>,
           document.body,

@@ -8,6 +8,96 @@
 
 ---
 
+## 2026-08-21 · bd — 侧栏折叠时点不开设置
+
+用户报的现象:**不展开项目栏就打不开设置**。
+
+设置弹窗原来住在 `SidebarModals` 里,而 `AppContent` 对侧栏的写法是
+
+```tsx
+isSidebarCollapsed ? null : <Sidebar {...sidebarSharedProps} />
+```
+
+—— 折叠时**整棵侧栏都不渲染**。于是点轨上的齿轮,`showSettings` 确实变成了 true,
+**但没有任何东西在渲染它**。表现就是"按了没反应",既不报错也没有半点提示。
+
+而设置的三个入口 —— 轨上的齿轮、命令面板的「打开设置」、主区那个 —— **全都在侧栏之外**,
+却一起依赖侧栏活着。弹窗本来就是 `createPortal` 到 `document.body` 的,
+待在侧栏子树里从来只是历史位置,没有任何理由。
+
+搬到 `settings/view/SettingsModalHost`,挂在 `AppContent` 上,谁开都一样。
+新建项目 / 删除确认那三个仍然留在 `SidebarModals`:它们的唯一入口就在侧栏内部,
+侧栏没渲染时本来也点不到。
+
+**这不是 bb / bc 引入的。** 拿 au 的源码对了一遍,`isSidebarCollapsed ? null` 和
+`SidebarModals` 里那段设置弹窗一字不差 —— 从侧栏折叠这个功能落地(aa/ac 那一轮)
+就一直是这样。
+
+### 验证:同一段脚本,两个构建
+
+拿未改动的 bc 原样解包构建了一个实例,和修好的实例跑同一段 Playwright:
+
+| | 折叠侧栏后点齿轮 |
+|---|---|
+| bc(原样) | **打不开**(`hasSettingsTitle: false`) |
+| bd | **打得开** |
+
+另外确认展开状态没被改坏:点齿轮照常打开,页面上「设置」标题**只有一个**
+(没有因为两处挂载而重复渲染);折叠状态下开→点 × 关→再开,三次都对。
+
+> 顺带一提:`Esc` 关不掉设置弹窗 —— 查了源码,它**从来就没有** Escape 处理,
+> 不是这轮碰坏的。这轮不动它。
+
+### 验证
+
+- 用例 600 全绿;typecheck 双端通过;eslint `src/ server/` **0 error**(45 条 warning 不变)
+- 双端构建通过;`package-lock.json` 未变,零新增依赖
+
+---
+
+## 2026-08-21 · bc — 退役文件不再靠人记得删
+
+bb 上线时构建挂了:
+
+```
+"UI_THEMES" is not exported by "src/contexts/ThemeContext.jsx",
+  imported by "src/components/quick-settings-panel/view/QuickThemeSwitch.tsx"
+```
+
+看着像代码写错了,其实是**目录脏了**。`ThemeContext` 那一轮从 `.jsx` 改成 `.tsx`,
+部署目录里旧的 `.jsx` 没删干净;而 Vite 的 `resolve.extensions` 里
+**`.jsx` 排在 `.tsx` 前面**,于是那句无扩展名的 import 稳稳地解析到了旧文件。
+
+更糟的是另一种情况:旧文件恰好导出了同名的东西 —— **构建通过,跑的是上一轮的逻辑**,
+一点提示都没有。
+
+退役文件写在部署文档里靠人记得删,这个约定到此为止。加一道 `prebuild` 自检
+(`scripts/check-retired-files.mjs`),登记所有已退役路径,构建前发现一个就
+**中止并打印删除命令**(带部署机上的绝对路径,可直接复制)。
+
+```
+✗ 部署目录里还留着已退役的文件:
+
+  src/contexts/ThemeContext.jsx
+
+  删掉再构建:
+
+    rm -f /home/ubuntu/prism/src/contexts/ThemeContext.jsx
+```
+
+当前登记 7 条(bb 的 2 条、at 的 2 张 PNG、aa/ac 的 3 个组件)。
+往表里加条目的规矩:**只登记确实已从仓库删掉的路径** —— 自检对着本地树跑,
+表里写了还存在的文件,自己的构建立刻就会失败。
+
+### 验证
+
+- 造一个假的 `ThemeContext.jsx` 放进树里:`npm run build` 退出码 1,
+  **Vite 一次都没启动**;删掉之后构建正常
+- 用例 600 全绿;typecheck 双端通过;eslint 0 error(45 条 warning 不变)
+- `package-lock.json` 未变,零新增依赖
+
+---
+
 ## 2026-08-21 · bb — 浅色分成两种材质,深浅开关换成界面主题三选
 
 设计稿在 `light-ui/`:**纸构蓝图**(设计稿 B)与**棱光玻璃**(设计稿 A),

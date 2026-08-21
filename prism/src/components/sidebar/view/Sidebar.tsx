@@ -31,9 +31,6 @@ function Sidebar({
   loadingProgress,
   onRefresh,
   onShowSettings,
-  showSettings,
-  settingsInitialTab,
-  onCloseSettings,
   isMobile,
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
@@ -189,11 +186,7 @@ function Sidebar({
   return (
     <>
         <SidebarModals
-          projects={projects}
-        showSettings={showSettings}
-        settingsInitialTab={settingsInitialTab}
-        onCloseSettings={onCloseSettings}
-        showNewProject={showNewProject}
+          showNewProject={showNewProject}
         onCloseNewProject={() => setShowNewProject(false)}
         onProjectCreated={handleProjectCreated}
         deleteConfirmation={deleteConfirmation}
