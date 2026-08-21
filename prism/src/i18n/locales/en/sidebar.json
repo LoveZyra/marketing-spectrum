@@ -100,6 +100,7 @@
     "publicHint": "Public project — unowned and under the public directory, visible to everyone",
     "rootOnlyHint": "Visible to root only — unowned and outside the public directory",
     "sharedHint": "Shared with you by someone else",
-    "sharedOutHint": "Shared with {{count}} people"
+    "sharedOutHint": "Shared with {{count}} people",
+    "sharedOutRootOnlyHint": "Shared with {{count}} user(s) — otherwise visible to root only"
   }
 }

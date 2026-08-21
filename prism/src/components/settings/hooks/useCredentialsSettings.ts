@@ -47,6 +47,14 @@ export function useCredentialsSettings({
   const [showToken, setShowToken] = useState<Record<string, boolean>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<CreatedApiKey | null>(null);
+  /**
+   * 新建密钥失败时给人看的那句话。
+   *
+   * 以前失败只 `console.error`,界面上一点动静都没有 —— 表现成"点了创建没反应",
+   * 而真正的原因(老库里 `api_keys.api_key` 还是 NOT NULL)只写在服务端日志里。
+   * 出错就该在出错的地方说出来。
+   */
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -76,6 +84,7 @@ export function useCredentialsSettings({
       return;
     }
 
+    setApiKeyError(null);
     try {
       const response = await authenticatedFetch('/api/settings/api-keys', {
         method: 'POST',
@@ -84,7 +93,9 @@ export function useCredentialsSettings({
 
       const payload = await response.json() as ApiKeysResponse;
       if (!response.ok || !payload.success) {
-        console.error('Error creating API key:', getApiError(payload, 'Failed to create API key'));
+        const message = getApiError(payload, 'Failed to create API key');
+        console.error('Error creating API key:', message);
+        setApiKeyError(message);
         return;
       }
 
@@ -95,7 +106,9 @@ export function useCredentialsSettings({
       setShowNewKeyForm(false);
       await fetchData();
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error('Error creating API key:', error);
+      setApiKeyError(message);
     }
   }, [fetchData, newKeyName]);
 
@@ -231,6 +244,7 @@ export function useCredentialsSettings({
   const cancelNewApiKeyForm = useCallback(() => {
     setShowNewKeyForm(false);
     setNewKeyName('');
+    setApiKeyError(null);
   }, []);
 
   const cancelNewGithubForm = useCallback(() => {
@@ -268,6 +282,7 @@ export function useCredentialsSettings({
     showToken,
     copiedKey,
     newlyCreatedKey,
+    apiKeyError,
     createApiKey,
     deleteApiKey,
     toggleApiKey,

@@ -6,10 +6,26 @@ import type { MainContentStateViewProps } from '../../types/types';
 
 import MobileMenuButton from './MobileMenuButton';
 
-export default function MainContentStateView({ mode, isMobile, onMenuClick }: MainContentStateViewProps) {
+const TAB_LABEL_KEY: Record<string, string> = {
+  chat: 'tabs.chat',
+  shell: 'tabs.shell',
+  files: 'tabs.files',
+  notebook: 'tabs.notebook',
+};
+
+export default function MainContentStateView({ mode, isMobile, onMenuClick, activeTab }: MainContentStateViewProps) {
   const { t } = useTranslation();
 
   const isLoading = mode === 'loading';
+  /**
+   * 没选项目时,四个页签渲染的都是这块空态 —— 点了终端 / 文件 / notebook,
+   * 轨上的图标亮了,主区却一动不动,读起来就是"点了没反应"。
+   * 这里把用户刚点的那个页签名说出来:点是点到了,缺的是一个项目。
+   * 聊天是默认页签,不额外提示,免得刚进来就先看到一句多余的话。
+   */
+  const pendingTabLabel = activeTab && activeTab !== 'chat'
+    ? t(TAB_LABEL_KEY[activeTab] ?? '', { defaultValue: '' })
+    : '';
 
   return (
     <div className="flex h-full flex-col">
@@ -36,7 +52,14 @@ export default function MainContentStateView({ mode, isMobile, onMenuClick }: Ma
               <Folder className="h-7 w-7 text-muted-foreground" />
             </div>
             <h2 className="mb-2 text-xl font-semibold text-foreground">{t('mainContent.chooseProject')}</h2>
-            <p className="mb-5 text-sm leading-relaxed text-muted-foreground">{t('mainContent.selectProjectDescription')}</p>
+            <p className="mb-5 text-sm leading-relaxed text-muted-foreground">
+              {pendingTabLabel
+                ? t('mainContent.tabNeedsProject', {
+                    tab: pendingTabLabel,
+                    defaultValue: '「{{tab}}」需要先选一个项目 —— 从左侧选一个就会打开。',
+                  })
+                : t('mainContent.selectProjectDescription')}
+            </p>
             <div className="rounded-md border border-border p-3.5">
               {/* 浅色模式下绿色不做小字(#10b981 配白底仅 2.6:1),只在深色里用绿 */}
               <p className="text-sm text-body dark:text-primary">

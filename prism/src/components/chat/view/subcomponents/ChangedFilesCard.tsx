@@ -314,7 +314,18 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
   if (files.length === 0) return null;
 
   return (
-    <div className="mx-3 mb-2 overflow-hidden rounded-lg border border-border">
+    /**
+     * 宽度对齐到**对话列**,不再横贯整屏。
+     *
+     * 消息列、输入框、待审批横幅、排队消息卡片这四处早就都是
+     * `mx-auto max-w-[54.25rem]`,只有这块面板留着 `mx-3` —— 于是它比正下方的
+     * 输入框宽出一大截,两条边界对不上,看着像另一个层的东西压在上面。
+     * (ar 轮只收了高度,没碰宽度,所以那轮之后依然是这样。)
+     *
+     * 54.25rem 这个值在上述四处也是写死的字面量,这里保持一致而不另起变量 ——
+     * 五处形式统一比省一个数字重要。
+     */
+    <div className="mx-auto mb-2 w-full max-w-[54.25rem] overflow-hidden rounded-lg border border-border">
       {/* 标头(设计稿 2a/2b):分支图标 → 本轮改动 → 文件数 → 总增删 → ml-auto → ckpt → 回滚本轮 */}
       <div className="flex items-center gap-2.5 border-b border-border bg-card px-3.5 py-2">
         <button

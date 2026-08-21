@@ -100,6 +100,7 @@
     "publicHint": "公共项目 —— 无主且在公共目录下,所有人可见",
     "rootOnlyHint": "仅 root 可见 —— 无主且不在公共目录下",
     "sharedHint": "他人共享给你的项目",
-    "sharedOutHint": "已共享给 {{count}} 人"
+    "sharedOutHint": "已共享给 {{count}} 人",
+    "sharedOutRootOnlyHint": "已共享给 {{count}} 人 —— 此外仅 root 可见"
   }
 }

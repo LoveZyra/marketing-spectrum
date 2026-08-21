@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 
+import { useAuth } from '../components/auth/context/AuthContext';
 import { api } from '../utils/api';
 import type { ServerEvent } from '../contexts/WebSocketContext';
 import type {
@@ -64,6 +65,45 @@ const readSelectedProvider = (): LLMProvider => {
     return storedProvider ? storedProvider as LLMProvider : DEFAULT_PROVIDER;
   } catch {
     return DEFAULT_PROVIDER;
+  }
+};
+
+/**
+ * 上次打开的项目。启动时用它把现场恢复回来 —— 见下面那个自动选中的 effect。
+ *
+ * **按用户分开存**:Prism 是多用户的,同一台机器上换个账号登录,不该把上一个人
+ * 的项目打开给他 —— 那不只是别扭,那个项目他可能根本无权看见。所以键上带账号
+ * 标识(优先用 id,没有就退到用户名)。
+ *
+ * 存 `projectId` 而不是路径:路径会被改名,id 是 `projects` 表的主键。
+ * 读写一律吞掉异常(隐私模式 / 禁用存储),存不上最多是回到"要自己点一下"。
+ *
+ * 存在浏览器本地,所以是"每个用户 + 每个浏览器"。换台机器不跟着走 ——
+ * 要跨设备就得挪到服务端的用户偏好里,这轮没做。
+ */
+const LAST_PROJECT_KEY_PREFIX = 'prism-last-project-id';
+
+const lastProjectKey = (userKey: string | null): string | null => (
+  userKey ? `${LAST_PROJECT_KEY_PREFIX}:${userKey}` : null
+);
+
+const readLastProjectId = (userKey: string | null): string | null => {
+  const key = lastProjectKey(userKey);
+  if (!key) return null;
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const writeLastProjectId = (userKey: string | null, projectId: string): void => {
+  const key = lastProjectKey(userKey);
+  if (!key) return;
+  try {
+    localStorage.setItem(key, projectId);
+  } catch {
+    // 存不上就算了,不影响这一次的使用。
   }
 };
 
@@ -329,6 +369,14 @@ export function useProjectsState({
   isMobile,
   activeSessions,
 }: UseProjectsStateArgs) {
+  /**
+   * 当前账号的标识,用来给"上次打开的项目"分账号存。
+   * 优先用 id;平台模式下没有 id 就退到用户名。两个都没有就不记 —— 宁可不恢复,
+   * 也不能把上一个账号的项目打开给下一个人。
+   */
+  const { user } = useAuth();
+  const currentUserKey = user?.id != null ? String(user.id) : (user?.username ?? null);
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
@@ -571,12 +619,39 @@ export function useProjectsState({
     void fetchProjects();
   }, [fetchProjects]);
 
-  // Auto-select the project when there is only one, so the user lands on the new session page
+  /**
+   * 启动时把上次打开的项目选回来。
+   *
+   * 不做这一步的后果不是"少一点方便",而是**四个页签看起来全坏了**:
+   * `MainContent` 开头就是 `if (!selectedProject) return <选择您的项目/>`,
+   * 没选项目时点终端 / 对话 / 文件 / notebook,`activeTab` 确实变了、轨上图标
+   * 也亮了,但主区渲染的还是那块空状态 —— 和点之前一模一样。用户读到的是
+   * "点了没反应",然后随手点了个项目才活过来,于是又读成"加载太慢"。
+   *
+   * 只有一个项目时照旧直接选中它(原来就有的行为);多个项目时按存下来的
+   * `projectId` 找回上次那个。项目被删了就找不回,退回空状态,不硬选一个。
+   *
+   * URL 里带 sessionId 时一概不插手 —— 那条路自己会把项目定出来。
+   */
   useEffect(() => {
-    if (!isLoadingProjects && projects.length === 1 && !selectedProject && !sessionId) {
+    if (isLoadingProjects || selectedProject || sessionId || projects.length === 0) return;
+
+    if (projects.length === 1) {
       setSelectedProject(projects[0]);
+      return;
     }
-  }, [isLoadingProjects, projects, selectedProject, sessionId]);
+
+    const lastProjectId = readLastProjectId(currentUserKey);
+    if (!lastProjectId) return;
+
+    const remembered = projects.find((project) => project.projectId === lastProjectId);
+    if (remembered) setSelectedProject(remembered);
+  }, [currentUserKey, isLoadingProjects, projects, selectedProject, sessionId]);
+
+  // 选中项目就记下来,下次这个账号启动照这个恢复。
+  useEffect(() => {
+    if (selectedProject?.projectId) writeLastProjectId(currentUserKey, selectedProject.projectId);
+  }, [currentUserKey, selectedProject]);
 
   // Realtime sidebar updates. The backend pushes per-session deltas
   // (`session_upserted`) instead of full project snapshots, so each event is

@@ -151,7 +151,6 @@ function ChatInterface({
     textareaRef,
     inputHighlightRef,
     isTextareaExpanded,
-    slashCommandsCount,
     filteredCommands,
     frequentCommands,
     commandQuery,
@@ -372,7 +371,10 @@ function ChatInterface({
         />
 
         <div className="relative flex-shrink-0">
+          {/* 左右内边距与 `chat-composer-shell` 一致 —— 面板自己负责居中收窄,
+              这一层负责在窄屏下和输入框留一样的边距,两条边界才真的对得上。 */}
           {changedFiles && changedFiles.files.length > 0 && (
+            <div className="px-2 sm:px-4 md:px-4">
             <ChangedFilesCard
               state={changedFiles}
               isProcessing={isProcessing}
@@ -382,6 +384,7 @@ function ChatInterface({
                 if (activeId) void sessionStore.refreshFromServer(activeId);
               }}
             />
+            </div>
           )}
           {isUserScrolledUp && chatMessages.length > 0 && (
             <div className="pointer-events-none absolute -top-11 left-0 right-0 z-20 flex justify-center">
@@ -421,7 +424,6 @@ function ChatInterface({
           onShowTokenUsage={showCostModal}
           onShowModelPicker={showModelsModal}
           onShowCheckpoints={() => setShowCheckpoints(true)}
-          slashCommandsCount={slashCommandsCount}
           onToggleCommandMenu={handleToggleCommandMenu}
           hasInput={Boolean(input.trim())}
           onClearInput={handleClearInput}

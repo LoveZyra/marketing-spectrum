@@ -29,7 +29,8 @@
     "export": "导出",
     "persistentSession": "常驻会话",
     "persistentSessionHint": "这段对话在服务端挂着常驻运行时，下一轮无需重建进程",
-    "exporting": "导出中…"
+    "exporting": "导出中…",
+    "tabNeedsProject": "「{{tab}}」需要先选一个项目 —— 从左侧选一个就会打开。"
   },
   "fileTree": {
     "loading": "正在加载文件...",

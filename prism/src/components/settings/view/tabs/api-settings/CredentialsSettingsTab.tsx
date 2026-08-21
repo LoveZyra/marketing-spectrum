@@ -27,6 +27,7 @@ export default function CredentialsSettingsTab() {
     showToken,
     copiedKey,
     newlyCreatedKey,
+    apiKeyError,
     createApiKey,
     deleteApiKey,
     toggleApiKey,
@@ -64,6 +65,7 @@ export default function CredentialsSettingsTab() {
         newKeyName={newKeyName}
         onShowNewKeyFormChange={setShowNewKeyForm}
         onNewKeyNameChange={setNewKeyName}
+        apiKeyError={apiKeyError}
         onCreateApiKey={createApiKey}
         onCancelCreateApiKey={cancelNewApiKeyForm}
         onToggleApiKey={toggleApiKey}

@@ -26,6 +26,8 @@ lower(hex(randomblob(6)))
 type TableInfoRow = {
   name: string;
   pk: number;
+  /** PRAGMA table_info 的 notnull 列:1 表示该列带 NOT NULL 约束。 */
+  notnull: number;
 };
 
 const addColumnToTableIfNotExists = (
@@ -479,6 +481,14 @@ const migrateApiKeysToHashed = (db: Database): void => {
   addColumnToTableIfNotExists(db, 'api_keys', columnNames, 'api_key_hash', 'TEXT');
   addColumnToTableIfNotExists(db, 'api_keys', columnNames, 'api_key_prefix', 'TEXT');
 
+  /**
+   * **必须在哈希之前**:下面那步是 `UPDATE … SET api_key = NULL`,
+   * 老表上那一列是 `NOT NULL` —— 先不松约束的话,这句 UPDATE 自己就会抛,
+   * 而迁移是往上抛的,结果是**服务直接起不来**。
+   * (已经建过密钥的老库升级上来正是这种情况。)
+   */
+  relaxLegacyApiKeyNotNull(db);
+
   // Plaintext rows that predate hashing.
   const legacyRows = db
     .prepare(
@@ -504,6 +514,84 @@ const migrateApiKeysToHashed = (db: Database): void => {
   // older SQLite builds and is meaningless now that the column is emptied.
   db.exec('DROP INDEX IF EXISTS idx_api_keys_key');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(api_key_hash)');
+};
+
+/**
+ * 老库里的 `api_keys.api_key` 是 `NOT NULL`,新代码往那一列写 NULL —— 于是
+ * **新建 API 密钥永远失败**。
+ *
+ * 上游最初的建表是 `api_key TEXT UNIQUE NOT NULL`(明文存 key)。改成只存哈希之后,
+ * 新建走的是 `INSERT … (api_key, api_key_hash, api_key_prefix) VALUES (NULL, ?, ?)`,
+ * 在那种老表上直接撞 `NOT NULL constraint failed: api_keys.api_key`。
+ *
+ * 全新安装不会有这个问题(建表用的是新形状),所以它只在**升级上来的库**上出现,
+ * 而且**一把密钥都没建过的库最隐蔽**:上面那段哈希迁移只 UPDATE
+ * `api_key IS NOT NULL` 的行,一行都没有就什么也没做,约束原样留着。
+ * 界面那边失败只 `console.error`,于是表现成"点了创建没反应"。
+ *
+ * SQLite 改不了列约束,只能重建表。照搬 projects / sessions 两处的做法。
+ */
+const relaxLegacyApiKeyNotNull = (db: Database): void => {
+  const info = getTableInfo(db, 'api_keys');
+  const apiKeyColumn = info.find((column) => column.name === 'api_key');
+  // notnull === 0 就是已经可空,什么都不用做(全新安装走这条)。
+  if (!apiKeyColumn || Number(apiKeyColumn.notnull) === 0) return;
+
+  console.log('Running migration: Relaxing legacy NOT NULL on api_keys.api_key');
+
+  const columnNames = info.map((column) => column.name);
+  const pick = (name: string, fallback: string) =>
+    (columnNames.includes(name) ? name : fallback);
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec('BEGIN TRANSACTION');
+    db.exec('DROP TABLE IF EXISTS api_keys__new');
+    db.exec(`
+      CREATE TABLE api_keys__new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        key_name TEXT NOT NULL,
+        api_key TEXT UNIQUE,
+        api_key_hash TEXT UNIQUE,
+        api_key_prefix TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_used DATETIME,
+        is_active BOOLEAN DEFAULT 1,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    db.exec(`
+      INSERT INTO api_keys__new
+        (id, user_id, key_name, api_key, api_key_hash, api_key_prefix, created_at, last_used, is_active)
+      SELECT
+        id,
+        user_id,
+        key_name,
+        -- 已经哈希过的行这一列是空串或明文残留;空串按"没有"处理,
+        -- 免得新表的 UNIQUE 把多行空串判成重复。
+        NULLIF(api_key, ''),
+        ${pick('api_key_hash', 'NULL')},
+        ${pick('api_key_prefix', 'NULL')},
+        ${pick('created_at', 'CURRENT_TIMESTAMP')},
+        ${pick('last_used', 'NULL')},
+        COALESCE(${pick('is_active', '1')}, 1)
+      FROM api_keys
+    `);
+    db.exec('DROP TABLE api_keys');
+    db.exec('ALTER TABLE api_keys__new RENAME TO api_keys');
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+
+  // 重建把索引也带走了,补回来。
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(api_key_hash)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(is_active)');
 };
 
 /**

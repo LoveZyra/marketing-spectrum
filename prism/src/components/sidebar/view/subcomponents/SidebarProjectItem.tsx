@@ -8,6 +8,7 @@ import { useAuth } from '../../../auth/context/AuthContext';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionActivityMap } from '../../../../hooks/useSessionProtection';
 import type { SessionWithProvider } from '../../types/types';
+import { planVisibilityMarks, type VisibilityMarkKey } from '../../utils/visibilityMarks';
 
 import ProjectPermissionsModal from './ProjectPermissionsModal';
 import SidebarProjectSessions from './SidebarProjectSessions';
@@ -92,52 +93,55 @@ function ProjectVisibilityBadges({
   sharedOutCount,
   t,
 }: VisibilityBadgeProps) {
-  const marks: Array<{ key: string; Icon: typeof Globe; label: string; count?: number }> = [];
+  /**
+   * 画哪几个图标由 `planVisibilityMarks` 定 —— 那条"共享出去就不再画锁"的规则
+   * 在那里,连同它的用例。这里只负责把 key 翻成图标和提示语。
+   */
+  const keys = planVisibilityMarks({ isPublic, isRootOnly, isSharedToViewer, sharedOutCount });
+  if (keys.length === 0) return null;
 
-  if (isPublic) {
-    marks.push({
-      key: 'public',
-      Icon: Globe,
-      label: t('project.publicHint', { defaultValue: '公共项目 —— 无主且在公共目录下,所有人可见' }),
-    });
-  }
-  if (isRootOnly) {
-    marks.push({
-      key: 'rootOnly',
-      Icon: Lock,
-      label: t('project.rootOnlyHint', { defaultValue: '仅 root 可见 —— 无主且不在公共目录下' }),
-    });
-  }
-  if (isSharedToViewer) {
-    marks.push({
-      key: 'shared',
-      Icon: UserCheck,
-      label: t('project.sharedHint', { defaultValue: '他人共享给你的项目' }),
-    });
-  }
-  if (sharedOutCount > 0) {
-    marks.push({
-      key: 'sharedOut',
-      Icon: Share2,
-      label: t('project.sharedOutHint', { count: sharedOutCount, defaultValue: '已共享给 {{count}} 人' }),
-      count: sharedOutCount,
-    });
-  }
+  const MARK_ICON: Record<VisibilityMarkKey, typeof Globe> = {
+    public: Globe,
+    rootOnly: Lock,
+    shared: UserCheck,
+    sharedOut: Share2,
+  };
 
-  if (marks.length === 0) {
-    return null;
-  }
+  const labelFor = (key: VisibilityMarkKey): string => {
+    switch (key) {
+      case 'public':
+        return t('project.publicHint', { defaultValue: '公共项目 —— 无主且在公共目录下,所有人可见' });
+      case 'rootOnly':
+        return t('project.rootOnlyHint', { defaultValue: '仅 root 可见 —— 无主且不在公共目录下' });
+      case 'shared':
+        return t('project.sharedHint', { defaultValue: '他人共享给你的项目' });
+      case 'sharedOut':
+      default:
+        // 无主项目额外说明"除这几个人之外仍只有 root 看得见" —— 上面那把锁省掉了,
+        // 它承载的信息挪到这里,不能一起丢掉。
+        return isRootOnly
+          ? t('project.sharedOutRootOnlyHint', {
+              count: sharedOutCount,
+              defaultValue: '已共享给 {{count}} 人 —— 此外仅 root 可见',
+            })
+          : t('project.sharedOutHint', { count: sharedOutCount, defaultValue: '已共享给 {{count}} 人' });
+    }
+  };
 
   return (
     <span className="flex flex-none items-center gap-1.5 text-muted-foreground">
-      {marks.map(({ key, Icon, label, count }) => (
-        <span key={key} className="flex items-center gap-0.5" role="img" aria-label={label} title={label}>
-          <Icon className="h-3.5 w-3.5" strokeWidth={2} />
-          {count !== undefined && (
-            <span className="font-mono text-[10px] leading-none">{count}</span>
-          )}
-        </span>
-      ))}
+      {keys.map((key) => {
+        const Icon = MARK_ICON[key];
+        const label = labelFor(key);
+        return (
+          <span key={key} className="flex items-center gap-0.5" role="img" aria-label={label} title={label}>
+            <Icon className="h-3.5 w-3.5" strokeWidth={2} />
+            {key === 'sharedOut' && (
+              <span className="font-mono text-[10px] leading-none">{sharedOutCount}</span>
+            )}
+          </span>
+        );
+      })}
     </span>
   );
 }

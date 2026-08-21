@@ -29,7 +29,8 @@
     "export": "匯出",
     "persistentSession": "常駐工作階段",
     "persistentSessionHint": "這段對話在伺服器端掛著常駐執行環境，下一輪無需重建行程",
-    "exporting": "匯出中…"
+    "exporting": "匯出中…",
+    "tabNeedsProject": "「{{tab}}」需要先選一個專案 —— 從左側選一個就會開啟。"
   },
   "fileTree": {
     "loading": "正在載入檔案...",

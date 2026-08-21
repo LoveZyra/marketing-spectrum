@@ -8,6 +8,8 @@ type ApiKeysSectionProps = {
   apiKeys: ApiKeyItem[];
   showNewKeyForm: boolean;
   newKeyName: string;
+  /** 新建失败时的原因;null 表示没有错误。 */
+  apiKeyError?: string | null;
   onShowNewKeyFormChange: (value: boolean) => void;
   onNewKeyNameChange: (value: string) => void;
   onCreateApiKey: () => void;
@@ -20,6 +22,7 @@ export default function ApiKeysSection({
   apiKeys,
   showNewKeyForm,
   newKeyName,
+  apiKeyError,
   onShowNewKeyFormChange,
   onNewKeyNameChange,
   onCreateApiKey,
@@ -69,6 +72,12 @@ export default function ApiKeysSection({
               {t('apiKeys.form.cancelButton')}
             </Button>
           </div>
+          {/* 失败以前只写进 console —— 界面上一点动静都没有,看着就是"点了没反应"。 */}
+          {apiKeyError && (
+            <p role="alert" className="mt-2 text-sm text-destructive">
+              {apiKeyError}
+            </p>
+          )}
         </div>
       )}
 

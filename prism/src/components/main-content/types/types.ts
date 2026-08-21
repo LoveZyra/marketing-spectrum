@@ -54,6 +54,13 @@ export type MainContentStateViewProps = {
   mode: 'loading' | 'empty';
   isMobile: boolean;
   onMenuClick: () => void;
+  /**
+   * 空态下用户当前选的页签。
+   *
+   * 没选项目时四个页签渲染的都是这块空态 —— 点终端 / 文件 / notebook 看起来
+   * 「毫无反应」。把页签名说出来,至少让人知道点是点到了,缺的是一个项目。
+   */
+  activeTab?: AppTab;
 };
 
 export type MobileMenuButtonProps = {
