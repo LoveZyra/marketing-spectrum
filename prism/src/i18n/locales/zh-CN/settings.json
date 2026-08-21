@@ -116,6 +116,27 @@
         "label": "字体大小",
         "description": "编辑器字体大小（px）"
       }
+    },
+    "uiTheme": {
+      "label": "界面主题",
+      "description": "选择整套界面的材质与配色",
+      "options": {
+        "blueprint": {
+          "name": "纸构蓝图",
+          "description": "暖白纸底、发丝线分区、零投影",
+          "short": "纸构"
+        },
+        "glass": {
+          "name": "棱光玻璃",
+          "description": "冷白玻璃面板、柔光层级、分光强调",
+          "short": "棱光"
+        },
+        "dark": {
+          "name": "霓虹终端",
+          "description": "近黑画布、点阵栅格、强调色发光",
+          "short": "霓虹"
+        }
+      }
     }
   },
   "mcpForm": {

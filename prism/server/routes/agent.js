@@ -8,9 +8,11 @@ import spawn from 'cross-spawn';
 import express from 'express';
 import { Octokit } from '@octokit/rest';
 
-import { userDb, apiKeysDb, githubTokensDb, projectsDb } from '../modules/database/index.js';
+import { userDb, apiKeysDb, githubTokensDb, projectsDb, sessionsDb, canViewerSeeSession } from '../modules/database/index.js';
+import { chatRunRegistry } from '../modules/websocket/index.js';
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { IS_PLATFORM } from '../constants/config.js';
+import { readRequestViewer } from '../shared/project-visibility.js';
 import { normalizeProjectPath, WORKSPACES_ROOT } from '../shared/utils.js';
 
 const router = express.Router();
@@ -448,6 +450,15 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
   });
 }
 
+/** JSON.parse,坏了就返回 null —— 不让一条脏帧把整段收集带崩。 */
+function safeParseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Clean up a temporary project directory and its Claude session
  * @param {string} projectPath - Path to the project directory
@@ -567,25 +578,35 @@ class ResponseCollector {
    * Get filtered assistant messages only
    */
   getAssistantMessages() {
+    /**
+     * 这里原来只认 `type: 'claude-response'` 的**字符串**帧 —— 那是老 CLI 的
+     * 线格式。走 SDK 之后运行时推过来的一律是规范化**对象**
+     * (`{ kind: 'text' | 'tool_use' | … }`),两个条件一个都对不上,
+     * 于是非流式响应的 `messages` **恒为空数组**,静默了很久。
+     *
+     * 现在按 kind 取:`text` 就是助手真正说出来的那几段。工具调用不在内 ——
+     * 要看完整过程去页面上看,这个字段的语义是"回答"。
+     */
     const assistantMessages = [];
 
     for (const msg of this.messages) {
-      // Skip initial status message
-      if (msg && msg.type === 'status') {
+      const data = typeof msg === 'string' ? safeParseJson(msg) : msg;
+      if (!data || typeof data !== 'object') continue;
+
+      if (data.kind === 'text' && typeof data.content === 'string' && data.content) {
+        assistantMessages.push({
+          id: data.id,
+          role: data.role || 'assistant',
+          content: data.content,
+          model: data.model,
+          timestamp: data.timestamp,
+        });
         continue;
       }
 
-      // Handle JSON strings
-      if (typeof msg === 'string') {
-        try {
-          const parsed = JSON.parse(msg);
-          // Only include claude-response messages with assistant type
-          if (parsed.type === 'claude-response' && parsed.data && parsed.data.type === 'assistant') {
-            assistantMessages.push(parsed.data);
-          }
-        } catch (e) {
-          // Not JSON, skip
-        }
+      // 老 CLI 线格式,留着不动 —— 万一还有别的调用方走那条路。
+      if (data.type === 'claude-response' && data.data && data.data.type === 'assistant') {
+        assistantMessages.push(data.data);
       }
     }
 
@@ -613,8 +634,26 @@ class ResponseCollector {
         }
       }
 
+      if (!data || typeof data !== 'object') continue;
+
+      // SDK 路径:每条助手消息的用量以 `status / token_budget` 帧推过来。
+      // 和下面那段老格式一样是**逐条累加**,不是取最后一条。
+      if (data.kind === 'status' && data.text === 'token_budget' && data.tokenBudget) {
+        const budget = data.tokenBudget;
+        totalOutput += budget.outputTokens || 0;
+        totalCacheRead += budget.cacheReadTokens || 0;
+        totalCacheCreation += budget.cacheCreationTokens || 0;
+        // budget.inputTokens 里已经含了两种缓存,减掉才是"直入"部分,
+        // 否则下面再加一次会把缓存算两遍。
+        totalInput += Math.max(
+          0,
+          (budget.inputTokens || 0) - (budget.cacheReadTokens || 0) - (budget.cacheCreationTokens || 0),
+        );
+        continue;
+      }
+
       // Extract usage from claude-response messages
-      if (data && data.type === 'claude-response' && data.data) {
+      if (data.type === 'claude-response' && data.data) {
         const msgData = data.data;
         if (msgData.message && msgData.message.usage) {
           const usage = msgData.message.usage;
@@ -641,6 +680,65 @@ class ResponseCollector {
 // ===============================
 // External API Endpoint
 // ===============================
+
+/**
+ * POST /api/agent/sessions —— **先领一个会话号**。
+ *
+ * 不跑任何回合,毫秒级返回。用途是把"拿 id"和"干活"拆成两步:
+ *
+ *   1. POST /api/agent/sessions  { projectPath }        → { sessionId, sessionPath }
+ *   2. 立刻就能拼链接:  https://<host>/session/<sessionId>
+ *   3. POST /api/agent           { projectPath, message, sessionId }
+ *
+ * 关键是这里**真的在库里占了一行**,不是发一个 UUID 就完事 —— 占了行,
+ * 第 2 步那个链接当场就能打开(先是一段空对话),而不是"会话不存在"。
+ *
+ * 第 3 步传这个 id 时会被当成"**用这个 id 新建**"而不是续对话:判据是库里
+ * 那行的 `provider_session_id` 还空着。老调用方传的是 provider 原生 id
+ * (磁盘发现的会话两列同值,一定非空),所以走的还是原来的 resume,行为不变。
+ *
+ * Request:  { projectPath: "/path/to/project", provider?: "claude" }
+ * Response: 201 { success, sessionId, sessionPath, projectPath }
+ */
+router.post('/sessions', validateExternalApiKey, async (req, res) => {
+  const { projectPath, provider = 'claude' } = req.body || {};
+
+  if (!projectPath || !String(projectPath).trim()) {
+    return res.status(400).json({ error: 'projectPath is required' });
+  }
+
+  if (provider !== 'claude') {
+    return res.status(400).json({ error: 'provider must be "claude"' });
+  }
+
+  try {
+    // 和主路由同一道门:这个端点用 API key 鉴权,而任何登录用户都能自助建一把
+    // key,少了这道校验就等于把工作区边界让出去了。
+    const finalProjectPath = normalizeProjectPath(path.resolve(String(projectPath)));
+    await assertInsideWorkspaceRoot(finalProjectPath);
+
+    try {
+      await fs.access(finalProjectPath);
+    } catch {
+      return res.status(400).json({ error: `Project path does not exist: ${finalProjectPath}` });
+    }
+
+    const sessionId = crypto.randomUUID();
+    // owner 必须传:不传等于把这个项目标成"公共",全服务器可见。
+    sessionsDb.createAppSession(sessionId, provider, finalProjectPath, req.user.id);
+
+    return res.status(201).json({
+      success: true,
+      sessionId,
+      // 相对路径:服务端不猜自己的对外域名(反代之后 Host 未必对)。
+      sessionPath: `/session/${sessionId}`,
+      projectPath: finalProjectPath,
+    });
+  } catch (error) {
+    console.error('[Agent API] 领会话号失败:', error);
+    return res.status(400).json({ error: error.message });
+  }
+});
 
 /**
  * POST /api/agent
@@ -843,8 +941,29 @@ class ResponseCollector {
  *     } | { error: "..." }
  *   }
  *
+ * Async Response (async=true):
+ *   HTTP Status: 202
+ *   Content-Type: application/json
+ *   {
+ *     success: true,
+ *     sessionId: "c0c9b6bf-bf3d-4936-a655-460f5d2d10db",
+ *     sessionPath: "/session/c0c9b6bf-bf3d-4936-a655-460f5d2d10db",
+ *     projectPath: "/path/to/project",
+ *     status: "running"
+ *   }
+ *
+ *   响应在回合**开跑之前**就发出去,拿到 sessionId 直接拼前端链接即可,
+ *   点进去就能实时看着这一轮跑完(输出走聊天网关广播,断线重连有补发)。
+ *
+ *   注意:
+ *   - 不带 sessionId 时新建会话,id 由服务端生成,同时也是 transcript 文件名;
+ *     带 sessionId 时续那段对话(会查可见性,看不见按 404 处理)。
+ *   - 与 createBranch / createPR 互斥:响应先发,结果没地方回报。
+ *   - cleanup 不生效:会话是留着给人看的,不能把它的项目目录删掉。
+ *   - 同一会话已有回合在跑时返回 409。
+ *
  * Error Response:
- *   HTTP Status: 400, 401, 500
+ *   HTTP Status: 400, 401, 404, 409, 500
  *   Content-Type: application/json
  *   { success: false, error: "Error description" }
  *
@@ -865,7 +984,17 @@ class ResponseCollector {
  *     "createPR": true
  *   }
  *
- * Example 3: Clone to specific path with auto-generated branch
+ * Example 3: 先拿会话 id 再去页面上看(异步模式)
+ *   POST /api/agent
+ *   {
+ *     "projectPath": "/home/user/project",
+ *     "message": "把这个仓库的测试跑一遍",
+ *     "async": true
+ *   }
+ *   → 202 { sessionId, sessionPath }  —— 立刻返回,回合在后台跑
+ *   → 打开 https://<host>/session/<sessionId> 实时观看
+ *
+ * Example 4: Clone to specific path with auto-generated branch
  *   POST /api/agent
  *   {
  *     "githubUrl": "https://github.com/user/repo",
@@ -884,6 +1013,13 @@ router.post('/', validateExternalApiKey, async (req, res) => {
   // Parse stream and cleanup as booleans (handle string "true"/"false" from curl)
   const stream = req.body.stream === undefined ? true : (req.body.stream === true || req.body.stream === 'true');
   const cleanup = req.body.cleanup === undefined ? true : (req.body.cleanup === true || req.body.cleanup === 'true');
+  /**
+   * 异步模式:**先把会话 id 返回,再去跑回合**。
+   *
+   * 默认(false)是原来的行为 —— 一直等到回合结束才回响应。那种形态下调用方
+   * 拿到 id 时对话早就结束了,"拿链接去页面上看着它跑"根本无从谈起。
+   */
+  const asyncMode = req.body.async === true || req.body.async === 'true';
 
   // If branchName is provided, automatically enable createBranch
   const createBranch = branchName ? true : (req.body.createBranch === true || req.body.createBranch === 'true');
@@ -900,6 +1036,14 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
   if (provider !== 'claude') {
     return res.status(400).json({ error: 'provider must be "claude"' });
+  }
+
+  // 异步模式下这两件事没有落脚点:分支/PR 的结果要等回合跑完才有,而响应
+  // 早就发出去了,做完也没人收得到。与其悄悄做一件没人看得见的事,不如直说。
+  if (asyncMode && (createBranch || createPR)) {
+    return res.status(400).json({
+      error: 'async mode does not support createBranch / createPR — the response is sent before the turn finishes, so there is nowhere to report the result.',
+    });
   }
 
   // Validate GitHub branch/PR creation requirements
@@ -965,6 +1109,113 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       console.log('Project registered:', registrationResult.project);
     }
 
+    /**
+     * 传进来的 `sessionId` 到底是什么意思 —— 三种情况,判据只有一条:
+     * **库里那行的 `provider_session_id` 空不空。**
+     *
+     * 1. 库里没这行 → 老语义,当成 provider 原生 id 直接续对话(行为不变)。
+     * 2. 库里有行、`provider_session_id` 为空 → 这是 `POST /api/agent/sessions`
+     *    领过号但还没跑过的会话 → **用这个 id 新建**。此时若按 resume 处理,
+     *    CLI 会去找一份根本不存在的 transcript,直接失败。
+     * 3. 库里有行、`provider_session_id` 有值 → 续那个 provider 会话。
+     */
+    let appSessionId = sessionId || null;
+    let resumeProviderSessionId = null;
+    let createWithSessionId = null;
+
+    if (sessionId) {
+      const row = sessionsDb.getSessionById(sessionId);
+      if (row) {
+        // API key 背后也是一个具体的人,不能拿一把自助 key 就往别人的会话里写。
+        // 与"这个 id 不存在"同形返回,不泄漏"存在但你看不见"。
+        if (!canViewerSeeSession(sessionId, readRequestViewer(req))) {
+          return res.status(404).json({ error: `Session "${sessionId}" was not found.` });
+        }
+        if (row.provider_session_id) resumeProviderSessionId = row.provider_session_id;
+        else createWithSessionId = sessionId;
+      } else {
+        resumeProviderSessionId = sessionId;
+      }
+    }
+
+    /**
+     * 异步模式:id 先走,回合后走。
+     *
+     * 顺序是**故意**这样的:
+     *
+     * 1. 先定下会话 id 并**立刻在库里占一行**(`createAppSession`)。占了行,
+     *    `/session/<id>` 这个链接当场就能打开 —— 哪怕回合一个字都还没吐,
+     *    页面看到的也是一段空对话,而不是"会话不存在"。
+     * 2. 把这一轮登记进 `chatRunRegistry`,写入口用网关 writer。**此刻一个
+     *    浏览器都没连着**,所以 `connection` 传 null;人点开链接之后
+     *    `chat.subscribe` 会把 socket 加进来,前半段由补发游标补上。
+     *    走网关还顺带两个好处:显示日志会记(见 az 轮),`chat.abort` 也能用。
+     * 3. 回合真正开跑之前就把 id 发回去。调用方直接拿去拼链接。
+     *
+     * 落盘文件名同样是这个 id(`newSessionId` → SDK 的 `Options.sessionId`),
+     * 所以"应用侧 id"和"provider 原生 id"是同一个值,链接、transcript、
+     * 侧栏三处对得上。
+     */
+    if (asyncMode) {
+      if (!appSessionId) {
+        // 一步到位:没领过号就现领一个,同样占行,链接立刻可用。
+        appSessionId = crypto.randomUUID();
+        // owner 必须传:不传等于把这个项目标成"公共",全服务器可见。
+        sessionsDb.createAppSession(appSessionId, provider, finalProjectPath, req.user.id);
+        createWithSessionId = appSessionId;
+      }
+
+      const run = chatRunRegistry.startRun({
+        appSessionId,
+        provider,
+        providerSessionId: resumeProviderSessionId,
+        connection: null,
+        userId: req.user.id,
+      });
+
+      if (!run) {
+        return res.status(409).json({
+          error: `Session "${appSessionId}" already has a run in progress.`,
+          sessionId: appSessionId,
+        });
+      }
+
+      res.status(202).json({
+        success: true,
+        sessionId: appSessionId,
+        // 相对路径:服务端不猜自己的对外域名(反代之后 Host 未必对)。
+        sessionPath: `/session/${appSessionId}`,
+        projectPath: finalProjectPath,
+        status: 'running',
+      });
+
+      // 不 await:响应已经发出去了,这一轮在后台跑,输出走网关推给
+      // 之后订阅上来的浏览器。
+      queryClaudeSDK(message.trim(), {
+        projectPath: finalProjectPath,
+        cwd: finalProjectPath,
+        sessionId: resumeProviderSessionId ?? undefined,
+        resume: Boolean(resumeProviderSessionId),
+        newSessionId: createWithSessionId ?? undefined,
+        runId: appSessionId,
+        model,
+        effort,
+        permissionMode: 'bypassPermissions',
+        oneShot: true,
+      }, run.writer).catch((error) => {
+        console.error('[Agent API] 异步回合失败', {
+          sessionId: appSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }).finally(() => {
+        // 兜底的终止帧:运行时崩了或者没发自己的 complete 时,不能让页面
+        // 永远转圈。只对"还是当前这一轮"生效。
+        chatRunRegistry.completeRunIfCurrent(run, { exitCode: 1 });
+      });
+
+      return;
+    }
+
     // Set up writer based on streaming mode
     if (stream) {
       // Set up SSE headers for streaming
@@ -1000,13 +1251,33 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       await queryClaudeSDK(message.trim(), {
         projectPath: finalProjectPath,
         cwd: finalProjectPath,
-        sessionId: sessionId || null,
+        sessionId: resumeProviderSessionId,
+        // 领过号但还没跑过的会话:用这个 id 新建,transcript 落盘就是它。
+        newSessionId: createWithSessionId ?? undefined,
         model: model,
         effort,
         permissionMode: 'bypassPermissions', // Bypass all permissions for API calls
         oneShot: true // API turns stay on the per-turn path (no resident runtime)
       }, writer);
 
+      /**
+       * 领过号的会话:回合一跑完就把映射补上,别等 watcher。
+       *
+       * 这一行的 `provider_session_id` 在领号时是空的,而 `fetchHistory` 见它为空
+       * 就直接返回空历史 —— 也就是说在 watcher 扫到 transcript 之前,用户点开
+       * 那个链接看到的是一段空对话,尽管内容早就落盘了。这里主动补一次,
+       * 窗口从"一次扫描周期"缩到零。
+       *
+       * 同步路径的 writer 不走网关,所以没有 `recordProviderSessionId` 那条路,
+       * 只能在这里补。
+       */
+      if (createWithSessionId) {
+        try {
+          sessionsDb.assignProviderSessionId(createWithSessionId, writer.getSessionId() || createWithSessionId);
+        } catch (error) {
+          console.warn('[Agent API] 回填 provider session id 失败:', error?.message || error);
+        }
+      }
     }
 
     // Handle GitHub branch and PR creation after successful agent completion
@@ -1265,3 +1536,6 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 });
 
 export default router;
+
+// 单测用:非流式响应的收集器本身是有逻辑的(挑回答、累加用量),值得钉住。
+export { ResponseCollector };

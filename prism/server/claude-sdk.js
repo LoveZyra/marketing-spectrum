@@ -401,7 +401,7 @@ async function currentUserSettingsMtimeMs() {
 }
 
 function mapCliOptionsToSDK(options = {}, stderrTail = null) {
-  const { sessionId, cwd, toolsSettings, permissionMode, effort } = options;
+  const { sessionId, newSessionId, cwd, toolsSettings, permissionMode, effort } = options;
 
   const sdkOptions = {};
 
@@ -486,7 +486,26 @@ function mapCliOptionsToSDK(options = {}, stderrTail = null) {
   // 显式钉成 false,不吃默认值。
   sdkOptions.forwardSubagentText = false;
 
-  if (sessionId) {
+  /**
+   * 新建会话时**指定 id**,而不是让 SDK 自己发一个。
+   *
+   * SDK 的 `Options.sessionId` 就是干这个的("Use a specific session ID for the
+   * conversation instead of an auto-generated one. Must be a valid UUID"),
+   * transcript 会原样落成 `<id>.jsonl`。Prism 用它把"应用侧会话 id"和
+   * "provider 原生 id"钉成同一个值 —— 于是接口可以在**回合开跑之前**就把
+   * 最终 id 返给调用方,对方直接拼 `/session/<id>` 就能打开这段对话。
+   *
+   * 和 `resume` 互斥:CLI 明确拒绝同时给两个(`forkSession` 那条路除外)。
+   * 这里的优先级是"新建优先" —— 传了 newSessionId 就是要开一段新的。
+   *
+   * 非法 UUID 或 id 已被占用时,CLI 直接退出 1 并在 stderr 写明原因
+   * (`Invalid session ID. Must be a valid UUID.` /
+   *  `Session ID <x> is already in use.`),不会穿越目录、也不会静默续写进
+   * 别人的对话。但调用方只看得到一个退出码,所以这两种情况应当在路由层先拦。
+   */
+  if (newSessionId) {
+    sdkOptions.sessionId = newSessionId;
+  } else if (sessionId) {
     sdkOptions.resume = sessionId;
   }
 
@@ -2681,6 +2700,7 @@ async function prewarmClaudeSession(options = {}) {
 
 export {
   toSdkModel,
+  mapCliOptionsToSDK,
   readTurnWatchdogConfig,
   collectToolUseDelta,
   queryClaudeSDK,

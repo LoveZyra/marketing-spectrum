@@ -1,12 +1,12 @@
 import { useTranslation } from 'react-i18next';
 
-import { DarkModeToggle } from '../../../../shared/view/ui';
 import type { CodeEditorSettingsState, ProjectSortOrder } from '../../types/types';
 import LanguageSelector from '../../../../shared/view/ui/LanguageSelector';
 import SettingsCard from '../SettingsCard';
 import SettingsRow from '../SettingsRow';
 import SettingsSection from '../SettingsSection';
 import SettingsToggle from '../SettingsToggle';
+import ThemePicker from '../ThemePicker';
 
 type AppearanceSettingsTabProps = {
   projectSortOrder: ProjectSortOrder;
@@ -31,14 +31,11 @@ export default function AppearanceSettingsTab({
 
   return (
     <div className="space-y-8">
-      <SettingsSection title={t('appearanceSettings.darkMode.label')}>
+      {/* 原来这里是一枚「深色模式」开关。浅色分成两种材质之后布尔表达不了三个值,
+          换成三张带缩略预览的卡片 —— 选主题是看着选的,不是读文字选的。 */}
+      <SettingsSection title={t('appearanceSettings.uiTheme.label', { defaultValue: '界面主题' })}>
         <SettingsCard>
-          <SettingsRow
-            label={t('appearanceSettings.darkMode.label')}
-            description={t('appearanceSettings.darkMode.description')}
-          >
-            <DarkModeToggle ariaLabel={t('appearanceSettings.darkMode.label')} />
-          </SettingsRow>
+          <ThemePicker />
         </SettingsCard>
       </SettingsSection>
 

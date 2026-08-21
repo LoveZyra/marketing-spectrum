@@ -116,6 +116,27 @@
         "label": "字型大小",
         "description": "編輯器字型大小（px）"
       }
+    },
+    "uiTheme": {
+      "label": "介面主題",
+      "description": "選擇整套介面的材質與配色",
+      "options": {
+        "blueprint": {
+          "name": "紙構藍圖",
+          "description": "暖白紙底、髮絲線分區、零陰影",
+          "short": "紙構"
+        },
+        "glass": {
+          "name": "稜光玻璃",
+          "description": "冷白玻璃面板、柔光層級、分光強調",
+          "short": "稜光"
+        },
+        "dark": {
+          "name": "霓虹終端",
+          "description": "近黑畫布、點陣格線、強調色發光",
+          "short": "霓虹"
+        }
+      }
     }
   },
   "mcpForm": {

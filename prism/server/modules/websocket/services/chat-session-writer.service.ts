@@ -8,9 +8,15 @@ import type {
   RealtimeClientConnection,
 } from '@/shared/types.js';
 import { createCompleteMessage, readObjectRecord } from '@/shared/utils.js';
+import { sessionMessagesDb } from '@/modules/database/index.js';
 
 type ChatSessionWriterOptions = {
-  connection: RealtimeClientConnection;
+  /**
+   * 起这条 run 的那个 socket。**可以是 null** —— 外部 API 触发的回合一开始
+   * 一个浏览器都没有,人是拿着返回的 session id 去点链接的,晚几秒才接上来。
+   * 那时走 `addConnection` 加进来,照样能看到后半段,再靠补发游标补前半段。
+   */
+  connection: RealtimeClientConnection | null;
   userId: string | number | null;
   provider: LLMProvider;
   /** Provider-native id when resuming an existing session, otherwise null. */
@@ -81,7 +87,9 @@ export class ChatSessionWriter {
 
   constructor(options: ChatSessionWriterOptions) {
     this.options = options;
-    this.connections.add(options.connection);
+    // null 不能进集合:`forward` 会读每个连接的 readyState,塞个 null 进去
+    // 等于给每一条出站消息埋一颗 TypeError。
+    if (options.connection) this.connections.add(options.connection);
     this.userId = options.userId;
     this.providerSessionId = options.providerSessionId;
   }
@@ -186,6 +194,20 @@ export class ChatSessionWriter {
    * 顺手清掉已经关闭的 socket:刷新页面留下的旧连接没人会来摘,靠这里回收。
    */
   private forward(message: NormalizedMessage): number {
+    /**
+     * 落一份「给人看的对话日志」。
+     *
+     * 这里是所有出站消息的唯一收口:`decorateAndRecordEvent` 已经把 `sessionId`
+     * 换成了**应用侧**的 id,provider 的原生 id 到不了这一步 —— 正好和
+     * `fetchHistory` 的键对齐。
+     *
+     * 写在投递**之前**、且不看有没有 socket 在连:用户关掉标签页,回合照跑,
+     * 日志照记。这一点是它比"前端 store"更可靠的地方。
+     */
+    if (typeof message.sessionId === 'string' && message.sessionId) {
+      sessionMessagesDb.append(message.sessionId, message);
+    }
+
     const payload = JSON.stringify(message);
     let delivered = 0;
 

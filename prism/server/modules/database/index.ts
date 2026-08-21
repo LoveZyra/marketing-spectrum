@@ -6,6 +6,7 @@ export { apiKeysDb } from '@/modules/database/repositories/api-keys.js';
 export { auditLogDb } from '@/modules/database/repositories/audit-log.js';
 export type { AuditEntry, AuditEvent, AuditRow } from '@/modules/database/repositories/audit-log.js';
 export { appConfigDb } from '@/modules/database/repositories/app-config.js';
+export { isDurableDisplayMessage, sessionMessagesDb } from '@/modules/database/repositories/session-messages.db.js';
 export { credentialsDb } from '@/modules/database/repositories/credentials.js';
 export { githubTokensDb } from '@/modules/database/repositories/github-tokens.js';
 export { notificationPreferencesDb } from '@/modules/database/repositories/notification-preferences.js';

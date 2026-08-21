@@ -5,7 +5,7 @@ import { AlertTriangle, Check, X, Folder, Upload } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
 import { copyTextToClipboard } from '../../../utils/clipboard';
-import { ICON_SIZE_CLASS, getFileIconData } from '../constants/fileIcons';
+import { FAMILY_COLOR_CLASS, ICON_SIZE_CLASS, getFileFamily, getFileIconData } from '../constants/fileIcons';
 import { useExpandedDirectories } from '../hooks/useExpandedDirectories';
 import { useFileTreeData } from '../hooks/useFileTreeData';
 import { useFileTreeOperations } from '../hooks/useFileTreeOperations';
@@ -98,9 +98,16 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     }
   }, [operations.renamingItem]);
 
+  /**
+   * 图标沿用 `getFileIconData` 的映射,颜色改走**七个语义族**。
+   *
+   * 族色是 CSS 变量(`--filetype-*`):两套浅色主题给设计稿的七色,霓虹终端
+   * 下落回次级墨色 —— 那一稿没有分色这回事,不该被这轮顺手改掉。
+   */
   const renderFileIcon = useCallback((filename: string) => {
-    const { icon: Icon, color } = getFileIconData(filename);
-    return <Icon className={cn(ICON_SIZE_CLASS, color)} />;
+    const { icon: Icon } = getFileIconData(filename);
+    const family = getFileFamily(filename);
+    return <Icon className={cn(ICON_SIZE_CLASS, FAMILY_COLOR_CLASS[family])} />;
   }, []);
 
   /**

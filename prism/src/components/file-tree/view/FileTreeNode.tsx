@@ -90,9 +90,16 @@ export default function FileTreeNode({
   const hasChildren = Boolean(isDirectory && item.children && item.children.length > 0);
   const isRenaming = renamingItem?.path === item.path;
 
+  /**
+   * 文件名的字体交给主题(`--filename-font` / `--filename-size`):
+   * 纸构蓝图整列走等宽 —— 扩展名本身就参与区分,不必全靠图标;
+   * 另外两套仍是界面字体。目录名保持界面字体加粗,它是"容器"不是"文件"。
+   */
   const nameClassName = cn(
-    'font-sans text-[13px] leading-tight truncate',
-    isDirectory ? 'font-medium text-foreground' : 'text-body',
+    'leading-tight truncate',
+    isDirectory
+      ? 'font-sans text-[13px] font-medium text-foreground'
+      : 'prism-filename text-body',
   );
 
   // View mode only changes the row layout; selection, expansion, and recursion stay shared.
@@ -106,6 +113,9 @@ export default function FileTreeNode({
     // 而"这个目录开着"本来就有箭头方向在表达。边框保留但恒为透明,
     // 只为占住那 2px,免得开合时整行左右跳动。
     'border-l-2 border-transparent',
+    // 行间分隔交给主题:纸构蓝图给一条次级发丝线(图纸的行格),
+    // 另外两套什么都不加(见 index.css 的 .prism-row)。
+    'prism-row',
   );
 
   // Render rename input if this item is being renamed

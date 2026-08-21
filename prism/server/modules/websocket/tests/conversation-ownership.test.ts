@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
-import { afterEach, describe, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, test } from 'vitest';
 
+import { closeConnection, initializeDatabase, sessionMessagesDb } from '@/modules/database/index.js';
 import {
   claimForShell,
   currentHolder,
@@ -10,6 +14,31 @@ import {
 } from '@/modules/websocket/services/conversation-ownership.service.js';
 
 afterEach(() => resetConversationOwnership());
+
+/**
+ * 整个文件都跑在一份临时库上。
+ *
+ * `releaseShellClaim` 现在会顺手清掉这段对话的显示日志 —— 也就是说这个模块
+ * **会碰数据库**。不先把 `DATABASE_PATH` 指到临时目录,连接层会回落到
+ * 安装目录里的 `server/database/auth.db`,测试就开始往真库里写了。
+ */
+let previousDatabasePath: string | undefined;
+let tempDirectory: string;
+
+beforeAll(async () => {
+  previousDatabasePath = process.env.DATABASE_PATH;
+  tempDirectory = await mkdtemp(path.join(tmpdir(), 'ownership-'));
+  closeConnection();
+  process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
+  await initializeDatabase();
+});
+
+afterAll(async () => {
+  closeConnection();
+  if (previousDatabasePath === undefined) delete process.env.DATABASE_PATH;
+  else process.env.DATABASE_PATH = previousDatabasePath;
+  await rm(tempDirectory, { recursive: true, force: true });
+});
 
 describe('对话所有权(chat / 终端互斥)', () => {
   test('默认没有登记 —— chat 可用,不需要先"认领"', () => {
@@ -57,4 +86,17 @@ describe('对话所有权(chat / 终端互斥)', () => {
     assert.equal(holder?.panel, 'shell');
     assert.equal(holder?.username, null);
   });
+});
+
+test('终端释放时把显示日志一并丢掉 —— 缺了中间一截的日志比没有更糟', () => {
+  sessionMessagesDb.append('s-shell', {
+    id: 'm1', sessionId: 's-shell', kind: 'text', role: 'assistant',
+    content: '终端接管之前说的', timestamp: '2026-08-20T10:00:00.000Z', provider: 'claude',
+  } as never);
+  assert.equal(sessionMessagesDb.countForSession('s-shell'), 1);
+
+  claimForShell('s-shell', { userId: 1, username: 'demo' });
+  releaseShellClaim('s-shell');
+
+  assert.equal(sessionMessagesDb.countForSession('s-shell'), 0);
 });

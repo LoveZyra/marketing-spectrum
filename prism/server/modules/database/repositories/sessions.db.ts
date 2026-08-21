@@ -359,7 +359,11 @@ export const sessionsDb = {
   deleteSessionsByProjectPath(projectPath: string): void {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
-    db.prepare(`DELETE FROM sessions WHERE project_path = ?`).run(normalizedProjectPath);
+    db.prepare(`
+            DELETE FROM session_display_messages
+            WHERE session_id IN (SELECT session_id FROM sessions WHERE project_path = ?)
+        `).run(normalizedProjectPath);
+        db.prepare(`DELETE FROM sessions WHERE project_path = ?`).run(normalizedProjectPath);
   },
 
   getSessionName(sessionId: string, provider: string): string | null {
@@ -390,6 +394,9 @@ export const sessionsDb = {
 
   deleteSessionById(sessionId: string): boolean {
     const db = getConnection();
+    // 显示日志没有对 sessions 建外键(新会话的第一条消息可能早于 sessions 行落库),
+    // 所以删会话时要显式清一遍,免得留下永远读不到的孤儿行。
+    db.prepare('DELETE FROM session_display_messages WHERE session_id = ?').run(sessionId);
     return db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId).changes > 0;
   },
 };

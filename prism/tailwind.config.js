@@ -18,9 +18,12 @@ export default {
         // 界面默认中文,但拉丁字体后面必须挂上系统中文字体,否则中文会落到
         // Windows 的宋体(SimSun)—— 又细又旧,和这套设计完全不搭。挂上
         // 各平台的现代黑体(苹方 / 微软雅黑 / 思源黑体),不需要额外下载。
-        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"Helvetica Neue"', 'Arial', 'sans-serif', '"PingFang SC"', '"Microsoft YaHei"', '"Noto Sans SC"', '"Hiragino Sans GB"', '"Source Han Sans SC"'],
+        // 具体字族由主题决定(纸构蓝图 = IBM Plex,棱光玻璃 = Space Grotesk,
+        // 霓虹终端 = Inter),所以这里只指到变量;回落链写在 index.css 的
+        // --font-ui / --font-mono 里,三套各自完整。
+        sans: ['var(--font-ui)'],
         // 等宽给一切「可以被打出来或算出来的东西」:路径、id、token 数、耗时、行数、diff 数字
-        mono: ['"SF Mono"', 'SFMono-Regular', '"JetBrains Mono"', 'Menlo', 'Monaco', 'Consolas', '"Liberation Mono"', 'monospace'],
+        mono: ['var(--font-mono)'],
       },
       colors: {
         border: {

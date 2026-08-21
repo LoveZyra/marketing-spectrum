@@ -4,6 +4,7 @@ import type { WebSocket } from 'ws';
 
 import { canViewerSeeSession, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
+import { seedDisplayLogFromTranscript } from '@/modules/providers/index.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
 import { currentHolder } from '@/modules/websocket/services/conversation-ownership.service.js';
 import { getGlobalImageAssetsDir, normalizeImageDescriptors } from '@/shared/image-attachments.js';
@@ -215,6 +216,18 @@ async function handleChatSend(
     sendProtocolError(ws, 'UNSUPPORTED_PROVIDER', `Provider "${provider}" is not available.`, sessionId);
     return;
   }
+
+  /**
+   * 回合开始之前,先确保这个会话的显示日志是**完整的**。
+   *
+   * 老会话(这一轮之前建的)日志里一行都没有,而这次回合会往里写。写完之后
+   * `fetchHistory` 就会改从日志读 —— 如果不先把已有历史抄进去,刷新页面时
+   * 之前的对话会整段消失。抄一次就够,之后这个会话永久归日志管。
+   *
+   * 放在 `startRun` 之前:抄的是"这次发送之前"的历史,顺序天然对得上,
+   * 也不会和本回合正在写入的新消息抢同一批 id。
+   */
+  await seedDisplayLogFromTranscript(sessionId);
 
   const run = chatRunRegistry.startRun({
     appSessionId: sessionId,

@@ -7,11 +7,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>棱镜</title>
 
-    <!-- Fonts: Inter (UI) + JetBrains Mono (等宽数字/路径/id) -->
+    <!--
+      三套界面主题各有自己的字族(见 src/index.css 的 --font-ui / --font-mono):
+        霓虹终端   Inter          + JetBrains Mono
+        纸构蓝图   IBM Plex Sans  + IBM Plex Mono
+        棱光玻璃   Space Grotesk  + JetBrains Mono
+      拉不到时按 --font-ui 里的回落链退到系统字体,界面照常可用。
+    -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
 

@@ -223,3 +223,76 @@ export function getFileIconData(filename: string): FileIconData {
 
   return { icon: File, color: 'text-muted-foreground' };
 }
+
+/**
+ * 文件类型的**七个语义族**。
+ *
+ * `FILE_ICON_MAP` 已经给每种类型分了图标,但颜色一律 `text-muted-foreground` ——
+ * 一列灰图标,扫一眼分不出哪些是代码、哪些是配置、哪些是密钥。两份浅色设计稿
+ * (`light-ui/`)都要求按族分色,并且明确"**不动图标映射**",所以这里只加一层
+ * 族归属,原来的图标解析一行不改。
+ *
+ * 色值由主题给(`--filetype-*`):两套浅色用设计稿的七色,霓虹终端下全部落回
+ * 次级墨色 —— 深色那一稿没有这个特性,不该被这轮顺手改掉。
+ */
+export type FileFamily = 'dir' | 'code' | 'data' | 'config' | 'doc' | 'runtime' | 'secret' | 'plain';
+
+const FAMILY_BY_EXTENSION: Record<string, FileFamily> = {};
+
+const registerFamily = (family: FileFamily, extensions: string[]) => {
+  for (const extension of extensions) FAMILY_BY_EXTENSION[extension] = family;
+};
+
+registerFamily('code', [
+  'js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts', 'py', 'pyw', 'pyi', 'ipynb', 'vue', 'svelte',
+  'html', 'htm', 'rs', 'go', 'rb', 'erb', 'java', 'kt', 'kts', 'swift', 'c', 'cc', 'cpp', 'h',
+  'hpp', 'cs', 'php', 'scala', 'dart', 'lua', 'r', 'ex', 'exs', 'elm', 'clj', 'hs', 'ml', 'pl',
+  'css', 'scss', 'sass', 'less',
+]);
+registerFamily('data', ['json', 'json5', 'jsonc', 'csv', 'tsv', 'sql', 'db', 'sqlite', 'parquet', 'avro']);
+registerFamily('config', [
+  'yml', 'yaml', 'toml', 'ini', 'conf', 'cfg', 'properties', 'editorconfig', 'babelrc',
+  'eslintrc', 'prettierrc', 'npmrc', 'nvmrc', 'gitignore', 'gitattributes', 'dockerignore',
+]);
+registerFamily('doc', ['md', 'mdx', 'markdown', 'txt', 'pdf', 'rst', 'adoc', 'doc', 'docx', 'rtf']);
+registerFamily('runtime', ['sh', 'bash', 'zsh', 'fish', 'bat', 'cmd', 'ps1', 'mk']);
+registerFamily('secret', ['lock', 'pem', 'key', 'crt', 'cer', 'p12', 'keystore']);
+
+const FAMILY_BY_FILENAME: Record<string, FileFamily> = {
+  Dockerfile: 'runtime',
+  'docker-compose.yml': 'runtime',
+  'docker-compose.yaml': 'runtime',
+  Makefile: 'runtime',
+  Procfile: 'runtime',
+  LICENSE: 'doc',
+  'LICENSE.md': 'doc',
+  NOTICE: 'doc',
+  'NOTICE.md': 'doc',
+  'README.md': 'doc',
+  'CHANGELOG.md': 'doc',
+  'requirements.txt': 'data',
+  'go.sum': 'secret',
+};
+
+/** 目录单独一族。调用方对目录不走 `getFileIconData`,所以这里显式给一个入口。 */
+export function getFileFamily(filename: string, isDirectory = false): FileFamily {
+  if (isDirectory) return 'dir';
+  if (FAMILY_BY_FILENAME[filename]) return FAMILY_BY_FILENAME[filename];
+  if (filename.startsWith('.env')) return 'secret';
+
+  const extension = filename.split('.').pop()?.toLowerCase();
+  if (extension && FAMILY_BY_EXTENSION[extension]) return FAMILY_BY_EXTENSION[extension];
+  return 'plain';
+}
+
+/** 族 → 颜色类。`plain` 保持原样,不额外上色。 */
+export const FAMILY_COLOR_CLASS: Record<FileFamily, string> = {
+  dir: 'filetype-dir',
+  code: 'filetype-code',
+  data: 'filetype-data',
+  config: 'filetype-config',
+  doc: 'filetype-doc',
+  runtime: 'filetype-runtime',
+  secret: 'filetype-secret',
+  plain: 'text-muted-foreground',
+};

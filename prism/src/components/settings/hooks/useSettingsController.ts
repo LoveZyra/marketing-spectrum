@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { useTheme } from '../../../contexts/ThemeContext';
 import { authenticatedFetch } from '../../../utils/api';
 import { setNotificationSoundEnabled } from '../../../utils/notificationSound';
 import { useProviderAuthStatus } from '../../provider-auth/hooks/useProviderAuthStatus';
@@ -13,11 +12,6 @@ import type {
   ProjectSortOrder,
   SettingsMainTab,
 } from '../types/types';
-
-type ThemeContextValue = {
-  isDarkMode: boolean;
-  toggleDarkMode: () => void;
-};
 
 type UseSettingsControllerArgs = {
   isOpen: boolean;
@@ -113,7 +107,6 @@ const normalizeNotificationPreferences = (
 };
 
 export function useSettingsController({ isOpen, initialTab }: UseSettingsControllerArgs) {
-  const { isDarkMode, toggleDarkMode } = useTheme() as ThemeContextValue;
   const closeTimerRef = useRef<number | null>(null);
 
   const [activeTab, setActiveTab] = useState<SettingsMainTab>(() => normalizeMainTab(initialTab));
@@ -316,8 +309,6 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
   return {
     activeTab,
     setActiveTab,
-    isDarkMode,
-    toggleDarkMode,
     saveStatus,
     projectSortOrder,
     setProjectSortOrder,

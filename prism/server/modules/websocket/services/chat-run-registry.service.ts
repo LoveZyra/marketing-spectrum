@@ -260,7 +260,8 @@ export const chatRunRegistry = {
     appSessionId: string;
     provider: LLMProvider;
     providerSessionId: string | null;
-    connection: RealtimeClientConnection;
+    /** null = 还没有浏览器在看(外部 API 触发的回合),之后由 `attachConnection` 接上。 */
+    connection: RealtimeClientConnection | null;
     userId: string | number | null;
   }): ChatRun | null {
     const existing = runs.get(input.appSessionId);

@@ -11,6 +11,8 @@
  * chat 被自己锁死"的状态 —— 没有记录就等于 chat 可用。
  */
 
+import { sessionMessagesDb } from '@/modules/database/index.js';
+
 export type ConversationHolder = {
   panel: 'shell';
   userId: string | number | null;
@@ -35,9 +37,26 @@ export function claimForShell(
   return holder;
 }
 
-/** PTY 退出/断开时调用。不存在也不报错 —— 断开路径不该因为这个抛异常。 */
+/**
+ * PTY 退出/断开时调用。不存在也不报错 —— 断开路径不该因为这个抛异常。
+ *
+ * 顺手把这段对话的**显示日志丢掉**。
+ *
+ * 显示日志的前提是"这段对话的每一条消息都从 Prism 手里过过一遍"。终端接管的
+ * 这一截没有:`claude --resume` 直接往 transcript 上追加,Prism 一个字节都没看见。
+ * 留着一份缺了中间一截的日志,界面上就会**少掉终端里聊的那几轮** —— 比回落到
+ * transcript 糟糕得多。
+ *
+ * 丢掉之后,下一次在 Prism 里发言会用 transcript(此时它已经包含终端那一截)
+ * 重新抄一份完整的日志。代价是重抄一次,换来的是"要么完整、要么没有"这条不变式。
+ */
 export function releaseShellClaim(appSessionId: string): void {
   holders.delete(appSessionId);
+  try {
+    sessionMessagesDb.deleteForSession(appSessionId);
+  } catch {
+    // 断开路径不抛异常;抄不掉大不了下次继续用旧日志。
+  }
 }
 
 /** 当前持有者;返回 null 表示"chat 可用"。 */

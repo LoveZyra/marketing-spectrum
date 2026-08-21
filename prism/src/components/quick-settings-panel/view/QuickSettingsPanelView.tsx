@@ -3,7 +3,6 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
-import { useTheme } from '../../../contexts/ThemeContext';
 import { QUICK_SETTINGS_TOGGLE_EVENT } from '../constants';
 import { useQuickSettingsDrag } from '../hooks/useQuickSettingsDrag';
 import type { PreferenceToggleKey, QuickSettingsPreferences } from '../types';
@@ -22,7 +21,6 @@ export default function QuickSettingsPanelView() {
     return () => window.removeEventListener(QUICK_SETTINGS_TOGGLE_EVENT, onToggle);
   }, []);
   const { isMobile } = useDeviceSettings({ trackPWA: false });
-  const { isDarkMode } = useTheme();
   const { preferences, setPreference } = useUiPreferences();
   const {
     isDragging,
@@ -78,7 +76,6 @@ export default function QuickSettingsPanelView() {
         <div className="flex h-full flex-col">
           <QuickSettingsPanelHeader />
           <QuickSettingsContent
-            isDarkMode={isDarkMode}
             preferences={quickSettingsPreferences}
             onPreferenceChange={handlePreferenceChange}
           />

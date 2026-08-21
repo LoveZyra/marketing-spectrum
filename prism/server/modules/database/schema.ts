@@ -147,6 +147,39 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 `;
 
+/**
+ * 「给人看的对话日志」——与 CLI 的 JSONL transcript **完全解耦**。
+ *
+ * ## 为什么要有这张表
+ *
+ * 在此之前,聊天界面是**回放** CLI 写在 `~/.claude/projects` 下的 JSONL transcript
+ * 得到的。那份文件是
+ * **模型的记忆**,不是对话记录:里面混着子代理的整段 sidechain、`isMeta` 的图片
+ * 尺寸说明、技能正文注入、压缩摘要、各种机器耳语。拿它当显示模型,等于把
+ * "CLI 内部怎么记账"直接暴露成"用户看到了什么" —— CLI 每加一种内部行,界面就漏一次
+ * (`transcript-provenance.ts` 那一长串判据就是这么攒出来的)。
+ *
+ * 这张表反过来:**推给前端的每一条消息,原样存一份**。以后 transcript 只用于
+ * 重建与审计,不再直接决定界面。
+ *
+ * `payload` 存整条 NormalizedMessage 的 JSON —— 前端本来就消费这个结构,
+ * 回放时不需要再解析、再归一化,也就没有"再判一次出处"的机会。
+ *
+ * 没有对 `sessions` 建外键:新会话的第一条消息可能早于 sessions 行落库,
+ * 外键会让那一条直接写不进去。清理走 `deleteForSession()` 显式调用。
+ */
+export const SESSION_DISPLAY_MESSAGES_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS session_display_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    UNIQUE (session_id, message_id)
+);
+`;
+
 export const LAST_SCANNED_AT_SQL = `
 CREATE TABLE IF NOT EXISTS scan_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -199,6 +232,10 @@ ${SESSIONS_TABLE_SCHEMA_SQL}
 CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id);
 -- NOTE: This index is created in migrations after sessions is rebuilt to include project_path.
 -- Creating it here can fail on upgraded installs where the legacy sessions table has no project_path.
+
+${SESSION_DISPLAY_MESSAGES_TABLE_SCHEMA_SQL}
+-- 按会话 + 追加顺序取页,回放的唯一查询路径
+CREATE INDEX IF NOT EXISTS idx_display_messages_session_id ON session_display_messages(session_id, id);
 
 ${LAST_SCANNED_AT_SQL}
 

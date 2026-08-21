@@ -10,53 +10,85 @@
      ========================================================================== */
   :root {
     /* ------------------------------------------------------------------
-       淡色主场 = 「暖白纸感」
-       暖白画布上浮着纯白卡片,层级靠**两层极软投影**拉开(1px 贴地 + 大范围
-       扩散),不靠边框。发丝线只在真的需要"这是两段内容"时才出现。
+       浅色主场之一 = 「纸构蓝图」(默认;设计稿 light-ui/设计稿 B)
+       暖白纸底 + 22px 细点阵,**全部靠发丝线分区,零投影**。圆角收到 4–6px,
+       追求设备感和图纸感而不是卡片感。紫色只做一件事:标记「当前在哪」——
+       选中的标签、选中的项目行、活跃会话的方形短标记。
        ------------------------------------------------------------------ */
-    --background: 40 20% 98%;         /* #faf9f7  暖白画布 */
-    --foreground: 40 8% 9%;           /* #171614  最强墨色 */
-    --body: 30 5% 27%;                /* #48443f  正文 */
-    --card: 0 0% 100%;                /* #ffffff  卡片浮在暖白之上,靠"更白"抬起来 */
-    --card-foreground: 40 8% 9%;      /* #171614 */
-    --popover: 0 0% 100%;             /* #ffffff */
-    --popover-foreground: 40 8% 9%;
+    --background: 40 27% 98%;         /* #fbfaf8  暖白纸 */
+    --foreground: 40 7% 8%;           /* #171614  最强墨色 */
+    --body: 41 12% 21%;               /* #3c382f  正文 */
+    --card: 0 0% 100%;                /* #ffffff  实白:卡片、输入框、会话区 */
+    --card-foreground: 40 7% 8%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 40 7% 8%;
 
-    --primary: 160 84% 39%;           /* #10b981  淡底上取同族最深 */
-    --primary-foreground: 0 0% 6%;    /* #101010  绿底文字恒为深墨,不要改白 */
-    --primary-hover: 162 84% 35%;     /* #0ea371  淡色 hover */
+    --primary: 250 90% 60%;           /* #5b3df5  只用来标记「当前在哪」 */
+    --primary-foreground: 0 0% 100%;  /* 紫底上是白字 */
+    --primary-hover: 250 67% 51%;     /* #4c2fd6 */
 
-    --secondary: 40 14% 96%;          /* #f6f4f1 */
-    --secondary-foreground: 40 8% 9%;
-    --muted: 40 14% 96%;              /* #f6f4f1  行的 hover / 选中底 */
-    --muted-foreground: 33 5% 42%;    /* #737069  次级文字。暖白底上 #928d87 只有 3.1:1,
-                                         压在 bg-muted(#f6f5f3)上也要够 4.5:1,所以取到 42% */
-    --accent: 40 14% 96%;
-    --accent-foreground: 40 8% 9%;
+    --secondary: 40 20% 96%;          /* #f6f4f0 */
+    --secondary-foreground: 40 7% 8%;
+    --muted: 40 20% 96%;              /* #f6f4f0  行 hover:纸感中性,不染紫 */
+    --muted-foreground: 38 9% 40%;    /* #6f685c  次级文字。纸底上 4.9:1 */
+    --accent: 251 89% 96%;            /* #f0edfe  选中底:唯一染紫的面 */
+    --accent-foreground: 250 67% 45%; /* 选中底上的紫字 */
 
-    --border: 36 11% 89%;             /* #e6e3df  发丝线 */
-    --border-strong: 33 7% 64%;       /* #a9a49d  outline hover(淡色) */
-    --input: 36 11% 89%;
-    --ring: 160 84% 39%;
+    --border: 38 17% 88%;             /* #e6e2da  主发丝线 */
+    --border-strong: 36 10% 60%;      /* #a09889  outline hover */
+    --input: 37 16% 85%;              /* #e0dcd3  控件描边 */
+    --ring: 250 90% 60%;
 
-    /* 代码/等宽文字色 —— 淡色近墨,深色近白 */
     --code-foreground: 40 8% 12%;
 
-    /* 调色板里没有红。仅保留给不可逆的销毁确认 */
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 100%;
 
-    --radius: 0.75rem;                /* 12px 卡片 / 10px 按钮输入 / 8px 芯片 */
-    --radius-panel: 14px;             /* 输入框、大面板 */
-    --radius-bubble: 18px;            /* 用户气泡 */
+    --radius: 0.375rem;               /* 6px 卡片 / 4px 按钮输入 / 2px 芯片 */
+    --radius-panel: 6px;              /* 输入区、大面板 */
+    --radius-bubble: 6px;             /* 气泡不做异形收角 */
 
-    /* 面板抬升:淡色是两层投影(1px 贴地 + 大范围扩散),深色换成绿调描边。
-       全库只此两个变量,组件侧只写 .prism-panel / .prism-raised。 */
-    --shadow-panel: 0 1px 2px rgba(23, 22, 20, 0.06), 0 12px 30px -18px rgba(23, 22, 20, 0.38);
-    --shadow-raised: 0 1px 2px rgba(23, 22, 20, 0.07), 0 18px 44px -24px rgba(23, 22, 20, 0.5);
-    /* 强调色当"光"用的三档 —— 淡色不发光,留空由深色覆盖 */
+    /* 抬升全部靠 1px 发丝线,**没有投影**。唯一例外是活跃会话行的左侧紫竖条,
+       那是标记而不是投影(见 .prism-rail-line / SidebarSessionItem)。 */
+    --shadow-panel: inset 0 0 0 1px hsl(var(--border));
+    --shadow-raised: inset 0 0 0 1px hsl(var(--input));
     --glow-dot: none;
     --glow-accent: none;
+
+    /* 画布纹理:22px 步长的细点阵 */
+    --canvas-texture: radial-gradient(rgba(70, 58, 120, 0.10) 1px, transparent 1px);
+    --canvas-texture-size: 22px 22px;
+    /* 玻璃材质专用,纸感下一律关掉 */
+    --panel-blur: none;
+    --panel-tint: transparent;
+    --accent-bar: none;
+    /* 状态点:纸感下是**正方形**,不是圆 */
+    --dot-radius: 0px;
+
+    --font-ui: "IBM Plex Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Hiragino Sans GB", "Source Han Sans SC";
+    --font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    /* 主动作按钮(创建新项目):纸感下是**墨黑**,不是紫 ——
+       紫色在这一稿里只负责标记「当前在哪」。 */
+    --action-bg: #171614;
+    --action-bg-image: none;
+    --action-bg-hover: #2a2723;
+    --action-fg: #ffffff;
+    --action-border: transparent;
+    --action-shadow: none;
+
+    /* 文件类型七族(两套浅色共用,见设计稿 A 第 7 节) */
+    --filetype-dir: #6d4aff;
+    --filetype-code: #4338ca;
+    --filetype-data: #a16207;
+    --filetype-config: #5b6472;
+    --filetype-doc: #0f766e;
+    --filetype-runtime: #0369a1;
+    --filetype-secret: #a21caf;
+
+    /* 文件名字体:纸感下整列走等宽,让扩展名本身也参与区分 */
+    --filename-font: var(--font-mono);
+    --filename-size: 12.5px;
 
     /* 动效常量:只允许颜色/描边/阴影/透明度参与过渡 */
     --motion-fast: 120ms;
@@ -89,6 +121,89 @@
       --safe-area-inset-bottom: constant(safe-area-inset-bottom);
       --safe-area-inset-left: constant(safe-area-inset-left);
     }
+  }
+
+  [data-ui-theme="glass"] {
+    /* ------------------------------------------------------------------
+       浅色主场之二 = 「棱光玻璃」(设计稿 light-ui/设计稿 A)
+       冷白画布上浮半透明玻璃面板,层级靠**一层柔光**而不是描边。强调色是
+       一道分光(紫→青窄渐层),只出现在三处:窗口顶边、输入区上沿、会话选中条。
+       其余位置一律实色紫。
+       ------------------------------------------------------------------ */
+    --background: 240 38% 97%;        /* #f6f6fb  冷白,带一点蓝紫 */
+    --foreground: 250 21% 11%;        /* #191723 */
+    --body: 253 13% 27%;              /* #3f3b4d  正文 */
+    --card: 0 0% 100%;                /* 面板底色;半透明与模糊在 bg-card 规则里加 */
+    --card-foreground: 250 21% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 250 21% 11%;
+
+    --primary: 252 100% 65%;          /* #6d4aff */
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 253 80% 56%;     /* #5b34e8 */
+
+    --secondary: 247 68% 95%;         /* rgba(109,74,255,.07) 压在画布上的实色 */
+    --secondary-foreground: 250 21% 11%;
+    --muted: 247 68% 95%;             /* 行 hover:淡紫底 */
+    --muted-foreground: 255 8% 39%;   /* #5f5b6b  次级文字。冷白底上 6.6:1 */
+    --accent: 249 72% 92%;            /* 选中底,比 hover 再深一档 */
+    --accent-foreground: 253 80% 45%;
+
+    --border: 251 49% 93%;            /* rgba(102,74,200,.10) 的实色;唯一描边色 */
+    --border-strong: 250 30% 72%;
+    --input: 251 49% 93%;
+    --ring: 252 100% 65%;
+
+    --code-foreground: 250 21% 14%;
+
+    --radius: 0.75rem;                /* 12px 卡片 / 10px 按钮输入 / 8px 芯片 */
+    --radius-panel: 16px;             /* 消息卡、输入区 */
+    --radius-bubble: 18px;
+
+    /* 只有两层,不叠第三层:1px 内描边代替 border,外加一层大范围低透明扩散。 */
+    --shadow-panel: 0 0 0 1px rgba(102, 74, 200, 0.09), 0 24px 50px -34px rgba(46, 32, 96, 0.6);
+    --shadow-raised: 0 0 0 1px rgba(102, 74, 200, 0.12), 0 6px 16px -10px rgba(46, 32, 96, 0.4);
+    --glow-dot: none;
+    --glow-accent: none;
+
+    /* 画布:32px 细线网格 + 右上紫 / 左下青两层光晕 */
+    --canvas-texture:
+      radial-gradient(120% 80% at 82% -10%, rgba(120, 88, 255, 0.13), transparent 60%),
+      radial-gradient(90% 70% at -6% 106%, rgba(34, 211, 238, 0.10), transparent 62%),
+      linear-gradient(rgba(88, 64, 180, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(88, 64, 180, 0.045) 1px, transparent 1px);
+    --canvas-texture-size: 100vw 100vh, 100vw 100vh, 32px 32px, 32px 32px;
+    --panel-blur: blur(10px);
+    --panel-tint: rgba(255, 255, 255, 0.86);
+    /* 分光条:紫 → 品红 → 青 → 紫 */
+    --accent-bar: linear-gradient(90deg, #6d4aff, #a855f7 32%, #22d3ee 68%, #6d4aff);
+    --dot-radius: 999px;
+
+    --font-ui: "Space Grotesk", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Hiragino Sans GB", "Source Han Sans SC";
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    /* 主动作按钮:紫色渐层 + 一层染紫的投影 */
+    /* 渐层要配一个实色底:`background-image` 不参与 `backgroundColor` 的计算,
+       只写渐层的话,任何按"底色"判断的东西(包括对比度扫描、失效回退)
+       看到的都是透明。取渐层中点。 */
+    --action-bg: #6144ef;
+    --action-bg-image: linear-gradient(135deg, #7c53ff, #5b34e8);
+    --action-bg-hover: #5b34e8;
+    --action-fg: #ffffff;
+    --action-border: transparent;
+    --action-shadow: 0 10px 24px -12px rgba(91, 52, 232, 0.85);
+
+    --filetype-dir: #6d4aff;
+    --filetype-code: #4338ca;
+    --filetype-data: #a16207;
+    --filetype-config: #5b6472;
+    --filetype-doc: #0f766e;
+    --filetype-runtime: #0369a1;
+    --filetype-secret: #a21caf;
+
+    /* 玻璃稿的文件名是界面字体,不走等宽 */
+    --filename-font: var(--font-ui);
+    --filename-size: 13.5px;
   }
 
   .dark {
@@ -139,6 +254,41 @@
     --shadow-raised: inset 0 0 0 1px hsl(var(--primary) / 0.16), 0 0 30px -14px hsl(var(--primary) / 0.55);
     --glow-dot: 0 0 10px hsl(var(--primary) / 0.9);
     --glow-accent: 0 0 16px -4px hsl(var(--primary) / 0.85);
+
+    /* 画布:28px 点阵栅格 + 顶部环境光(原来写死在 .dark [class~=bg-background],
+       现在和另外两套走同一个变量,规则只剩一条) */
+    --canvas-texture:
+      radial-gradient(120% 62% at 50% -8%, hsl(var(--primary) / 0.07), transparent 62%),
+      linear-gradient(hsl(var(--primary) / 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--primary) / 0.05) 1px, transparent 1px);
+    --canvas-texture-size: 100vw 100vh, 28px 28px, 28px 28px;
+    --panel-blur: none;
+    --panel-tint: transparent;
+    --accent-bar: none;
+    --dot-radius: 999px;
+
+    --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Hiragino Sans GB", "Source Han Sans SC";
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    /* 霓虹终端的主动作按钮维持原样:透明底 + 发丝描边,不是实心块。 */
+    --action-bg: transparent;
+    --action-bg-image: none;
+    --action-bg-hover: transparent;
+    --action-fg: hsl(var(--card-foreground));
+    --action-border: hsl(var(--border));
+    --action-shadow: none;
+
+    /* 深色那一稿没有文件类型分色,七族一律落回次级墨色 */
+    --filetype-dir: hsl(var(--primary));
+    --filetype-code: hsl(var(--muted-foreground));
+    --filetype-data: hsl(var(--muted-foreground));
+    --filetype-config: hsl(var(--muted-foreground));
+    --filetype-doc: hsl(var(--muted-foreground));
+    --filetype-runtime: hsl(var(--muted-foreground));
+    --filetype-secret: hsl(var(--muted-foreground));
+
+    --filename-font: var(--font-ui);
+    --filename-size: 13px;
   }
 }
 
@@ -164,7 +314,7 @@
   body {
     @apply bg-background text-body;
 
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Hiragino Sans GB", "Source Han Sans SC";
+    font-family: var(--font-ui);
     font-feature-settings: "calt" 1, "rlig" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -272,8 +422,52 @@
   }
 
   /* 状态点:深色把强调色当光源用,淡色老老实实是个点 */
+  /* 主动作按钮。三套主题对"最重要的那个按钮"给的答案完全不同:
+     纸构蓝图是墨黑实心块、棱光玻璃是紫色渐层、霓虹终端是发丝描边的空心块。
+     这些差异塞不进一个颜色变量,所以整块背景 / 前景 / 描边 / 投影都走 token。 */
+  .prism-action {
+    background-color: var(--action-bg);
+    background-image: var(--action-bg-image);
+    color: var(--action-fg);
+    border-color: var(--action-border);
+    box-shadow: var(--action-shadow);
+  }
+
+  .prism-action:hover {
+    background-color: var(--action-bg-hover);
+    border-color: var(--action-border);
+  }
+
+  /* 文件类型七族分色。族 → 变量的映射在 fileIcons.ts,这里只把变量落成颜色。 */
+  .filetype-dir { color: var(--filetype-dir); }
+  .filetype-code { color: var(--filetype-code); }
+  .filetype-data { color: var(--filetype-data); }
+  .filetype-config { color: var(--filetype-config); }
+  .filetype-doc { color: var(--filetype-doc); }
+  .filetype-runtime { color: var(--filetype-runtime); }
+  .filetype-secret { color: var(--filetype-secret); }
+
+  /* 列表行的分隔线。纸构蓝图是图纸:行与行之间有一条次级发丝线,
+     不靠间距分行。另外两套靠 hover 底色和间距,不画线。 */
+  .prism-row {
+    border-bottom: 1px solid transparent;
+  }
+
+  [data-ui-theme="blueprint"] .prism-row {
+    border-bottom-color: #f4f1ea;
+  }
+
+  /* 文件名:纸构蓝图整列走等宽(扩展名本身参与区分),另外两套是界面字体。 */
+  .prism-filename {
+    font-family: var(--filename-font);
+    font-size: var(--filename-size);
+  }
+
+  /* 状态点:深色把强调色当光源用;纸构蓝图下它是个**正方形**,不是圆 ——
+     这是纸感语言里"制图标记"和"发光指示灯"的区别。 */
   .prism-dot {
     box-shadow: var(--glow-dot);
+    border-radius: var(--dot-radius);
   }
 
   /* 强调色作为"光"打在图标 / 按钮上(深色专用,淡色为 none) */
@@ -293,13 +487,32 @@
      会错开半格,一眼就穿帮。小控件(输入框、按钮)上的栅格因此正好和画布
      接得上,看起来像是透明的。
      ------------------------------------------------------------------ */
-  .dark [class~="bg-background"] {
-    background-image:
-      radial-gradient(120% 62% at 50% -8%, hsl(var(--primary) / 0.07), transparent 62%),
-      linear-gradient(hsl(var(--primary) / 0.05) 1px, transparent 1px),
-      linear-gradient(90deg, hsl(var(--primary) / 0.05) 1px, transparent 1px);
-    background-size: 100vw 100vh, 28px 28px, 28px 28px;
+  [class~="bg-background"] {
+    background-image: var(--canvas-texture);
+    background-size: var(--canvas-texture-size);
     background-attachment: fixed;
+  }
+
+  /* 棱光玻璃:面板是**半透明玻璃**,不是实白卡片。一条规则罩住全库的 bg-card,
+     组件侧不用逐个改;另外两套 --panel-tint 是 transparent、--panel-blur 是 none,
+     这条规则对它们等于不存在。 */
+  [data-ui-theme="glass"] [class~="bg-card"] {
+    background-color: var(--panel-tint);
+    backdrop-filter: var(--panel-blur);
+    -webkit-backdrop-filter: var(--panel-blur);
+  }
+
+  /* 窗口顶边那道分光条。只有棱光玻璃有(另外两套 --accent-bar 为 none)。 */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0 0 auto 0;
+    height: 2px;
+    background: var(--accent-bar);
+    /* 压在最上层:界面里最高的浮层(命令面板、模态)在 z-50 一档,
+       这道条要盖过它们,它属于"窗口"而不属于任何一层内容。 */
+    z-index: 9999;
+    pointer-events: none;
   }
 
   /* 过渡工具类:时长统一到设计系统三档 */

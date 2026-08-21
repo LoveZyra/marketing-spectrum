@@ -116,6 +116,27 @@
         "label": "Font Size",
         "description": "Editor font size in pixels"
       }
+    },
+    "uiTheme": {
+      "label": "Interface theme",
+      "description": "Pick the material and palette for the whole interface",
+      "options": {
+        "blueprint": {
+          "name": "Paper Blueprint",
+          "description": "Warm paper, hairline rules, no shadows",
+          "short": "Paper"
+        },
+        "glass": {
+          "name": "Prismatic Glass",
+          "description": "Cool glass panels, soft light, spectrum accent",
+          "short": "Glass"
+        },
+        "dark": {
+          "name": "Neon Terminal",
+          "description": "Near-black canvas, dot grid, glowing accent",
+          "short": "Neon"
+        }
+      }
     }
   },
   "mcpForm": {

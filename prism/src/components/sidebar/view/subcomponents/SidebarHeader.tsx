@@ -183,7 +183,7 @@ export default function SidebarHeader({
           <button
             type="button"
             onClick={onCreateProject}
-            className="flex h-8 w-full items-center justify-center gap-2 rounded-md border border-border bg-transparent text-[13px] font-semibold leading-5 text-card-foreground transition-colors hover:border-border-strong active:translate-y-px"
+            className="prism-action flex h-8 w-full items-center justify-center gap-2 rounded-md border text-[13px] font-semibold leading-5 transition-colors active:translate-y-px"
           >
             {t('tooltips.createProject')}
           </button>

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { canViewerSeeSession, projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { canViewerSeeSession, projectsDb, sessionMessagesDb, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import type {
@@ -12,7 +12,7 @@ import type {
   NormalizedMessage,
   Viewer,
 } from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+import { AppError, sliceTailPage } from '@/shared/utils.js';
 
 type CreateAppSessionResult = {
   sessionId: string;
@@ -190,6 +190,31 @@ export const sessionsService = {
       });
     }
 
+    /**
+     * 优先读**自己的显示日志**,读不到才回落到 transcript 回放。
+     *
+     * transcript 是**模型的记忆**,不是对话记录 —— 里面混着子代理 sidechain、
+     * `isMeta` 行、技能正文注入、压缩摘要。拿它当显示模型,CLI 每加一种内部行
+     * 界面就漏一次。日志这条路径直接把当初推给前端的那条消息原样还回去,
+     * 中间**没有任何再解析、再判定的环节**,那一类问题结构上不会再出现。
+     *
+     * 回落是必须的:这张表是这一轮才有的,之前的会话一行都没有。
+     * 老会话继续走 transcript(带着 `transcript-provenance` 的出处判定),
+     * 新会话从第一条消息起就走日志。
+     */
+    const loggedCount = sessionMessagesDb.countForSession(sessionId);
+    if (loggedCount > 0) {
+      const logged = sessionMessagesDb.listForSession(sessionId);
+      const { page, hasMore } = sliceTailPage(logged, options.limit ?? null, options.offset ?? 0);
+      return {
+        messages: page.map((message) => ({ ...message, sessionId })),
+        total: logged.length,
+        hasMore,
+        offset: options.offset ?? 0,
+        limit: options.limit ?? null,
+      };
+    }
+
     // App-created sessions that never produced a provider transcript yet
     // (e.g. first message still streaming) simply have no history.
     if (!session.provider_session_id) {
@@ -218,6 +243,7 @@ export const sessionsService = {
       })),
     };
   },
+
 
 
   /**

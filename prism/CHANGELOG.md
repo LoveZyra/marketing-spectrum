@@ -8,6 +8,240 @@
 
 ---
 
+## 2026-08-21 · bb — 浅色分成两种材质,深浅开关换成界面主题三选
+
+设计稿在 `light-ui/`:**纸构蓝图**(设计稿 B)与**棱光玻璃**(设计稿 A),
+各自带会话页与文件页两张画板。这一轮把它们做进产品,原来那套「暖白纸感」
+浅色不再作为选项,深色「霓虹终端」一个像素没动。
+
+### 布尔表达不了三个值
+
+主题层原来只有 `isDarkMode`。三选一之后底层换成联合类型
+`'blueprint' | 'glass' | 'dark'`,`.dark` 类名照旧(全库和 tailwind 的
+`dark:` 变体都认它),两套浅色靠 `data-ui-theme` 属性区分。
+
+`isDarkMode` / `toggleDarkMode` 仍然对外导出 —— 代码编辑器主题、语法高亮、
+命令面板等十来处消费方只关心"是不是深色",**一行都不用改**。
+`toggleDarkMode` 从深色切回来时回到**上一次选过的那套浅色**,
+选了棱光玻璃的人切一趟深色再切回来不会变成纸构蓝图。
+
+旧的 `theme` 键(`dark` / `light`)会迁移一次:深色照旧,浅色落到纸构蓝图。
+
+### 差异塞进 token,组件基本不动
+
+沿用 ap 轮那套「组件只写 `.prism-panel` / `.prism-raised`」的架子,
+把两稿的差异全部表达成变量:
+
+| 变量 | 纸构蓝图 | 棱光玻璃 | 霓虹终端 |
+|---|---|---|---|
+| `--shadow-panel` | 发丝线内描边(**零投影**) | 1px 内描边 + 大范围柔光 | 绿调内描边 |
+| `--radius` | 6px | 12px | 6px |
+| `--canvas-texture` | 22px 点阵 | 32px 线格 + 紫/青双光晕 | 28px 点阵 + 顶部环境光 |
+| `--panel-blur` | 无 | `blur(10px)` + 86% 白 | 无 |
+| `--accent-bar` | 无 | 紫→品红→青分光条(窗口顶边) | 无 |
+| `--dot-radius` | **0(正方形)** | 圆 | 圆 |
+| `--font-ui` | IBM Plex Sans | Space Grotesk | Inter |
+| `--action-bg` | 墨黑 `#171614` | 紫色渐层 | 透明 + 发丝描边 |
+
+原来写死在 `.dark [class~="bg-background"]` 的深色栅格也收进 `--canvas-texture`,
+三套共用一条规则。`tailwind.config.js` 的 `fontFamily` 指到变量,回落链写在
+各主题自己的 token 里 —— 拉不到 Google Fonts 时退到系统字体,界面照常可用。
+
+### 两页逐组件对齐
+
+- **文件类型七族分色**(两稿共用):`fileIcons.ts` 加一层族归属
+  (目录 / 代码 / 数据 / 配置 / 文档 / 运行时 / 密钥),**图标映射一个字没改**。
+  色值由主题给,霓虹终端下七族一律落回次级墨色 —— 深色那一稿没有这个特性,
+  不该被这轮顺手改掉。
+- **文件名字体**:纸构蓝图整列走等宽,扩展名本身参与区分;另外两套是界面字体。
+- **行分隔线**:纸构蓝图给一条次级发丝线(图纸的行格),另外两套靠 hover 底色。
+- **主动作按钮**:三套对"最重要的那个按钮"的答案完全不同,整块背景 / 前景 /
+  描边 / 投影都走 token。
+
+### 设置页:开关 → 三张带预览的卡片
+
+「深色模式」那一节换成「界面主题」,每张卡片带一枚**按该主题实色画的**缩略预览
+(轨 + 侧栏 + 面板同构)。快速设置面板里那枚同样的开关换成三档分段控件
+(空间只够两字简称)。`DarkModeToggle` 至此无人使用,退役。
+
+### 验证
+
+- 三套主题逐一浏览器实测:会话页、文件页、设置页各截一轮,深色与上一轮逐像素同构
+- 对比度全页扫描:三套主题各 **0 处违规**
+  - 途中真发现一个:玻璃的渐层按钮只写了 `background-image`,`backgroundColor`
+    是透明的 —— 任何按"底色"判断的东西看到的都是画布。补了实色底(渐层中点),
+    白字对它 5.9:1
+- 用例 600 全绿;typecheck 双端通过;eslint `src/ server/` **0 error**
+  (45 条 warning:44 条既有 + `ThemeContext` 从 `.jsx` 转 `.tsx` 后加入
+  `react-refresh/only-export-components` —— 另外四个 context 早就在这条规则里)
+- 双端构建通过;`npm ci` 未执行,`package-lock.json` 未变,**零新增依赖**
+
+### 退役文件(服务器部署需删)
+
+- `src/contexts/ThemeContext.jsx`(转 `.tsx`)
+- `src/shared/view/ui/DarkModeToggle.tsx`
+
+---
+
+## 2026-08-20 · ba — 外部 API:先领会话号,再干活
+
+需求是"调 Prism 的接口起一段会话,拿到 id 直接拼前端链接点进去看"。
+现在的 `/api/agent` 做不到两件事:**id 只有回合跑完才回**,而且**没法指定 id**。
+
+### 领号与干活拆开
+
+新增 `POST /api/agent/sessions`(同 API key 守卫),不跑任何回合,毫秒级返回:
+
+```
+POST /api/agent/sessions  { projectPath }
+→ 201 { sessionId, sessionPath: "/session/<id>", projectPath }
+```
+
+关键是它**真的在库里占一行**(`createAppSession`),不是发一个 UUID 就完事 ——
+占了行,那个链接当场就能打开(先是一段空对话),而不是"会话不存在"。
+
+第二步照常 `POST /api/agent`,把领到的 id 放在 `sessionId` 里。
+
+### `sessionId` 的三种含义,判据只有一条
+
+传进来的 id 是"续对话"还是"用这个 id 新建"?判据是**库里那行的
+`provider_session_id` 空不空**:
+
+| 库里 | 含义 |
+|---|---|
+| 没这行 | 老语义:当成 provider 原生 id 续对话(**行为不变**) |
+| 有行、`provider_session_id` 空 | 领过号还没跑过 → **用这个 id 新建** |
+| 有行、`provider_session_id` 有值 | 续那个 provider 会话 |
+
+第二种若按 resume 处理,CLI 会去找一份根本不存在的 transcript,直接失败。
+
+新建靠 SDK 的 `Options.sessionId`(实测:transcript 原样落成 `<id>.jsonl`)。
+于是**应用侧 id、provider 原生 id、transcript 文件名三者同值** ——
+链接、侧栏、磁盘对得上。watcher 之后扫到走的是
+`INSERT … ON CONFLICT(session_id) DO UPDATE`,原地补 `provider_session_id`,
+不产生重复行;同步路径跑完还会主动回填一次,不等扫描周期。
+
+那个"只改一行"的写法有个坑:`mapCliOptionsToSDK` 没解构 `newSessionId`,
+而 server 是 ESM(严格模式),直接引用未声明标识符**每个回合都抛
+ReferenceError**,不是"传了才出问题"。
+
+### 可选的 `async: true`:发起即走
+
+想连第二步的等待都省掉,可以传 `async: true` —— 回合**开跑之前**就 202 返回
+`{ sessionId, sessionPath }`,这一轮转到后台,输出走**聊天网关**广播。
+所以人点开链接是**实时看着它跑**,不是等跑完再刷新;断线重连有补发游标,
+`chat.abort` 也能用,显示日志(az 轮)照记。
+
+为此 `ChatSessionWriter` 要允许"一个浏览器都没连着"的 run:构造函数原来
+无条件把 `options.connection` 塞进集合,传 null 等于给每一条出站消息埋一颗
+`null.readyState`。现在有值才加。
+
+`async` 与 `createBranch` / `createPR` 互斥(响应先发,结果没地方回报),
+`cleanup` 在它下面不生效(会话是留着给人看的,不能删掉它的项目目录)。
+
+### 顺手修掉:非流式响应一直是空的
+
+`ResponseCollector` 只认 `type: 'claude-response'` 的**字符串**帧 —— 老 CLI 的
+线格式。走 SDK 之后推过来的一律是规范化**对象**,两个条件一个都不成立,
+于是非流式 `/api/agent` 的 `messages` **恒为 `[]`**、`tokens` 全 0,静默很久了。
+按 kind 认之后实测能拿到回答与真实用量(`{"content":"收到"}` / 81349 tokens)。
+
+### 验证
+
+真机跑通(本地实例 + 真实 CLI):
+
+1. 领号 → 201,库里立刻有行,`provider_session_id` 为空
+2. **回合还没开始**就打开 `/session/<id>` → 正常渲染空对话,不是"不存在"
+3. `POST /api/agent { async: true }` → 202 立即返回
+4. **第 6 秒页面上未刷新就出现内容**,工具行显示"运行中"
+5. 回合结束 → 刷新后内容完整(2 条消息 + 助手回答)
+6. transcript 落盘文件名 = 该 id;`provider_session_id` 已回填;显示日志 5 行
+7. 同步两步流程另测一遍:响应里拿到回答与用量
+
+- 用例 593 → **600**(SDK 选项映射 5 条、无连接 run 2 条、收集器 7 条,含既有)
+- typecheck 双端通过;eslint `src/ server/` **0 error**(44 条既有 warning 不变)
+- 双端构建通过;`npm ci` 未执行,`package-lock.json` 未变,**零新增依赖**
+
+---
+
+## 2026-08-20 · az — 界面不再从 transcript 里"读"对话,改成自己记一份显示日志
+
+今天一整天的毛病其实是同一个:**假用户消息、技能正文泄漏、压缩摘要冒出来**,
+都不是渲染写错了,而是**显示模型选错了**。
+
+界面回放历史走的是 `~/.claude/projects/**/*.jsonl`。那份文件是**模型的记忆**,
+不是对话记录 —— 里面混着子代理 sidechain、`isMeta` 行、技能正文注入、压缩边界、
+SDK 自造的续写。要把它当对话显示,就得逐一判定"这一行到底是不是人说的",
+而 CLI 每加一种内部行,这套判定就漏一次,只能再补一条规则。补了一天了。
+
+参考 cloudink 的做法(它从不读 transcript,只把自己发出去的那条存进自己的表),
+这轮把显示模型换掉:
+
+### 新增一张 `session_display_messages`
+
+出站消息的**唯一收口**是 `ChatSessionWriter.forward()` —— 所有推给浏览器的帧
+都从这里过。在投递之前顺手落一行:
+
+```ts
+if (typeof message.sessionId === 'string' && message.sessionId) {
+  sessionMessagesDb.append(message.sessionId, message);
+}
+```
+
+写在投递之前、且不看有没有 socket 连着:用户关掉标签页,回合照跑,日志照记。
+`fetchHistory` 优先读这张表,读不到才回落 transcript。
+
+**这条路径上没有任何"再解析、再判定"的环节** —— 当初推给前端什么,再开还是什么。
+transcript 里有什么、CLI 明天又加了什么内部行,都与界面无关了。
+
+用**白名单**决定什么算"会留在对话里":`text` / `thinking` / `tool_use` /
+`tool_result` / `error` / `interactive_prompt` / `task_notification`。
+`stream_delta` 这种每 token 一条的洪流、`status` 这类瞬时态一律不落库。
+新增 kind 默认不留是安全的(顶多少显示一样东西),默认留则可能把洪流灌进库。
+
+### 老会话:要么日志是完整的,要么一行都没有
+
+这里差点埋一个很难看的错。日志表是这轮才有的,老会话一行都没有,所以走 transcript;
+可只要这个会话**再发一条消息**,日志里就有了一行,`fetchHistory` 立刻改走日志 ——
+界面上几百条历史瞬间只剩最新那一条。
+
+所以在回合真正开始之前(`chat.send` → `startRun` 之前)先把已有历史**整段抄进日志**,
+用的是**和 transcript 回放完全同一条代码路径**,所以老内容长什么样一点不变。
+抄完这个会话就永久归日志管。抄不动也不阻断发送,继续走老路。
+
+同理,终端接管(`claude --resume` 的 PTY)那一截 Prism 一个字节都没看见,
+留着一份缺中间一截的日志比没有更糟 —— 所以 `releaseShellClaim` 时把日志丢掉,
+下次发言按已经包含终端那截的 transcript 重新抄一份完整的。
+
+### 验证:A/B 对照
+
+两个内容完全相同的会话,一个抄进了日志、一个没有;
+然后往**两份** transcript 里各追加一条"明天的 CLI 内部行"(普通 `role:user`,
+没有 `isMeta`、不是 sidechain、没有任何工具标记 —— 今天的出处判定挡不住它):
+
+| | 追加前 | 追加后 |
+|---|---|---|
+| 走 transcript(今天的行为) | 2 条 | **3 条 —— 多出一个假用户气泡** |
+| 走显示日志(本轮) | 2 条 | **2 条,纹丝不动** |
+
+服务端另有一组等价性验证:132 条真实历史,transcript 路径与日志路径
+**逐字节一致**(`JSON.stringify` 相等),重复抄为 0 行,`limit=5` 尾页语义一致。
+
+### 顺手修掉的两个测试坑
+
+- `session-display-log.test.ts` 设的是 `PRISM_HOME`,而连接层只认 `DATABASE_PATH`
+  —— 于是这组用例一直在**往真库里写**,用例之间互相看得见,幂等那条又假绿又假红。
+- 没有 `id` 的消息原来一律记成空串,第二条起被唯一键当成重复吞掉(**丢行**)。
+  改成没 id 就临时造一个:失去幂等,但绝不丢行。
+
+### 验证
+
+- 用例 580 → **586**(新增显示日志无 id 用例、抄写 4 条、终端释放 1 条)
+- typecheck 双端通过;eslint `src/ server/` **0 error**(44 条既有 warning 不变)
+- 双端构建通过;`npm ci` 未执行,`package-lock.json` 未变,**零新增依赖**
+
+---
+
 ## 2026-08-20 · ay — ax 只修了一半:提交路径上还有同一个窄判断
 
 ax 之后 `/compact` 仍然报「既不是内置命令,也没有对应的命令文件」。
