@@ -1,0 +1,82 @@
+prism/CHANGELOG.md
+  h_4e3a4dcdcf415f 11-244
+prism/index.html
+  h_4e3a4dcdcf415f 10-16,20
+prism/server/claude-sdk.js
+  h_4e3a4dcdcf415f 404,489-508,2703
+prism/server/modules/database/index.ts
+  h_4e3a4dcdcf415f 9
+prism/server/modules/database/repositories/session-messages.db.ts
+  h_4e3a4dcdcf415f 1-129
+prism/server/modules/database/repositories/sessions.db.ts
+  h_4e3a4dcdcf415f 362-366,397-399
+prism/server/modules/database/schema.ts
+  h_4e3a4dcdcf415f 150-182,236-239
+prism/server/modules/database/tests/session-display-log.test.ts
+  h_4e3a4dcdcf415f 1-115
+prism/server/modules/providers/index.ts
+  h_4e3a4dcdcf415f 4
+prism/server/modules/providers/services/display-log-seed.service.ts
+  h_4e3a4dcdcf415f 1-46
+prism/server/modules/providers/services/sessions.service.ts
+  h_4e3a4dcdcf415f 5,15,193-217,248
+prism/server/modules/providers/tests/display-log-seed.test.ts
+  h_4e3a4dcdcf415f 1-99
+prism/server/modules/websocket/services/chat-run-registry.service.ts
+  h_4e3a4dcdcf415f 263-264
+prism/server/modules/websocket/services/chat-session-writer.service.ts
+  h_4e3a4dcdcf415f 11,14-19,90-92,197-210
+prism/server/modules/websocket/services/chat-websocket.service.ts
+  h_4e3a4dcdcf415f 7,220-231
+prism/server/modules/websocket/services/conversation-ownership.service.ts
+  h_4e3a4dcdcf415f 14-15,40-52,55-59
+prism/server/modules/websocket/tests/chat-run-headless.test.ts
+  h_4e3a4dcdcf415f 1-125
+prism/server/modules/websocket/tests/conversation-ownership.test.ts
+  h_4e3a4dcdcf415f 2-4,6,8,18-42,90-102
+prism/server/routes/agent.js
+  h_4e3a4dcdcf415f 11-12,15,453-461,581-589,593-603,607-609,637-654,656,684-742,944-964,966,987-997,1016-1022,1041-1048,1112-1218,1254-1256,1263-1280,1539-1541
+prism/server/tests/agent-response-collector.test.js
+  h_4e3a4dcdcf415f 1-87
+prism/server/tests/sdk-new-session-id.test.js
+  h_4e3a4dcdcf415f 1-48
+prism/src/components/file-tree/constants/fileIcons.ts
+  h_4e3a4dcdcf415f 226-298
+prism/src/components/file-tree/view/FileTree.tsx
+  h_4e3a4dcdcf415f 8,101-106,108-110
+prism/src/components/file-tree/view/FileTreeNode.tsx
+  h_4e3a4dcdcf415f 93-97,99-102,116-118
+prism/src/components/quick-settings-panel/view/QuickSettingsContent.tsx
+  h_4e3a4dcdcf415f 4,12,42-43
+prism/src/components/quick-settings-panel/view/QuickThemeSwitch.tsx
+  h_4e3a4dcdcf415f 1-2,4,7-17,20-25,27-31,33-35,38-69
+prism/src/components/settings/view/ThemePicker.tsx
+  h_4e3a4dcdcf415f 1-172
+prism/src/components/settings/view/tabs/AppearanceSettingsTab.tsx
+  h_4e3a4dcdcf415f 9,34-36,38
+prism/src/components/sidebar/view/subcomponents/SidebarHeader.tsx
+  h_4e3a4dcdcf415f 186
+prism/src/contexts/ThemeContext.tsx
+  h_4e3a4dcdcf415f 1,3-17,19-75,83-92,96-106,109-120,125-127,134-138,140-142,144-151,153-154
+prism/src/i18n/locales/en/settings.json
+  h_4e3a4dcdcf415f 119-139
+prism/src/i18n/locales/zh-CN/settings.json
+  h_4e3a4dcdcf415f 119-139
+prism/src/i18n/locales/zh-TW/settings.json
+  h_4e3a4dcdcf415f 119-139
+prism/src/index.css
+  h_4e3a4dcdcf415f 13-16,18-41,47-54,58-92,126-208,257-291,317,425-467,470,490-492,496-517
+prism/tailwind.config.js
+  h_4e3a4dcdcf415f 21-24,26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c204092b1d6467dc0927bcce1033dd83d665f787",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
