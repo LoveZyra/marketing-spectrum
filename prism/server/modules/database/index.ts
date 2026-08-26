@@ -12,6 +12,9 @@ export { githubTokensDb } from '@/modules/database/repositories/github-tokens.js
 export { notificationPreferencesDb } from '@/modules/database/repositories/notification-preferences.js';
 export { projectsDb } from '@/modules/database/repositories/projects.db.js';
 export { scanStateDb } from '@/modules/database/repositories/scan-state.db.js';
+export { scheduledTasksDb } from '@/modules/database/repositories/scheduled-tasks.db.js';
+export type { ScheduledTaskRow, ScheduledTaskInsert, TaskFrequency, TaskSessionMode } from '@/modules/database/repositories/scheduled-tasks.db.js';
 export { sessionsDb } from '@/modules/database/repositories/sessions.db.js';
 export { userDb } from '@/modules/database/repositories/users.js';
 export type { ApprovalStatus, UserAdminRow } from '@/modules/database/repositories/users.js';
+export { attachmentsDb, type AttachmentKind, type AttachmentRecord } from '@/modules/database/repositories/attachments.db.js';

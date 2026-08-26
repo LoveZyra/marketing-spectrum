@@ -49,5 +49,8 @@
     "legacyFormat": "This notebook uses the ancient nbformat 3 layout, which the preview does not support — switch to the source view, or open it in JupyterLab (which upgrades the format).",
     "parseFailed": "Could not parse this notebook file (invalid JSON structure). Switch to the source view to inspect it.",
     "empty": "Empty notebook — no cells yet."
+  },
+  "unsaved": {
+    "confirmDiscard": "This file has unsaved changes that will be lost if you leave. Discard them?"
   }
 }

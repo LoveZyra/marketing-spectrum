@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 
 import { api } from '../../../utils/api';
+import { useToast } from '../../../shared/view/ui';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionActivityMap } from '../../../hooks/useSessionProtection';
@@ -115,6 +116,7 @@ export function useSidebarController({
   sidebarVisible,
 }: UseSidebarControllerArgs) {
   const paletteOps = usePaletteOps();
+  const { toast } = useToast();
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [editingProject, setEditingProject] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
@@ -355,17 +357,24 @@ export function useSidebarController({
 
     setIsSearching(true);
     const seq = ++searchSeqRef.current;
-
-    if (seq !== searchSeqRef.current) {
-      return;
-    }
-
-    const url = api.searchConversationsUrl(query);
-    const es = new EventSource(url);
-    eventSourceRef.current = es;
+    // 取票是异步的:期间若查询被后续输入取代(seq 变了)或组件卸载(cancelled)
+    // 就别再开流,否则会漏一个没人 close 的 EventSource。
+    let cancelled = false;
 
     const accumulated: ConversationProjectResult[] = [];
     let totalMatches = 0;
+
+    void (async () => {
+      let ticket: string;
+      try {
+        ticket = await api.issueSearchTicket();
+      } catch {
+        if (!cancelled && seq === searchSeqRef.current) setIsSearching(false);
+        return;
+      }
+      if (cancelled || seq !== searchSeqRef.current) return;
+      const es = new EventSource(api.searchConversationsUrl(query, ticket));
+      eventSourceRef.current = es;
 
     es.addEventListener('result', (evt) => {
       if (seq !== searchSeqRef.current) { es.close(); return; }
@@ -407,18 +416,20 @@ export function useSidebarController({
       }
     });
 
-    es.addEventListener('error', () => {
-      if (seq !== searchSeqRef.current) { es.close(); return; }
-      es.close();
-      eventSourceRef.current = null;
-      setIsSearching(false);
-      setSearchProgress(null);
-      if (accumulated.length === 0) {
-        setConversationResults({ results: [], totalMatches: 0, query });
-      }
-    });
+      es.addEventListener('error', () => {
+        if (seq !== searchSeqRef.current) { es.close(); return; }
+        es.close();
+        eventSourceRef.current = null;
+        setIsSearching(false);
+        setSearchProgress(null);
+        if (accumulated.length === 0) {
+          setConversationResults({ results: [], totalMatches: 0, query });
+        }
+      });
+    })();
 
     return () => {
+      cancelled = true;
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
@@ -686,17 +697,21 @@ export function useSidebarController({
         const response = await api.renameProject(projectId, editingName);
         if (response.ok) {
           await paletteOps.refreshProjects();
+          setEditingProject(null);
+          setEditingName('');
         } else {
+          // 失败不再静默 console:会话改名/删除都有反馈,唯独这里没有 —— 界面看起来
+          // 和成功一模一样,直到刷新才发现名字没变。给提示并**保留编辑态**,让用户
+          // 能直接重试,不必重新点开重命名。
           console.error('Failed to rename project');
+          toast({ message: t('messages.updateProjectError', '重命名失败,请重试。'), variant: 'error' });
         }
       } catch (error) {
         console.error('Error renaming project:', error);
-      } finally {
-        setEditingProject(null);
-        setEditingName('');
+        toast({ message: t('messages.updateProjectError', '重命名出错,请重试。'), variant: 'error' });
       }
     },
-    [editingName, paletteOps],
+    [editingName, paletteOps, toast, t],
   );
 
   const showDeleteSessionConfirmation = useCallback(

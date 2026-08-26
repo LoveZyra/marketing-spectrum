@@ -17,6 +17,8 @@ interface LoadAllMessagesOverlayProps {
   showLoadAllOverlay: boolean;
   isLoadingAllMessages: boolean;
   loadAllJustFinished: boolean;
+  /** 卡死兜底:浮层常驻、不自动淡出(2.5 秒后消失的按钮对卡住的用户等于没有)。 */
+  stuck?: boolean;
   totalMessages: number;
   onLoadAllMessages: () => void;
 }
@@ -25,6 +27,7 @@ export default function LoadAllMessagesOverlay({
   showLoadAllOverlay,
   isLoadingAllMessages,
   loadAllJustFinished,
+  stuck = false,
   totalMessages,
   onLoadAllMessages,
 }: LoadAllMessagesOverlayProps) {
@@ -36,8 +39,8 @@ export default function LoadAllMessagesOverlay({
 
   return (
     <div
-      className={`pointer-events-none sticky top-2 z-20 flex justify-center ${!isLoadingAllMessages ? 'load-all-overlay-auto-fade' : ''}`}
-      style={!isLoadingAllMessages ? { animation: 'loadAllOverlayAutoFade 2500ms ease forwards' } : undefined}
+      className={`pointer-events-none sticky top-2 z-20 flex justify-center ${!isLoadingAllMessages && !stuck ? 'load-all-overlay-auto-fade' : ''}`}
+      style={!isLoadingAllMessages && !stuck ? { animation: 'loadAllOverlayAutoFade 2500ms ease forwards' } : undefined}
     >
       <style>{loadAllOverlayAnimationStyle}</style>
       {loadAllJustFinished ? (

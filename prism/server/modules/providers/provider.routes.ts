@@ -20,6 +20,7 @@ import { providerModelsService } from '@/modules/providers/services/provider-mod
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
+import { issueSseTicket } from '@/shared/sse-tickets.js';
 import type {
   LLMProvider,
   McpScope,
@@ -819,6 +820,20 @@ router.get(
     res.json(createApiSuccessResponse(result));
   }),
 );
+
+/**
+ * 铸一张搜索用的 SSE 票据。
+ *
+ * EventSource 没法带 Authorization 头,所以前端先用普通(带 Bearer 头的)POST
+ * 换一张短命票据,再拿它连 `/search/sessions` —— JWT 不进 URL。
+ */
+router.post('/search/ticket', (req: Request, res: Response) => {
+  const viewer = (req as Request & { user?: { id?: number } }).user;
+  if (viewer?.id == null) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  return res.json({ ticket: issueSseTicket(viewer.id) });
+});
 
 router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) => {
   const query = parseSessionSearchQuery(req.query.q);

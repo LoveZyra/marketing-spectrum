@@ -55,6 +55,10 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
             {saveStatus === 'success' && (
               <span className="text-xs text-muted-foreground">{t('saveStatus.success')}</span>
             )}
+            {saveStatus === 'error' && (
+              // 'error' 此前无处渲染 —— 通知偏好等 PUT 失败时用户毫无感知。
+              <span className="text-xs text-destructive">{t('saveStatus.error', { defaultValue: '保存失败,请重试' })}</span>
+            )}
             <Button
               variant="ghost"
               size="sm"

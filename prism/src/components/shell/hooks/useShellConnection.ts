@@ -57,6 +57,14 @@ export function useShellConnection({
   const connectingRef = useRef(false);
   const forceRestartOnInitRef = useRef(false);
   const suppressAutoConnectRef = useRef(false);
+  // 重连退避:连不上时(拿不到票据 / 建连抛错)自动重连不能零间隔 ——
+  // autoConnect effect 会因 isConnecting 复位而立刻重跑,形成对票据接口的紧密
+  // 轮询风暴(ws-auth 注释明确要求"调用方自带退避",此前没实现)。失败翻倍、
+  // 成功清零;上限 30s。
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectDelayRef = useRef(0);
+  const RECONNECT_BASE_MS = 1000;
+  const RECONNECT_MAX_MS = 30000;
 
   const handleProcessCompletion = useCallback(
     (output: string) => {
@@ -121,6 +129,11 @@ export function useShellConnection({
         if (!wsUrl) {
           connectingRef.current = false;
           setIsConnecting(false);
+          // 拿不到票据也是一次失败,抬高退避,别让 effect 立刻重扑上来。
+          reconnectDelayRef.current = Math.min(
+            reconnectDelayRef.current ? reconnectDelayRef.current * 2 : RECONNECT_BASE_MS,
+            RECONNECT_MAX_MS,
+          );
           return;
         }
 
@@ -131,6 +144,13 @@ export function useShellConnection({
           setIsConnected(true);
           setIsConnecting(false);
           connectingRef.current = false;
+          // 连上了 → 退避清零。
+          reconnectDelayRef.current = 0;
+
+          // 断线时**不再**清屏(见 onclose),本地滚屏一直留着;真正重连成功、
+          // 即将收到服务端回放的这一刻才清一次,让回放落在干净屏上、不与旧内容
+          // 叠成重复的尾巴。
+          clearTerminalScreen();
 
           window.setTimeout(() => {
             const currentTerminal = terminalRef.current;
@@ -169,19 +189,30 @@ export function useShellConnection({
           setIsConnected(false);
           setIsConnecting(false);
           connectingRef.current = false;
-          clearTerminalScreen();
+          // 断线**不清屏**:意外掉线时本地滚屏应该留在眼前(冻住),而不是瞬间
+          // 被抹白只能等服务端回放捞回一小段。清屏改到重连成功的 onopen 里做。
+          // 主动断开(disconnectFromShell)仍会清 —— 那是用户自己要走。
         };
 
         socket.onerror = () => {
           setIsConnected(false);
           setIsConnecting(false);
           connectingRef.current = false;
+          // 建连失败按一次失败计:抬高下次退避。
+          reconnectDelayRef.current = Math.min(
+            reconnectDelayRef.current ? reconnectDelayRef.current * 2 : RECONNECT_BASE_MS,
+            RECONNECT_MAX_MS,
+          );
         };
       } catch {
         setIsConnected(false);
         setIsConnecting(false);
         connectingRef.current = false;
         forceRestartOnInitRef.current = false;
+        reconnectDelayRef.current = Math.min(
+          reconnectDelayRef.current ? reconnectDelayRef.current * 2 : RECONNECT_BASE_MS,
+          RECONNECT_MAX_MS,
+        );
       }
     },
     [
@@ -217,7 +248,14 @@ export function useShellConnection({
       suppressAutoConnectRef.current = true;
     }
 
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    reconnectDelayRef.current = 0;
+
     closeSocket();
+    // 主动断开才清屏(用户点了断开/切走)。
     clearTerminalScreen();
     setIsConnected(false);
     setIsConnecting(false);
@@ -231,12 +269,27 @@ export function useShellConnection({
       suppressAutoConnectRef.current ||
       !isInitialized ||
       isConnecting ||
-      isConnected
+      isConnected ||
+      connectingRef.current ||
+      reconnectTimerRef.current
     ) {
       return;
     }
 
-    connectToShell();
+    // 带退避地重连:首次(delay=0)立刻连,之后每次失败翻倍。timer 在手期间
+    // effect 不再另起一个(上面的 reconnectTimerRef 守卫)。
+    const delay = reconnectDelayRef.current;
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      connectToShell();
+    }, delay);
+
+    return () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
   }, [autoConnect, connectToShell, isConnected, isConnecting, isInitialized]);
 
   return {

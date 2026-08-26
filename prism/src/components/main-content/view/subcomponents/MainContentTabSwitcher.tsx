@@ -1,4 +1,4 @@
-import { MessageSquare, Terminal, Folder, NotebookPen, type LucideIcon } from 'lucide-react';
+import { MessageSquare, Terminal, Folder, NotebookPen, Clock, type LucideIcon } from 'lucide-react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -21,6 +21,7 @@ type TabDefinition = BuiltInTab;
 
 const BASE_TABS: BuiltInTab[] = [
   { kind: 'builtin', id: 'chat',  labelKey: 'tabs.chat',  icon: MessageSquare },
+  { kind: 'builtin', id: 'tasks', labelKey: 'tabs.tasks', icon: Clock },
   { kind: 'builtin', id: 'shell', labelKey: 'tabs.shell', icon: Terminal },
   { kind: 'builtin', id: 'files', labelKey: 'tabs.files', icon: Folder },
   { kind: 'builtin', id: 'notebook', labelKey: 'tabs.notebook', icon: NotebookPen },

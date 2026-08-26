@@ -72,6 +72,8 @@ export function useAccountApprovals(enabled: boolean) {
           throw new Error(payload.error || 'Failed to update the account');
         }
         await refresh();
+        // 通知设置入口的红色角标立刻刷新(usePendingApprovalCount 在听)。
+        window.dispatchEvent(new CustomEvent('prism:approvals-changed'));
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Failed to update the account');
       } finally {

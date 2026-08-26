@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import {
   BookOpen,
   Bot,
@@ -8,6 +8,7 @@ import {
   Globe,
   ChevronRight,
   ListChecks,
+  MessageSquareText,
   PencilLine,
   Plug,
   Search,
@@ -62,6 +63,8 @@ const ICONS: Record<ActivityIconKey, LucideIcon> = {
   mcp: Plug,
   thinking: Brain,
   tool: Wrench,
+  // narration 行不走这张表(渲染成小圆点),这里只为类型完备
+  narration: MessageSquareText,
 };
 
 /** 动词 → i18n 键与中文兜底。目标为空时退化成只有动词的短句。 */
@@ -90,6 +93,7 @@ const SUMMARY_TEXT: Record<ActivityIconKey, { key: string; fallback: string }> =
   todo: { key: 'activity.summary.todo', fallback: '更新任务清单 {{count}} 次' },
   mcp: { key: 'activity.summary.mcp', fallback: '外部工具 {{count}} 次' },
   tool: { key: 'activity.summary.tool', fallback: '其它工具 {{count}} 次' },
+  narration: { key: 'activity.summary.narration', fallback: '说明 {{count}} 段' },
   thinking: { key: 'activity.summary.thinking', fallback: '思考 {{count}} 次' },
 };
 
@@ -98,9 +102,9 @@ const SUMMARY_TEXT: Record<ActivityIconKey, { key: string; fallback: string }> =
  *
  * **默认展开多少,取决于这一轮跑完没有**:
  * - 还在跑:只摊开最新 3 步 —— 正在看的永远是"现在在干什么",更早的先收起来;
- * - 已跑完:整段收成抬头那一行 —— 一段做完的活儿不该继续占着几十行屏幕。
+ * - 已跑完:**无论几步都整段收成抬头那一行** —— 做完的活儿不该继续占着屏幕。
  *
- * 两种情况都点抬头展开全部。太短的完成段(不足 3 步)不折,折了反而添乱。
+ * 两种情况都点抬头展开全部。进行中且不足 3 步的段全摊着,没什么可折的。
  *
  * 竖线是靠每行图标列里的两截线拼出来的:图标上方固定 8px、下方 `flex-1` 撑到行底。
  * 首行不画上截、末行不画下截,于是线正好起于第一个图标、止于最后一个图标;
@@ -109,7 +113,7 @@ const SUMMARY_TEXT: Record<ActivityIconKey, { key: string; fallback: string }> =
  * 每行只给一句人话(工具自带 description 就用它),原始命令、参数、输出都收在
  * 展开区里 —— 展开走的还是既有的 MessageComponent,渲染能力一项不减。
  */
-export default function ActivityTimeline({
+function ActivityTimeline({
   group,
   prevMessage,
   createDiff,
@@ -126,12 +130,20 @@ export default function ActivityTimeline({
   const [isRunOpen, setIsRunOpen] = useState(false);
 
   const rows = useMemo(
-    () => group.messages.map((message, index) => ({
-      message,
-      index,
-      key: getMessageKey(message),
-      summary: message.isThinking ? null : summarizeToolRow(message),
-    })),
+    () => group.messages.map((message, index) => {
+      const kind: 'thinking' | 'narration' | 'tool' = message.isThinking
+        ? 'thinking'
+        : message.isToolUse
+          ? 'tool'
+          : 'narration';
+      return {
+        message,
+        index,
+        kind,
+        key: getMessageKey(message),
+        summary: kind === 'tool' ? summarizeToolRow(message) : null,
+      };
+    }),
     [group.messages, getMessageKey],
   );
 
@@ -194,6 +206,40 @@ export default function ActivityTimeline({
         const isLast = position === visibleRows.length - 1;
         const isExpanded = expandedKeys.has(row.key);
         const summary = row.summary;
+
+        // 过渡性正文(cd 轮):不是"一行标签点开看详情",正文本身就是内容 ——
+        // 小圆点挂在竖线上,全文内联(超长由 ClampedBlock 先折),流程不断线。
+        if (row.kind === 'narration') {
+          const narrationText = String(row.message.content || '');
+          return (
+            <div key={row.key} className="flex items-start gap-2.5">
+              <span className="flex w-[18px] flex-none flex-col items-center self-stretch" aria-hidden>
+                <span
+                  className={cn('h-3 w-px flex-none', isFirst ? 'bg-transparent' : 'prism-rail-line')}
+                  data-state="charged"
+                />
+                <span className="flex h-4 w-4 flex-none items-center justify-center">
+                  <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
+                </span>
+                <span
+                  className={cn('w-px flex-1', isLast ? 'bg-transparent' : 'prism-rail-line')}
+                  data-state="charged"
+                />
+              </span>
+
+              <div className="group/narration min-w-0 flex-1 py-1.5">
+                <ClampedBlock maxHeight={320} copyText={narrationText}>
+                  <Markdown className="prose prose-sm max-w-none font-sans text-[13.5px] leading-[22px] text-body dark:prose-invert">
+                    {narrationText}
+                  </Markdown>
+                </ClampedBlock>
+                <div className="mt-1 flex items-center text-[11px] opacity-0 transition-opacity focus-within:opacity-100 group-hover/narration:opacity-100">
+                  <MessageCopyControl content={narrationText} messageType="assistant" />
+                </div>
+              </div>
+            </div>
+          );
+        }
 
         const iconKey: ActivityIconKey = summary ? summary.icon : 'thinking';
         const Icon = summary?.status === 'error' ? XCircle : ICONS[iconKey];
@@ -322,3 +368,11 @@ export default function ActivityTimeline({
     </div>
   );
 }
+
+/**
+ * memo 的前提是 `group` 引用稳定 —— ChatMessagesPane 在分组后做了身份保持:
+ * 成员没变的段沿用上一轮的同一个 ToolGroupItem 对象。于是流式期间只有
+ * 正在跑的那一段重渲,已完成的时间轴整段跳过(每段都要重算 rows/摘要,
+ * 长对话里这占了 tick 开销的大头)。
+ */
+export default memo(ActivityTimeline);

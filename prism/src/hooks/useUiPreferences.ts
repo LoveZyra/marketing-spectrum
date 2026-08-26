@@ -150,8 +150,29 @@ export function useUiPreferences(storageKey = 'uiPreferences') {
     readInitialPreferences
   );
 
+  const hasPersistedRef = useRef(false);
+
   useEffect(() => {
     if (typeof window === 'undefined') {
+      return;
+    }
+
+    /**
+     * 首次挂载**不广播**。
+     *
+     * 每个 useUiPreferences 实例在挂载时从存储读一份初始值,原来紧接着就把它
+     * 写回并广播出去。晚挂载的实例(切标签页时才出现的面板、终端、Notebook…)
+     * 于是会把**它读到的旧快照**广播给所有人,把别人刚改好的新值冲掉 ——
+     * 表现为偏好"回跳一步、慢一拍"(切标签页自动收放侧栏时最明显)。
+     *
+     * 初始值本来就来自存储,写回是空转;真正需要补写的只有"存储里还没有这
+     * 一项"的情况(从旧版分键存储迁移过来的第一次)。
+     */
+    if (!hasPersistedRef.current) {
+      hasPersistedRef.current = true;
+      if (localStorage.getItem(storageKey) === null) {
+        localStorage.setItem(storageKey, JSON.stringify(state));
+      }
       return;
     }
 

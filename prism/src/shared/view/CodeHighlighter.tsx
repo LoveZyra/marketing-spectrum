@@ -21,6 +21,14 @@ type CodeHighlighterProps = {
   customStyle?: CSSProperties;
   codeTagProps?: { style?: CSSProperties };
   children: string;
+  /**
+   * 只出纯文本块,不加载/不运行 tokenizer。
+   *
+   * 给流式中的代码块用:内容每 100ms 变一次,每次全量重新 tokenize 是纯浪费,
+   * 大代码块能把打字动画卡成幻灯片。布局与配色和真高亮完全一致(就是 Suspense
+   * fallback 那套),所以收尾时切回高亮只是"字上色",没有跳动。
+   */
+  plain?: boolean;
 };
 
 const MONO_FONT =
@@ -53,7 +61,16 @@ export default function CodeHighlighter({
   customStyle,
   codeTagProps,
   children,
+  plain = false,
 }: CodeHighlighterProps) {
+  if (plain) {
+    return (
+      <PlainCodeBlock customStyle={customStyle} codeTagProps={codeTagProps}>
+        {children}
+      </PlainCodeBlock>
+    );
+  }
+
   return (
     <Suspense
       fallback={

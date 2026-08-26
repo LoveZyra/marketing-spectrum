@@ -147,7 +147,16 @@ export function createPreviewPublicRouter(dependencies: PreviewPublicRouterDepen
     res.type(contentType);
 
     if (forceDownload) {
-      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(validation.resolved)}"`);
+      // 文件名不能裸拼进头:非 Latin-1 字符(中文名是常态)会让 setHeader 抛
+      // ERR_INVALID_CHAR,整个请求 500;引号本身也会破坏头部语法。照会话导出
+      // (provider.routes.ts)的写法:ASCII 兜底 + RFC 5987 filename* 带真名。
+      const baseName = path.basename(validation.resolved);
+      const asciiName = baseName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') || 'download';
+      const utf8Name = encodeURIComponent(baseName);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${asciiName}"; filename*=UTF-8''${utf8Name}`,
+      );
     }
 
     return res.sendFile(validation.resolved);

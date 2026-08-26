@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../../types/app';
 import type { CodeEditorDiffInfo, CodeEditorFile } from '../types/types';
+import { confirmDiscardEditorChanges } from '../utils/editorDirtyState';
 
 type UseEditorSidebarOptions = {
   selectedProject: Project | null;
@@ -15,6 +17,7 @@ export const useEditorSidebar = ({
   isMobile,
   initialWidth = 600,
 }: UseEditorSidebarOptions) => {
+  const { t } = useTranslation('codeEditor');
   const [editingFile, setEditingFile] = useState<CodeEditorFile | null>(null);
   const [editorWidth, setEditorWidth] = useState(initialWidth);
   const [editorExpanded, setEditorExpanded] = useState(false);
@@ -22,8 +25,24 @@ export const useEditorSidebar = ({
   const [hasManualWidth, setHasManualWidth] = useState(false);
   const resizeHandleRef = useRef<HTMLDivElement | null>(null);
 
+  // 关闭/换文件都会卸载(或重载)当前 CodeEditor,未保存的编辑随之蒸发 ——
+  // beforeunload 只拦浏览器级离开,应用内的这两条路在这里拦。
+  const confirmDiscard = useCallback(
+    () =>
+      confirmDiscardEditorChanges(
+        t('unsaved.confirmDiscard', {
+          defaultValue: '当前文件有未保存的改动,离开将丢失这些改动。确定丢弃吗?',
+        }),
+      ),
+    [t],
+  );
+
   const handleFileOpen = useCallback(
     (filePath: string, diffInfo: CodeEditorDiffInfo | null = null) => {
+      if (!confirmDiscard()) {
+        return;
+      }
+
       const normalizedPath = filePath.replace(/\\/g, '/');
       const fileName = normalizedPath.split('/').pop() || filePath;
 
@@ -36,13 +55,16 @@ export const useEditorSidebar = ({
         diffInfo,
       });
     },
-    [selectedProject?.projectId],
+    [confirmDiscard, selectedProject?.projectId],
   );
 
   const handleCloseEditor = useCallback(() => {
+    if (!confirmDiscard()) {
+      return;
+    }
     setEditingFile(null);
     setEditorExpanded(false);
-  }, []);
+  }, [confirmDiscard]);
 
   const handleToggleEditorExpand = useCallback(() => {
     setEditorExpanded((previous) => !previous);

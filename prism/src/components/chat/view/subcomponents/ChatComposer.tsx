@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   ChangeEvent,
@@ -11,7 +11,7 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { ImageIcon, MessageSquareIcon, XIcon, ChevronDown, Check, ArrowUpIcon, Cpu, FileTextIcon, LinkIcon, History, Paperclip, SquareIcon } from 'lucide-react';
+import { ImageIcon, SquareSlash as SquareSlashIcon, XIcon, ChevronDown, Check, ArrowUpIcon, Cpu, FileTextIcon, LinkIcon, History, Paperclip, SquareIcon } from 'lucide-react';
 
 import type { AttachedDoc, DocUploadProgress, QueuedDraft } from '../../hooks/useChatComposerState';
 import type { PendingPermissionRequest, PermissionMode } from '../../types/types';
@@ -77,7 +77,6 @@ interface ChatComposerProps {
   onShowTokenUsage: () => void;
   /** 打开 /models 弹窗。模型徽标的点击入口 —— 和敲 /models 同一条路径。 */
   onShowModelPicker: () => void;
-  slashCommandsCount: number;
   onToggleCommandMenu: () => void;
   hasInput: boolean;
   onClearInput: () => void;
@@ -142,7 +141,7 @@ function renderPlaceholderWithKeys(text: string) {
   ));
 }
 
-export default function ChatComposer({
+function ChatComposer({
   pendingPermissionRequests,
   handlePermissionDecision,
   handleGrantToolPermission,
@@ -159,7 +158,6 @@ export default function ChatComposer({
   tokenBudget,
   onShowTokenUsage,
   onShowModelPicker,
-  slashCommandsCount,
   onToggleCommandMenu,
   hasInput,
   onClearInput,
@@ -381,7 +379,8 @@ export default function ChatComposer({
   const keyboardHint = sendByCtrlEnter
     ? t('input.hintText.ctrlEnter')
     : t('input.hintText.enter');
-  // 只有"流式中回车会排队"这种**当下才成立**的短提示留在底栏,单行截断。
+  // 只有"流式中回车会排队"这种**当下才成立**的短提示留在底栏。底栏可见的是
+  // **短版**(几个字,窄屏也放得下,不会截成半句),整句进悬停 title。
   const submitHint = canQueueDraft
     ? hasQueuedDraft
       ? t('input.hintText.updateQueued', { defaultValue: 'Enter to update queued message' })
@@ -469,7 +468,8 @@ export default function ChatComposer({
                     d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
                   />
                 </svg>
-                <p className="text-sm font-medium">Drop images here</p>
+                <p className="text-sm font-medium">松手即可添加附件</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">图片随消息一起发送,其他文件落到项目里</p>
               </div>
             </div>
           )}
@@ -690,19 +690,17 @@ export default function ChatComposer({
               </PromptInputButton>
             )}
 
+            {/* 斜杠命令入口。
+                图标从 MessageSquare(一个对话气泡,和"命令"毫无关系)换成 SquareSlash ——
+                框里一个「/」,正是输入框里唤起它的那个字符。
+                角标去掉了:那个数字是"可用命令有多少条",既不是待办也不是未读,
+                摆一个绿色圆点角标在那儿只会让人以为有什么东西需要处理。
+                条数在展开的命令面板里本来就看得到。 */}
             <PromptInputButton
               tooltip={{ content: t('input.showAllCommands') }}
               onClick={onToggleCommandMenu}
-              className="relative"
             >
-              <MessageSquareIcon />
-              {slashCommandsCount > 0 && (
-                <span
-                  className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground"
-                >
-                  {slashCommandsCount}
-                </span>
-              )}
+              <SquareSlashIcon />
             </PromptInputButton>
 
             {/* 清空按钮:**常驻占位**,无输入时只是隐形(invisible 仍占宽)。
@@ -899,13 +897,8 @@ export default function ChatComposer({
           </PromptInputTools>
 
           <div className="ml-auto flex min-w-0 flex-none items-center justify-end gap-2">
-            {/* 底栏高度必须恒定:这里只放"排队"这类当下才成立的短提示,强制单行 +
-                截断,绝不折行。静态快捷键说明在发送按钮的 title 里。 */}
-            {canQueueDraft && (
-              <div className="hidden min-w-0 max-w-64 truncate whitespace-nowrap text-xs text-muted-foreground lg:block">
-                {submitHint}
-              </div>
-            )}
+            {/* 底栏不放任何文字提示 —— 会把右侧两个按钮挤得来回移位。
+                "回车=排队"的说明收进发送按钮的悬停 title(见下)。 */}
             {/* 中止:跑起来才出现,描边方块。它和发送并排 ——
                 这样"有草稿时点发送=排队、想停就点方块"两件事各有各的按钮,
                 不用再让同一个按钮身兼二职。 */}
@@ -950,3 +943,11 @@ export default function ChatComposer({
     </div>
   );
 }
+
+/**
+ * memo 的动机:这是聊天页最大的单个组件(约 950 行的输入区),而流式期间
+ * store 每 100ms 通知一次 ChatInterface 重渲 —— 输入区里没有任何东西在变,
+ * 却整棵陪跑。props 里的回调都来自 useCallback(ChatInterface 侧的内联箭头
+ * 已一并收敛),浅比较在打字/拖拽之外的时刻都能命中。
+ */
+export default memo(ChatComposer);

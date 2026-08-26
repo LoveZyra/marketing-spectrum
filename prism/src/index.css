@@ -718,6 +718,18 @@
     }
   }
 
+  /* 会话内查找(Ctrl+F):CSS Custom Highlight API 的命中着色。
+     不往 DOM 里塞 <mark>,所以流式更新与 React 调和都不受影响。
+     当前命中用主题强调色实底,其余命中用弱一档的同色透明底。 */
+  ::highlight(prism-find) {
+    background-color: hsl(var(--primary) / 0.28);
+    color: inherit;
+  }
+  ::highlight(prism-find-current) {
+    background-color: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+  }
+
 }
 
 /* Mobile optimizations and components */

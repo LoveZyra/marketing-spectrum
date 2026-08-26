@@ -155,9 +155,10 @@ export const sessionsDb = {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
 
-    // owner 必须在这里落下去。`createProjectPath` 的第三参默认 null,而 null 在
-    // 归属判定里的含义是"公共项目,所有人可见" —— 所以少传这一个参数,等于每个
-    // 新建的项目都对全服务器公开。已存在的项目走 ON CONFLICT,owner 不会被改。
+    // owner 必须在这里落下去。`createProjectPath` 的第三参默认 null,而 null 的
+    // 含义是"无主"(2026-08-14 起:非公共目录仅 root 可见,公共目录下全员可见)——
+    // 少传这一个参数,新项目要么创建者自己都看不见,要么意外对全服务器公开。
+    // 已存在的项目走 ON CONFLICT,owner 不会被改;所以**第一次落行就得带对 owner**。
     projectsDb.createProjectPath(normalizedProjectPath, null, ownerUserId);
 
     db.prepare(

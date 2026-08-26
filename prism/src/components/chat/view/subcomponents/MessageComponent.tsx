@@ -37,6 +37,9 @@ type MessageComponentProps = {
   selectedProject?: Project | null;
   /** Prism: fork the conversation at this user message and re-run an edit. */
   onEditRerun?: (message: ChatMessage) => void;
+  /** F2:这条错误消息是对话末尾且当前空闲 —— 显示「重发上一条」。 */
+  showRetry?: boolean;
+  onRetry?: () => void;
   /**
    * 活动时间轴的展开区用:只要消息主体,不要头像 / 角色名 / 时间戳那圈外壳 ——
    * 那些信息时间轴的行上已经有了,再来一遍就是噪声。
@@ -52,7 +55,7 @@ type InteractiveOption = {
 
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, onEditRerun, bare = false }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, onEditRerun, showRetry = false, onRetry, bare = false }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = bare || (prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -430,7 +433,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
 
                   // Normal rendering for non-JSON content
                   return message.type === 'assistant' ? (
-                    <Markdown className="chat-answer prose prose-sm font-sans dark:prose-invert">
+                    <Markdown
+                      className="chat-answer prose prose-sm font-sans dark:prose-invert"
+                      streaming={Boolean(message.isStreaming)}
+                    >
                       {content}
                     </Markdown>
                   ) : (
@@ -439,6 +445,19 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                     </div>
                   );
                 })()}
+
+                {/* 失败一键重试:只在"最后一条是错误、当前空闲"时出现(由
+                    ChatMessagesPane 判定)。按原文重发最近一条用户消息;
+                    回合在跑或断网时自动进排队通道,不会重复发。 */}
+                {showRetry && onRetry && message.type === 'error' && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    className="mt-2 rounded-md border border-border px-2.5 py-1 text-xs text-body transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    {t('retry.lastTurn', { defaultValue: '重发上一条消息' })}
+                  </button>
+                )}
               </div>
             )}
 

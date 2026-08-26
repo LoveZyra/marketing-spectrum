@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { ChevronRight, Folder, FolderOpen } from 'lucide-react';
 
@@ -61,7 +62,12 @@ function TreeItemIcon({ item, isOpen, renderFileIcon }: TreeItemIconProps) {
   return <span className="ml-[18px] flex flex-shrink-0 items-center">{renderFileIcon(item.name)}</span>;
 }
 
-export default function FileTreeNode({
+/**
+ * memo:大目录下每个节点都是一次完整渲染。此前 FileTree 里任何无关状态(toast、
+ * 搜索框击键、上传进度)一变,整棵树的每个节点都重渲一遍。浅比较挡住无关更新;
+ * 展开/收起(expandedDirs 换新 Set)与重命名期间照常重渲,行为不变。
+ */
+function FileTreeNode({
   item,
   level,
   viewMode,
@@ -221,7 +227,7 @@ export default function FileTreeNode({
             aria-hidden="true"
           />
           {item.children?.map((child) => (
-            <FileTreeNode
+            <MemoizedFileTreeNode
               key={child.path}
               item={child}
               level={level + 1}
@@ -252,3 +258,7 @@ export default function FileTreeNode({
     </div>
   );
 }
+
+// 递归子节点也走 memo 包装,整棵子树都享受浅比较短路。
+const MemoizedFileTreeNode = memo(FileTreeNode);
+export default MemoizedFileTreeNode;

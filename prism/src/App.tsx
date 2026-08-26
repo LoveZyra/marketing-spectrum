@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import { I18nextProvider } from 'react-i18next';
 
 import { ThemeProvider } from './contexts/ThemeContext';
+import { ToastProvider } from './shared/view/ui';
 import { AuthProvider, ProtectedRoute } from './components/auth';
 import AuthLoadingScreen from './components/auth/view/AuthLoadingScreen';
 import { WebSocketProvider } from './contexts/WebSocketContext';
@@ -113,6 +114,7 @@ export default function App() {
   return (
     <I18nextProvider i18n={i18n}>
       <ThemeProvider>
+        <ToastProvider>
         <AuthProvider>
           <WebSocketProvider>
                 <ProtectedRoute>
@@ -129,6 +131,7 @@ export default function App() {
                 </ProtectedRoute>
           </WebSocketProvider>
         </AuthProvider>
+        </ToastProvider>
       </ThemeProvider>
     </I18nextProvider>
   );

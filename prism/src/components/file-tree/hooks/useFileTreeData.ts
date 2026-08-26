@@ -26,7 +26,12 @@ type FileTreeLocation = {
 
 type UseFileTreeDataResult = {
   files: FileTreeNode[];
+  /** 首次进入某个视图(项目/目录)且还没有内容可显示时才为真。 */
   loading: boolean;
+  /** 同一视图的重取(刷新/上传后)进行中 —— 旧内容保持可见,只是数据在路上。 */
+  refreshing: boolean;
+  /** 服务端因条目过多截断了本次列表(X-Prism-Truncated)。 */
+  truncated: boolean;
   refreshFiles: () => void;
   location: FileTreeLocation;
   /** False while browsing above or beside the project root. */
@@ -59,9 +64,14 @@ function readPathHeader(response: Response, name: string): string | null {
 export function useFileTreeData(selectedProject: Project | null): UseFileTreeDataResult {
   const [files, setFiles] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [truncated, setTruncated] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [location, setLocation] = useState<FileTreeLocation>(EMPTY_LOCATION);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // 上一次**成功**加载的视图标识(项目+浏览路径)。同一视图的重取(refreshKey 变)
+  // 不再把 loading 置真 —— 旧行为是每次刷新都闪一遍骨架屏并清掉滚动位置。
+  const loadedViewRef = useRef<string | null>(null);
 
   // File-tree requests use the DB projectId; the backend resolves it to the
   // project's absolute path through the projects table.
@@ -97,6 +107,9 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
       setFiles([]);
       setLocation(EMPTY_LOCATION);
       setLoading(false);
+      setRefreshing(false);
+      setTruncated(false);
+      loadedViewRef.current = null;
       return;
     }
 
@@ -108,10 +121,15 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
 
     // Track mount state so aborted or late responses do not enqueue stale state updates.
     let isActive = true;
+    const viewKey = `${projectId}:${browsePath ?? ''}`;
+    const isSameView = loadedViewRef.current === viewKey;
 
     const fetchFiles = async () => {
       if (isActive) {
-        setLoading(true);
+        // 视图没变(刷新/上传后的重取)→ 只标 refreshing,旧内容留在屏上;
+        // 视图变了(换项目/进目录)→ 才走骨架屏。
+        if (isSameView) setRefreshing(true);
+        else setLoading(true);
       }
       try {
         const response = await api.getFiles(
@@ -142,6 +160,9 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
             projectRoot: readPathHeader(response, 'X-Prism-Tree-Project-Root'),
             externalRead: response.headers.get('X-Prism-Tree-External-Read') === '1',
           });
+          // 服务端条目上限截断标记:前端此前根本不读它,大目录静默少显示。
+          setTruncated(response.headers.get('X-Prism-Truncated') === '1');
+          loadedViewRef.current = viewKey;
         }
       } catch (error) {
         if ((error as { name?: string }).name === 'AbortError') {
@@ -155,6 +176,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
       } finally {
         if (isActive) {
           setLoading(false);
+          setRefreshing(false);
         }
       }
     };
@@ -179,6 +201,8 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
   return {
     files,
     loading,
+    refreshing,
+    truncated,
     refreshFiles,
     location,
     isInProject,

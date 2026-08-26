@@ -156,4 +156,105 @@ describe('normalizedToChatMessages', () => {
 
     expect(normalizedToChatMessages([orphan])).toHaveLength(0);
   });
+
+  // ── C1:身份透传(id / seq / rowid)──
+  // 修前 convertMessage 不带 id,导致「编辑重跑」按钮(gated 在 message.id)整体
+  // 失效,且流式气泡 key 退化到 timestamp+正文、每 100ms 漂移触发重挂载。
+  describe('身份透传', () => {
+    it('单条消息把 NormalizedMessage.id 盖到 ChatMessage 上', () => {
+      const u = message({ id: 'uuid-abc', kind: 'text', role: 'user', content: '问题' });
+      const [chat] = normalizedToChatMessages([u]);
+      expect(chat.id).toBe('uuid-abc');
+    });
+
+    it('流式消息保留稳定的 __streaming_ id(不随正文变化)', () => {
+      const s1 = message({ id: '__streaming_sess1', kind: 'stream_delta', content: 'abc' });
+      const [c1] = normalizedToChatMessages([s1]);
+      const s2 = { ...s1, content: 'abcdef' };
+      const [c2] = normalizedToChatMessages([s2]);
+      expect(c1.id).toBe('__streaming_sess1');
+      expect(c2.id).toBe('__streaming_sess1');
+    });
+
+    it('一条 msg 拆成多条时,id 加 #index 后缀防撞', () => {
+      // task-notification = 状态行 + 结果正文,两条都从同一个 msg.id 来。
+      const notification = message({
+        id: 'uuid-multi',
+        kind: 'text',
+        role: 'user',
+        content: [
+          '<task-notification>',
+          '<summary>done</summary>',
+          '<result>',
+          '## R',
+          '</result>',
+          '</task-notification>',
+        ].join('\n'),
+      });
+      const out = normalizedToChatMessages([notification]);
+      expect(out).toHaveLength(2);
+      expect(out[0].id).toBe('uuid-multi#0');
+      expect(out[1].id).toBe('uuid-multi#1');
+      expect(out[0].id).not.toBe(out[1].id);
+    });
+
+    it('携带 seq / rowid 作为 key 兜底', () => {
+      const u = message({ id: 'uuid-x', kind: 'text', role: 'assistant', content: 'hi', seq: 42, rowid: 7 });
+      const [chat] = normalizedToChatMessages([u]);
+      expect(chat.seq).toBe(42);
+      expect(chat.rowid).toBe(7);
+    });
+  });
+});
+
+/**
+ * ci 回归:子代理实时子步骤归拢 —— 带 parentToolUseId 的行不出顶层,
+ * 塞进父容器(Task/Agent)的 subagentState.childTools。
+ */
+describe('子代理子步骤归拢', () => {
+  const base = { sessionId: 's1', timestamp: '2026-08-26T03:00:00Z', provider: 'claude' as const };
+
+  it('子行折进父卡,顶层只剩父容器', () => {
+    const messages = [
+      { ...base, id: 'p1', kind: 'tool_use' as const, toolName: 'Agent', toolId: 'toolu_parent', toolInput: '{"description":"读文件"}' },
+      { ...base, id: 'c1', kind: 'tool_use' as const, toolName: 'Read', toolId: 'toolu_child', toolInput: '{"file_path":"/a.txt"}', parentToolUseId: 'toolu_parent' },
+      { ...base, id: 'c1r', kind: 'tool_result' as const, toolId: 'toolu_child', content: 'hello', parentToolUseId: 'toolu_parent' },
+    ];
+    const out = normalizedToChatMessages(messages as never);
+    expect(out).toHaveLength(1);
+    const parent = out[0];
+    expect(parent.isSubagentContainer).toBe(true);
+    expect(parent.subagentState?.childTools).toHaveLength(1);
+    expect(parent.subagentState?.childTools[0].toolName).toBe('Read');
+    expect(parent.subagentState?.childTools[0].toolResult?.content).toBe('hello');
+  });
+
+  it('子行结果未到:child 无 result(运行中);到了后指纹变化触发重转', () => {
+    const parentRow = { ...base, id: 'p2', kind: 'tool_use' as const, toolName: 'Task', toolId: 'toolu_p2', toolInput: '{}' };
+    const childRow = { ...base, id: 'c2', kind: 'tool_use' as const, toolName: 'Bash', toolId: 'toolu_c2', toolInput: '{"command":"ls"}', parentToolUseId: 'toolu_p2' };
+    const first = normalizedToChatMessages([parentRow, childRow] as never);
+    expect(first[0].subagentState?.childTools[0].toolResult).toBeNull();
+
+    const resultRow = { ...base, id: 'c2r', kind: 'tool_result' as const, toolId: 'toolu_c2', content: 'ok', parentToolUseId: 'toolu_p2' };
+    const second = normalizedToChatMessages([parentRow, childRow, resultRow] as never);
+    expect(second[0].subagentState?.childTools[0].toolResult?.content).toBe('ok');
+  });
+
+  it('子代理的文本/思考帧不渲染,不串进主对话', () => {
+    const messages = [
+      { ...base, id: 'p3', kind: 'tool_use' as const, toolName: 'Agent', toolId: 'toolu_p3', toolInput: '{}' },
+      { ...base, id: 't1', kind: 'text' as const, role: 'assistant' as const, content: '子代理内部回复', parentToolUseId: 'toolu_p3' },
+      { ...base, id: 'th1', kind: 'thinking' as const, content: '子代理思考', parentToolUseId: 'toolu_p3' },
+    ];
+    const out = normalizedToChatMessages(messages as never);
+    expect(out).toHaveLength(1);
+    expect(out[0].isSubagentContainer).toBe(true);
+  });
+
+  it('Agent 工具名也认作子代理容器(新版 SDK)', () => {
+    const out = normalizedToChatMessages([
+      { ...base, id: 'p4', kind: 'tool_use' as const, toolName: 'Agent', toolId: 'toolu_p4', toolInput: '{}' },
+    ] as never);
+    expect(out[0].isSubagentContainer).toBe(true);
+  });
 });

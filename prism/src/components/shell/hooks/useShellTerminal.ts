@@ -8,7 +8,9 @@ import { Terminal } from '@xterm/xterm';
 
 import type { Project } from '../../../types/app';
 import { copyTextToClipboard } from '../../../utils/clipboard';
+import { useTheme } from '../../../contexts/ThemeContext';
 import {
+  getTerminalTheme,
   TERMINAL_INIT_DELAY_MS,
   TERMINAL_OPTIONS,
   TERMINAL_RESIZE_DELAY_MS,
@@ -84,6 +86,7 @@ export function useShellTerminal({
   isRestarting,
   closeSocket,
 }: UseShellTerminalOptions): UseShellTerminalResult {
+  const { isDarkMode } = useTheme();
   const [isInitialized, setIsInitialized] = useState(false);
   const resizeTimeoutRef = useRef<number | null>(null);
   const mobileSelectionRef = useRef<MobileTerminalSelectionManager | null>(null);
@@ -124,7 +127,11 @@ export function useShellTerminal({
       return;
     }
 
-    const nextTerminal = new Terminal(TERMINAL_OPTIONS);
+    // 按当前 UI 主题挑配色:深色→霓虹深色,浅色两个主题→暖白浅色。
+    const nextTerminal = new Terminal({
+      ...TERMINAL_OPTIONS,
+      theme: { ...TERMINAL_OPTIONS.theme, ...getTerminalTheme(isDarkMode) },
+    });
     terminalRef.current = nextTerminal;
 
     const nextFitAddon = new FitAddon();
@@ -308,6 +315,14 @@ export function useShellTerminal({
     terminalRef,
     wsRef,
   ]);
+
+  // 主题切换时热更新配色,不重建终端(重建会丢滚屏)。isDarkMode 有意不在上面创建
+  // effect 的依赖里,就为了避免切主题重建;配色变更走这里的 options.theme 赋值。
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.options.theme = { ...TERMINAL_OPTIONS.theme, ...getTerminalTheme(isDarkMode) };
+  }, [isDarkMode, terminalRef]);
 
   return {
     isInitialized,

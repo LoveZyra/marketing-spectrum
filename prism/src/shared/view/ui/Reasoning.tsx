@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from 'react';
+import { useTranslation } from 'react-i18next';
 import { BrainIcon, ChevronDownIcon } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
@@ -135,24 +136,31 @@ export interface ReasoningTriggerProps extends React.ButtonHTMLAttributes<HTMLBu
   getThinkingMessage?: (isStreaming: boolean, duration?: number) => React.ReactNode;
 }
 
-const defaultGetThinkingMessage = (isStreaming: boolean, duration?: number): React.ReactNode => {
-  if (isStreaming || duration === 0) {
-    return <Shimmer>Thinking...</Shimmer>;
-  }
-  if (duration === undefined) {
-    return <p>Thought for a few seconds</p>;
-  }
-  return <p>Thought for {duration} seconds</p>;
-};
-
 export const ReasoningTrigger = React.memo<ReasoningTriggerProps>(
   ({
     className,
     children,
-    getThinkingMessage = defaultGetThinkingMessage,
+    getThinkingMessage,
     ...props
   }) => {
     const { isStreaming, isOpen, duration } = useReasoning();
+    const { t } = useTranslation('common');
+
+    // 默认文案走 i18n(中文默认语言下不再是英文 "Thought for Ns")。
+    // 调用方传了 getThinkingMessage 则完全交给它。
+    const renderThinkingMessage = React.useCallback(
+      (streaming: boolean, seconds?: number): React.ReactNode => {
+        if (getThinkingMessage) return getThinkingMessage(streaming, seconds);
+        if (streaming || seconds === 0) {
+          return <Shimmer>{t('reasoning.thinking', { defaultValue: '思考中…' })}</Shimmer>;
+        }
+        if (seconds === undefined) {
+          return <p>{t('reasoning.thoughtFewSeconds', { defaultValue: '思考了几秒' })}</p>;
+        }
+        return <p>{t('reasoning.thoughtSeconds', { duration: seconds, defaultValue: `思考了 ${seconds} 秒` })}</p>;
+      },
+      [getThinkingMessage, t],
+    );
 
     return (
       <CollapsibleTrigger
@@ -165,7 +173,7 @@ export const ReasoningTrigger = React.memo<ReasoningTriggerProps>(
         {children ?? (
           <>
             <BrainIcon className="h-4 w-4" />
-            {getThinkingMessage(isStreaming, duration)}
+            {renderThinkingMessage(isStreaming, duration)}
             <ChevronDownIcon
               className={cn(
                 'h-4 w-4 transition-transform',

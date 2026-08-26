@@ -291,6 +291,24 @@ export function useFileTreeOperations({
     }
   }, [selectedProject, showToast]);
 
+  /**
+   * 把下载失败的 HTTP 状态翻成一句能看懂的中文。
+   *
+   * 之前统一抛 "Failed to download file" —— 中文界面里一句含糊的英文,用户读不出
+   * "到底是没权限还是文件没了",体感就是"点了没反应"。按状态分:401 登录失效、
+   * 403/404 无权限或文件不存在(files/content 对看不见的项目回 404、路径越界回 403),
+   * 其余给出状态码兜底。
+   */
+  const describeDownloadFailure = useCallback((status: number, name: string): string => {
+    if (status === 401) {
+      return t('fileTree.download.unauthorized', { name, defaultValue: `登录已失效,请重新登录后再下载「${name}」` });
+    }
+    if (status === 403 || status === 404) {
+      return t('fileTree.download.forbidden', { name, defaultValue: `没有权限下载「${name}」,或该文件已不存在` });
+    }
+    return t('fileTree.download.failed', { name, status, defaultValue: `下载「${name}」失败(HTTP ${status})` });
+  }, [t]);
+
   // Download a single file
   const downloadSingleFile = useCallback(async (item: FileTreeNode) => {
     if (!selectedProject) return;
@@ -299,12 +317,12 @@ export function useFileTreeOperations({
     const response = await api.readFileBlob(selectedProject.projectId, item.path);
 
     if (!response.ok) {
-      throw new Error('Failed to download file');
+      throw new Error(describeDownloadFailure(response.status, item.name));
     }
 
     const blob = await response.blob();
     triggerBrowserDownload(blob, item.name);
-  }, [selectedProject, triggerBrowserDownload]);
+  }, [selectedProject, triggerBrowserDownload, describeDownloadFailure]);
 
   // Download folder as ZIP
   const downloadFolderAsZip = useCallback(async (folder: FileTreeNode) => {
@@ -319,7 +337,7 @@ export function useFileTreeOperations({
       if (node.type === 'file') {
         const response = await api.readFileBlob(selectedProject.projectId, node.path);
         if (!response.ok) {
-          throw new Error(`Failed to download "${node.name}" for ZIP export`);
+          throw new Error(describeDownloadFailure(response.status, node.name));
         }
 
         // Store raw bytes in the archive so binary files stay intact.
@@ -345,7 +363,7 @@ export function useFileTreeOperations({
     triggerBrowserDownload(zipBlob, `${folder.name}.zip`);
 
     showToast(t('fileTree.toast.folderDownloaded', 'Folder downloaded as ZIP'), 'success');
-  }, [selectedProject, showToast, t, triggerBrowserDownload]);
+  }, [selectedProject, showToast, t, triggerBrowserDownload, describeDownloadFailure]);
 
   return {
     // Rename operations

@@ -14,6 +14,8 @@ type CodeEditorHeaderProps = {
   notebookRaw?: boolean;
   saving: boolean;
   saveSuccess: boolean;
+  /** diff 视图缓冲区是片段,写回会截断真文件 —— false 时整个保存按钮不渲染。 */
+  canSave?: boolean;
   onToggleMarkdownPreview: () => void;
   onToggleHtmlPreview: () => void;
   onToggleNotebookRaw?: () => void;
@@ -55,6 +57,7 @@ export default function CodeEditorHeader({
   notebookRaw = false,
   saving,
   saveSuccess,
+  canSave = true,
   onToggleMarkdownPreview,
   onToggleHtmlPreview,
   onToggleNotebookRaw,
@@ -160,25 +163,27 @@ export default function CodeEditorHeader({
           <Download className="h-4 w-4" />
         </button>
 
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={saving}
-          className={`flex items-center justify-center rounded-md p-1.5 transition-colors disabled:opacity-50 ${
-            saveSuccess
-              ? 'bg-primary/[0.08] text-card-foreground dark:text-primary'
-              : 'text-body hover:bg-muted hover:text-foreground'
-          }`}
-          title={saveTitle}
-        >
-          {saveSuccess ? (
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-          ) : (
-            <Save className="h-4 w-4" />
-          )}
-        </button>
+        {canSave && (
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saving}
+            className={`flex items-center justify-center rounded-md p-1.5 transition-colors disabled:opacity-50 ${
+              saveSuccess
+                ? 'bg-primary/[0.08] text-card-foreground dark:text-primary'
+                : 'text-body hover:bg-muted hover:text-foreground'
+            }`}
+            title={saveTitle}
+          >
+            {saveSuccess ? (
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+          </button>
+        )}
 
         {!isSidebar && (
           <button

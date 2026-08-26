@@ -78,9 +78,16 @@ export default function TokenUsageSummary({ usage, onClick }: TokenUsageSummaryP
   const contextExact = Boolean(usage?.contextExact) && totalTokens > 0;
   const ratio = contextExact ? usedTokens / totalTokens : 0;
 
-  const title = contextExact
+  // 会话累计费用(F4):result 帧带来的 total_cost_usd,挂在悬停提示里 ——
+  // 芯片本体寸土寸金,金额进 tooltip,点开 /cost 弹窗看明细。
+  const costUsd = readUsageNumber(usage?.costUsd);
+  const costSuffix = costUsd > 0
+    ? ` · $${costUsd < 0.01 ? costUsd.toFixed(4) : costUsd.toFixed(2)}`
+    : '';
+
+  const title = (contextExact
     ? `${usedTokens.toLocaleString()} / ${totalTokens.toLocaleString()} context tokens (${Math.round(ratio * 100)}%)${ratio >= 0.8 ? ' — auto-compact threshold reached' : ''}`
-    : `${usedTokens.toLocaleString()} tokens used`;
+    : `${usedTokens.toLocaleString()} tokens used`) + costSuffix;
 
   return (
     <button

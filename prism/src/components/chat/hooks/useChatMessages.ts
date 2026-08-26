@@ -95,6 +95,11 @@ type ConversionCacheEntry = {
    * next to the output rather than inferred from it.
    */
   toolResult: ResolvedToolResult;
+  /**
+   * 子代理容器(Task/Agent)的实时子步骤指纹:`条数:已有结果数`。
+   * 子代理每走一步,父卡的输出都要重转 —— 指纹不符即失效。非容器行恒为空串。
+   */
+  childSignature: string;
   chatMessages: ChatMessage[];
 };
 
@@ -129,27 +134,78 @@ const conversionCache = new WeakMap<NormalizedMessage, ConversionCacheEntry>();
  * `conversionCache`.
  */
 export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMessage[] {
-  // First pass: collect tool results for attachment
+  // First pass: collect tool results for attachment.
+  // 带 parentToolUseId 的 result 属于子代理内部,不进顶层 result 表。
   const toolResultMap = new Map<string, NormalizedMessage>();
   for (const msg of messages) {
-    if (msg.kind === 'tool_result' && msg.toolId) {
+    if (msg.kind === 'tool_result' && msg.toolId && !msg.parentToolUseId) {
       toolResultMap.set(msg.toolId, msg);
     }
   }
 
+  /**
+   * 子代理实时子步骤归拢(ci 轮)。
+   *
+   * SDK 在 forwardSubagentText=false 下依然实时转发子代理的 tool_use /
+   * tool_result 帧(带 parentToolUseId),且已随显示日志持久化 —— 此前前端
+   * 不消费,这些行被当**顶层工具行**混进主时间轴,层级全丢。现在:
+   * 按 parentToolUseId 归拢成 SubagentChildTool[],塞给对应父容器
+   * (toolId === parentToolUseId)的 subagentState;这些行自身不再出顶层。
+   */
+  const childResultByToolId = new Map<string, NormalizedMessage>();
+  for (const msg of messages) {
+    if (msg.parentToolUseId && msg.kind === 'tool_result' && msg.toolId) {
+      childResultByToolId.set(msg.toolId, msg);
+    }
+  }
+  const childrenByParent = new Map<string, SubagentChildTool[]>();
+  for (const msg of messages) {
+    if (!msg.parentToolUseId || msg.kind !== 'tool_use') continue;
+    const result = msg.toolResult
+      || (msg.toolId ? childResultByToolId.get(msg.toolId) : undefined)
+      || null;
+    const list = childrenByParent.get(msg.parentToolUseId) ?? [];
+    list.push({
+      toolId: msg.toolId || `child_${list.length}`,
+      toolName: msg.toolName || 'Tool',
+      toolInput: msg.toolInput,
+      toolResult: result
+        ? { content: formatToolResultContent(result.content), isError: Boolean(result.isError) }
+        : null,
+      timestamp: new Date(msg.timestamp || Date.now()),
+    });
+    childrenByParent.set(msg.parentToolUseId, list);
+  }
+
   const converted: ChatMessage[] = [];
   for (const msg of messages) {
+    // 子代理内部行不出顶层:tool_use/tool_result 已归拢进父卡;
+    // 文本/思考帧(个别 CLI 版本会转发)直接不渲染,防止串进主对话。
+    if (msg.parentToolUseId && (
+      msg.kind === 'tool_use' || msg.kind === 'tool_result'
+      || msg.kind === 'text' || msg.kind === 'thinking' || msg.kind === 'stream_delta'
+    )) {
+      continue;
+    }
+
     const toolResult = resolveToolResult(msg, toolResultMap);
+    const realtimeChildren = msg.kind === 'tool_use' && msg.toolId
+      ? childrenByParent.get(msg.toolId) ?? null
+      : null;
+    const childSignature = realtimeChildren
+      ? `${realtimeChildren.length}:${realtimeChildren.filter((child) => child.toolResult).length}`
+      : '';
+
     const cached = conversionCache.get(msg);
-    if (cached && cached.toolResult === toolResult) {
+    if (cached && cached.toolResult === toolResult && cached.childSignature === childSignature) {
       for (const chatMessage of cached.chatMessages) {
         converted.push(chatMessage);
       }
       continue;
     }
 
-    const chatMessages = convertMessage(msg, toolResult);
-    conversionCache.set(msg, { toolResult, chatMessages });
+    const chatMessages = convertMessage(msg, toolResult, realtimeChildren);
+    conversionCache.set(msg, { toolResult, childSignature, chatMessages });
     for (const chatMessage of chatMessages) {
       converted.push(chatMessage);
     }
@@ -165,7 +221,11 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
  * control events render as nothing, and a `<task-notification>` renders as a
  * status line plus, when the agent returned one, its markdown result.
  */
-function convertMessage(msg: NormalizedMessage, resolvedToolResult: ResolvedToolResult): ChatMessage[] {
+function convertMessage(
+  msg: NormalizedMessage,
+  resolvedToolResult: ResolvedToolResult,
+  realtimeChildren: SubagentChildTool[] | null = null,
+): ChatMessage[] {
   const converted: ChatMessage[] = [];
 
   const sharedMetadata = {
@@ -235,19 +295,35 @@ function convertMessage(msg: NormalizedMessage, resolvedToolResult: ResolvedTool
 
     case 'tool_use': {
       const tr = resolvedToolResult;
-      const isSubagentContainer = msg.toolName === 'Task';
+      // SDK 不同版本给子代理容器报的工具名不同:早期 Task,新版 Agent。
+      const isSubagentContainer = msg.toolName === 'Task' || msg.toolName === 'Agent';
 
-      // Build child tools from subagentTools
+      // Build child tools:历史路径(agent-*.jsonl 解析出的 subagentTools)
+      // 与实时路径(parentToolUseId 帧归拢)按 toolId 合并 —— 实时项覆盖同 id
+      // (它带着刚落地的 result),新项按到达顺序排在后面。
       const childTools: SubagentChildTool[] = [];
-      if (isSubagentContainer && msg.subagentTools && Array.isArray(msg.subagentTools)) {
-        for (const tool of msg.subagentTools as any[]) {
-          childTools.push({
-            toolId: tool.toolId,
-            toolName: tool.toolName,
-            toolInput: tool.toolInput,
-            toolResult: tool.toolResult || null,
-            timestamp: new Date(tool.timestamp || Date.now()),
-          });
+      if (isSubagentContainer) {
+        const byId = new Map<string, number>();
+        if (msg.subagentTools && Array.isArray(msg.subagentTools)) {
+          for (const tool of msg.subagentTools as any[]) {
+            byId.set(String(tool.toolId), childTools.length);
+            childTools.push({
+              toolId: tool.toolId,
+              toolName: tool.toolName,
+              toolInput: tool.toolInput,
+              toolResult: tool.toolResult || null,
+              timestamp: new Date(tool.timestamp || Date.now()),
+            });
+          }
+        }
+        for (const child of realtimeChildren ?? []) {
+          const existing = byId.get(String(child.toolId));
+          if (existing !== undefined) {
+            childTools[existing] = child;
+          } else {
+            byId.set(String(child.toolId), childTools.length);
+            childTools.push(child);
+          }
         }
       }
 
@@ -377,5 +453,29 @@ function convertMessage(msg: NormalizedMessage, resolvedToolResult: ResolvedTool
       break;
   }
 
-  return converted;
+  // 把稳定身份从 NormalizedMessage 盖到每条 ChatMessage 上。
+  //
+  // 此前这一步整个漏掉:convertMessage 产出的 ChatMessage 不带 id/seq/rowid,
+  // 于是 getIntrinsicMessageKey 只能退化到 "时间戳+正文前 48 字" 当 key。两个
+  // 后果都很实:
+  //   1)「编辑重跑」按钮 gated 在 message.id 上,永远 undefined → 功能整体死掉;
+  //   2)流式气泡的 id 本是稳定的 `__streaming_<sid>`,丢了之后 key 变成
+  //      "时间戳+正文",而 updateStreaming 每次 flush 换新时间戳 → key 每 100ms
+  //      漂移 → React 每次都卸载重建整个流式气泡(DOM 重建 + markdown 重排)。
+  // 一处补齐,同时救这两个症状。
+  //
+  // 多输出防撞:一条 msg 可能拆成多条(task-notification = 状态行 + 结果正文),
+  // 它们共用同一个 msg.id 会撞 key —— >1 时给 id 加 `#index` 后缀。
+  const multi = converted.length > 1;
+  return converted.map((chatMessage, index) => {
+    if (chatMessage.id !== undefined && chatMessage.id !== null) return chatMessage;
+    const baseId = typeof msg.id === 'string' && msg.id.length > 0 ? msg.id : undefined;
+    return {
+      ...chatMessage,
+      id: baseId ? (multi ? `${baseId}#${index}` : baseId) : undefined,
+      seq: msg.seq,
+      rowid: msg.rowid,
+      sequence: msg.sequence,
+    };
+  });
 }

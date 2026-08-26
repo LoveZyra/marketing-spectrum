@@ -3,7 +3,7 @@ import express from 'express';
 import { auditLogDb, projectsDb, resolveVisibleProjectRoot, userDb } from '@/modules/database/index.js';
 import { createProject, updateProjectDisplayName } from '@/modules/projects/services/project-management.service.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
-import { readRequestViewer } from '@/shared/project-visibility.js';
+import { isPublicWorkspacePath, readRequestViewer } from '@/shared/project-visibility.js';
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
 import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projects/services/project-delete.service.js';
 import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/projects/services/project-star.service.js';
@@ -143,8 +143,15 @@ const readProjectPermissionsView = (projectId: string) => {
   const row = projectsDb.getProjectById(projectId);
   if (!row) return null;
   const sharedUserIds = projectsDb.getProjectSharedUserIds(projectId);
+  // 「个人」不能只看 visibility 列和授权名单 —— 一个**无主**项目若落在公共目录
+  // (PRISM_PUBLIC_WORKSPACE)下,对所有人可见,那其实是「公共」。此前这里把它
+  // 显示成「个人」,于是用户选「个人」保存后看着没变、实际一直是公共。所以
+  // "有效公共"要把这种无主+公共目录的情况也算进去,对话框才显示真实状态。
+  const unowned = row.owner_user_id === null || row.owner_user_id === undefined;
+  const effectivelyPublic = row.visibility === 'public'
+    || (unowned && isPublicWorkspacePath(row.project_path));
   return {
-    visibility: row.visibility === 'public'
+    visibility: effectivelyPublic
       ? ('public' as const)
       : sharedUserIds.length > 0
         ? ('shared' as const)
@@ -227,9 +234,23 @@ router.put(
       sharedUserIds = parsedIds;
     }
 
-    // 三档互斥,与创建向导同语义:public 清授权名单;personal 两者皆清。
-    projectsDb.setProjectVisibility(projectId, choice === 'public' ? 'public' : null);
-    projectsDb.setProjectShares(projectId, sharedUserIds, readUser(req)?.id ?? null);
+    // 三档互斥。关键:personal / shared 必须让项目**有主**。
+    // 只把 visibility 列清成 null 是不够的 —— 一个无主项目若在公共目录下,
+    // 对所有人可见,清 visibility 也还是公共(用户报的"改回个人还是公共"就是这个)。
+    // 所以当前无主时,把归属认领给操作者(对话框「个人 = 仅自己和 root 可见」
+    // 里的"自己");已有主则不动,避免 root 帮别人改权限时顺手夺走归属。
+    const actingUserId = readUser(req)?.id ?? null;
+    if (choice === 'public') {
+      projectsDb.setProjectVisibility(projectId, 'public');
+      projectsDb.setProjectShares(projectId, [], actingUserId);
+    } else {
+      projectsDb.setProjectVisibility(projectId, null);
+      const currentOwner = projectsDb.getProjectOwner(projectId);
+      if ((currentOwner === null || currentOwner === undefined) && actingUserId != null) {
+        projectsDb.setProjectOwner(projectId, actingUserId);
+      }
+      projectsDb.setProjectShares(projectId, choice === 'shared' ? sharedUserIds : [], actingUserId);
+    }
 
     res.json(createApiSuccessResponse(readProjectPermissionsView(projectId)));
   }),

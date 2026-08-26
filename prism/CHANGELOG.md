@@ -8,6 +8,1430 @@
 
 ---
 
+## 2026-08-26 · cn — 侧栏按标签页自动收放 + 偏好同步竞态修复
+
+- **切标签页自动收放项目侧栏**(用户点名):进「聊天」自动展开(挑会话要靠它),
+  进「定时任务 / 终端 / 文件 / Notebook」自动折叠成图标轨 —— 那几页都是整页
+  内容,侧栏在那儿只占宽度。规则只在 activeTab **变化**的那一拍生效:同一个
+  标签页里手动开合不会被弹回去;ref 用当前标签页初始化,**首次挂载不动手**,
+  刷新页面保留上次的展开/折叠状态。移动端侧栏是抽屉,不适用。
+- **顺带修掉一个偏好同步竞态**(否则上面这条会"慢一拍、来回跳"):
+  `useUiPreferences` 每个实例挂载时从 localStorage 读一份初始值,原来紧接着
+  写回并**广播**。切标签页时才挂载的面板(任务页、终端、Notebook…)于是会把
+  **自己读到的旧快照**广播给所有实例,冲掉别人刚改的新值。现在首次挂载不广播,
+  只有存储里还没有该项时补写一次(旧版分键存储的迁移路径)。这条对所有 UI
+  偏好都生效,不止侧栏。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 752 全过;
+双端构建过。浏览器 11 项全过:起始在聊天时展开;定时任务/终端/文件/Notebook
+四页逐一折叠、每次切回聊天都重新展开;标签页内手动展开后不被规则弹回;
+之后切回聊天仍按规则展开。修复前同一脚本 4 项失败(切回聊天不展开),
+并用 localStorage 快照复现了"偏好比 DOM 慢一拍"的竞态。
+
+---
+
+## 2026-08-26 · cm — 创建定时任务改走对话 + 会话绑定修复(用户定的方案 B)
+
+用户实测:让 Claude 建任务时选了「固定会话」,结果侧栏又冒出一条新会话。
+根因在两处配合 —— 隐藏说明里只有"最近会话清单",**没有模型自己所在那条对话
+的 id**,于是它填了 `sessionMode:"fixed"` 却把 `fixedSessionId` 留空;服务端
+`resolveTargetSessionId` 把"fixed 但没给 id"解释为"给它开一个专属会话",
+行为符合代码、不符合直觉。顺带暴露出「固定会话」这一个词其实糊住了三种语义。
+
+- **票据记住来源会话**:`POST /api/tasks/ticket` 接受 `originSessionId`
+  (校验该用户可见后随票记下,看不见就丢弃),响应回 `hasOriginSession`;
+  `/via-ticket` 新增语法糖 `"sessionMode":"current"` → 展开成
+  `fixed + fixed_session_id=来源会话`。**模型不用手抄 UUID**(抄错一位就悄悄
+  新开一个会话,正是用户踩到的)。没有来源会话时该值 400 并提示改用 fixed/new。
+- **隐藏说明要求出选择题**:会话归属由 Claude 让用户**二选一**——「写进当前
+  这条对话」(current)/「新开一个专属会话并长期固定」(fixed 不带 id),
+  另有「每次都新开」(new);不许替用户决定。同时带上当前时间与时区
+  (时刻按用户时区理解)、以及"缺哪项问哪项、一次问全"的要求。
+- **创建的推荐路径改成对话**(方案 B):右上角「新建任务 ▾」点开是两个选项 ——
+  「让 Claude 创建」(第一项,说一句需求、缺的细节它来问)与「手动填写表单」
+  (自己填名称/频率/目标会话,编辑已有任务也走它),各带一行说明。
+  按钮本身**只展开菜单、不直接触发**:中途试过"主体直接进对话流"的拆分按钮,
+  用户反馈点一下就跳走太突然,改回二选一。空态文案同步改写。
+- **项目下拉的「选择其它目录…」改开文件夹浏览器**(用户点名):复用创建新项目
+  向导的 `FolderBrowserModal`(逐级浏览 + 新建文件夹),不再让用户手打绝对
+  路径。浏览器挂在表单层、点开时先收起下拉面板 —— 否则 z-101 的 portal 面板
+  会压住 z-70 的浏览器弹窗。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 752 全过;
+双端构建过。REST 探针四态:带来源会话领票 `hasOriginSession:true` →
+`sessionMode:"current"` 建出的任务 `fixed + fixedSessionId=那条会话`;
+不带来源会话时 `current` 被 400 挡下;传别人的/不存在的会话 id 时来源被丢弃。
+浏览器 9 项全过:主按钮只展开菜单(仍停在任务页)、菜单两项俱在、表单从菜单
+打开、footer 是「选择其它目录…」、文件夹浏览器打开且**下拉已让位**、关闭回填、
+菜单项发起对话、隐藏说明不泄漏到页面。
+
+---
+
+## 2026-08-26 · cl — 下拉弹层浮出容器(用户反馈,ck 的收尾)
+
+ck 把定时任务的下拉换成自定义弹层后,弹层被祖先的 `overflow` 裁成半截:
+指令框底部那圈 `overflow-hidden` 裁掉项目/模型面板(模型面板整个不可见,
+表现为**"模型选不了"**),弹窗自身的 `overflow-y-auto` 裁掉「目标会话」面板。
+
+- **面板 portal 到 `document.body` + `position: fixed`**,按触发器的视口坐标
+  定位:下方空间不足且上方更宽敞时自动上翻;宽度取 `max(触发器宽, 288px)`
+  并夹在视口内;开着时监听滚动(捕获阶段)与 resize 重新测量。祖先再怎么
+  `overflow` 也裁不到了 —— 与用户给的 Claude 官方截图同款(弹层压在弹窗外沿)。
+- 面板改 flex 纵向布局:搜索框与底部动作区固定,**只有列表滚动**(上限 320px)。
+- **Esc 关面板**而不穿透关掉整个弹窗。
+- **模型下拉与 `/models` 模型映射卡片逐字同款**(用户点名,对照那一页截图):
+  主行 = 配置出来的**实际模型名**(等宽字体,如 `deepseek-v4-flash`、`glm-5`),
+  副行 = **`别名 · 档名`**(`default · 默认模型`、`sonnet[1m] · Sonnet (1M context)`);
+  没配映射的档位退回只显示档名(如 `Haiku`)。**价格与卖点整段去掉**
+  (原来那串 `· Best for everyday tasks · $3/$15 per Mtok` 不再出现)。
+  取值口径与模型切换器同源 `/api/providers/claude/model-mappings`,且
+  **配置层优先** —— 服务端 `readAliasConfigMappings` 直接读
+  `~/.claude/settings.json` 的 `model` 与 `ANTHROPIC_DEFAULT_*_MODEL`
+  (零成本、随改随新),实测映射仅在配置没写且未过期时兜底。
+  接口自带的 `default` 项与本页「默认模型」去重只留一份;任务详情页
+  「执行配置」用同一份文案。任务里存的仍是别名,老任务无需迁移。
+- **详情页写出固定会话的完整 id**(用户点名):原来只有「固定会话」四个字,
+  看不出到底固定在哪 —— 现在下面一行等宽小字给出完整 session id,点它直接
+  跳进那个会话;还没跑过(尚未绑定)时写「首次运行时自动创建并固定」。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 752 全过;
+双端构建过。浏览器 22 项全过 —— 新增三项钉住这次的问题:面板 `parentElement`
+是 `body`、面板矩形完全落在视口内、**真的选中模型**(触发器文案 默认模型 → Fable)。
+另用一份写了 `ANTHROPIC_DEFAULT_*_MODEL` 的 settings.json 起探针服务器,实测下拉
+渲染为主副两行:`deepseek-v4-flash / default · 默认模型`、`glm-5 / fable · Fable`、
+`deepseek-v4-pro / opus[1m] · Opus 4.8 (1M context)`、未配映射的 `Haiku` 单行;
+chip 同步显示 `deepseek-v4-flash`。
+
+---
+
+## 2026-08-26 · ck — 定时任务体验修补五件(全部来自用户当天实测反馈)
+
+cj 发布当天用户在生产上连发五条反馈,当轮全收:
+
+1. **「让 Claude 创建」改为 Cowork 式对话**:不再把带票据的大段 curl 话术糊进
+   输入框 —— 页面上只直发一句人话(「我想设置一个定时任务。先说明怎么工作,
+   再问我几个问题…」),票据与接口用法作为**隐藏上下文**随消息带给模型:
+   `chat.send` 新增 `options.hiddenContext`(16KB 上限),提示词= 人话+隐藏块,
+   **气泡与显示日志只落人话**,运行时 options 里剥掉;票据 TTL 10→30 分钟
+   (聊完再建也来得及)。实测模型收到后主动讲解并用选择卡片反问频率/会话模式。
+2. **票据可撤销自己刚建的任务**:同一张票在 TTL 内可
+   `DELETE /api/tasks/via-ticket/:id`,但**只能删它自己创建的那一个**
+   (创建仍一次即焚,第二次创建照旧 401)—— 此前 Claude 建错只能求用户去
+   页面删;隐藏块同时写明「其它修改/删除让用户到定时任务页操作」。
+3. **固定会话可选了**:手动表单 fixed 模式新增「目标会话」搜索下拉
+   (该项目下最近会话,默认「自动新建一个并固定」);「让 Claude 创建」的
+   隐藏块顺手带上项目最近 8 个会话的 id+名称清单 —— 两条路都不再"不知道
+   sessionId 只能新建"。服务端补:fixedSessionId 必须是**发起人看得见的会话**
+   (否则 400,堵住往别人会话里塞任务输出的口子);`/options/sessions` 按
+   可见性过滤 + 最近活跃排序(此前任何登录用户可枚举全站会话名)。
+4. **弹窗所有下拉换自定义弹层**(对照 Claude 官方项目选择截图):搜索框 +
+   名称/路径两行 + 选中勾;项目下拉底部带「新建项目 / 其他目录…」直接输路径;
+   模型从死的文本框变成真下拉(选项来自 `/api/providers/claude/models`,
+   与聊天输入框同源);频率/周几/会话/权限同款。
+5. **时刻数字框可清空重打**(原来受控值删不掉,一打字变 "015");另:cj 版
+   预填话术若残留为会话草稿,恢复时识别 `X-Prism-Task-Ticket` 特征直接丢弃
+   (修「打开目标会话带出一堆文字」)。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 751→752 全过
+(新增 hiddenContext 三断言:进提示词/不进显示日志/不进运行时 options);双端
+构建过。REST 探针:一票一建、撤销自己 200、撤别人 403、坏会话 400、绑定已有
+会话后立即运行四行齐落入指定会话、/options/sessions 过滤排序;浏览器 18 项
+全过(直发短句成气泡、刷新后不漏票据、目标会话下拉、项目搜索、自定义路径、
+模型 8 项、15:45 可打)。无新依赖。
+
+---
+
+## 2026-08-26 · cj — 定时任务(B 方案,产品化;用户点名)
+
+对话里让 Claude 配的定时任务此前只是"到点在后台跑",页面上无入口、无回执。
+本轮把它做成完整功能,版式对照 Claude 官方 Scheduled tasks 截图:
+
+- **图标栏新入口**:时钟图标插在「对话」与「终端」之间(桌面侧栏与移动端
+  标签条同步);没选项目也能进 —— 任务列表是全局的,表单里自带项目下拉;
+- **列表页**:大标题 + 搜索 + 「新建任务 ▾」下拉(让 Claude 创建 / 手动创建)
+  + 双列卡片(状态徽标 运行中/启用中/已暂停 + 频率 + 下一次时刻),15s 轻轮询;
+- **详情页**:启停开关、编辑/删除/立即运行、最近运行记录(成功/失败 + 耗时 +
+  失败原因)、指令全文、目标(项目 + 会话策略)、重复规则、「打开目标会话 →」;
+- **手动创建弹窗**:对照 Create scheduled task 截图 —— 名称*/指令* 大框底部
+  内嵌项目与模型选择/频率(手动/每小时/每天/工作日/每周/每月 + 时刻)/会话
+  策略(固定会话·推荐 或 每次新建)/权限三档;
+- **让 Claude 创建**:先领一张**一次性票据**(10 分钟有效、只代表当前用户、
+  用一次即焚),把带票据的 curl 话术预填进聊天输入框并切到对话页 —— 会话里的
+  Claude 调 `POST /api/tasks/via-ticket` 落任务,全程不暴露登录 token;
+- **服务端调度**:`scheduled_tasks` 表(启动时 IF NOT EXISTS 自建,老库免迁移);
+  调度器 30s 一拍捞到期任务,`claimRun` 原子占位防双跑,崩死遗留的 running
+  标记启动时松开;next_run_at 纯函数推算(服务器本地时区);
+- **执行链与网页聊天同通道**:startRun → 用户指令行落显示日志 → ⏰「开始执行」
+  回执 → queryClaudeSDK(oneShot)流式照常落库/推流 → ✅/⚠️ 回执(带耗时或
+  失败原因)—— 开着目标会话能实时旁观,离线回来看历史;固定会话丢失自动
+  重建并回写,新会话自动命名「任务名 · 月/日」。
+
+顺手(用户反馈):**输入框右下角「回车 = 排队」文案删除** —— 它把最右侧
+停止/发送两个按钮挤得来回移位;完整说明仍在发送按钮悬停提示里。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 744→751 全过
+(computeNextRunAt 7 例:manual/daily 前后/hourly/weekdays 周五→周一/weekly/
+monthly 跨月/toDbUtc 形状);双端构建过。真实网关全链路探针:REST 建任务→
+立即运行→目标会话四行齐(用户行/⏰/正文/✅·耗时);票据一次即焚(重放 401);
+浏览器 18 项全过 —— 图标位次、列表/下拉/弹窗/详情/启停/立即运行/时间轴回执/
+预填话术/排队文案已除,均截图留档。无新依赖,从 ≤cd 版本直升仍需 `npm install`
+(mermaid,见 ce)。
+
+---
+
+## 2026-08-26 · ci — 子代理过程实时展示(用户点名,对齐 Claude Code 样式)
+
+调子代理(Task/Agent)时页面原来一片死寂:SDK 其实把子代理每一步的
+tool_use/tool_result 都实时推上来了(带 parentToolUseId,显示日志也一直在存),
+但前端不消费 —— 这些行要么被当**顶层工具行**混进主时间轴(层级全丢),要么
+Agent 容器根本不被认识(只认 Task,新版 SDK 报 Agent)。现在:
+
+- **子代理卡片组**(新组件 SubagentGroupCard):相邻的 Task/Agent 调用聚合成
+  一张卡 —— 抬头「运行 N 个子代理 · 共 M 步」(进行中带转圈与计数),内部是
+  并排子卡网格:✓/转圈/✗ + 任务描述 + 步数徽标 + 运行中的当前工具;
+- **点开子卡**在网格下方展开该子代理自己的步骤时间轴(实时逐步点亮)+ 指令
+  + 最终「子代理汇报」正文(markdown);
+- **实时 + 持久两路合一**:parentToolUseId 帧实时归拢进父卡(childSignature
+  进转换缓存,子代理每走一步父卡即重渲),与跑完后 agent-*.jsonl 解析的
+  subagentTools 按 toolId 去重合并 —— 运行中能看,刷新后不丢;
+- 子代理的内部文本/思考帧一律不渲染(防串进主对话);`Agent` 工具名补认为
+  子代理容器;子行不再污染主时间轴的计数(此前"读取 1 个文件"其实是子代理的);
+- 正文后面跟子代理组时按过程叙述折进前段(与 cd 轮规则一致)。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 736→744 全过
+(子代理分组 4、子步骤归拢 4);双端构建过。浏览器实测(真实网关,一条消息
+并行两个子代理):聚合抬头「运行 2 个子代理 · 共 2 步」、双卡并排、点开见
+指令+步骤+汇报、刷新后原样,零 pageerror。
+
+---
+
+## 2026-08-26 · ch — 重启中断标记 + 审批红点实时 + 两处反馈修复
+
+### F14c · 优雅关停补「回合被中断」标记
+
+部署重启时,正在跑的回合原来无声消失 —— 用户回来只看到对话停在半截。现在
+shutdown 序列在中止运行前,给每个在跑会话的显示日志补一条错误行:「服务已重启,
+这一回合被中断。点下方『重发上一条消息』可继续」—— 它是收尾错误行,cb 轮的
+重试按钮自动出现,一键续上。强杀(kill -9)写不了,认了。E2E 实测:长任务中
+SIGTERM → 重启 → 历史末行即中断标记,PASS。
+
+### 外部 API 回合的用户指令也落显示日志(cb 边界补齐)
+
+cb 只修了 chat.send;`POST /api/agent`(异步/同步两路)发起的回合,网页打开
+会话看不到"是谁让它干的什么"。现在两路 startRun 受理后同样落 role:user 行。
+
+### 账号审批红点实时化(用户反馈 #2)
+
+红点原来只靠 60s 轮询 + 窗口聚焦刷新:新注册最长等一分钟才冒出来,审批完还
+赖着不走。现在三路合一:**服务端推送**(注册/批准/驳回时向所有在线 root 广播
+`admin_pending_approvals` 帧,新增 admin-broadcast.service)+ **本地事件**
+(本浏览器点了批准立即刷)+ 轮询兜底。浏览器实测:注册 2.5s 内红点出现(只有
+推送能这么快),点「通过」红点应声消失。
+
+### 输入框角落提示不再截半句(用户反馈 #3)
+
+「回车把下一条消息加入队列」在窄屏被截成「回车把下一条消…」。底栏可见文案改
+短版「回车 = 排队 / 回车 = 更新排队」,整句进悬停 title;高度恒定不折行的
+设计不变。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 736 全过;
+双端构建过;三个 E2E/浏览器探针全 PASS。
+
+---
+
+## 2026-08-26 · cg — 外部 API 闭环(F5)
+
+拿 API key 的外部调用方原来只能发起任务(POST /api/agent)与领会话号,发起之后
+就是黑盒:不知道跑没跑完、跑飞了也停不下来。这轮补齐闭环三件:
+
+- **GET /api/agent/sessions** — 本 key 可见的会话列表(与网页端同一道
+  canViewerSeeSession 闸),`running` 字段来自运行注册表;`?limit/offset` 分页,
+  `?includeArchived=1` 含归档,按 updated_at 倒序。
+- **GET /api/agent/runs/:sessionId** — 运行状态:空闲 `idle`;在跑/结束返回注册表
+  的 status、provider、startedAt/completedAt、lastSeq。不可见与不存在同形 404。
+- **POST /api/agent/sessions/:sessionId/abort** — 中止在跑回合,与网页端 chat.abort
+  同一条路(provider 原生 id 优先、runId 兜底),订阅中的浏览器照常收到 complete
+  帧;无在跑回合返回 409 NO_ACTIVE_RUN。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 736 全过;双端
+构建过。E2E 实测(node + 真实网关):领 key→列会话(total=13)→领号→空闲 idle→
+空闲中止 409→发起长任务→轮询到 running→中止 aborted=true→状态 completed→
+无效 key 401,全链 PASS。
+
+---
+
+## 2026-08-26 · cf — 费用金额展示(F4)+ API 密钥状态文案(用户点名)
+
+### F4 · 会话费用金额
+
+SDK result 帧带 `total_cost_usd`,原来全链路丢弃。现在:
+
+- `extractTokenBudget` 提取 `costUsd` 随 token_budget 状态帧透传(两个分支都带);
+- 前端聚合改**保留式合并**:中途的 usage 帧没有 cost,不再把已拿到的金额抹掉
+  (`setTokenBudget` 升级为函数式更新,类型改 Dispatch);
+- `/cost` 弹窗新增「本会话累计费用 $X.XX」行(<1 分显示四位小数);
+- 输入框 token 芯片的悬停提示追加 ` · $X.XX`。
+
+拿不到 cost 的部署(自建网关不报 total_cost_usd)整条 UI 按设计隐藏,不出零值。
+
+### API 密钥「激活」歧义(用户点名)
+
+设置→API 和令牌里,原来一颗按钮上写「激活/未激活」—— 分不清是**当前状态**还是
+**点击后的动作**。拆开:左边状态徽标(`● 使用中` 主题色 / `○ 已停用` 灰),右边
+动作按钮(「停用」/「启用」,动词,带 tooltip 说明后果),一眼可辨。zh/en 词条
+同步(In use / Disabled / Disable / Enable)。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 736 全过;双端
+构建过。浏览器实测:/cost 弹窗正常(本网关不报 cost,行按设计隐藏);API 密钥
+两态均验证 —— 使用中徽标+停用按钮、点停用变已停用徽标+启用按钮、点启用复原;
+零 pageerror。
+
+---
+
+## 2026-08-26 · ce — mermaid 图渲染(F3)
+
+模型高频输出 mermaid 图(流程图/时序图/状态机),原来只能当代码块干看。现在
+```mermaid 代码块直接渲染成图:
+
+- **懒加载**:mermaid 库(约 1MB,独立 chunk)只在正文里真的出现 mermaid 块时
+  才动态加载,不影响首屏;
+- **亮/暗主题适配**,切主题自动重渲;
+- **失败回退**:先 `parse` 预检,语法不合法(模型输出的图常有小错)就原样显示
+  高亮源码块 + 一行小字说明,绝不渲染半个错误占位;
+- **流式期间不试渲染**(半截源码必然报错),定稿后再画 —— 与 ca 轮"流式代码块
+  免高亮"同一开关;
+- 悬停右上角「复制」拷贝的是 mermaid 源码;securityLevel 用 mermaid 默认 strict。
+
+**依赖新增:`mermaid@^11.17.2`(package.json / package-lock.json 有变,部署需
+`npm install`)。**
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 736 全过;双端
+构建过(mermaid 独立 chunk 确认)。浏览器实测(真实网关):让模型输出 flowchart,
+渲染出 4 节点中文流程图(开始→条件判断→是/否→执行/结束),零 pageerror。
+
+---
+
+## 2026-08-26 · cd — 回合中间正文收进活动时间轴(用户点名)
+
+一轮长任务里,模型在工具调用之间说的过渡性正文("校验通过,接着写文档"这类)
+原来会以完整正文打印、把活动时间轴切成两截 —— 一轮任务在界面上碎成好几段流程。
+现在:
+
+- **夹在活动之间的正文收进同一条时间轴**:小圆点行、全文内联(超长由 ClampedBlock
+  先折)、悬停出复制,竖线连续不断;段抬头计数新增「说明 N 段」。
+- **收尾的最终回答保持大正文排版**(判定:其后再无活动的 assistant 文本永不吸收)。
+- **回合开头**先说一句再动手的,那句也随之入段。
+- **流式尾巴不吸收**:正在打字的正文照旧实时大字显示,等下一个工具启动、它定稿
+  后自动折入 —— 一轮任务从头到尾一条竖线。
+- 特殊行不吸收:任务通知/压缩摘要/交互提示/本地命令/带 reasoning 附页的消息、
+  以及 error,照旧独立渲染。
+
+实现:`groupConsecutiveTools` 重写(可吸收正文 lookahead:后面还有活动才吸收,
+连续多条一起判);`isAbsorbableNarration` 导出复用;ActivityTimeline 增加
+narration 行渲染;`summarizeActivityRun` 增加 narration 计数。ca 轮的组身份保持
+(`stabilizeGroupIdentity`)对新成员构成不变式依旧成立,memo 不受影响。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 728→736 全过
+(吸收规则 8 例:中间吸收/收尾保留/用户消息阻断/开头正文开段/连续正文/流式不吸
+/特殊行不吸/隐藏思考透明);双端构建过。浏览器实测(真实网关,读-说明-读-总结
+四步回合):时间轴 1 段未被切断,抬头「读取 2 个文件 · 说明 1 段」,展开可见圆点
+说明行内联,段外仅收尾总结一条大正文,零 pageerror。
+
+---
+
+## 2026-08-26 · cc — 会话内查找条 Ctrl+F(F1)
+
+聊天面板右上角浮动查找条:**Ctrl/Cmd+F** 打开(编辑器与终端里不抢,它们有自己的
+搜索),输入即时高亮全部命中(防抖 160ms),计数 `n/m`,**Enter 下一个 /
+Shift+Enter 上一个**(环形),Esc 关闭。切会话自动关闭;流式期间消息还在长也会
+自动重扫,命中序号不失效。
+
+实现要点:匹配走**渲染后的 DOM 文本**(TreeWalker),markdown 渲出什么就能搜到
+什么;整词着色用 **CSS Custom Highlight API**(`CSS.highlights` + `::highlight()`),
+不往 React 管的 DOM 里塞 <mark>,流式调和不打架;不支持该 API 的老内核退化为
+滚动定位 + 命中消息闪环。全局 Esc 中止对 `[data-find-bar-open]` 放行,查找条里
+按 Esc 不会误杀正在跑的回合。命中上限 2000 条防御单字查询拖死主线程。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线,新文件零新增);vitest
+721→728 全过(findMatches 7);双端构建过。浏览器实测:Ctrl+F 打开、输入计数
+1/2、Highlight API 注册、Enter 跳到 2/2、Esc 关闭且高亮清空、无结果提示,零
+pageerror。
+
+---
+
+## 2026-08-26 · cb — 聊天顺手四件 + 用户消息落显示日志(F2 + 一个 P1)
+
+### P1 · 用户消息从未写入显示日志(az 轮引入的回归,顺藤摸出)
+
+显示日志(az 起的主显示路径)从**出站帧**收口,而用户自己的消息是入站的,从来
+没有对应的出站帧 —— 于是显示日志时代的每个会话,**刷新页面后用户气泡整段消失**
+(活着的页面靠前端乐观回显撑着,一直没露馅),连带重载后「编辑重跑」找不到锚、
+本轮新加的 ↑ 回填 / 失败重试也会失灵。修法:`chat.send` 受理后把用户行(含附件
+描述)直接落库、**不**外发帧 —— 在线端已有乐观气泡不会双,刷新后前端的 local_
+乐观行被服务端拷贝正常去重。浏览器实测:完成后 1 个气泡、重载后仍 1 个。
+
+### F2 · 聊天顺手四件
+
+- **每会话独立草稿**:草稿键从 `draft_input_<projectId>`(同项目互相覆盖)改为
+  会话优先 `draft_input_session_<sessionId>`,新建会话页退回项目键;持久化/恢复
+  两个 effect 用 owner-ref 防切会话瞬间串写(与 queuedDraft 同款)。
+- **↑ 键历史回填**(readline 风格):输入框为空按 ↑ 回填最近一条用户消息,连按
+  往更早走,↓ 往更新走、越过最新恢复空输入;打字/发送/切会话即退出回看。纯函数
+  `stepHistoryWalk` 单测覆盖;历史列表从当前会话消息惰性取值。
+- **断网自动入队**:断线时发送不再报错让用户"稍后再试",改走既有排队通道
+  (与"回合进行中"同一条路)—— 排队卡立刻可见、可编辑可删;连接恢复自动重放。
+  排队冲发 effect 补 isConnected 门,断网期间不空转。发送瞬间掉线(sent=false)
+  同样入队,原来那条英文错误文案一并退役。
+- **失败一键重试**:对话**以错误收尾**且空闲时,错误消息下出现「重发上一条消息」,
+  按原文重发最近一条用户消息(在跑/断网自动入队);走 ref 取消息列表,按钮出现
+  与否不打扰 memo。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 基线);vitest 711→721 全过
+(composerHistory 7、composerDrafts 3);双端构建过。浏览器实测(真实网关):
+A/B 会话草稿互不串、切回恢复;发消息→完成→重载,用户气泡前后都是 1 个;重载后
+↑ 回填原文、↓ 退出;零 pageerror。
+
+---
+
+## 2026-08-26 · ca — 聊天渲染性能(全库深读方案 C9–C10)
+
+流式期间 store 每 100ms 通知一次视图,此前整条渲染链都陪跑:输入区(约 950 行的
+ChatComposer)、每一段活动时间轴、全部 markdown 都重算一遍;大代码块每次 flush 全量
+重新 tokenize;一次几千行的 Edit 在渲染路径上做 O(N×M) LCS 能把主线程冻住数秒。
+这轮把"没变的部分"真正静下来:
+
+### C9 · 流式重渲裁剪
+
+- **ChatComposer memo 化**:ChatInterface 侧的内联箭头/内联表达式 props 一并收敛成
+  稳定引用(onRemoveImage/onSelectEffort/onShowCheckpoints/activeModelReal/
+  frequentCommands),流式 tick 期间输入区整棵跳过。
+- **ActivityTimeline memo 化 + 组身份保持**(`stabilizeGroupIdentity`):分组后,
+  成员引用完全没变的活动段沿用上一轮的同一个 ToolGroupItem 对象;配合
+  ChatMessagesPane 的 getMessageKey 改为恒定引用(经 ref 读本轮 key 表),
+  流式期间只有正在跑的那一段时间轴重渲,已完成段整段跳过。
+- **Markdown memo 化 + 流式代码块免高亮**:`<Markdown streaming>` 传导到代码块,
+  流式中渲染纯文本块(布局配色与高亮版一致,即 Suspense fallback 那套),定稿后
+  一次性上色 —— 不再每 100ms 对越来越长的代码块全量 tokenize。
+- **diff 加预算**(`calculateDiff`):先掐公共前后缀(常见"大文件小改动"直接把
+  O(N×M) 压到改动区),改动区仍超 25 万格预算时退化为全删+全增,不再冻主线程。
+
+### C10 · 内存与懒加载
+
+- **会话槽位 LRU**(`useSessionStore`):原设计"切会话不清、旧数据全留",逛几十个
+  长会话后内存只涨不落。现在超过 12 个槽位时在切会话的边界按最久未用淘汰;当前
+  会话与 60 秒内仍有动静的会话(如后台在推流)受保护,被淘汰的会话再次打开走正常
+  首屏拉取。纯函数 `planSlotEviction` 单测覆盖。
+- **附件缩略图懒加载**(ChatMessageImages):附件图取的是原图 blob,此前挂载即全量
+  并发拉取;现在 IntersectionObserver(400px 预读)滚近了才取,`<img>` 补
+  `loading="lazy" decoding="async"`。无 IntersectionObserver 的环境视为立即可见。
+
+验证:typecheck 双端过;eslint 0 错误(46 warnings 与基线一致,新文件零告警);
+vitest 695→711 全过(新增 messageTransforms 6+1、toolGrouping 4、planSlotEviction 5);
+双端构建过。浏览器实测(构建产物 + 真实网关流式):发消息→流式→定稿,代码块定稿
+高亮、复制/时间戳/模型徽标齐全,切会话/展开时间轴无异常,零 pageerror。
+
+---
+
+## 2026-08-26 · bz — 中文化补全 + 文件树体验(全库深读方案 D 组·下)
+
+### D4 · 成片英文中文化 + 12 个缺 key 落盘
+
+中文是默认语言,但审计发现约 79 处硬编码英文与 12 个"代码在用、locale 里没有"的 key
+(全靠内联 defaultValue 兜底,两边语言互相漏)。这轮收口:
+
+- **命令面板(CommandPalette)整页**:标题/分组(动作/导航/设置/会话/文件)/占位符/
+  空态/浏览全部/返回提示全部 i18n;设置项直接复用 `settings:mainTabs.*` 现成中文;
+  cmdk 匹配值改双语(中文名+英文关键词都能搜)。
+- **问答面板(AskUserQuestionPanel)**:标题「等待你的回答」、自定义…、跳过/全部跳过、
+  上一题/下一题/提交、输入占位。
+- **计划卡(PlanDisplay)**:标题「实施计划」、生成中、原始参数、按钮改「开始实施 /
+  继续修改」。
+- **思考条(Reasoning)**:默认文案「思考中… / 思考了 N 秒」走 i18n(调用方自定义渲染
+  不受影响)。
+- **命令结果弹窗(CommandResultModal)**:四个弹窗(帮助/选模型/用量/状态)的
+  eyebrow/标题/副标题、内置命令描述、筛选占位、当前模型、切换失败提示、cost 与
+  status 的全部指标标签、Esc 提示。
+- **技能页(ProviderSkills)整页**:添加技能/刷新/拖放提示/选择文件(夹)/待安装/
+  搜索/空态/校验错误(30MB 上限、缺 SKILL.md)/范围徽标(用户/插件/项目)等 30+ 处。
+- **文件夹浏览器(FolderBrowserModal)**、图片查看器加载文案。
+- **12 个缺 key 全部落进 zh-CN + en**(composer 附件 tooltip、终端粘贴、编辑重跑、
+  会话运行中指示、导出失败、设置保存失败……),并跑了 zh-CN↔en **键对齐自检:全一致**。
+
+### D2 · 文件树四件
+
+1. **刷新不再闪骨架屏**:loading 与 refreshing 分离 —— 同一视图的重取(刷新/上传后)
+   旧内容保持可见,只有首次进入新视图才走骨架;此前每次刷新都清屏并丢滚动位置。
+2. **大目录截断可见**:服务端因条目上限截断时发 `X-Prism-Truncated`,前端此前根本
+   不读 —— 大目录静默少显示。现在读出并在树顶展示提示条。
+3. **节点 memo**:大目录下任何无关状态(toast、搜索击键、上传进度)一变,整棵树每个
+   节点全量重渲。`FileTreeNode` 加 `React.memo`(递归子节点同样走 memo 包装)。
+4. **搜索展开不再永久化**:搜索命中的祖先目录此前被永久写进展开状态 —— 搜一次,清掉
+   关键词后整棵树还是摊开的。改为派生并集:搜索期间临时展开,清空即还原。
+
+### 验证
+
+- zh-CN↔en 全部 6 个 namespace 键对齐自检**零缺失**;typecheck 双端过。
+- 真实浏览器:Ctrl+K 命令面板**全中文**(新建会话/打开设置/切换主题/前往聊天/
+  设置:智能体…),面板动作可直达设置页;智能体 tab 内「技能」子页签中文可见;
+  0 pageerror。
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(46 warning,与上轮持平);
+vitest **695** 全过;双端构建通过。无新增依赖、无建表,`package-lock.json` 不变。
+
+---
+
+## 2026-08-25 · by — 反馈可靠性(全库深读方案 D 组·上)
+
+"你现在能看清发生了什么"这一簇。D 组拆两轮,这轮做反馈/一致性,下轮做 i18n 与文件树性能。
+
+### D3 · 统一提示(toast)通道 + 接上成片的静默失败 + 全局 401
+
+全站错误出口原先三分:`window.alert`、组件各自 setError、以及大量只 `console.error`
+的静默 catch —— 同类失败在不同页面体验割裂,很多干脆"点了没反应"。
+
+- 新增轻量 toast(`shared/view/ui/Toast.tsx` + `toastBus.ts`,不引第三方):module 级
+  事件总线 + Provider + `useToast`。**总线设计**是为了非 React 模块(如 api.js 的 401
+  拦截)也能弹;组件用 `useToast`,非组件直接 `emitToast`。挂在 App 顶层。
+- 接上静默失败:项目重命名(失败不再只 console,提示并保留编辑态可重试)、会话导出
+  (侧栏 + 顶栏两处)、API key 与 GitHub 凭证的删除/停用/创建、设置页保存失败
+  (`saveStatus==='error'` 此前无处渲染,补上红字)。
+- **全局 401 拦截**:`authenticatedFetch` 拿到 401(令牌过期/被撤销)时弹提示并派发
+  `prism:session-expired`,AuthProvider 收到即清会话跳回登录(去抖 5s 防并发风暴)。
+  此前只有文件树单独分辨过 401,其余面板一律"点了没反应"。
+
+### D1 · 编辑器保存冲突检测(不再静默覆盖)
+
+读文件接口现在带回 `mtimeMs`;保存时回传作基线,服务端比对磁盘当前 mtime,不一致回
+**409**(`FILE_MODIFIED`)。此前是无条件 `writeFile` —— Claude / 他人 / 外部编辑器在
+你编辑期间改过的文件会被"最后写入者赢"静默覆盖(多用户 IDE 高频事故)。前端 409 时
+提示"再次保存=覆盖,重新打开=加载最新",给"重载 / 仍覆盖"两条路;保存成功后基线更新
+为新 mtime。基线缺省(新建文件)时退化为不检测,兼容。
+
+### D5 · 终端配色随三主题
+
+xterm 此前写死一套 VSCode 深色,纸构蓝图 / 棱光玻璃浅色主题下是一块突兀的黑。新增
+浅色 ITheme(暖白底 + 墨色前景 + 适配浅底的 ANSI),按 `uiTheme` 选色;切主题时
+`terminal.options.theme` 热更新,不重建终端(不丢滚屏)。
+
+### D7 · 后端错误体形状统一
+
+AppError 中间件此前把 `error` 写成 `{code,message,details}` 对象,而全站 245 处手写响应
+和所有前端消费方都把 `data.error` 当字符串 —— 同名字段一边字符串一边对象,前端直接
+渲染就得到 `[object Object]`。统一为:`error` 恒为字符串(消息),`code`/`details` 放同级。
+
+### 验证
+
+- 单测 +4(共 **695** 全过):toast 总线(订阅收发 / 订阅前 backlog 补发 / 退订 / 递增 id)。
+- 真实服务:读文件带 `mtimeMs`;正确基线保存 200、外部改动后旧基线保存 **409
+  FILE_MODIFIED**、无基线强制覆盖 200;AppError 端点 `error` 为**字符串**。
+- 真实浏览器:登录后 **0 pageerror**(toast Provider 未破坏应用树);浅色主题下终端背景
+  `rgb(250,249,246)`(修前 `#1e1e1e`)。
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(warning 45→46,新增文件本身
+无 warning,新 toast 组件一处 HMR 提示与既有 UI 组件同类);vitest **695** 全过
+(新增 4 项);双端构建通过。无新增依赖、无建表,`package-lock.json` 不变。
+
+---
+
+## 2026-08-25 · bx — 服务端性能七件(全库深读方案 E 组)
+
+热路径的读盘 / 解析 / 编译开销收口。纯性能,行为不变。
+
+### E1 · 显示日志历史加解析缓存
+
+`listForSession` 是新会话的主显示路径 —— 每次打开/每次上翻都把整段日志读出、逐条
+`JSON.parse` 再交上层切片,会话越长越慢,而 transcript 那条路的 LRU 完全覆盖不到它。
+加 (行数, 最大 id) 指纹缓存:日志没变就直接返回上次解析结果;写入(append/appendMany/
+delete)使对应会话缓存失效;返回浅拷贝防上层改动污染缓存。LRU 32 条。
+
+### E2 · 老会话 seed 事务化
+
+老会话首次把上千条历史抄进日志时,逐条 append 是上千次独立隐式事务(每次 fsync),
+首条消息发送前明显卡顿。新增 `appendMany` 用 better-sqlite3 `transaction` 整批一次提交。
+
+### E3 · append/count/list prepared statement 缓存
+
+`append` 是所有出站消息的唯一收口,此前每条都 `db.prepare` 重新编译同一句 SQL。改为
+连接感知缓存(库在备份/关停时会 close+reopen,连接一变即重新 prepare)。
+
+### E4 · 查"当前模型"改尾读
+
+`getCurrentActiveModel` 此前把几十 MB 的 transcript 整个 `readFile` 再倒扫。当前模型
+来自最近的 assistant/init 事件、几乎总在尾部,改为先读尾部 64KB(与 synchronizer 同
+法),尾部没命中才回落整读。
+
+### E5 · resolveResumeModel 指纹缓存
+
+每次 send 都全量读+parse `provider-session-active-model-changes.json`。加 (mtimeMs, size)
+指纹缓存,没变直接返回上次解析结果;写入方主动失效,避免同秒 mtime 粒度竞争。
+
+### E6 · watcher 尾读去重
+
+一次同步里,同一 transcript 的尾部被读两遍(`extractLastActivityFromEnd` 取最后活动
+时间 + `extractSessionAiTitleFromEnd` 取 AI 标题,会话还叫 Untitled 时每 3s 一次)。
+抽出 `readJsonlTailCached`(指纹缓存,16 条),同一 pass 里第二次尾读命中缓存。
+
+### E8 · projects 可见性列加索引
+
+项目列表热路径 `getProjectPaths(visibleTo)` 按 `owner_user_id` / `visibility` 过滤,
+此前这两列无索引、随项目数线性扫。补 `idx_projects_owner` 与 `idx_projects_visibility`。
+
+### 验证
+
+- 单测 +5(共 **691** 全过):显示日志解析缓存失效 / 浅拷贝防污染 / appendMany 批量
+  幂等(`session-display-log.test.ts`);>64KB 大 transcript 尾读命中最近模型
+  (`claude-active-model.test.ts`)。
+- 真实服务:启动跑迁移后 `idx_projects_owner` + `idx_projects_visibility` 已建;历史
+  接口重复加载结果一致(缓存不改变输出)。
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(45 warning 不变);
+vitest **691** 全过(新增 5 项);双端构建通过。无新增依赖;**新增两个索引**(迁移
+幂等 `CREATE INDEX IF NOT EXISTS`,首次上线自动建),`package-lock.json` 不变。
+
+---
+
+## 2026-08-25 · bw — 聊天链路修复八件(全库深读方案 C 组)
+
+### C1 · ChatMessage 透传 id(救活「编辑重跑」+ 止住流式气泡重挂载)
+
+`convertMessage` 产出的 ChatMessage 一直不带 id/seq/rowid,`getIntrinsicMessageKey`
+只能退化到 "时间戳+正文前 48 字" 当 key。两个后果:①「编辑重跑」按钮 gated 在
+`message.id` 上,永远 undefined → 功能整体死掉;②流式气泡本该用稳定的
+`__streaming_<sid>` 当 key,丢了 id 后 key 变成 "时间戳+正文",而 updateStreaming 每
+100ms 换新时间戳 → key 漂移 → React 每 100ms 卸载重建整个流式气泡(DOM 重建 +
+markdown 重排)。在 convertMessage 末尾统一把 id/seq/rowid/sequence 盖上,一处修同时
+救两症;多输出消息(task-notification = 状态行+结果)id 加 `#index` 后缀防撞。
+
+### C2 · 切会话不再清光所有会话的流缓冲 + 去掉后台碎片行
+
+切会话时 `resetStreamingState()` 是**无差别全清**,把后台还在流式的会话(A 回答中切去
+B)的累积文本一起截断,切回 A 只剩碎片;同时非活跃会话每条原始 delta 还被
+`appendRealtime` 存成独立行,与累积消息重复。改法:切会话不清流缓冲(缓冲按会话分桶、
+各刷各的 store,全清只留给整体卸载/新建会话);删掉非活跃分支的原始 delta 追加
+(100ms 定时器本就对任意 sid 调 updateStreaming)。
+
+### C3 · 纯文本流式跟随底部
+
+跟底 effect 只依赖 `chatMessages.length` —— 纯文本流式时就一条消息在变长、条数不变,
+于是长回答一路"打字"到视野外、页面不动,直到冒出新行才跳一下。加上"最后一条消息正文
+长度"作依赖,正文增长即触发跟底。
+
+### C4 · 运行中 Esc 不再误杀 run
+
+全局 Esc-中止监听挂在 document 的 capture 阶段且注册最早,比问答面板 / 弹窗自己的
+Esc(冒泡阶段)先跑,`defaultPrevented` 此时还是 false —— 于是在"Skip·Esc"的问答面板
+里、或 /models 弹窗里按 Esc,直接中止整轮 run。现在中止前先查 DOM 有没有
+`[role="dialog"]` 或 `[data-interactive-prompt]`,有就放行让它们各自的 Esc 生效。
+
+### C5 · Plan 卡按正文匹配,不再一个请求点亮所有历史卡
+
+每张 PlanDisplay 都全局 `find` 任意 pending 的 ExitPlanMode 请求,不与自身对应 ——
+会话里有旧计划时,新请求一来所有旧计划卡都长出 Build/Revise,点旧卡的 Build 批的却是
+新计划。改为按计划正文匹配,只有内容一致的卡显示按钮;顺带删掉没有任何处理器实现的
+假 `⌘↩` 角标。
+
+### C6 · 运行中向上翻页去重
+
+流式期间新行不断落盘,total 在涨,而 fetchMore 按"已加载条数"从尾部算 offset 取页,
+这一页可能与已加载窗口重叠 → prepend 出现重复消息。prepend 前按 id 过滤掉已在
+serverMessages 里的;offset 仍按服务端返回条数推进(对应分页游标,与本地去重无关)。
+
+### C7 · 反转义保护代码区段(围栏 + 行内)
+
+`unescapeWithMathProtection` 此前只保护数学,助手消息里代码块/行内码中的 `"\n"`、
+`"\t"` 字面量会被替换成真实换行/制表,把 `print("a\nb")` 掰成两行。改为先把围栏代码块、
+行内码、数学一并摘出(NUL 哨兵占位),反转义后再还原。
+
+### C8 · 审批决定看发送结果
+
+断线瞬间点"允许/拒绝",帧没发出去(sendMessage 返回 false)但旧代码不看返回值就把请求
+从列表移除 —— 弹窗消失、run 仍挂着那条待批。改为只移除**确认送达**的,发失败的留在原地
+并提示"连接已断开,授权未发送成功,请恢复连接后重试"。
+
+### 验证
+
+- 单测 +11(共 **686** 全过):id/seq/rowid 透传 + 流式 id 稳定 + 多输出 #index 去撞
+  (`useChatMessages.test.ts`);代码/行内/数学保护 + 哨兵不外泄(`chatFormatting.test.ts`)。
+- 真实浏览器:发一条消息 → 用户气泡上**出现「编辑重跑」按钮**(id 透传的端到端证据)。
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(45 warning 不变);
+vitest **686** 全过(新增 11 项);双端构建通过。无新增依赖、无建表,
+`package-lock.json` 不变。
+
+---
+
+## 2026-08-25 · bv — 运行时稳定性十件(全库深读方案 B 组)
+
+全库深读方案的第二轮:运行时/终端/关停链路的健壮性。
+
+### B1 · 常驻 runtime 去掉 maxTurns=100 累计上限
+
+streaming-input 模式下一个 query 贯穿整段对话,`num_turns` 是**跨用户回合累计**
+的 —— 设 100 意味着聊到第一百个来回(或几轮重 agentic 任务)后必撞
+`error_max_turns`,越活跃的会话死得越早,而一次性路径从没设过。删掉;单回合失控
+自有 turn 看门狗(空转/工具静默超时)兜着。
+
+### B2 · 外部 API 同步路径纳入 run registry(消除双写)
+
+`POST /api/agent`(stream / 非 stream)此前不 `startRun`、不查 holder —— 同一
+provider 会话可被网页聊天的常驻 runtime 与这条同步回合**同时写同一份 transcript**。
+现在:指向已有会话(appSessionId 有值)时占运行位,冲突回 **409**;并把 runId 传给
+queryClaudeSDK,顺带让 `chat.abort` 能中止同步回合;finally 里释放运行位。全新会话
+(无 appSessionId)无可冲突目标,语义不动。
+
+### B3 · 一次性路径纳入并发预算
+
+有意的一次性回合(外部 API 的 `oneShot`、或 `PRISM_PERSISTENT_SESSIONS=0`)此前
+直呼 `queryClaudeSDKOnce`,绕开 `MAX_RUNTIMES + overflow` 全局预算,只剩 IP 限流
+兜底 —— API 流量可无上限打出上百个 CLI 子进程。改为同样走 `runOneShotFallback`
+的预算闸(不发"已降级"提示,只计数与配额)。
+
+### B4 · abort 的 interrupt() 加超时,子进程僵死也能停
+
+用户按"停止"最常发生在子进程僵死时,而 `interrupt()`(与子进程的协商)此时永不
+返回,`await` 挂死、终止帧发不出,停止按钮要等看门狗兜底。新增 `interruptWithTimeout`
+(默认 5s 竞速,迟到的 reject 内部吞掉防 unhandled);两条 abort 路径超时即升级到
+**硬撕**(abortController)。为此给一次性路径也补了 abortController(此前只有持久
+路径有),并让 `addSession` 记录它。
+
+### B5 · PTY 回放缓冲改字节预算
+
+终端断线重连的回放缓冲此前只数条数(5000 chunk),单块不设限 —— `cat` 大文件时
+单个 PTY 能挂住几十 MB 到 30 分钟超时才回收(chat 侧早改字节预算,shell 漏了)。
+改为**字节为主(2MiB)+ 条数兜底**双预算,裁剪逻辑抽成纯函数 `shell-replay-buffer.ts`。
+
+### B6 · WebSocket 设 maxPayload=4MiB
+
+ws 库默认单帧上限 100MiB —— 任一已登录 socket 一帧就能造成 `JSON.parse` 内存/CPU
+尖峰。聊天入站帧(文本+图片引用+审批应答)远小于 4MiB,大文件走 HTTP 分片通道。
+超限帧由 ws 以 1009 关闭。
+
+### B7 · 关停清理:空闲常驻池 + 备份首跑定时器
+
+(1) shutdown 原先只 abort 有活跃 turn 的会话,空闲常驻池(最多 MAX_RUNTIMES 个
+claude 子进程)全靠 `process.exit` 隐式连坐。新增 `disposeAllRuntimes()` 显式收干净。
+(2) `startDatabaseBackups` 的首跑一次性定时器(启动约 60s)没被 stop 清 —— 恰在这
+窗口内关停,首跑 `backupDatabase` 会把刚 close 的库重新打开(正是它想防的)。stop
+现在两个定时器一起清。
+
+### B8 · 一次性回退重放收窄,避免重复用户消息
+
+常驻回合在"输入已递交、还没流出内容"时崩溃,旧代码按 `!prismStreamed` 无条件重放
+到一次性路径 —— 若 CLI 已把用户消息写进 transcript,重放会造出**重复的用户消息**。
+现在标记 `inputDelivered` + 回合起点,回退前用 `userTurnReachedTranscript` 侦察
+transcript 尾部 64KB:发现晚于回合起点的 user 行(消息已落盘)就不重放、老实报错让
+用户重发;transcript 没动(子进程早死)才照旧透明重放。拿不准一律按"已落盘"处理。
+
+### B9 · 终端前端:断线不清屏 + 重连指数退避
+
+(1) 掉线瞬间 `onclose` 会 `clearTerminalScreen` 抹掉本地滚屏,只能靠服务端回放捞回
+一小段。改为**断线不清屏**(内容冻在眼前),清屏挪到重连成功、即将收到回放的
+`onopen` 里做一次,回放不与旧内容叠成重复尾巴;主动断开仍清。(2) 连不上时
+autoConnect 会因 isConnecting 复位而**零间隔重扑**票据接口(ws-auth 注释要求"调用方
+自带退避",此前没实现)。加指数退避(1s 起、翻倍、上限 30s,连上清零)。
+(终端心跳/半开连接检测需服务端配套 pong,本轮未做,留待后续。)
+
+### B10 · force 删项目清附件目录与台账
+
+删项目只清 sessions/transcripts/项目行,`attachments/` 目录与台账行残留 —— 台账按
+用户计配额,只能等 30 天 TTL,而那时目录可能已随项目消失,徒留僵尸配额行。force
+分支现在**先递归删 `<project>/attachments/` 文件、再按前缀 `forgetUnder` 清台账**
+(顺序不能反 —— 先 forget 会留磁盘孤儿),立即把配额还给用户;软删(archive)不动。
+
+### 验证
+
+- 新增 14 项单测(共 **675** 全过):interrupt 超时竞速(及时返回/永挂超时/迟到
+  reject 不外泄,注入短超时跑得快)、transcript 回退侦察(无 id / 文件缺 / 晚于起点
+  已落盘 / 早于起点可重放)、PTY 字节预算裁剪(字节/条数/巨块/多字节 UTF-8)、
+  force 删项目清附件(删净 + 软删不动)。
+- 真实服务实测:6MiB 的 WS 帧 → **1009 Message Too Big 关闭**(修前默认 100MiB 收下)。
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(45 warning 不变);
+vitest **675** 全过(新增 14 项);双端构建通过。无新增依赖、无建表,
+`package-lock.json` 不变。
+
+---
+
+## 2026-08-25 · bu — P0 修复:数据与权限六件(全库深读方案 A 组)
+
+全库五路深读(方案见 `claude/方案_全库深读与增强路线_20260825.md`)后的第一轮:
+把数据丢失与越权类的六件 P0 一次修完。
+
+### A1 · Diff 视图可保存,会把真文件截断成片段(数据丢失级)
+
+从聊天 Edit 工具卡点开 diff 时,编辑器缓冲区装的是 **new_string 片段**而非整个
+文件;而 Ctrl+S 是 document 级监听、保存按钮也照常渲染 —— 按一下,真文件被写成
+几行片段。修法:
+
+- `useCodeEditorDocument`:新增 `isDiffView` 判定(与加载 diff 分支同条件),
+  `handleSave` 对它早退;diff 加载时同步 `persistedContent`(此前 diff 视图
+  恒被当成"有未保存改动",beforeunload 会对着只读视图拦人);
+- `CodeEditorHeader`:`canSave=false`(diff 模式)时整个保存按钮不渲染;
+- **顺带修 Esc 与脏态**:Esc 关编辑器原先不看 `event.defaultPrevented`(关
+  CodeMirror 搜索面板的 Esc 会连带关掉编辑器)也不查未保存改动。现在 Esc 尊重
+  已消费事件;新增模块级脏态登记(`editorDirtyState.ts`),**关闭编辑器 / 点开
+  另一个文件前**有未保存改动都会弹确认(i18n:`codeEditor.unsaved.confirmDiscard`,
+  zh-CN + en);弹出态(pop-out)的收回改为跟随 `editingFile` 清空,确认被拒时
+  不再出现"半关闭"重挂载丢改动。
+
+### A2 · fork-point / token-usage 两端点漏可见性校验(IDOR)
+
+`usage.routes.ts` 的 `POST /api/claude/fork-point` 与
+`GET /api/projects/:projectId/sessions/:sessionId/token-usage` 只挂了
+authenticateToken —— 从 index.js 迁出时漏了 `canViewerSeeSession`(邻居端点
+context-usage / slash-commands / active-model 都有)。任何登录用户拿会话 id 就能
+套出他人会话的 `provider_session_id` + 项目路径(fork-point 还会扫其 transcript)。
+两处补闸,不可见与不存在同形 404。
+
+### A3 · 外部 Agent API 建的新项目 owner=NULL(创建者自己看不见)
+
+`agent.js` 主路由先做了一次**不带 owner 的预注册**
+(`createProjectPath(path, null)`),而随后 `createAppSession` 内部的注册走
+ON CONFLICT、按设计不改归属 —— 新路径项目永远无主。现行规则(08-14 起)下
+无主+非公共目录=仅 root 可见:**API 调用者自己都打不开返回的 /session/<id> 链接**;
+恰在公共目录下则意外全服公开。修法:预注册直接带 `req.user.id`;顺带纠正
+`sessions.db.ts` / `agent.js` 两处还写着 08-14 之前旧语义("null=全服公开")的注释。
+
+### A4 · 库里无行时按裸 id resume(越权窗口收口)
+
+传入 sessionId 查无此行时,老语义是"当成 provider 原生 id 直接以
+bypassPermissions 续聊" —— 绕开 `canViewerSeeSession`(watcher 尚未索引期间,
+等于拿任意 id 续别人的 transcript)。收口为 404;正路是先
+`POST /api/agent/sessions` 领号或等索引完成。
+
+### A5 · 预览下载中文文件名直接 500
+
+`preview.routes.ts` 把文件名裸拼进 `Content-Disposition`,非 Latin-1 字符让
+setHeader 抛 ERR_INVALID_CHAR。照会话导出的写法改为 ASCII 兜底 + RFC 5987
+`filename*`。
+
+### A6 · clone 把 GitHub token 拼进 URL 且 stderr 进日志
+
+`https://<token>@github.com/...` 会随 git 报错原样落进服务日志,还被写进克隆产物
+`.git/config`。改为 `GIT_CONFIG_*` 环境变量注入 `http.extraHeader`
+(Basic x-access-token),token 全程不进 URL / argv / 磁盘;stderr 与报错统一
+脱敏(`https://***@`);顺带把 `includes('github.com')` 的弱校验收紧为
+"https + 主机名必须是 github.com/*.github.com"(凭据随请求发出,主机不锁死等于
+把 token 交给任意主机)。
+
+### 验证(单测 + 真实路由 + 真实浏览器)
+
+- 新增 4 项单测:`usage-visibility.test.ts`(真 express 实例:他人 404 同形、
+  本人与 root 过闸 —— 用返回文案区分"闸门挡的 404"与"过闸后的正常 404")、
+  `project-first-registration-owner.test.ts`(钉住"首次登记带 owner 落对"与
+  "先无主预注册、后补不回"的污染陷阱本身)。
+- 真实服务实测:A5 中文名 `.bin` 下载 **200** + `filename*=UTF-8''…`(修前 500);
+  A4 未知 sessionId → **404(5ms 短路,未起 run)**;A3 该次请求预注册的项目行
+  `owner_user_id=2`(demo,修前 NULL)。
+- 真实浏览器(Playwright):编辑器打字后点关闭 → **弹确认**(取消保留、确认关闭);
+  无改动关闭不弹框。
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(45 warning 不变);
+vitest **661** 全过(新增 4 项);双端构建通过。无新增依赖、无建表,
+`package-lock.json` 不变。外部 API 行为变化一处:未登记的 sessionId 现在返回
+404(原先直接裸 resume),集成方如依赖旧行为需改走领号接口。
+
+---
+
+## 2026-08-25 · bt — 换 logo:全站换成棱镜彩虹图
+
+用户给了新的棱镜彩虹图(透明底自发光版),要求把 logo 换成它。
+
+### 改法
+
+- **品牌标记** `PrismLogo.tsx`:原先是两张矢量图(`logo.svg` / `logo-dark.svg`,
+  靠 `dark:hidden`/`dark:block` 明暗切换),换成**单张位图** `public/brand/logo.png`。
+  新图透明底、明暗两个主题都读得清,不再需要分浅/深两份资产。用它的六处
+  (登录加载页 / 登录布局 / 侧栏 App Rail / Vision 面板 / 关于页 / 侧栏头)全部跟着换。
+- **图片生成**:源图 1254² RGBA,裁掉透明边(getbbox)、居中放进正方形画布、
+  LANCZOS 压到 256²(约 60KB)。浏览器页签图标 `favicon.png`(64²)/`favicon.svg`
+  (viewBox 128、内嵌 base64 PNG)同源重生成;`index.html` 的两条 icon link 不变。
+- **退役自检对表**:`at` 轮当年把 `logo.png`/`logo-dark.png` 退役换矢量,这轮又把
+  `logo.png` 换回位图 —— 所以从 `check-retired-files.mjs` 的退役表里**移除 `logo.png`**
+  (它现在是活文件,留在表里构建会被自检挡下),**新登记这轮退役的 `logo.svg` /
+  `logo-dark.svg`**。
+- **顺带对齐 public 根下无引用的旧 logo 资产**:`logo-32/64/128/256/512.png` 与
+  `logo.svg` 全站没有任何引用(grep 遍 html/json/ts/tsx/js/jsx + 无 manifest),
+  但它们仍是**旧品牌**的位图/矢量。为免部署树里留旧 logo 地雷(上一轮刚做过"全面
+  检测问题"),用同一条裁切→居中→缩放流水线一并重生成为新图。`logo-256.png` 与
+  `brand/logo.png` 字节一致(md5 同),`logo-64.png` 与 `favicon.png` 一致。
+
+### 验证(实测,真实运行的实例)
+
+- 门槛前浏览器已确认新棱镜图在侧栏头(「棱镜」旁)与 App Rail 正常渲染;
+  这轮起 `brand/logo.png` 字节未变(md5 `2c9c5403…`),渲染同前。
+- 起真实服务(`dist-server`),HTTP 拉取:`/brand/logo.png` 200 image/png
+  md5 `2c9c5403…`(60353B)、`/favicon.png` 200、`/favicon.svg` 200、
+  `/logo-256.png` 200 且 md5 与 `brand/logo.png` **一致**、`/logo.svg` 200;
+  首页 icon link 仍指向 `/favicon.svg` + `/favicon.png`。
+- 构建产物 `dist/` 与 `public/` 逐一 md5 对齐;JS bundle 内 logo 引用只剩
+  `brand/logo.png`;`dist` 内无残留旧 `logo*.svg`(根 `logo.svg` 为新图)。
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(45 warning 不变);
+vitest **657** 全过(无新增用例);双端构建通过。纯资产 + 构建脚本改动,
+无新增依赖、无建表,`package-lock.json` 不变。
+
+---
+
+## 2026-08-25 · bs — 会话排序:只点一下不该顶到最前,按真实会话时间排
+
+用户报:只要点一下会话框(没发消息),它就被排到最前。
+
+### 根因
+
+侧栏按 `updated_at` 排序,而 `updated_at` 取的是**transcript 文件的 mtime**
+(`readFileTimestamps` 返回 `fileStat.mtime`)。点开一个会话会触发**预热**
+(`POST …/prewarm` → `claude --resume`),SDK 会**碰一下这个 JSONL 的 mtime 却不
+追加任何消息**(实测:点击后行数不变 755、mtime 变成点击时刻、updated_at 随之
+从 11:40 跳到 12:17)。于是文件系统 watcher 一同步,排序键就被"只是点了一下"顶起来了。
+
+### 改法
+
+`updated_at` 改成取**transcript 里最后一条真实消息(user/assistant)的 timestamp**,
+而不是文件 mtime。只读尾部 64KB,从后往前找第一条 user/assistant 且带合法 timestamp
+的行;元数据行(queue-operation / custom-title / summary / compact_boundary 等)一律
+跳过;找不到才回落到 mtime。这样:
+
+- 预热 / resume 碰 mtime 但没说话 → 最后消息时间不变 → **排序不动**;
+- 真发过一轮 → 追加了新的 user/assistant 行 → 时间前移 → 正常排到前面。
+
+### 验证(实测,真实运行的实例 + DB)
+
+- 人为把 updated_at 设成错的 13:30、再 `touch` 文件模拟 resume 摸 mtime → 同步后
+  updated_at **回正**到 `10:02:21.861Z`(最后一条真实消息时间),不是 mtime
+- 浏览器真点会话(触发 prewarm POST,旧代码此处 11:40→12:17):updated_at **保持
+  10:02:21.861Z 不变**
+- 追加一条 timestamp=14:00 的真实 user 消息 → 同步后 updated_at **前移到 14:00**
+- 单测:抽出纯函数 `pickLastActivityTimestamp`,钉住"取最后 user/assistant 时间 /
+  跳过尾部元数据行 / 新一轮前移 / 空与坏行回 undefined / 非法时间跳过",5 项
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(45 warning 不变);
+vitest **657** 全过(新增 5 项);双端构建通过。无新增依赖、无建表,`package-lock.json` 不变。
+
+---
+
+## 2026-08-25 · br — 改完权限徽标不实时刷新,得整页刷新才变
+
+bq 修好了权限本身的互斥,但改完之后**侧栏徽标(公共 / 已共享·N / 锁)不跟着变**,
+必须整页刷新才更新。
+
+### 根因
+
+保存权限的链路是通的:对话框 `onSaved` → `handleSidebarRefresh` → `GET /api/projects`
+(返回里**带**了 `isPublic / ownerUserId / sharedWithViewer / sharedUserCount`)→
+合并 → **`projectsHaveChanges` 判定有没有变,变了才 `setProjects`**。
+
+问题就在这个判定函数:它只比 `projectId / displayName / fullPath / isStarred /
+sessionMeta / sessions` —— **偏偏漏了可见性那四项**。于是改完权限刷新时,新数据
+明明到手了,却因为"这几项没变"被判成"整体没变"→ 不 `setProjects` → 徽标停在旧值。
+只有整页刷新(重新初始化 state)才显示新徽标。
+
+### 改法
+
+`projectsHaveChanges` 补上可见性四项的比较:`isPublic`、`ownerUserId`、
+`sharedWithViewer`、`sharedUserCount` 任一变化都算"变了"。数据早就返回、合并也
+保留了(`mergeExpandedSessionPages` 用的是新对象),补上比较后徽标即时更新。
+
+### 验证
+
+- 确认 `GET /api/projects` 每个项目都带那四个字段(实测返回里有)
+- 新增 6 项单测钉住:四个字段各自变化、以及"公共→个人(isPublic 翻转 + 认领 owner)"
+  都被判为"有变化"(改之前这些会被判"没变",正是徽标不刷新的原因)
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(45 warning,+1 为新测试文件的
+既有风格项);vitest **652** 全过(新增 6 项);双端构建通过。纯前端、无新增依赖、无建表。
+
+---
+
+## 2026-08-25 · bq — 权限三档改不回互斥 + 下载无权限时给提示
+
+用户报的两件事。
+
+### 一、「公共 → 个人」改不回,一直是公共
+
+权限用了两列:`visibility`('public'|null)和 `owner_user_id`(null=无主)。判定可见性时,
+**无主项目只要落在公共目录(`PRISM_PUBLIC_WORKSPACE`)下,就对所有人可见** = 公共。
+
+而"个人"过去只做了 `setProjectVisibility(null)` + 清授权名单,**从不认领归属**。于是
+一个无主、又在公共目录下的项目,选「个人」保存后:`visibility` 是清了,但 owner 仍是
+null → 仍在公共目录下 → 还是所有人可见。看着没变,就是"改回个人还是公共"。
+
+而且**对话框显示的当前档位也是错的**:`readProjectPermissionsView` 把"个人"判成
+"visibility≠public 且无授权",完全没看 owner —— 一个实际公共(无主+公共目录)的项目
+被显示成「个人」,用户点「个人」当然觉得没反应。
+
+两处一起修,保证三档**唯一互斥**:
+
+- **写**:选「个人 / 共享」时,若项目当前**无主**就把归属认领给操作者(对话框
+  「个人 = 仅自己和 root 可见」里的"自己");已有主则不动(避免 root 帮别人改权限时
+  顺手夺走归属)。「公共」= `visibility='public'` + 清授权。
+- **读**:当前档位把"无主 + 公共目录 = 有效公共"也算进去,对话框如实显示「公共」。
+
+### 二、下载没权限时,给一句看得懂的话
+
+文件树下载失败过去统一抛 `Failed to download file` —— 中文界面里一句含糊英文,
+用户读不出"到底没权限还是文件没了",体感就是"点了没反应"。改成按 HTTP 状态分:
+- 401 → 「登录已失效,请重新登录后再下载「x」」
+- 403 / 404 → 「没有权限下载「x」,或该文件已不存在」(files/content 对看不见的项目回 404、越界回 403)
+- 其余 → 「下载「x」失败(HTTP n)」
+
+单文件与文件夹打包两条路都改。
+
+### 验证(实测)
+
+权限(`PRISM_PUBLIC_WORKSPACE=/home`,拿一个无主项目 /home/lw):
+- 初始(无主+公共目录):对话框视图=**public**(改之前会错显示成 personal)
+- PUT personal → DB `owner` 被认领(null→2)、visibility=null → 视图=personal;
+  `canViewerSeeProject`:owner 本人可见、**非 root 他人不可见**
+- PUT public → 视图=public;**再 PUT personal → 视图=personal**(公共→个人这次真的翻过来了)
+- 单测:公共→个人→共享→个人 每步唯一生效,新增 3 项
+
+下载(浏览器,拦截 files/content 强制 403):右键文件→下载 → toast 显示
+**「没有权限下载「readme.txt」,或该文件已不存在」**(改之前是英文 Failed to download file)
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(44 warning 不变);
+vitest **646** 全过(新增 3 项);双端构建通过。无新增依赖、无建表,`package-lock.json` 不变。
+
+---
+
+## 2026-08-25 · bp — 历史加载「补页放弃后彻底卡死」的兜底出口
+
+bj 给历史加载做了自动补页,但留了个死角:极端情形下用户会被彻底卡住,只能靠
+缩小窗口自救。
+
+### 死角是怎么形成的
+
+视口很大、整段又都是被折叠的工具行时,30 轮补页(600 条)仍撑不满容器 →
+永远不出滚动条 → 永远不触发 scroll 事件。而通往「加载全部」浮层的**唯一**入口
+是 `handleScroll` 里"滚到顶部"那一下(`setShowLoadAllOverlay(true)`);滚不动就
+永远不会触发。「向上滚动以加载更多」那行提示本身又不可点。于是补页放弃之后,
+剩下几百条再也没有任何办法加载出来。
+
+### 改法
+
+补页循环一旦放弃(30 轮耗尽 / 撞锁超时 / 取不到下一页),而容器仍滚不动、且
+还没取完,就主动把「加载全部」浮层亮出来(`surfaceLoadAllIfStuck`)——
+给一个**不依赖滚动**的入口。
+
+一个坑:这个浮层原本 2.5 秒后自动淡出(对"滚到顶"的临时提示是对的)。但对
+**卡死**的用户,一个 2.5 秒后消失的按钮等于没有。所以新增 `loadAllStuck` 态:
+卡死兜底亮出来的浮层**常驻、不淡出**,直到用户点它、或会话切换、或取完为止。
+
+### 验证(实测,临时把上限压到 1 轮强制触发)
+
+- 1200 条、纯折叠工具行、1440×1600 视口:补页第 1 轮放弃后容器仍滚不动 →
+  「加载全部消息」按钮出现
+- 等 4 秒(超过 2.5 秒淡出窗口):浮层容器 `opacity` 仍是 **1**(卡死态不淡出)
+- 点按钮 → 提示消失(全部加载)、DOM 渲染出 90 个消息行
+- 正常会话(内容能撑满视口)照旧:补页到能滚就收手,不会弹这个浮层
+
+顺带修了 bj 的过时注释(写"20 轮 400 条",实为 30 轮 600 条)。
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(44 warning 不变);
+vitest **643** 全过;双端构建通过。纯前端、无新增依赖、无建表。
+
+---
+
+## 2026-08-25 · bo — 搜索 SSE 不再把 JWT 塞进 URL
+
+体检发现的令牌泄漏面。每次在侧栏/命令面板搜对话,前端都发
+`GET /api/providers/search/sessions?q=...&token=<7天有效的完整JWT>` —— 而 URL 会进
+反代 access log、浏览器历史。团队早为 **WebSocket** 把这条堵了(`ws-tickets.js`,
+一次性票据,并明确写"没有 `?token=` 回退"),但这条 **SSE** 漏了。
+
+EventSource 发 GET 时设不了 Authorization 头,所以过去只能把凭据放 URL。改法沿用
+WS 那套思路,给 HTTP SSE 加一张短命票据 `sse-tickets.js`:
+
+- 前端先用**带 Bearer 头的 POST** `search/ticket` 换一张 64 位随机票据,再拿它连 SSE;
+  **JWT 不进 URL**,日志里最多留下一张 60 秒后作废的票。
+- 票据**可在有效期内重复消费**(`singleUse:false`)—— EventSource 断线会自动重连、
+  用同一个 URL,一次性票会让重连立刻 401。60 秒窗口够一次搜索及其偶发重连,
+  又短到泄漏无实际价值。
+- `authenticateToken` 现在接受 `?ticket=`(消费票据 → 查 `is_active` 用户 → 放行);
+  遗留的 `?token=<JWT>` **默认不再接受**,只有显式设 `PRISM_ALLOW_QUERY_TOKEN=1`
+  的部署才放行,与 WS 升级那边一致。
+
+### 验证(实测)
+
+- 旧漏洞:`?token=<JWT>` 连 SSE → **401**(默认拒绝)
+- 新流程:POST 换票 → 用票连 SSE → **200 + event 流**;同票重连 → **仍 200**
+- 无票 / 乱票 → **401**
+- 浏览器实测侧栏对话搜索:先 `POST search/ticket`,再
+  `GET search/sessions?q=...&ticket=<T>` —— **URL 里不含 JWT**,无 console error
+- 单测新增 `sse-tickets`(签发/消费/可重复消费/未知票/缺 userId)5 项
+
+门槛:typecheck 双端;eslint `src/ server/` **0 错误**(44 warning 不变);
+vitest **643** 全过(新增 5 项);双端构建通过。无新增依赖、无建表,
+`package-lock.json` 不变。
+
+> 兼容性:若你的部署里有别的东西靠 `?token=` 连过 Prism 的 SSE/接口,
+> 上线后会 401 —— 临时设 `PRISM_ALLOW_QUERY_TOKEN=1` 可恢复旧行为,但那等于
+> 保留泄漏面,建议改用票据。前端自带的搜索已全部切到票据。
+
+---
+
+## 2026-08-25 · bn — 上传分片竞态 + 跨会话流式串味
+
+体检里两条「两个东西同时来就出错」的并发 bug。
+
+### 一、分片同-index 并发到达 → 整单作废
+
+`/land/chunk` 的 `session.nextIndex = index + 1` 在 `await appendChunkFile` **之后**
+才推进。触发场景很现实:反代(nginx 之类,分片上传本来就是为穿它而生)在源站
+还在慢盘 append 时先回 504 → 前端重发**同一片** → 第一个 handler 还没推进
+`nextIndex`,重发的第二个再次通过顺序门 → **两个都 append 到同一个 `.part`**
+(字节还会交错),`received` 翻倍 → complete 命中 `received !== declaredSize` →
+最大 500MB 的整单被判「不完整」作废。重试机制反而帮了倒忙。
+
+**为什么不能只把 `nextIndex` 挪到 await 前**:那样两个**不同** index 的请求会
+同时通过顺序门、同时 append 到同一文件,一样交错。所以「判序 + 追加 + 推进」
+必须在一把**每会话串行锁**里一气呵成(`withSessionLock`):同 index 重发等到锁时
+`nextIndex` 已推进 → 命中幂等分支被丢弃;下一个 index 排在前一个之后再 append,
+顺序不乱。
+
+实测:同 index=0 并发两发,两个都回 `received:1000000`(没翻倍),补完 1、2 后
+complete 成功,落地文件正好 3000000 字节。
+
+### 二、流式缓冲全局共享 → 当前会话气泡显示别的对话
+
+整个 realtime hook 只有**一个** `accumulatedStreamRef`(字符串)和**一个**
+`streamTimerRef`。两条 run 同时向本浏览器推流时(队列自动发到后台会话、多会话
+同时 processing 都会),两路 token 交错进同一个缓冲,100ms 定时器到点把「A+B
+混合文本」刷给其中一个 sid 的气泡。当前所看会话会短暂显示另一段对话的字
+(`complete` 后 `refreshFromServer` 自愈,但看着像串台)。
+
+**改法**:缓冲与定时器都**按 sessionId 分桶**(`Map<string,…>`)。每个会话的
+定时器闭包捕获自己的 sid 与 provider,刷的永远是它自己那段缓冲。`stream_end` /
+`complete` 只清自己这一桶。
+
+### 验证
+
+- 分片竞态:并发同-index 两发不翻倍,complete 成功,落地字节精确(见上)
+- 流式:会话正常渲染、无 pageerror / console error(改的是缓冲键控,渲染路径未动)
+- 门槛:typecheck 双端;eslint `src/ server/` **0 错误**(44 warning 不变);
+  vitest **638** 全过;双端构建通过。无新增依赖、无建表,`package-lock.json` 不变。
+
+---
+
+## 2026-08-25 · bm — 附件配额收口(bl 的三个短板)
+
+bl 上了附件配额,全面体检时发现它**能绕、而且用量会失真**。这轮补死。
+
+### 一、配额预检只看 Content-Length,挡不住 chunked 和并发
+
+`/land`、`/images` 的预检是 `Number(req.headers['content-length']) || 0`:
+
+- **chunked 传输不带这个头** → 预检看到 0 → 一律放行,随后照收最大 500MB;
+- 落盘后**从不按真实字节复检**;
+- 并发多个上传都读到同一份"上传前用量",预检全过,合计可远超上限。
+
+CHANGELOG 上一轮声称"三条路全部 413",只在**串行 + 带 Content-Length** 时成立。
+
+**改法:落盘之后再把一次关**,新增 `commitAttachmentWithinQuota`:在一个
+**同步临界区**里「求和 + 判断 + 记账」一气呵成。为什么这段是原子的 ——
+better-sqlite3 是同步 API、Node 又是单线程,从 `totalBytesForUser` 到 `record`
+之间**没有 await**,并发请求走到这里天然串行,不会两个都读到旧总量再各自放行。
+没过配额就把刚落的文件删掉。预检保留,但只当"开传前快速失败"的优化,真正
+守死账面的是这道。
+
+(落盘发生在临界区之外,并发时磁盘峰值可能短暂超标,但被拒的文件立即删除,
+**最终入账绝不超配额**。硬预留能连磁盘峰值也压住,但要引入预留表+超时回收,
+这轮先把账面守死。)
+
+### 二、`forget()` 是死代码,删了附件配额不释放
+
+`attachmentsDb.forget()` 注释写着"用户在文件树删文件时调用",但**全代码零调用点**。
+后果:在文件树里删掉附件 → 台账不动 → 继续占配额、设置页「附件空间」显示幽灵
+条目,直到 30 天 TTL 才消;极端下会因"已删除的文件"传不了新附件。
+
+**改法**:文件删除路由 `DELETE /api/projects/:id/files` 删成功后,单文件调
+`forget(path)`、目录调新增的 `forgetUnder(dir)`(按 `abs_path` 前缀删,末尾补
+分隔符,不误伤 `attachments-old/`)。
+
+### 三、记账失败 / 落盘后被拒 → 孤儿文件
+
+`/land/complete` 里 `landStagedFile` 已把 `.part` rename 成落地文件之后,若记账
+抛错,catch 走 `dropChunkSession`(unlink 的是已移走的 `.part`,no-op)→ 落地文件
+成了不入台账、不被 TTL 清扫的孤儿。`commit` 现在把"记账失败"也当失败返回
+(`reason:'error'`),三条路(land / parse-html / complete)一律在失败时显式删掉
+已落地的文件。
+
+### 验证
+
+- 配额 3MB、已用 2.4MB,再用 **chunked** 传 2.4MB:落盘后复检 **413**,文件被删,
+  用量停在 2.4MB,目录里只剩 1 个文件(旧代码这里会漏过)
+- 文件树删掉那个 2.4MB 附件:用量 2.5MB → 158KB,`forget` 生效
+- 单元测试:`commitAttachmentWithinQuota` 配额内记账 / 超配额拒且不入账 / 匿名放行;
+  `forgetUnder` 按前缀删不误伤兄弟目录;`sweepExpired` 只删台账记过的文件(bl 已有)
+
+门槛:typecheck 双端通过;eslint `src/ server/` **0 错误**(44 条 warning 不变);
+vitest **638** 项全过(新增 2 项);双端构建通过。无新增依赖、无新建表,
+`package-lock.json` 不变。
+
+---
+
+## 2026-08-25 · bl — 附件搬进项目目录,粘贴/拖放放开到任意文件
+
+三件事一起做,因为它们本来就是同一个问题的三个面。
+
+### 一、附件不该躺在一个全局目录里
+
+原先:聊天图片进 `~/.prism/assets/`,回形针的任意文件进 `~/html-server/staging/`
+—— **所有用户、所有项目、所有会话混在一起**。
+
+这不是不好看的问题,是**归属没法验**:目录是全局的,取文件时只能验"你登录了",
+没法验"这个附件是你的"。上一轮查到的「任一登录用户都能读别人的聊天图片」,
+根子就在这里。
+
+现在落到**会话所属项目**的工作目录下的 `attachments/`:
+
+```
+/home/scrolltest
+├── attachments/            ← 明放在文件树里,用户看得见、也能自己删
+│   ├── .gitignore          ← 自忽略,不会被 git add . 带进仓库
+│   ├── 季度报表-k0yks5.png
+│   └── 75853f29_合同.pdf
+├── src/
+└── README.md
+```
+
+- **归属自动对上**:走 `files/content`,那条路自带项目可见性校验
+- **生命周期对上**:项目删了附件跟着走;项目共享出去,协作者能看见对话里的图
+- **管道本来就铺好了**:信任边界 `isAllowedImageSourcePath` 早就同时接受全局目录
+  和运行 cwd,`ImageAttachmentDescriptor.path` 的注释原文就是 "Project-relative
+  (**preferred**) or absolute"。老图走老路、新图走新路,**不需要数据迁移**。
+
+没落到项目上的会话回落全局目录 —— 不能因为"还没选项目"就不让人传图。
+
+落盘文件名也跟着改了:目录明放在文件树里,`1787648734803-93142742.png` 就是
+一串噪音。改成 `原名-随机后缀.扩展名`,但三条约束一条没松:**扩展名只由已校验的
+MIME 决定**(让上传方定扩展名 + 按扩展名定 Content-Type = 同源 inline HTML,
+而 JWT 就在 localStorage 里)、**不留任何路径分隔符**、**必带随机后缀**防覆盖。
+
+### 二、配额与过期清理
+
+新增 `attachments` 台账表。**清理只删这张表记过的文件** —— `attachments/` 是明放的,
+用户自己也会往里放东西,扫目录做不到这个区分。实测:过期清理删掉了记过账的两个
+附件,用户手放的 `我自己放的.txt` 和 `.gitignore` 一个字节没碰。
+
+- TTL 30 天(`PRISM_ATTACHMENT_TTL_DAYS`),启动跑一次 + 每小时一轮
+- 每用户 10GB(`PRISM_ATTACHMENT_QUOTA_MB`)
+- 分片上传的配额在 **start** 时就拦 —— 传完 400MB 再说"你超了"是最糟的告知时机
+
+设置 →「我的账号」新增「附件空间」:已用/上限、进度条、按类型与按项目的明细、
+最先被清理的几个。只给一个总数是不够的 —— 超限时用户除了发牢骚做不了别的。
+
+### 三、粘贴和拖放,以前只认图片
+
+粘一个 PDF 进对话框:**静默无反应**。没有附件、没有报错、连一个请求都不发。
+根子在 `handleImageFiles` 第一句 `if (!file.type.startsWith('image/')) return false;`
+—— 非图片直接过滤,连条错误都不记。而回形针按钮那条 land 通道本来就什么类型都收,
+**能力是现成的,只是这两个入口没接上去**。
+
+现在按类型分流:图片走图片(随消息以 image 块发给模型),其余任何类型走 land,
+和回形针完全一致。纯文本粘贴照旧原样放过去 —— 拦下来就没法粘代码了。
+
+顺带把 composer 里 16 条面向用户的英文文案清成中文,以及拖放浮层那句写死的
+"Drop images here"(现在收的早就不止图片了)。
+
+### 验证
+
+| 用例 | 结果 |
+|---|---|
+| 带 projectId 传图 | 落 `/home/scrolltest/attachments/small-k0yks5.png` |
+| 带 projectId land 文件 | 落同一目录,`.gitignore` 自动生成 |
+| 不带 projectId | 回落 `/root/.prism/assets/`,行为不变 |
+| 配额 10MB / 已用 19.1MB | 图片、land 直传、land 分片 **三条路全部 413**,中文提示 |
+| TTL 清理 | 删 2 个过期附件释放 20MB;用户手放的文件与 `.gitignore` 未动 |
+| 粘贴 PDF / TXT / ZIP | 各自挂上 chip,`land?projectId=…` 全部 200 |
+| 拖放 PDF / PNG | 分别走 land 与图片,都成功 |
+| 图片历史回读 | 先试 `files/content` 直接 200 —— 顺序按路径形态排,省掉每张图一次必然 404 |
+| 设置页附件空间 | 137 KB / 10.0 GB、13 个附件、按类型与按项目明细正确 |
+
+门槛:typecheck 双端通过;eslint `src/ server/` **0 错误**(44 条 warning,比上轮少一条);
+vitest **636** 项全过(新增 16 项);双端构建通过。
+
+**本轮有新建表**(`attachments`),首次启动自动建,无需手工操作;无新增依赖,
+`package-lock.json` 不变。
+
+---
+
+## 2026-08-25 · bk — PDF 读不了,和一个内联 HTML 的口子
+
+起因是把上传/下载整条链路挨个实测了一遍。**功能本身没问题** —— 文件树上传
+(小文件 / 300KB / 40MB 走分片)、下载(单文件 / 文件夹打包 zip / 40MB / 非 ASCII
+文件名)、聊天图片、20MB 任意文件 land、csv/docx/xlsx 解析、会话导出,逐项核对
+md5 与文件名,全对。挖出来的是另外两件事。
+
+> 顺带记两个**测试环境的假象**,免得以后再误判成产品 bug:
+> Playwright 的 `setInputFiles` 附不上带中文**路径**的文件;容器 locale 是 `POSIX`,
+> Chromium 会把所有非 ASCII 下载名消毒成 `download` —— 连规范的 RFC5987
+> `Content-Disposition` 都一样中招,换 `LANG=C.UTF-8` 后全部正确。
+
+### 一、PDF 读不了
+
+`pdf-parse@1.1.4` 打包的是 **2018 年的 pdf.js v1.10.100**。八个样本里只过两个:
+
+| 样本 | 换之前 | 换之后 |
+|---|---|---|
+| reportlab(默认) | `bad XRef entry` | ✅ |
+| reportlab(canvas) | `Illegal character: 41` | ✅ |
+| reportlab → qpdf 传统 xref | `bad XRef entry` | ✅ |
+| reportlab → qpdf 线性化 | `bad XRef entry` | ✅ |
+| reportlab → qpdf xref stream | ✅ | ✅ |
+| LibreOffice | ✅ | ✅ |
+| Chromium 打印 | ✅ | ✅ |
+| 手写残缺 PDF | `bad XRef entry` | ✅ |
+
+reportlab 是各类系统开发票、出报表的常用生成器,所以这不是边角料。
+
+换成维护中的 **`pdfjs-dist` ^6.2.108**,`pdf-parse` 移除。worker 的对外协议没变
+(`{ok,text,numpages}`,页间 `\f`),父进程那个 30s 硬超时 + `terminate()` 照旧。
+顺带两处:按 pdf.js 的 `hasEOL` 断行(不看它会把整页文字拼成没有空格的一长条),
+以及 `PRISM_PDF_MAX_PAGES`(默认 500)防止几千页的文档把超时预算耗光却什么都没产出。
+
+**这轮有新增依赖,`package-lock.json` 变了 —— 部署时必须跑 `npm install`。**
+
+### 二、报错文案
+
+用户看到的原话是:
+
+```
+Failed to parse document real.pdf: Failed to extract text from real.pdf: PDF parsing failed: bad XRef entry
+```
+
+中文界面里一整句英文,文件名两遍、failed 三遍,而真正的原因被挤到最后 ——
+何况 `bad XRef entry` 对用户既不说明发生了什么,也不提示能怎么办。
+
+三层壳各去一层,认得出的失败单独给话:
+
+```
+无法读取 enc.pdf:这个 PDF 有密码保护,需要先解除加密再上传
+无法读取 x.pdf:这个文件不是有效的 PDF,或者已经损坏
+x.pdf 里没有可提取的文字(可能是扫描件或纯图片 PDF)
+```
+
+### 三、files/content 会内联渲染项目里的 HTML
+
+`GET /api/projects/:id/files/content` 原先是 `mime.lookup()` 直出、不带
+`Content-Disposition`、也没有 CSP。往项目里放一个 `evil.html`,这个路由就会把它
+以 `text/html` **内联渲染在应用同源下**。`nosniff` 挡不住 —— 类型是我们自己
+显式声明的。实测:那份 HTML 里的脚本确实执行了,并把 localStorage 里的
+**整个 JWT 读了出来**。
+
+同仓的 assets 与 preview 两个模块早就为同一件事加过固(注释都写在代码里),
+只有这条没跟上。补上同一套判断:**只有位图 / 音频 / 视频允许 inline,其余一律
+`Content-Disposition: attachment`**,并始终带 `nosniff`。SVG 归到不 inline 那边 ——
+它能带脚本。
+
+应用内的调用方全部是 `authenticatedFetch` + blob(图片查看器、媒体预览、下载、
+打包 zip),fetch 根本不看 `Content-Disposition`,所以**现有功能一点没变**;变的
+只是"直接导航到这个 URL"时的行为:从渲染变成下载。
+
+### 验证
+
+- 八个 PDF 样本全部走通 `/api/documents/parse`(改之前 2/8);docx / xlsx / csv 回归正常
+- 加密 PDF、非 PDF、随机字节 —— 三种坏样本各自给出对应的中文一句话
+- 浏览器实测:导航到 `evil.html` 从"脚本执行 + 读出 JWT"变成 `Download is starting`
+- 应用自己的取文件路径逐个回读:中文名 / 40MB / png / html,`blob.type`、文件名、
+  字节全对 —— 媒体预览不受影响
+- 真实 UI 里附 `real.pdf`:成功挂上附件区(435 字);附 `enc.pdf`:错误卡片一行中文
+
+门槛:typecheck 双端通过;eslint `src/ server/` **0 错误**(45 条既有 warning);
+vitest **620** 项全过(新增 13 项);双端构建通过。
+
+---
+
+## 2026-08-21 · bj — 回看历史消息「叫你滚,又滚不动」
+
+用户报的是"加载慢":回看历史时页面写着「向上滚动以加载更多」,可是**滚不动**。
+
+不是慢,是**死锁**。
+
+### 它是怎么卡死的
+
+加载下一页**只由滚动事件驱动**。而首屏那一页 20 条消息,经过工具行折叠之后
+可能只渲染出**两三个 DOM 行** —— 一整轮 38 次工具调用会被收成一句
+「执行 13 条命令 · 读取 13 个文件 · 搜索 12 次」。
+
+于是:
+
+```
+撑不满容器  →  没有溢出  →  没有滚动条  →  永远不触发 scroll  →  再也不取下一页
+```
+
+提示还立在那儿写着「向上滚动以加载更多」—— 一句用户**物理上做不到**的指令。
+
+复现(360 条消息、每轮 38 次工具调用的会话,900px 视口):
+
+```
+显示 10 / 360 条消息 向上滚动以加载更多
+scrollHeight 695 / clientHeight 695   canScroll = false
+```
+
+剩下的 350 条,等多久都不会来。
+
+### 改法
+
+**先把视口填满,再把方向盘交回给用户。** 内容变化后量一次:还能往上取、
+但容器已经滚不动了,就自动再取一页,直到真的出现溢出或者取完为止。
+
+三个坑都是在实测里一个个撞出来的,记在这儿免得下次再踩:
+
+1. **不能靠 effect 重入驱动循环。** `sessionStore.fetchMore` 在 `return`
+   之前就 `notify()`,React 立刻重渲染、effect 重入 —— 而那一刻上一轮的
+   `isLoadingMoreRef` 还锁着,这一次调用直接空转返回。补一轮就停死
+   (实测 11 → 22 条之后 40 秒不动)。所以循环由 effect 自己拿着。
+
+2. **不能让 cleanup 里的 `cancelled` 收尾。** 取完一页后 `loadOlderMessages`
+   的身份变了,effect 先跑 cleanup 把循环判死、再重跑;重跑那一刻旧循环还停在
+   `await` 里没走到 `finally`,`autoFillBusyRef` 仍是 true,新一轮直接返回。
+   两边互相让路,还是补一轮就停死(实测 92 → 113 条)。
+   **退出条件只认会话** —— 只要还停在同一个会话上,这个循环就一直是它的主人。
+
+3. **「取不到」不等于「没得取」。** `isLoadingMoreRef` 是和用户滚动共用的一把锁,
+   补页途中恢复滚动位置会带出 scroll 事件,`handleScroll` 同样会去抢。撞上锁时
+   `loadOlderMessages` 只返回 false —— 把它当成"取完了"就是提前收工
+   (实测第 8 轮撞锁,停在 92 / 360)。撞锁要**等一等再来**。
+
+还有一个更阴的:**「能滚了」得站得住脚才算数**。补页过程中容器会短暂地高出来
+一点点(加载提示、滚动位置恢复、markdown 二次排版都会),量到那一帧就收手,
+等它缩回去又滚不动了 —— 实测量到 `706 / 695` 判定收工,落定后是 `712 / 712`,
+页面照样是死的。所以量到溢出**先等一下再量一次**,两次都站得住才真收手。
+收工之后内容再缩回去(工具行折叠、窗口变大),还会把循环重新叫起来。
+
+轮次上限 30 是"取不满就停手",不是"取够就行":万一整段都是被折叠的工具调用,
+30 轮之内还撑不满就停下把决定权交给用户 —— 他还有「加载全部」那条路。
+上限不随重新唤起而重置,所以不会没完没了。
+
+### 验证
+
+同一份语料、同一个视口的 A/B(360 条消息,每轮 38 次工具调用):
+
+| | 加载条数 | scrollHeight / clientHeight | 能滚吗 |
+|---|---|---|---|
+| 改之前 | **10 / 360** | 695 / 695 | **否 —— 永久卡死** |
+| 改之后 | 123 / 360 | 848 / 695 | 是 |
+
+改之后再用滚轮往上滚,`scrollHeight` 从 848 涨到 1870,提示消失 —— 360 条全部到齐。
+
+按视口高度自适应,不多取:
+
+| 视口 | 自动补到 | scrollHeight / clientHeight |
+|---|---|---|
+| 700px | 82 条 | 642 / 495 |
+| 900px | 123 条 | 848 / 695 |
+| 1080px | 164 条 | 1054 / 875 |
+
+**正常会话完全不受影响**:另造一个 360 条纯文本对话,首屏 20 条就已经
+`2309 / 695` 撑满了,自动补页**一轮都没跑**,显示条数原地不动还是 20,
+往上滚照常翻页(20 → 80)。
+
+门槛:typecheck 双端通过;eslint `src/ server/` **0 错误**(45 条既有 warning);
+vitest 607 项全过;双端构建通过。
+
+---
+
 ## 2026-08-21 · bi — 公共项目还挂着「已共享给 N 人」
 
 上一轮(bh)修了"共享出去还挂着锁",但**同一个毛病还剩一半没修**,而且我在

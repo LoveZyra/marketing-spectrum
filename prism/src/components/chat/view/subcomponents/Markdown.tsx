@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { memo, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useTranslation } from 'react-i18next';
@@ -10,9 +10,17 @@ import { copyTextToClipboard } from '../../../../utils/clipboard';
 import { usePaletteOps } from '../../../../contexts/PaletteOpsContext';
 import { useTheme } from '../../../../contexts/ThemeContext';
 
+import MermaidDiagram from './MermaidDiagram';
+
 type MarkdownProps = {
   children: React.ReactNode;
   className?: string;
+  /**
+   * 正文还在流式增长中。传下去只影响一件事:代码块先渲染成纯文本块
+   * (布局配色与高亮版一致),等这条消息定稿后再整体上色 —— 避免每个
+   * flush 都对越来越长的代码块全量重新 tokenize。
+   */
+  streaming?: boolean;
 };
 
 // Links to the wider web (or in-page anchors) keep normal browser navigation;
@@ -55,9 +63,35 @@ type CodeBlockProps = {
   inline?: boolean;
   className?: string;
   children?: React.ReactNode;
+  /** 见 MarkdownProps.streaming —— 为真时跳过语法高亮,渲染纯文本块。 */
+  streaming?: boolean;
 };
 
-const CodeBlock = ({ node, inline, className, children, ...props }: CodeBlockProps) => {
+/** mermaid 图右上角的「复制源码」,悬停出现,样式与代码块的复制一致。 */
+const MermaidCopyButton = ({ raw }: { raw: string }) => {
+  const { t } = useTranslation('chat');
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        copyTextToClipboard(raw).then((success) => {
+          if (success) {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          }
+        })
+      }
+      className="absolute right-2 top-2 z-10 rounded-md border border-border bg-card px-2 py-1 text-xs text-body opacity-0 transition-opacity hover:bg-muted focus:opacity-100 active:opacity-100 group-hover:opacity-100"
+      title={copied ? t('codeBlock.copied') : t('codeBlock.copyCode')}
+      aria-label={copied ? t('codeBlock.copied') : t('codeBlock.copyCode')}
+    >
+      {copied ? t('codeBlock.copied') : t('codeBlock.copy')}
+    </button>
+  );
+};
+
+const CodeBlock = ({ node, inline, className, children, streaming, ...props }: CodeBlockProps) => {
   const { t } = useTranslation('chat');
   const { isDarkMode } = useTheme();
   const [copied, setCopied] = useState(false);
@@ -80,6 +114,27 @@ const CodeBlock = ({ node, inline, className, children, ...props }: CodeBlockPro
 
   const match = /language-(\w+)/.exec(className || '');
   const language = match ? match[1] : 'text';
+
+  // mermaid 块渲染成图(F3):流式期间不试渲染(半截源码必然报错),
+  // 定稿后再画;渲染失败回退为下面这个高亮源码块。
+  if (language === 'mermaid' && !streaming) {
+    return (
+      <div className="group relative my-2">
+        <MermaidCopyButton raw={raw} />
+        <MermaidDiagram
+          code={raw}
+          fallback={
+            <CodeHighlighter
+              language="mermaid"
+              customStyle={{ margin: 0, borderRadius: '0.75rem', fontSize: '0.875rem', padding: '1rem' }}
+            >
+              {raw}
+            </CodeHighlighter>
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="group relative my-2">
@@ -133,6 +188,7 @@ const CodeBlock = ({ node, inline, className, children, ...props }: CodeBlockPro
 
       <CodeHighlighter
         language={language}
+        plain={Boolean(streaming)}
         customStyle={{
           margin: 0,
           borderRadius: '0.75rem',
@@ -181,7 +237,12 @@ const markdownComponents = {
   ),
 };
 
-export function Markdown({ children, className }: MarkdownProps) {
+/**
+ * memo 的意义:正文字符串没变就整棵跳过 —— markdown 解析(remark/rehype)
+ * 是聊天列表里最重的纯计算之一,父组件因无关状态重渲时不该重新解析全部历史。
+ * props 里只有 children/className/streaming 三个值类型,浅比较天然成立。
+ */
+export const Markdown = memo(function Markdown({ children, className, streaming }: MarkdownProps) {
   const content = normalizeInlineCodeFences(String(children ?? ''));
   // remark-math / rehype-katex arrive only for content that contains maths;
   // until then these are stable empty arrays and KaTeX is never fetched.
@@ -193,6 +254,7 @@ export function Markdown({ children, className }: MarkdownProps) {
   const components = useMemo(
     () => ({
       ...markdownComponents,
+      code: (props: CodeBlockProps) => <CodeBlock {...props} streaming={streaming} />,
       a: ({ href, children: linkChildren }: { href?: string; children?: React.ReactNode }) => {
         // Prefer the href when it is a real path; otherwise fall back to the
         // link text, since models often emit `[src/foo.ts]()` with an empty href.
@@ -226,7 +288,7 @@ export function Markdown({ children, className }: MarkdownProps) {
         );
       },
     }),
-    [openFileInEditor],
+    [openFileInEditor, streaming],
   );
 
   return (
@@ -236,4 +298,4 @@ export function Markdown({ children, className }: MarkdownProps) {
       </ReactMarkdown>
     </div>
   );
-}
+});

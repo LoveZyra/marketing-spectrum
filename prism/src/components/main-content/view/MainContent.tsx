@@ -13,6 +13,7 @@ import LazyPanel from '../../../shared/view/LazyPanel';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
+import MobileMenuButton from './subcomponents/MobileMenuButton';
 
 // Every tab below the chat tab is already mounted only while it is the active
 // tab, so deferring its module costs nothing and keeps xterm and the plugin
@@ -23,6 +24,7 @@ import MainContentStateView from './subcomponents/MainContentStateView';
 // EditorSidebar also stays eager — it is always rendered — but it lazily loads
 // CodeMirror itself, since it returns null until a file is actually open.
 const FileTree = lazy(() => import('../../file-tree/view/FileTree'));
+const TasksPage = lazy(() => import('../../tasks/TasksPage'));
 const StandaloneShell = lazy(() => import('../../standalone-shell/view/StandaloneShell'));
 const JupyterPanel = lazy(() => import('../../jupyter/JupyterPanel'));
 // Imported by concrete path rather than through the package barrels: the
@@ -108,6 +110,31 @@ function MainContent({
   }
 
   if (!selectedProject) {
+    // 定时任务列表是全局的(不挂在某个项目下),没选项目也照常可看可建 ——
+    // 表单里有自己的项目下拉。其余标签页(聊天/文件/终端)都以项目为前提,
+    // 保持原来的"先选项目"空态。
+    if (activeTab === 'tasks') {
+      return (
+        <div className="flex h-full flex-col">
+          {isMobile && (
+            <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-2">
+              <MobileMenuButton onMenuClick={onMenuClick} compact />
+              <span className="text-sm font-medium text-foreground">{t('tabs.tasks', { defaultValue: '定时任务' })}</span>
+            </div>
+          )}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <LazyPanel label={t('tabs.tasks', { defaultValue: '定时任务' })}>
+              <TasksPage
+                selectedProject={null}
+                selectedSession={selectedSession}
+                setActiveTab={setActiveTab}
+                onNavigateToSession={onNavigateToSession}
+              />
+            </LazyPanel>
+          </div>
+        </div>
+      );
+    }
     return (
       <MainContentStateView mode="empty" isMobile={isMobile} onMenuClick={onMenuClick} activeTab={activeTab} />
     );
@@ -155,6 +182,19 @@ function MainContent({
             <div className="h-full overflow-hidden">
               <LazyPanel label={t('tabs.files')}>
                 <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpen} />
+              </LazyPanel>
+            </div>
+          )}
+
+          {activeTab === 'tasks' && (
+            <div className="h-full overflow-hidden">
+              <LazyPanel label={t('tabs.tasks', { defaultValue: '定时任务' })}>
+                <TasksPage
+                  selectedProject={selectedProject}
+                  selectedSession={selectedSession}
+                  setActiveTab={setActiveTab}
+                  onNavigateToSession={onNavigateToSession}
+                />
               </LazyPanel>
             </div>
           )}

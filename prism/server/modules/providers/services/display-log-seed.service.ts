@@ -34,11 +34,12 @@ export async function seedDisplayLogFromTranscript(sessionId: string): Promise<n
       providerSessionId: session.provider_session_id,
     });
 
-    let seeded = 0;
-    for (const message of result.messages) {
-      if (sessionMessagesDb.append(sessionId, { ...message, sessionId })) seeded += 1;
-    }
-    return seeded;
+    // 整批一个事务(见 appendMany):老会话上千条历史逐条 append 会是上千次独立
+    // 隐式事务,首条消息发送前明显卡顿。
+    return sessionMessagesDb.appendMany(
+      sessionId,
+      result.messages.map((message) => ({ ...message, sessionId })),
+    );
   } catch (error) {
     console.warn('[display-log] seed failed:', (error as Error)?.message || error);
     return 0;

@@ -169,6 +169,31 @@ CREATE TABLE IF NOT EXISTS sessions (
  * 外键会让那一条直接写不进去。清理走 `deleteForSession()` 显式调用。
  */
 export const SESSION_DISPLAY_MESSAGES_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    instructions TEXT NOT NULL,
+    project_path TEXT NOT NULL,
+    session_mode TEXT NOT NULL DEFAULT 'fixed',
+    fixed_session_id TEXT,
+    frequency TEXT NOT NULL DEFAULT 'manual',
+    run_at_hour INTEGER,
+    run_at_minute INTEGER,
+    run_at_weekday INTEGER,
+    run_at_day INTEGER,
+    model TEXT,
+    permission_mode TEXT NOT NULL DEFAULT 'bypassPermissions',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    owner_user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    next_run_at TEXT,
+    last_run_at TEXT,
+    last_run_status TEXT,
+    last_run_detail TEXT,
+    last_run_duration_ms INTEGER,
+    running INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS session_display_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
@@ -177,6 +202,36 @@ CREATE TABLE IF NOT EXISTS session_display_messages (
     timestamp TEXT NOT NULL,
     payload TEXT NOT NULL,
     UNIQUE (session_id, message_id)
+);
+`;
+
+/**
+ * 聊天附件台账。
+ *
+ * 附件本体写在**会话所属项目的工作目录**下的 `attachments/`(没有项目时回落到
+ * 全局目录),这张表只记"谁、什么时候、传了哪个文件、多大" —— 配额和过期清理
+ * 都只认这张表。
+ *
+ * 为什么必须有台账、不能直接扫目录:`attachments/` 在文件树里是明放的,用户
+ * 自己也会往里放东西。**清理只删这张表记过的文件**,用户手工放进去的一个字节
+ * 都不碰 —— 扫目录做不到这个区分。
+ *
+ * `abs_path` 唯一:同一个文件不会记两笔;文件被用户手工删掉时,清扫器把这一行
+ * 一并收走(见 attachments.db.ts 的 sweepExpired)。
+ *
+ * 没有对 `users` 建外键:用户删除时附件该怎么处理是另一件事,不该让台账写入
+ * 依赖用户行还在。
+ */
+export const ATTACHMENTS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    session_id TEXT,
+    project_path TEXT,
+    kind TEXT NOT NULL,
+    abs_path TEXT NOT NULL UNIQUE,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 `;
 
@@ -236,6 +291,13 @@ CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id);
 ${SESSION_DISPLAY_MESSAGES_TABLE_SCHEMA_SQL}
 -- 按会话 + 追加顺序取页,回放的唯一查询路径
 CREATE INDEX IF NOT EXISTS idx_display_messages_session_id ON session_display_messages(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_owner ON scheduled_tasks(owner_user_id);
+
+${ATTACHMENTS_TABLE_SCHEMA_SQL}
+-- 配额按用户求和,清理按时间扫 —— 两条查询各一个索引
+CREATE INDEX IF NOT EXISTS idx_attachments_user_id ON attachments(user_id);
+CREATE INDEX IF NOT EXISTS idx_attachments_created_at ON attachments(created_at);
 
 ${LAST_SCANNED_AT_SQL}
 

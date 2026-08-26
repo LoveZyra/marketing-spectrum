@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 
 import { Button } from '../../../shared/view/ui';
@@ -11,6 +12,7 @@ type ImageViewerProps = {
 };
 
 export default function ImageViewer({ file, onClose }: ImageViewerProps) {
+  const { t } = useTranslation('common');
   const imagePath = `/api/projects/${file.projectId}/files/content?path=${encodeURIComponent(file.path)}`;
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +73,7 @@ export default function ImageViewer({ file, onClose }: ImageViewerProps) {
         <div className="flex min-h-[400px] items-center justify-center bg-muted p-4">
           {loading && (
             <div className="text-center text-muted-foreground">
-              <p>Loading image...</p>
+              <p>{t('imageViewer.loading')}</p>
             </div>
           )}
           {!loading && imageUrl && (

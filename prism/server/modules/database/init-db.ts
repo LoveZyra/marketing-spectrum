@@ -5,6 +5,10 @@ import { INIT_SCHEMA_SQL } from "@/modules/database/schema.js";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 let backupTimer: NodeJS.Timeout | null = null;
+// 首跑是个独立的一次性定时器(启动后约 60s 触发)。它必须也被 stop 清掉:
+// 若恰在这 60s 窗口内 shutdown,首跑的 backupDatabase 会经 getConnection() 把
+// 刚 close 掉的库重新打开 —— 正是 stopDatabaseBackups 想防的那件事。
+let initialBackupTimer: NodeJS.Timeout | null = null;
 
 /**
  * Starts the rolling database backup.
@@ -25,15 +29,22 @@ export const startDatabaseBackups = (): void => {
 
     // Delay the first run so it never competes with startup work (schema,
     // migrations, project scan) for the same write lock.
-    const initial = setTimeout(() => backupDatabase(keep), 60_000);
-    initial.unref();
+    initialBackupTimer = setTimeout(() => {
+        initialBackupTimer = null;
+        backupDatabase(keep);
+    }, 60_000);
+    initialBackupTimer.unref();
 
     backupTimer = setInterval(() => backupDatabase(keep), intervalMs);
     backupTimer.unref();
 };
 
-/** Stops the backup timer. Used by the shutdown path and by tests. */
+/** Stops the backup timers. Used by the shutdown path and by tests. */
 export const stopDatabaseBackups = (): void => {
+    if (initialBackupTimer) {
+        clearTimeout(initialBackupTimer);
+        initialBackupTimer = null;
+    }
     if (backupTimer) {
         clearInterval(backupTimer);
         backupTimer = null;

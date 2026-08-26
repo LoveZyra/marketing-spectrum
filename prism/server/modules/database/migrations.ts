@@ -721,6 +721,10 @@ export const runMigrations = (db: Database) => {
     db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_is_archived ON sessions(isArchived)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_projects_is_starred ON projects(isStarred)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_projects_is_archived ON projects(isArchived)');
+    // 项目列表热路径 getProjectPaths(visibleTo) 按 owner_user_id / visibility 过滤
+    // (owner 本人 OR 公共 OR 被授权),此前这两列都没索引、随项目数线性扫。
+    db.exec('CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_user_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_projects_visibility ON projects(visibility)');
 
     db.exec('DROP INDEX IF EXISTS idx_session_names_lookup');
     db.exec('DROP INDEX IF EXISTS idx_sessions_workspace_path');

@@ -13,6 +13,7 @@ import {
 } from '../middleware/rate-limit.js';
 import { issueTicket, WS_TICKET_TTL_MS } from '../shared/ws-tickets.js';
 import { isApprovalRequired, isRootUser } from '../shared/root-users.js';
+import { broadcastPendingApprovalCount } from '../modules/websocket/index.js';
 
 const router = express.Router();
 const db = getConnection();
@@ -99,6 +100,9 @@ router.post('/register', authRateLimiter, async (req, res) => {
         username: user.username,
         event: 'register_pending',
       });
+
+      // 新注册进了待审队列:立刻把最新待审数推给在线的 root(设置入口红点)。
+      broadcastPendingApprovalCount();
 
       // No token: an account that cannot log in must not be handed a session.
       // The message has to be explicit, or the user reads the success flag and

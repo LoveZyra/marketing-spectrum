@@ -8,7 +8,8 @@
     "chat": "聊天",
     "shell": "终端",
     "files": "文件",
-    "notebook": "Notebook"
+    "notebook": "Notebook",
+    "tasks": "定时任务"
   },
   "status": {
     "completed": "已完成"
@@ -78,7 +79,8 @@
     "toast": {
       "pathCopied": "路径已复制到剪贴板",
       "copyFailed": "复制失败"
-    }
+    },
+    "truncatedNotice": "目录条目过多,仅显示部分内容。可进入子目录查看更多。"
   },
   "projectWizard": {
     "title": "创建新项目",
@@ -163,5 +165,146 @@
     "installHint": "在服务器上安装后重试:",
     "startFailed": "JupyterLab 启动失败",
     "retry": "重试"
+  },
+  "palette": {
+    "title": "命令面板",
+    "pages": {
+      "actions": "动作",
+      "files": "文件",
+      "sessions": "会话"
+    },
+    "backToAll": "返回全部",
+    "backspaceHint": "Backspace 返回上级",
+    "searchPage": "搜索{{page}}…",
+    "searchAnything": "输入以搜索…",
+    "noResults": "没有结果",
+    "groupActions": "动作",
+    "groupNavigate": "导航",
+    "groupSettings": "设置",
+    "groupSessions": "会话",
+    "groupFiles": "文件",
+    "startNewChat": "新建会话",
+    "selectProjectFirst": "请先选择项目",
+    "openSettings": "打开设置",
+    "toggleTheme": "切换主题",
+    "goToChat": "前往聊天",
+    "goToFiles": "前往文件",
+    "goToShell": "前往终端",
+    "settingsPrefix": "设置：{{label}}",
+    "browseAllSessions": "浏览全部会话（{{count}}）",
+    "browseAllFiles": "浏览全部文件（{{count}}）"
+  },
+  "reasoning": {
+    "thinking": "思考中…",
+    "thoughtFewSeconds": "思考了几秒",
+    "thoughtSeconds": "思考了 {{duration}} 秒"
+  },
+  "tooltips": {
+    "exportSessionFailed": "导出会话失败,请重试。"
+  },
+  "folderBrowser": {
+    "title": "选择文件夹",
+    "loadFailed": "加载文件夹失败",
+    "createFailed": "创建文件夹失败",
+    "hideHidden": "隐藏以点开头的文件夹",
+    "showHidden": "显示以点开头的文件夹",
+    "createNew": "新建文件夹",
+    "newFolderName": "新文件夹名称",
+    "create": "创建",
+    "cancel": "取消",
+    "path": "路径：",
+    "noSubfolders": "没有子文件夹",
+    "select": "选择"
+  },
+  "imageViewer": {
+    "loading": "图片加载中…"
+  },
+  "tasksPage": {
+    "title": "定时任务",
+    "subtitle": "按计划或随时手动执行任务，结果写进目标会话。服务端调度，浏览器关了也照跑。",
+    "searchPh": "搜索任务…",
+    "newTask": "新建任务",
+    "createWithClaude": "让 Claude 创建",
+    "setupManually": "手动填写表单",
+    "loading": "加载中…",
+    "empty": "还没有定时任务。点右上角「新建任务」,让 Claude 问齐细节帮你建,或自己填表。",
+    "noMatch": "没有匹配的任务。",
+    "back": "返回任务列表",
+    "edit": "编辑",
+    "delete": "删除",
+    "running": "运行中",
+    "runNow": "立即运行",
+    "enabled": "启用中",
+    "paused": "已暂停",
+    "history": "运行记录",
+    "statusOk": "成功",
+    "statusFail": "失败",
+    "neverRan": "还没有跑过。",
+    "openSession": "打开目标会话 →",
+    "instructions": "执行指令",
+    "target": "目标",
+    "fixedSession": "固定会话",
+    "newSession": "每次新建会话",
+    "repeats": "重复",
+    "nextRun": "下一次：{{when}}",
+    "execution": "执行配置",
+    "modelIs": "模型 {{model}}",
+    "defaultModel": "默认模型",
+    "confirmDelete": "删除定时任务「{{name}}」？此操作不可撤销。",
+    "runStarted": "任务已开始执行，可进入目标会话旁观。",
+    "alreadyRunning": "任务正在运行中",
+    "freq": {
+      "manual": "手动触发",
+      "hourly": "每小时 :{{minute}}",
+      "daily": "每天 {{time}}",
+      "weekdays": "工作日 {{time}}",
+      "weekly": "每{{day}} {{time}}",
+      "monthly": "每月 {{day}} 号 {{time}}"
+    },
+    "freqOpt": {
+      "hourly": "每小时",
+      "daily": "每天",
+      "weekdays": "工作日",
+      "weekly": "每周",
+      "monthly": "每月"
+    },
+    "form": {
+      "createTitle": "新建定时任务",
+      "editTitle": "编辑定时任务",
+      "name": "名称",
+      "namePh": "例如：每日晨报",
+      "instructions": "执行指令",
+      "instructionsPh": "到点后发给 Claude 的消息，例如：汇总昨日日志的关键指标成表格。",
+      "pickProject": "选择项目…",
+      "defaultModel": "默认模型",
+      "frequency": "频率",
+      "time": "时刻",
+      "manualHint": "只在点「立即运行」时执行",
+      "sessionMode": "会话",
+      "sessionFixed": "固定会话（历史连续，推荐）",
+      "sessionNew": "每次新建会话",
+      "permissions": "权限",
+      "permAuto": "自动执行（无人值守）",
+      "permEdits": "自动批准编辑",
+      "permDefault": "默认（工具需审批，无人在会挂起）",
+      "required": "名称、指令、项目都不能为空",
+      "cancel": "取消",
+      "save": "保存任务",
+      "saving": "保存中…",
+      "targetSession": "目标会话",
+      "targetSessionAuto": "自动新建一个并固定(默认)"
+    },
+    "claudeStarted": "已把需求发给 Claude,到对话页继续聊即可。",
+    "needProject": "先在左侧选一个项目,再让 Claude 帮你建任务。",
+    "select": {
+      "noMatch": "没有匹配项",
+      "searchProjects": "搜索项目…",
+      "searchSessions": "搜索会话…",
+      "browseFolder": "选择其它目录…"
+    },
+    "fixedSessionPending": "首次运行时自动创建并固定",
+    "newTaskHint": "选择创建方式:让 Claude 问齐细节,或自己填表",
+    "createWithClaudeHint": "说一句需求,缺的细节它会问你",
+    "setupManuallyHint": "自己填名称、频率、目标会话"
   }
 }

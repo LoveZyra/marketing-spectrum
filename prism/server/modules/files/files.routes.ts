@@ -7,7 +7,7 @@ import express, { type RequestHandler, type Router } from 'express';
 import mime from 'mime-types';
 import multer from 'multer';
 
-import { projectsDb, resolveVisibleProjectRoot } from '@/modules/database/index.js';
+import { attachmentsDb, projectsDb, resolveVisibleProjectRoot } from '@/modules/database/index.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
 import {
   getFileTree,
@@ -43,6 +43,20 @@ const FILE_TREE_ALLOW_EXTERNAL_READ = /^(1|true|yes|on)$/i.test(
 const formatUploadSizeLabel = (megabytes: number): string => (
   megabytes % 1024 === 0 ? `${megabytes / 1024}GB` : `${megabytes}MB`
 );
+
+/**
+ * 允许在浏览器里 inline 呈现的类型:只有位图、音频、视频。
+ *
+ * 名单之外的一律 `Content-Disposition: attachment` —— 包括 HTML、SVG(能带脚本)、
+ * XML、以及任何"看起来无害"的文本类型。这里宁可窄:名单里少一个类型,最坏结果
+ * 是直接导航时变成下载(应用内的 blob 读取完全不受影响);名单里多一个能承载
+ * 脚本的类型,就是一个同源的存储型 XSS。
+ */
+export function isInlineSafeContentType(mimeType: string): boolean {
+  const type = mimeType.split(';', 1)[0].trim().toLowerCase();
+  if (type === 'image/svg+xml') return false;
+  return type.startsWith('image/') || type.startsWith('audio/') || type.startsWith('video/');
+}
 
 const MAX_FILE_UPLOAD_SIZE_MB = 1024;
 const MAX_FILE_UPLOAD_SIZE_BYTES = MAX_FILE_UPLOAD_SIZE_MB * 1024 * 1024;
@@ -376,7 +390,10 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       const resolved = validation.resolved;
 
       const content = await fsPromises.readFile(resolved, 'utf8');
-      res.json({ content, path: resolved });
+      // 带上 mtime 作保存冲突检测的基线(D1)。前端保存时回传,不一致就 409。
+      let mtimeMs: number | null = null;
+      try { mtimeMs = (await fsPromises.stat(resolved)).mtimeMs; } catch { /* 读得到内容通常也 stat 得到,取不到就置空、退化为不检测 */ }
+      res.json({ content, path: resolved, mtimeMs });
     } catch (error) {
       console.error('Error reading file:', error);
       const code = (error as NodeJS.ErrnoException).code;
@@ -424,9 +441,28 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         return res.status(404).json({ error: 'File not found' });
       }
 
-      // Get file extension and set appropriate content type
+      /**
+       * 类型照实报,但**只有媒体类才允许 inline 呈现**,其余一律按附件下发。
+       *
+       * 加固之前这里是 `mime.lookup()` 直出、不带 Content-Disposition、也没有 CSP:
+       * 项目里放一个 `evil.html`,这个路由就会把它以 `text/html` 内联渲染在应用
+       * **同源**下。`nosniff` 挡不住 —— 类型是我们自己显式声明的。实测那份 HTML
+       * 里的脚本确实执行了,并把 localStorage 里的整个 JWT 读了出来。
+       *
+       * 同仓的 assets 与 preview 两个模块早就为同一件事加过固(见
+       * image-assets.service.ts 的注释、static-content.service.ts 的白名单 + CSP),
+       * 只有这条没跟上。
+       *
+       * 应用内的调用方全部是 `authenticatedFetch` + blob(图片查看器、媒体预览、
+       * 下载、打包 zip),fetch 根本不看 Content-Disposition,所以这里加了不影响
+       * 任何现有功能 —— 变的只是"直接导航到这个 URL"时的行为:从渲染变成下载。
+       */
       const mimeType = mime.lookup(resolved) || 'application/octet-stream';
       res.setHeader('Content-Type', mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      if (!isInlineSafeContentType(mimeType)) {
+        res.setHeader('Content-Disposition', 'attachment');
+      }
 
       // Stream the file
       const fileStream = fs.createReadStream(resolved);
@@ -453,7 +489,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       // Named route params are always plain strings at runtime; the express
       // typings widen them to string | string[] (repeatable params).
       const projectId = req.params.projectId as string;
-      const { filePath, content } = req.body;
+      const { filePath, content, baseMtimeMs } = req.body;
 
       // Security: ensure the requested path is inside the project root
       if (!filePath) {
@@ -477,12 +513,36 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
       const resolved = validation.resolved;
 
+      // 保存冲突检测(D1):前端加载时拿到的 mtime 作基线,保存时回传。若磁盘上的
+      // 当前 mtime 与基线不符,说明这期间别人(Claude / 另一用户 / 外部编辑)改过 ——
+      // 无条件 writeFile 就是"最后写入者赢"、悄悄覆盖别人的改动(多用户 IDE 高频
+      // 事故)。回 409 让前端提示"磁盘已变化:重载 / 仍覆盖"。基线缺省(旧前端 / 新建
+      // 文件)时退化为不检测,保持兼容。
+      if (typeof baseMtimeMs === 'number') {
+        try {
+          const currentMtimeMs = (await fsPromises.stat(resolved)).mtimeMs;
+          // 留 1ms 容差:某些文件系统 mtime 精度有限。
+          if (Math.abs(currentMtimeMs - baseMtimeMs) > 1) {
+            return res.status(409).json({
+              error: '文件在你编辑期间被改动过,保存已中止以免覆盖。请重载后再改,或选择仍然覆盖。',
+              code: 'FILE_MODIFIED',
+              currentMtimeMs,
+            });
+          }
+        } catch {
+          // stat 失败(文件被删等):交给下面的 writeFile 处理/报错。
+        }
+      }
+
       // Write the new content
       await fsPromises.writeFile(resolved, content, 'utf8');
+      let newMtimeMs: number | null = null;
+      try { newMtimeMs = (await fsPromises.stat(resolved)).mtimeMs; } catch { /* 忽略 */ }
 
       res.json({
         success: true,
         path: resolved,
+        mtimeMs: newMtimeMs,
         message: 'File saved successfully'
       });
     } catch (error) {
@@ -764,8 +824,13 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       // Delete based on type
       if (stats.isDirectory()) {
         await fsPromises.rm(resolvedPath, { recursive: true, force: true });
+        // 附件台账按绝对路径记账;删掉整个目录就把它名下所有附件行一并收走,
+        // 否则用户手删了 attachments/ 里的东西,配额与设置页用量会一直挂着
+        // 幽灵条目,直到 30 天 TTL 才消(forget() 此前是死代码,没有任何调用点)。
+        attachmentsDb.forgetUnder(resolvedPath);
       } else {
         await fsPromises.unlink(resolvedPath);
+        attachmentsDb.forget(resolvedPath);
       }
 
       res.json({

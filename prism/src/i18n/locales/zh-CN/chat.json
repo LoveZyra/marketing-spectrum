@@ -63,7 +63,12 @@
     },
     "attachmentPath": "路径",
     "modelHint": "当前模型：{{model}} · 点击切换",
-    "queueShort": "加入队列"
+    "queueShort": "加入队列",
+    "attachDocuments": "附加文档（PDF、Word、Excel、PPT…）",
+    "attachUrl": "抓取网页作为上下文",
+    "attachUrlPrompt": "输入要抓取正文的网址：",
+    "removeDocument": "移除文档",
+    "parsingDocument": "正在解析文档…"
   },
   "providerSelection": {
     "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜索会话、文件和提交"
@@ -216,7 +221,8 @@
       "todo": "更新任务清单 {{count}} 次",
       "mcp": "外部工具 {{count}} 次",
       "tool": "其它工具 {{count}} 次",
-      "thinking": "思考 {{count}} 次"
+      "thinking": "思考 {{count}} 次",
+      "narration": "说明 {{count}} 段"
     },
     "foldedCount": "+{{count}}",
     "collapseRun": "收起"
@@ -236,5 +242,113 @@
   },
   "compactSummary": {
     "title": "上下文已压缩 —— 早前的对话折成了一份摘要"
+  },
+  "askUser": {
+    "title": "等待你的回答",
+    "other": "自定义…",
+    "typeAnswer": "输入你的回答…",
+    "skip": "跳过",
+    "skipAll": "全部跳过",
+    "back": "上一题",
+    "next": "下一题",
+    "submit": "提交"
+  },
+  "plan": {
+    "title": "实施计划",
+    "generating": "正在生成计划…",
+    "rawParams": "原始参数",
+    "build": "开始实施",
+    "revise": "继续修改"
+  },
+  "fork": {
+    "editRerun": "编辑重跑",
+    "editRerunTitle": "从这里分叉：编辑此消息并重新运行"
+  },
+  "commandResult": {
+    "builtins": {
+      "models": "浏览当前提供方的可用模型。",
+      "cost": "查看当前会话的 token 用量。",
+      "status": "查看运行时、版本、提供方与环境状态。",
+      "memory": "打开项目的 CLAUDE.md 记忆文件。",
+      "config": "打开设置与配置。",
+      "help": "显示命令文档与语法。"
+    },
+    "filterCommands": "筛选命令…",
+    "noDescription": "暂无描述。",
+    "unknown": "未知",
+    "changeModelFailed": "暂时无法切换模型。",
+    "refreshModels": "从提供方刷新模型列表",
+    "activeModel": "当前模型",
+    "nextBadge": "→ 下一轮起 {{model}}",
+    "sessionScopeNote": "你的选择将在下一次回复起对本会话生效。",
+    "defaultScopeNote": "你的选择将成为新回合的默认模型。",
+    "totalTokens": "总 token 用量",
+    "inputTokens": "输入 token",
+    "outputTokens": "输出 token",
+    "breakdown": "明细",
+    "unavailable": "不可用",
+    "contextWindow": "上下文窗口",
+    "package": "软件包",
+    "help": {
+      "eyebrow": "命令中心",
+      "title": "帮助与快捷键",
+      "subtitle": "不离开聊天即可检索内置命令、语法与用法。"
+    },
+    "models": {
+      "eyebrow": "模型选择",
+      "title": "选择模型",
+      "subtitle": "为当前提供方挑选要使用的模型。"
+    },
+    "cost": {
+      "eyebrow": "会话统计",
+      "title": "Token 用量",
+      "subtitle": "本会话的输入、输出与总 token 数。",
+      "model": "模型",
+      "provider": "提供方"
+    },
+    "status": {
+      "eyebrow": "运行状态",
+      "title": "系统状态",
+      "subtitle": "版本、提供方、运行时与环境信息一览。",
+      "package": "软件包",
+      "version": "版本",
+      "uptime": "运行时长",
+      "provider": "提供方",
+      "model": "模型",
+      "node": "Node.js",
+      "platform": "平台",
+      "memory": "内存",
+      "runtimeOnline": "运行时在线",
+      "processResponding": "进程 {{pid}} 正常响应。",
+      "healthy": "健康"
+    },
+    "fallbackTitle": "命令结果",
+    "closeAria": "关闭命令结果弹窗",
+    "escHint": "按 Esc 关闭。",
+    "sessionCost": "本会话累计费用"
+  },
+  "retry": {
+    "lastTurn": "重发上一条消息"
+  },
+  "findBar": {
+    "placeholder": "在对话中查找…",
+    "noMatches": "无结果",
+    "previous": "上一个 (Shift+Enter)",
+    "next": "下一个 (Enter)",
+    "close": "关闭 (Esc)"
+  },
+  "mermaid": {
+    "renderFailed": "mermaid 图渲染失败,已显示源码。"
+  },
+  "subagent": {
+    "groupTitle": "运行 {{count}} 个子代理",
+    "totalSteps": "共 {{count}} 步",
+    "steps": "{{count}} 步",
+    "runningCount": "{{count}} 个进行中",
+    "defaultTitle": "子代理任务",
+    "promptLabel": "指令:",
+    "resultLabel": "子代理汇报",
+    "noStepsYet": "还没有步骤 —— 子代理正在启动。",
+    "failed": "子代理执行失败:"
   }
 }

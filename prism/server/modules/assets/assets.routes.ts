@@ -1,33 +1,55 @@
 import fsSync, { promises as fs } from 'node:fs';
 
 import express from 'express';
-import mime from 'mime-types';
 import multer from 'multer';
 
 import {
+  buildAttachmentFilename,
   buildStoredImageRecords,
-  canonicalExtensionForMimeType,
-  ensureImageAssetsDir,
   inlineContentTypeForFile,
   isAllowedImageMimeType,
   resolveImageAssetFile,
 } from '@/modules/assets/services/image-assets.service.js';
+import { attachmentsDb, resolveVisibleProjectRoot } from '@/modules/database/index.js';
+import {
+  checkQuota,
+  commitAttachmentWithinQuota,
+  ensureAttachmentDir,
+  quotaExceededMessage,
+} from '@/shared/attachment-storage.js';
+import { readRequestViewer } from '@/shared/project-visibility.js';
 
 const router = express.Router();
 
-// Multer writes uploads straight into the global assets folder; the service
-// owns the folder location and the response record shape.
+/**
+ * 这次上传该落到哪个目录。
+ *
+ * `projectId` 走 **query** 而不是 multipart 字段:multer 是流式解析的,
+ * `req.body` 要等整个 body 收完才齐,而 `destination` 在**第一个文件字节到达前**
+ * 就要给出答案。放 query 里就不依赖字段与文件在 multipart 里的先后顺序。
+ *
+ * 解析不出可见项目时回落全局目录 —— 会话还没落到项目上是正常状态,不能因此
+ * 不让人传图。
+ */
+function resolveUploadTarget(req: express.Request): { dir: string; projectPath: string | null } {
+  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+  const projectRoot = projectId
+    ? resolveVisibleProjectRoot(readRequestViewer(req), projectId)
+    : null;
+  return ensureAttachmentDir(projectRoot);
+}
+
+// 落盘目录按会话所属项目走(拿不到项目时回落全局);文件名由服务生成。
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    ensureImageAssetsDir()
-      .then((assetsDir) => cb(null, assetsDir))
-      .catch((error) => cb(error as Error, ''));
+    try {
+      cb(null, resolveUploadTarget(req).dir);
+    } catch (error) {
+      cb(error as Error, '');
+    }
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    // 扩展名只由已校验的 MIME 决定,上传方给的文件名一个字符都不进磁盘名。
-    // 原始文件名仍会作为展示名返回(buildStoredImageRecords 用 originalname)。
-    cb(null, `${uniqueSuffix}${canonicalExtensionForMimeType(file.mimetype)}`);
+    cb(null, buildAttachmentFilename(file.originalname, file.mimetype));
   },
 });
 
@@ -51,15 +73,55 @@ const upload = multer({
  * returns their absolute paths for use in provider prompts and chat history.
  */
 router.post('/images', (req, res) => {
+  const viewer = readRequestViewer(req);
+  const declaredBytes = Number(req.headers['content-length']) || 0;
+  const verdict = checkQuota(viewer.userId as number | null, declaredBytes);
+  if (!verdict.ok) {
+    return res.status(413).json({ error: quotaExceededMessage(verdict) });
+  }
+
   upload.array('images', 5)(req, res, (err: unknown) => {
     if (err) {
-      const message = err instanceof Error ? err.message : 'Upload failed';
+      const message = err instanceof Error ? err.message : '上传失败';
       return res.status(400).json({ error: message });
     }
 
     const files = Array.isArray(req.files) ? req.files : [];
     if (files.length === 0) {
-      return res.status(400).json({ error: 'No image files provided' });
+      return res.status(400).json({ error: '没有收到图片文件' });
+    }
+
+    const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : null;
+    const target = resolveUploadTarget(req);
+
+    // 落盘后按真实字节逐个把关(预检那道 Content-Length 挡不住 chunked 与并发)。
+    // 一批图要么全部入账,要么全部删掉回滚 —— composer 是把这几张当一组附件的,
+    // 半成功只会让人困惑。
+    const committed: { absPath: string; userId: number | null }[] = [];
+    let failure: { reason?: 'quota' | 'error'; usedBytes: number; quotaBytes: number } | null = null;
+    for (const file of files) {
+      const absPath = `${file.destination}/${file.filename}`;
+      const commit = commitAttachmentWithinQuota({
+        userId: viewer.userId as number | null,
+        sessionId,
+        projectPath: target.projectPath,
+        kind: 'image',
+        absPath,
+        bytes: file.size,
+      });
+      if (!commit.ok) { failure = commit; break; }
+      committed.push({ absPath, userId: viewer.userId as number | null });
+    }
+
+    if (failure) {
+      // 回滚:删掉本批已记账的行与其文件,以及还没记账的剩余文件。
+      for (const done of committed) attachmentsDb.forget(done.absPath);
+      for (const file of files) {
+        fs.unlink(`${file.destination}/${file.filename}`).catch(() => {});
+      }
+      return failure.reason === 'quota'
+        ? res.status(413).json({ error: quotaExceededMessage(failure) })
+        : res.status(500).json({ error: '图片保存失败,请重试' });
     }
 
     res.json({ images: buildStoredImageRecords(files) });

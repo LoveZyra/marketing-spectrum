@@ -196,6 +196,8 @@ export default tseslint.config(
             "server/shared/preview-tickets.js", // short-lived, directory-scoped editor preview tickets
             "server/shared/project-visibility.js", // one owner-visibility rule for list + broadcast
             "server/shared/ticket-store.js", // 一次性/可重用票据的通用实现,ws 与预览票据共用
+            "server/shared/attachment-storage.ts", // 聊天附件落盘目录、配额与过期清理
+            "server/shared/sse-tickets.js", // HTTP SSE 的短命票据(搜索 SSE 用,替代 URL 里的 JWT)
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },

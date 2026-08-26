@@ -4,6 +4,7 @@ import express, { type RequestHandler, type Router } from 'express';
 
 import { auditLogDb, userDb, type ApprovalStatus } from '@/modules/database/index.js';
 import { collectServerStatus } from '@/modules/admin/services/server-status.service.js';
+import { broadcastPendingApprovalCount } from '@/modules/websocket/index.js';
 
 // bcrypt 不带类型声明(auth.js 是纯 JS 无所谓,这里是 TS)。只用到 hash 一个
 // 方法,自己给个最小签名,别为一个函数引 @types 依赖。
@@ -67,6 +68,9 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): Router
         event: status === 'approved' ? 'user_approved' : 'user_rejected',
         detail: `target user id ${targetUserId}`,
       });
+
+      // 审批落定即推最新待审数 —— 所有在线 root 的红色角标立刻消/更新。
+      broadcastPendingApprovalCount();
 
       res.json({ success: true, userId: targetUserId, approvalStatus: status });
     };

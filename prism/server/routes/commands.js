@@ -332,6 +332,9 @@ Custom commands can be created in:
     const computedUsed = inputTokens + outputTokens;
     const hasTokenBreakdown = computedUsed > 0;
     const used = Math.max(reportedUsed, computedUsed);
+    // 会话累计费用(F4):来自 SDK result 帧的 total_cost_usd,经 token_budget
+    // 状态帧透传到前端 tokenBudget,再随 /cost 的 context 走到这里。
+    const costUsd = Number(tokenUsage.costUsd ?? tokenUsage.total_cost_usd ?? 0) || 0;
 
     return {
       type: "builtin",
@@ -341,6 +344,7 @@ Custom commands can be created in:
           used,
           total,
         },
+        ...(costUsd > 0 ? { costUsd } : {}),
         ...(hasTokenBreakdown
           ? {
               tokenBreakdown: {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -60,7 +60,7 @@ function AppContentInner() {
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { sendMessage, subscribe, isConnected } = useWebSocket();
   const pendingApprovalCount = usePendingApprovalCount(Boolean(useAuth().user?.isRoot));
-  const { preferences: uiPreferences } = useUiPreferences();
+  const { preferences: uiPreferences, setPreference } = useUiPreferences();
   // 折叠后只留图标轨:侧栏与它的外层边框一起不渲染
   const isSidebarCollapsed = !isMobile && !uiPreferences.sidebarVisible;
 
@@ -98,6 +98,26 @@ function AppContentInner() {
     isMobile,
     activeSessions: processingSessions,
   });
+
+  /**
+   * 切标签页时自动收放项目侧栏(用户点名)。
+   *
+   * 聊天要靠侧栏挑会话,所以进聊天就展开;定时任务 / 终端 / 文件 / Notebook
+   * 都是"整页内容",侧栏在那儿只是占宽,自动折叠成图标轨。
+   *
+   * 只在 activeTab **变化**的那一拍写偏好:
+   * - 同一个标签页里用户手动开合不会被这条规则覆盖回去;
+   * - ref 用当前标签页初始化,所以**首次挂载不动手** —— 刷新页面时保留用户
+   *   上次存下的展开/折叠状态,而不是一进来就强行展开。
+   * 移动端侧栏是抽屉(由 sidebarOpen 管),这条规则不适用。
+   */
+  const lastAutoCollapseTabRef = useRef(activeTab);
+  useEffect(() => {
+    if (isMobile) return;
+    if (lastAutoCollapseTabRef.current === activeTab) return;
+    lastAutoCollapseTabRef.current = activeTab;
+    setPreference('sidebarVisible', activeTab === 'chat');
+  }, [activeTab, isMobile, setPreference]);
 
   // Queued messages for sessions that finish while another session (or none)
   // is being viewed are sent from here; the viewed session's composer handles

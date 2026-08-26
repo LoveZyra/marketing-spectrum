@@ -19,13 +19,14 @@
  *   - zip-based formats (docx/pptx/xlsx/xlsm) are pre-scanned with JSZip and
  *     stream-inflated with byte counters before mammoth/xlsx see the buffer
  *     (zip-bomb caps: entries, per-entry, total uncompressed).
- *   - pdf-parse runs inside a worker_thread with a hard terminate() deadline.
+ *   - pdf.js (pdfjs-dist) runs inside a worker_thread with a hard terminate() deadline.
  *   - plain text decoding: strict UTF-8 -> GB18030 -> Shift_JIS -> Latin-1.
  *
  * Env vars (all optional):
  *   PRISM_DOC_MAX_CHARS          per-document extracted text cap (default 200000)
  *   PRISM_URL_FETCH_TIMEOUT_MS   overall fetch-url deadline (default 20000)
- *   PRISM_PDF_TIMEOUT_MS         pdf-parse worker deadline (default 30000)
+ *   PRISM_PDF_TIMEOUT_MS         PDF worker deadline (default 30000)
+ *   PRISM_PDF_MAX_PAGES          pages read per PDF (default 500)
  *   PRISM_DOC_MAX_UNCOMPRESSED   total uncompressed zip cap in bytes (default 200MB)
  */
 
@@ -44,6 +45,14 @@ import multer from 'multer';
 import express from 'express';
 
 import { isPrivateIp } from '../shared/ip-guard.js';
+import {
+  checkQuota,
+  commitAttachmentWithinQuota,
+  ensureAttachmentDir,
+  quotaExceededMessage,
+} from '../shared/attachment-storage.js';
+import { readRequestViewer } from '../shared/project-visibility.js';
+import { resolveVisibleProjectRoot } from '../modules/database/project-access.js';
 
 const router = express.Router();
 
@@ -55,7 +64,7 @@ function intFromEnv(name, fallback) {
 
 const MAX_DOC_BYTES = 20 * 1024 * 1024; // 20MB upload cap (/parse — buffered in memory)
 // /land takes a much larger cap than /parse because the two do different work:
-// /parse must hand a whole Buffer to mammoth/xlsx/pdf-parse, so its ceiling is
+// /parse must hand a whole Buffer to mammoth/xlsx/pdf.js, so its ceiling is
 // bounded by RAM, while /land only relays bytes to disk and never materializes
 // them in the heap. Keep MB and BYTES derived from one number so the cap and
 // the error message can never drift apart.
@@ -131,18 +140,35 @@ function fixFilename(name) {
 // (upload.sh translates the name to English). Staging is not served, so a real
 // (e.g. Chinese) name on disk is fine; Node fs handles UTF-8. Named landHtmlFile
 // for historical reasons — it handles arbitrary file types.
-function reserveStagedPath(originalname) {
-  fs.mkdirSync(HTML_STAGING_DIR, { recursive: true });
+function reserveStagedPath(originalname, targetDir) {
+  const dir = targetDir || HTML_STAGING_DIR;
+  fs.mkdirSync(dir, { recursive: true });
   const safeName = path.basename(originalname || 'upload');
   const prefix = crypto.randomBytes(4).toString('hex');
   const filename = `${prefix}_${safeName}`;
-  return { filename, diskPath: path.join(HTML_STAGING_DIR, filename) };
+  return { filename, diskPath: path.join(dir, filename) };
+}
+
+/**
+ * 这次附件该落到哪个目录。
+ *
+ * `projectId` 走 query,和 /api/assets/images 一致:multer 是流式解析的,
+ * `req.body` 要等 body 收完才齐,而目录在第一个字节到达前就得定下来。
+ * 解析不出可见项目就回落到全局 staging —— 会话还没落到项目上是正常状态。
+ */
+function resolveAttachmentTarget(req, explicitProjectId) {
+  const projectId = explicitProjectId
+    || (typeof req.query?.projectId === 'string' ? req.query.projectId : '');
+  const projectRoot = projectId
+    ? resolveVisibleProjectRoot(readRequestViewer(req), projectId)
+    : null;
+  return ensureAttachmentDir(projectRoot);
 }
 
 // Buffer variant — used by /parse, whose multer instance is memory-backed
 // because the parsers downstream need the bytes in hand anyway.
-function landHtmlFile(originalname, buffer) {
-  const landed = reserveStagedPath(originalname);
+function landHtmlFile(originalname, buffer, targetDir) {
+  const landed = reserveStagedPath(originalname, targetDir);
   fs.writeFileSync(landed.diskPath, buffer);
   return landed;
 }
@@ -150,8 +176,8 @@ function landHtmlFile(originalname, buffer) {
 // Path variant — used by /land, whose multer instance already streamed the
 // upload to .incoming. Moving is a metadata operation on the common case, so a
 // 500MB attachment costs the same as a 5KB one and never touches the heap.
-function landStagedFile(originalname, tempPath) {
-  const landed = reserveStagedPath(originalname);
+function landStagedFile(originalname, tempPath, targetDir) {
+  const landed = reserveStagedPath(originalname, targetDir);
   try {
     fs.renameSync(tempPath, landed.diskPath);
   } catch (error) {
@@ -334,10 +360,10 @@ async function assertZipSafe(buffer) {
 const PDF_WORKER_URL = new URL('../workers/pdf-extract.worker.js', import.meta.url);
 
 /**
- * Run pdf-parse inside a worker_thread with a hard deadline. pdf-parse (pdf.js)
- * can spin the CPU indefinitely on hostile PDFs; on the main thread that would
- * freeze the whole server and could not be interrupted. worker.terminate()
- * kills the parse reliably. Protocol: {ok,text,numpages} | {ok:false,error}.
+ * Run pdf.js inside a worker_thread with a hard deadline. It can spin the CPU
+ * indefinitely on hostile PDFs; on the main thread that would freeze the whole
+ * server and could not be interrupted. worker.terminate() kills the parse
+ * reliably. Protocol: {ok,text,numpages} | {ok:false,error}.
  */
 function runPdfWorker(buffer) {
   return new Promise((resolve, reject) => {
@@ -370,7 +396,9 @@ function runPdfWorker(buffer) {
       if (msg && msg.ok) {
         settle(resolve, { text: msg.text || '', numpages: msg.numpages ?? null });
       } else {
-        settle(reject, validationError(`PDF parsing failed: ${(msg && msg.error) || 'unknown error'}`));
+        // worker 回的 error 已经是一句能直接给用户看的话,不再套壳 —— 每套一层,
+        // 用户最终看到的就多一句 "xxx failed:",而真正的原因被推到最后。
+        settle(reject, validationError((msg && msg.error) || 'PDF parsing failed'));
       }
     });
     worker.once('error', (error) => {
@@ -599,7 +627,24 @@ router.post('/parse', upload.single('document'), async (req, res) => {
     // The agent decides what to do based on the user's prompt (publish via
     // /upload-html, or analyze via Read). File is NOT public until published.
     if (ext === '.html' || ext === '.htm') {
-      const landed = landHtmlFile(name, req.file.buffer);
+      const htmlTarget = resolveAttachmentTarget(req);
+      const landed = landHtmlFile(name, req.file.buffer, htmlTarget.dir);
+      // 落盘后按真实字节做最终配额把关(预检那道 Content-Length 挡不住 chunked
+      // 和并发)。没过就把刚落的文件删掉,绝不留一个不入台账的孤儿。
+      const commit = commitAttachmentWithinQuota({
+        userId: readRequestViewer(req).userId,
+        sessionId: typeof req.query?.sessionId === 'string' ? req.query.sessionId : null,
+        projectPath: htmlTarget.projectPath,
+        kind: 'file',
+        absPath: landed.diskPath,
+        bytes: req.file.size,
+      });
+      if (!commit.ok) {
+        fs.promises.unlink(landed.diskPath).catch(() => {});
+        return commit.reason === 'quota'
+          ? res.status(413).json({ error: quotaExceededMessage(commit) })
+          : res.status(500).json({ error: '附件保存失败,请重试' });
+      }
       const text = buildHtmlUploadNotice(name, landed);
       return res.json({
         name,
@@ -622,13 +667,13 @@ router.post('/parse', upload.single('document'), async (req, res) => {
       raw = await extractor(req.file.buffer);
     } catch (error) {
       return res.status(422).json({
-        error: `Failed to extract text from ${name}: ${error.message}`,
+        error: `无法读取 ${name}:${error.message}`,
       });
     }
 
     const { text, truncated } = capText(raw);
     if (!text) {
-      return res.status(422).json({ error: `No extractable text found in ${name}` });
+      return res.status(422).json({ error: `${name} 里没有可提取的文字(可能是扫描件或纯图片 PDF)` });
     }
 
     res.json({ name, ext: ext || null, chars: text.length, truncated, text, kind: 'text' });
@@ -664,6 +709,12 @@ const landUpload = multer({
 });
 
 router.post('/land', (req, res) => {
+  const viewer = readRequestViewer(req);
+  const verdict = checkQuota(viewer.userId, Number(req.headers['content-length']) || 0);
+  if (!verdict.ok) {
+    return res.status(413).json({ error: quotaExceededMessage(verdict) });
+  }
+
   // Invoked manually rather than as route middleware so a limit breach becomes
   // a JSON error the composer can display, instead of falling through to
   // express's default HTML error page.
@@ -679,19 +730,36 @@ router.post('/land', (req, res) => {
       discardTempFile();
       const code = uploadError?.code;
       if (code === 'LIMIT_FILE_SIZE') {
-        return res.status(413).json({ error: `File too large. Maximum size is ${MAX_LAND_MB}MB.` });
+        return res.status(413).json({ error: `文件太大,单个附件最多 ${MAX_LAND_MB}MB。` });
       }
       if (code === 'LIMIT_FILE_COUNT') {
-        return res.status(400).json({ error: 'Only one file can be attached at a time.' });
+        return res.status(400).json({ error: '一次只能附一个文件。' });
       }
-      return res.status(500).json({ error: uploadError?.message || 'Upload failed' });
+      return res.status(500).json({ error: uploadError?.message || '上传失败' });
     }
 
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!req.file) return res.status(400).json({ error: '没有收到文件' });
 
     try {
       const name = fixFilename(req.file.originalname || 'file');
-      const landed = landStagedFile(name, req.file.path);
+      const target = resolveAttachmentTarget(req);
+      const landed = landStagedFile(name, req.file.path, target.dir);
+      const commit = commitAttachmentWithinQuota({
+        userId: viewer.userId,
+        sessionId: typeof req.query?.sessionId === 'string' ? req.query.sessionId : null,
+        projectPath: target.projectPath,
+        kind: 'file',
+        absPath: landed.diskPath,
+        bytes: req.file.size,
+      });
+      if (!commit.ok) {
+        // landStagedFile 已把临时文件 rename 成 landed,discardTempFile 此时是
+        // no-op —— 得显式删这个已落地的文件,否则它成为不入台账、不被清扫的孤儿。
+        fs.promises.unlink(landed.diskPath).catch(() => {});
+        return commit.reason === 'quota'
+          ? res.status(413).json({ error: quotaExceededMessage(commit) })
+          : res.status(500).json({ error: '附件保存失败,请重试' });
+      }
       const text = buildHtmlUploadNotice(name, landed);
       // kind:'path' — `text` is the staged disk path; see the /parse .html branch.
       res.json({ name, chars: text.length, truncated: false, text, kind: 'path', diskPath: landed.diskPath });
@@ -748,6 +816,24 @@ function appendChunkFile(partPath, chunkPath) {
   });
 }
 
+/**
+ * 每个上传会话一把串行锁。
+ *
+ * 分片必须**严格按序追加**到同一个 `.part`,否则拼出来的文件坏得很安静。
+ * 光把 `nextIndex` 挪到 await 之前是不够的:那样两个**不同** index 的请求会
+ * 同时通过顺序门、同时 append 到同一文件,字节级交错。所以整个「判序 + 追加 +
+ * 推进」必须在一把锁里做完:
+ *   - 同一 index 的重发:等到锁时 `nextIndex` 已推进 → 命中幂等分支被丢弃
+ *     (旧代码里两个都通过、都追加,`received` 翻倍,整单在 complete 被判废);
+ *   - 下一个 index:排在前一个之后再 append,顺序不乱。
+ */
+function withSessionLock(session, fn) {
+  const prev = session._appendLock || Promise.resolve();
+  let release;
+  session._appendLock = new Promise((resolve) => { release = resolve; });
+  return prev.then(() => fn()).finally(() => release());
+}
+
 /** 取出并校验会话;失败时已经把响应写完,调用方直接返回即可。 */
 function getChunkSession(req, res) {
   const uploadId = req.body?.uploadId || req.query?.uploadId;
@@ -796,7 +882,12 @@ router.post('/land/start', (req, res) => {
     return res.status(400).json({ error: 'size is required' });
   }
   if (declaredSize > MAX_LAND_BYTES) {
-    return res.status(413).json({ error: `File too large. Maximum size is ${MAX_LAND_MB}MB.` });
+    return res.status(413).json({ error: `文件太大,单个附件最多 ${MAX_LAND_MB}MB。` });
+  }
+  // 配额在**开传之前**就拦 —— 传完 400MB 再说"你超了"是最糟的告知时机。
+  const verdict = checkQuota(req.user?.id ?? null, declaredSize);
+  if (!verdict.ok) {
+    return res.status(413).json({ error: quotaExceededMessage(verdict) });
   }
   const uploadId = crypto.randomBytes(16).toString('hex');
   const partPath = chunkPartPath(uploadId);
@@ -813,6 +904,11 @@ router.post('/land/start', (req, res) => {
     declaredSize,
     nextIndex: 0,
     userId: req.user?.id ?? null,
+    // 落盘目录在 complete 时才用得上,但**必须在 start 时就记下来** ——
+    // complete 请求上没有 projectId,现取会回落到全局目录,分片上传的文件
+    // 就和直传的文件落到两个地方去了。
+    projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : null,
+    sessionId: typeof req.body?.sessionId === 'string' ? req.body.sessionId : null,
     updatedAt: Date.now(),
   });
   res.json({ uploadId, chunkBytes: LAND_CHUNK_BYTES });
@@ -862,36 +958,41 @@ router.post('/land/chunk', (req, res) => {
       discardTempFile();
       return res.status(400).json({ error: 'index must be a non-negative integer' });
     }
-    // 已收过的分片重复到达(客户端重试时很常见):幂等地当成功处理,不重复追加。
-    if (index < session.nextIndex) {
-      discardTempFile();
-      return res.json({ received: session.received, nextIndex: session.nextIndex });
-    }
-    if (index !== session.nextIndex) {
-      discardTempFile();
-      return res.status(409).json({ error: `Out-of-order chunk: expected ${session.nextIndex}, got ${index}` });
-    }
 
-    // 总量上限在服务端累加校验 —— 客户端声明的 size 只是提示,不能当约束。
-    const chunkSize = req.file.size || 0;
-    if (session.received + chunkSize > MAX_LAND_BYTES) {
-      discardTempFile();
-      dropChunkSession(uploadId);
-      return res.status(413).json({ error: `File too large. Maximum size is ${MAX_LAND_MB}MB.` });
-    }
+    // 判序 + 追加 + 推进必须在同一把会话锁里一气呵成 —— 否则同 index 的并发重发
+    // 会两个都通过、都追加,received 翻倍,整单在 complete 被判「不完整」作废。
+    await withSessionLock(session, async () => {
+      // 已收过的分片重复到达(客户端重试常见):幂等当成功,不重复追加。
+      if (index < session.nextIndex) {
+        discardTempFile();
+        return res.json({ received: session.received, nextIndex: session.nextIndex });
+      }
+      if (index !== session.nextIndex) {
+        discardTempFile();
+        return res.status(409).json({ error: `Out-of-order chunk: expected ${session.nextIndex}, got ${index}` });
+      }
 
-    try {
-      await appendChunkFile(session.partPath, req.file.path);
-      session.received += chunkSize;
-      session.nextIndex = index + 1;
-      session.updatedAt = Date.now();
-      res.json({ received: session.received, nextIndex: session.nextIndex });
-    } catch (error) {
-      dropChunkSession(uploadId);
-      res.status(500).json({ error: error.message });
-    } finally {
-      discardTempFile();
-    }
+      // 总量上限在服务端累加校验 —— 客户端声明的 size 只是提示,不能当约束。
+      const chunkSize = req.file.size || 0;
+      if (session.received + chunkSize > MAX_LAND_BYTES) {
+        discardTempFile();
+        dropChunkSession(uploadId);
+        return res.status(413).json({ error: `File too large. Maximum size is ${MAX_LAND_MB}MB.` });
+      }
+
+      try {
+        await appendChunkFile(session.partPath, req.file.path);
+        session.received += chunkSize;
+        session.nextIndex = index + 1;
+        session.updatedAt = Date.now();
+        res.json({ received: session.received, nextIndex: session.nextIndex });
+      } catch (error) {
+        dropChunkSession(uploadId);
+        res.status(500).json({ error: error.message });
+      } finally {
+        discardTempFile();
+      }
+    });
   });
 });
 
@@ -912,21 +1013,37 @@ router.post('/land/complete', (req, res) => {
 
   if (session.received === 0) {
     dropChunkSession(uploadId);
-    return res.status(400).json({ error: 'No chunks received' });
+    return res.status(400).json({ error: '没有收到任何分片' });
   }
   // 声明大小与实收不符 = 中途掉了片。宁可整单作废,也不把一个残缺文件交给 agent ——
   // 半截 CSV 不会报错,只会让后面的分析悄悄算错。
   if (session.declaredSize && session.received !== session.declaredSize) {
     dropChunkSession(uploadId);
     return res.status(400).json({
-      error: `Incomplete upload: expected ${session.declaredSize} bytes, received ${session.received}.`,
+      error: `上传不完整:应收 ${session.declaredSize} 字节,实收 ${session.received} 字节。请重试。`,
     });
   }
 
   try {
-    const landed = landStagedFile(session.name, session.partPath);
-    // .part 已被 rename 走,这里只能摘会话,不能再走 dropChunkSession 的 unlink。
+    const target = resolveAttachmentTarget(req, session.projectId);
+    const landed = landStagedFile(session.name, session.partPath, target.dir);
+    const commit = commitAttachmentWithinQuota({
+      userId: readRequestViewer(req).userId,
+      sessionId: session.sessionId || null,
+      projectPath: target.projectPath,
+      kind: 'file',
+      absPath: landed.diskPath,
+      bytes: session.received,
+    });
+    // .part 已被 rename 走,dropChunkSession 的 unlink 此时是 no-op;无论成功
+    // 与否都先摘会话,失败时再显式删已落地的文件(否则成孤儿)。
     chunkSessions.delete(uploadId);
+    if (!commit.ok) {
+      fs.promises.unlink(landed.diskPath).catch(() => {});
+      return commit.reason === 'quota'
+        ? res.status(413).json({ error: quotaExceededMessage(commit) })
+        : res.status(500).json({ error: '附件保存失败,请重试' });
+    }
     const text = buildHtmlUploadNotice(session.name, landed);
     res.json({
       name: session.name,

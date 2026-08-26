@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { authenticatedFetch } from '../../../utils/api';
+import { useToast } from '../../../shared/view/ui';
 import type {
   ApiKeyItem,
   ApiKeysResponse,
@@ -32,6 +33,12 @@ export function useCredentialsSettings({
   confirmDeleteApiKeyText,
   confirmDeleteGithubCredentialText,
 }: UseCredentialsSettingsArgs) {
+  const { toast } = useToast();
+  // 这些操作原先失败只 console(fetchData 失败还会显示误导性的"空列表")。逐个
+  // 补上提示 —— 删/停用一把 key 却没反应,用户没法判断是成功了还是没成功。
+  const notifyFailure = useCallback((message: string) => {
+    toast({ message, variant: 'error' });
+  }, [toast]);
   const [apiKeys, setApiKeys] = useState<ApiKeyItem[]>([]);
   const [githubCredentials, setGithubCredentials] = useState<GithubCredentialItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -125,14 +132,16 @@ export function useCredentialsSettings({
       if (!response.ok) {
         const payload = await response.json() as ApiKeysResponse;
         console.error('Error deleting API key:', getApiError(payload, 'Failed to delete API key'));
+        notifyFailure(getApiError(payload, '删除 API Key 失败'));
         return;
       }
 
       await fetchData();
     } catch (error) {
       console.error('Error deleting API key:', error);
+      notifyFailure('删除 API Key 出错,请重试');
     }
-  }, [confirmDeleteApiKeyText, fetchData]);
+  }, [confirmDeleteApiKeyText, fetchData, notifyFailure]);
 
   const toggleApiKey = useCallback(async (keyId: string, isActive: boolean) => {
     try {
@@ -144,14 +153,16 @@ export function useCredentialsSettings({
       if (!response.ok) {
         const payload = await response.json() as ApiKeysResponse;
         console.error('Error toggling API key:', getApiError(payload, 'Failed to toggle API key'));
+        notifyFailure(getApiError(payload, '切换 API Key 状态失败'));
         return;
       }
 
       await fetchData();
     } catch (error) {
       console.error('Error toggling API key:', error);
+      notifyFailure('切换 API Key 状态出错,请重试');
     }
-  }, [fetchData]);
+  }, [fetchData, notifyFailure]);
 
   const createGithubCredential = useCallback(async () => {
     if (!newGithubName.trim() || !newGithubToken.trim()) {
@@ -172,6 +183,7 @@ export function useCredentialsSettings({
       const payload = await response.json() as GithubCredentialsResponse;
       if (!response.ok || !payload.success) {
         console.error('Error creating GitHub credential:', getApiError(payload, 'Failed to create GitHub credential'));
+        notifyFailure(getApiError(payload, '创建 GitHub 凭证失败'));
         return;
       }
 
@@ -183,8 +195,9 @@ export function useCredentialsSettings({
       await fetchData();
     } catch (error) {
       console.error('Error creating GitHub credential:', error);
+      notifyFailure('创建 GitHub 凭证出错,请重试');
     }
-  }, [fetchData, newGithubDescription, newGithubName, newGithubToken]);
+  }, [fetchData, newGithubDescription, newGithubName, newGithubToken, notifyFailure]);
 
   const deleteGithubCredential = useCallback(async (credentialId: string) => {
     if (!window.confirm(confirmDeleteGithubCredentialText)) {
@@ -199,14 +212,16 @@ export function useCredentialsSettings({
       if (!response.ok) {
         const payload = await response.json() as GithubCredentialsResponse;
         console.error('Error deleting GitHub credential:', getApiError(payload, 'Failed to delete GitHub credential'));
+        notifyFailure(getApiError(payload, '删除 GitHub 凭证失败'));
         return;
       }
 
       await fetchData();
     } catch (error) {
       console.error('Error deleting GitHub credential:', error);
+      notifyFailure('删除 GitHub 凭证出错,请重试');
     }
-  }, [confirmDeleteGithubCredentialText, fetchData]);
+  }, [confirmDeleteGithubCredentialText, fetchData, notifyFailure]);
 
   const toggleGithubCredential = useCallback(async (credentialId: string, isActive: boolean) => {
     try {
@@ -218,14 +233,16 @@ export function useCredentialsSettings({
       if (!response.ok) {
         const payload = await response.json() as GithubCredentialsResponse;
         console.error('Error toggling GitHub credential:', getApiError(payload, 'Failed to toggle GitHub credential'));
+        notifyFailure(getApiError(payload, '切换 GitHub 凭证状态失败'));
         return;
       }
 
       await fetchData();
     } catch (error) {
       console.error('Error toggling GitHub credential:', error);
+      notifyFailure('切换 GitHub 凭证状态出错,请重试');
     }
-  }, [fetchData]);
+  }, [fetchData, notifyFailure]);
 
   const copyToClipboard = useCallback(async (text: string, id: string) => {
     try {

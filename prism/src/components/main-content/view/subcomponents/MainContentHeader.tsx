@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useToast } from '../../../../shared/view/ui';
 import { downloadSessionExport } from '../../../../utils/session-export';
 import type { MainContentHeaderProps } from '../../types/types';
 
@@ -24,6 +25,7 @@ export default function MainContentHeader({
   isPersistentSession = false,
 }: MainContentHeaderProps) {
   const { t } = useTranslation('common');
+  const { toast } = useToast();
   const [isExporting, setIsExporting] = useState(false);
 
   const showExport = activeTab === 'chat' && Boolean(selectedSession);
@@ -38,7 +40,8 @@ export default function MainContentHeader({
         (selectedSession.summary as string) || 'session',
       );
     } catch {
-      // 静默失败与侧栏导出一致:接口错误时不打断当前会话。
+      // 失败给提示,不再静默(点了没反应最困惑);当前会话不受影响。
+      toast({ message: t('tooltips.exportSessionFailed', { defaultValue: '导出会话失败,请重试。' }), variant: 'error' });
     } finally {
       setIsExporting(false);
     }

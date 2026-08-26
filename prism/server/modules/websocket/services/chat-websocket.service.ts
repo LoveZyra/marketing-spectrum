@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import type { WebSocket } from 'ws';
 
-import { canViewerSeeSession, sessionsDb } from '@/modules/database/index.js';
+import { canViewerSeeSession, sessionMessagesDb, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { seedDisplayLogFromTranscript } from '@/modules/providers/index.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
@@ -14,7 +14,7 @@ import type {
   AuthenticatedWebSocketRequest,
   LLMProvider,
 } from '@/shared/types.js';
-import { parseIncomingJsonObject } from '@/shared/utils.js';
+import { generateMessageId, parseIncomingJsonObject } from '@/shared/utils.js';
 
 /**
  * Trust boundary for client-supplied image attachments: chat.send options come
@@ -249,6 +249,43 @@ async function handleChatSend(
 
   const clientOptions = (data.options ?? {}) as AnyRecord;
   const command = typeof data.content === 'string' ? data.content : '';
+  const sanitizedImages = filterImagesToUploadStore(clientOptions.images);
+
+  /**
+   * 隐藏上下文(ck 轮):随消息附带、只给模型看的补充说明。
+   *
+   * 「让 Claude 创建定时任务」把一次性票据和接口用法装在这里 —— 页面气泡和
+   * 显示日志只落用户那句人话,发给运行时的提示词= 人话 + 隐藏块。来源是已
+   * 登录前端自己(和 content 同一信任级),截断到 16KB 防滥用;转发给运行时
+   * 的 options 里剥掉它,不让它顺流进 provider 的参数层。
+   */
+  const hiddenContext = typeof clientOptions.hiddenContext === 'string'
+    ? clientOptions.hiddenContext.slice(0, 16_384).trim()
+    : '';
+  delete clientOptions.hiddenContext;
+
+  /**
+   * 把**用户这条消息本身**写进显示日志。
+   *
+   * 日志的其它内容都从出站帧收口(ChatSessionWriter.forward),但用户的消息是
+   * 入站的,从来没有对应的出站帧 —— 于是显示日志时代(az 起)的会话刷新页面后
+   * **用户气泡整段消失**(活着的页面靠前端乐观回显撑着,才一直没露馅),连带
+   * 重载后「编辑重跑 / ↑ 历史回填 / 失败重试」全部失灵(它们都以历史里的用户行
+   * 为锚)。这里直接落库、**不**外发帧:在线端已有乐观气泡,再广播会双;
+   * 刷新后前端的 local_ 乐观行会被这份服务端拷贝正常去重(hasServerEchoForLocalUser)。
+   */
+  if (command.trim()) {
+    sessionMessagesDb.append(sessionId, {
+      id: generateMessageId('user'),
+      sessionId,
+      timestamp: new Date().toISOString(),
+      provider,
+      kind: 'text',
+      role: 'user',
+      content: command,
+      ...(Array.isArray(sanitizedImages) && sanitizedImages.length > 0 ? { images: sanitizedImages } : {}),
+    } as Parameters<typeof sessionMessagesDb.append>[1]);
+  }
 
   // The provider runtimes receive the provider-native session id (that is the
   // id their CLI/SDK understands for resume). Brand-new sessions have no
@@ -258,7 +295,7 @@ async function handleChatSend(
     ...clientOptions,
     // Image attachments are re-validated server-side: only files inside the
     // global upload store may reach the provider runtimes' file reads.
-    images: filterImagesToUploadStore(clientOptions.images),
+    images: sanitizedImages,
     sessionId: session.provider_session_id ?? undefined,
     // Gateway run identifier: the Claude runtime registers its abort handle
     // under this id so `chat.abort` works even before the provider-native
@@ -275,7 +312,7 @@ async function handleChatSend(
   };
 
   try {
-    await spawnFn(command, runtimeOptions, run.writer);
+    await spawnFn(hiddenContext ? `${command}\n\n${hiddenContext}` : command, runtimeOptions, run.writer);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[Chat] Provider runtime "${provider}" failed`, { sessionId, error: message });

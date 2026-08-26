@@ -98,12 +98,31 @@ export default function ApiKeysSection({
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {/* 状态与动作分离:原来一颗按钮上写「激活」,分不清是"当前已激活"
+                    还是"点我去激活"。现在左边是**状态**(圆点 + 使用中/已停用,
+                    不可点),右边是**动作**(停用/启用,动词,点了会发生什么一目了然)。 */}
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs ${
+                    key.is_active
+                      ? 'border-primary/30 bg-primary/10 text-foreground'
+                      : 'border-border bg-muted text-muted-foreground'
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${key.is_active ? 'bg-primary' : 'bg-muted-foreground/60'}`}
+                    aria-hidden
+                  />
+                  {key.is_active ? t('apiKeys.status.active') : t('apiKeys.status.inactive')}
+                </span>
                 <Button
                   size="sm"
-                  variant={key.is_active ? 'outline' : 'secondary'}
+                  variant="outline"
                   onClick={() => onToggleApiKey(key.id, key.is_active)}
+                  title={key.is_active
+                    ? t('apiKeys.action.disableHint', { defaultValue: '停用后,用这把密钥的请求会被拒绝' })
+                    : t('apiKeys.action.enableHint', { defaultValue: '启用后,这把密钥即可用于外部 API 请求' })}
                 >
-                  {key.is_active ? t('apiKeys.status.active') : t('apiKeys.status.inactive')}
+                  {key.is_active ? t('apiKeys.action.disable') : t('apiKeys.action.enable')}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => onDeleteApiKey(key.id)}>
                   <Trash2 className="h-4 w-4" />

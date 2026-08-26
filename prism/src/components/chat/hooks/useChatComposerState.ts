@@ -31,6 +31,8 @@ import type {
 import type { Project, ProjectSession, LLMProvider, ProviderModelsCacheInfo } from '../../../types/app';
 import { escapeRegExp } from '../utils/chatFormatting';
 import { buildDocsBlock, type AttachedDoc } from '../utils/attachmentPrompt';
+import { draftStorageKey } from '../utils/composerDrafts';
+import { stepHistoryWalk, type HistoryWalkState } from '../utils/composerHistory';
 
 /**
  * prism: 分片落盘。反向代理(nginx/openresty)的 client_max_body_size 会在请求到
@@ -60,18 +62,33 @@ const fetchLandLimits = async (): Promise<{ chunkBytes: number }> => {
 
 type LandPayload = { name?: string; text?: string; chars?: number; truncated?: boolean };
 
+/**
+ * 附件落盘要落到**会话所属项目**的 attachments/ 下,所以每条上传都得带上
+ * projectId。分片上传特别注意:projectId 必须在 **start** 时就交给服务端 ——
+ * complete 请求上没有它,现取会回落到全局目录,同一个功能的文件就落到两处去了。
+ */
+const attachmentQuery = (projectId?: string | null, sessionId?: string | null): string => {
+  const params = new URLSearchParams();
+  if (projectId) params.set('projectId', projectId);
+  if (sessionId) params.set('sessionId', sessionId);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+};
+
 const landFileInChunks = async (
   file: File,
   chunkBytes: number,
   onPercent: (percent: number) => void,
+  projectId?: string | null,
+  sessionId?: string | null,
 ): Promise<LandPayload> => {
   const started = await authenticatedFetch('/api/documents/land/start', {
     method: 'POST',
-    body: JSON.stringify({ name: file.name, size: file.size }),
+    body: JSON.stringify({ name: file.name, size: file.size, projectId, sessionId }),
   });
   const startPayload = await started.json().catch(() => ({}));
   if (!started.ok) {
-    throw new Error(startPayload?.error || `Upload start failed (${started.status})`);
+    throw new Error(startPayload?.error || `上传没能开始(HTTP ${started.status})`);
   }
   const uploadId: string = startPayload.uploadId;
   const effectiveChunk = Number(startPayload.chunkBytes) || chunkBytes;
@@ -186,6 +203,11 @@ interface UseChatComposerStateArgs {
   addMessage: (msg: ChatMessage) => void;
   setIsUserScrolledUp: (isScrolledUp: boolean) => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
+  /**
+   * 当前会话里用户已发送消息的正文,按时间顺序(旧→新)。↑ 键历史回填用。
+   * 通过函数惰性取值,避免把整个消息数组当依赖传进 composer。
+   */
+  getUserMessageHistory?: () => string[];
 }
 
 interface MentionableFile {
@@ -228,6 +250,8 @@ export type CostCommandData = {
     input?: number;
     output?: number;
   };
+  /** 会话累计费用(美元),来自 SDK result 帧;拿不到时缺席。 */
+  costUsd?: number;
   provider?: string;
   model?: string;
 };
@@ -329,12 +353,19 @@ export function useChatComposerState({
   addMessage,
   setIsUserScrolledUp,
   setPendingPermissionRequests,
+  getUserMessageHistory,
 }: UseChatComposerStateArgs) {
   const [input, setInput] = useState(() => {
-    if (typeof window !== 'undefined' && selectedProject) {
-      // Draft inputs are keyed by the DB projectId so per-project drafts
-      // survive display-name changes.
-      return safeLocalStorage.getItem(`draft_input_${selectedProject.projectId}`) || '';
+    if (typeof window !== 'undefined') {
+      // 草稿按会话分键(新建会话页退回项目键)—— 见 composerDrafts.ts。
+      const key = draftStorageKey(selectedSession?.id || currentSessionId || null, selectedProject?.projectId);
+      const saved = key ? safeLocalStorage.getItem(key) || '' : '';
+      // cj 版遗留的带票据建任务话术不恢复(与下方换草稿 effect 同一条规则)。
+      if (saved && /X-Prism-Task-Ticket|\/api\/tasks\/via-ticket/.test(saved)) {
+        if (key) safeLocalStorage.removeItem(key);
+        return '';
+      }
+      return saved;
     }
     return '';
   });
@@ -363,11 +394,20 @@ export function useChatComposerState({
   // Prism: pending fork descriptor for edit-and-rerun. When set, the next send
   // starts a brand-new session branched off the parent's native conversation.
   const pendingForkRef = useRef<{ providerSessionId: string; resumeSessionAt: string | null } | null>(null);
+  // Prism(ck):随下一次发送附带的隐藏上下文(只给模型看,不进气泡/显示日志)。
+  // 「让 Claude 创建定时任务」用它携带一次性票据与接口说明。构包时消费并清空;
+  // 回合占线被排队(isLoading 早退)时 ref 原样保留,排队消息自动重发再消费。
+  // 极端情况(掉线入队)隐藏块不随重发 —— 重新点一次入口即可。
+  const pendingHiddenContextRef = useRef<string | null>(null);
   const selectedProjectId = selectedProject?.projectId;
   // Prefer the stable backend-allocated id (selectedSession.id) but fall back
   // to currentSessionId for a just-established session that hasn't been
   // handed back to the parent's `selectedSession` prop yet.
   const sessionKey = selectedSession?.id || currentSessionId || null;
+  // 输入草稿的当前存储键(会话优先,新建会话页退回项目键)。
+  const activeDraftKey = draftStorageKey(sessionKey, selectedProjectId);
+  // ↑/↓ 历史回看状态;打字/发送/切会话都会清掉它。
+  const historyWalkRef = useRef<HistoryWalkState>(null);
 
   const [queuedDraft, setQueuedDraft] = useState<QueuedDraft | null>(() => {
     if (typeof window === 'undefined' || !sessionKey) {
@@ -419,13 +459,13 @@ export function useChatComposerState({
           if (data.error) {
             addMessage({
               type: 'assistant',
-              content: `Warning: ${data.message}`,
+              content: `提醒:${data.message}`,
               timestamp: Date.now(),
             });
           } else {
             addMessage({
               type: 'assistant',
-              content: `${data.message}\n\nPath: \`${data.path}\``,
+              content: `${data.message}\n\n路径:\`${data.path}\``,
               timestamp: Date.now(),
             });
             if (data.exists && onFileOpen) {
@@ -459,7 +499,7 @@ export function useChatComposerState({
       if (!confirmed) {
         addMessage({
           type: 'assistant',
-          content: 'Command execution cancelled',
+          content: '命令已取消',
           timestamp: Date.now(),
         });
         return;
@@ -540,7 +580,7 @@ export function useChatComposerState({
         console.error('Error executing command:', error);
         addMessage({
           type: 'assistant',
-          content: `Error executing command: ${message}`,
+          content: `命令执行失败:${message}`,
           timestamp: Date.now(),
         });
       }
@@ -670,7 +710,7 @@ export function useChatComposerState({
           const fileName = file.name || 'Unknown file';
           setImageErrors((previous) => {
             const next = new Map(previous);
-            next.set(fileName, 'File too large (max 5MB)');
+            next.set(fileName, '超过 5MB,图片最大 5MB');
             return next;
           });
           return false;
@@ -699,7 +739,7 @@ export function useChatComposerState({
       if (file.size > 20 * 1024 * 1024) {
         addMessage({
           type: 'error',
-          content: `Document too large (max 20MB): ${file.name}`,
+          content: `${file.name} 超过 20MB,文档解析放不下这么大的文件。`,
           timestamp: new Date(),
         });
         continue;
@@ -708,14 +748,13 @@ export function useChatComposerState({
       try {
         const formData = new FormData();
         formData.append('document', file);
-        const response = await authenticatedFetch('/api/documents/parse', {
-          method: 'POST',
-          headers: {},
-          body: formData,
-        });
+        const response = await authenticatedFetch(
+          `/api/documents/parse${attachmentQuery(selectedProjectId, currentSessionId)}`,
+          { method: 'POST', headers: {}, body: formData },
+        );
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(payload?.error || `Parse failed (${response.status})`);
+          throw new Error(payload?.error || `解析失败(HTTP ${response.status})`);
         }
         setAttachedDocs((previous) => [...previous, {
           name: payload.name || file.name,
@@ -729,16 +768,23 @@ export function useChatComposerState({
           kind: (payload.kind === 'path' || payload.htmlPath ? 'path' : 'text') as 'path' | 'text',
         }].slice(0, 8));
       } catch (error) {
+        // 服务端的报错里已经带了文件名,这里再拼一次就成了
+        // 「Failed to parse document x.pdf: Failed to extract text from x.pdf: ...」——
+        // 文件名两遍、failed 三遍,真正的原因被挤到最后。直接用服务端那句;
+        // 只有拿不到具体原因时才自己兜一句带文件名的。
+        const detail = error instanceof Error ? error.message : String(error);
         addMessage({
           type: 'error',
-          content: `Failed to parse document ${file.name}: ${error instanceof Error ? error.message : String(error)}`,
+          content: detail && detail !== 'Failed to fetch'
+            ? detail
+            : `无法读取 ${file.name}`,
           timestamp: new Date(),
         });
       } finally {
         setParsingDocsCount((count) => Math.max(0, count - 1));
       }
     }
-  }, [addMessage]);
+  }, [addMessage, selectedProjectId, currentSessionId]);
 
   /** prism: land any attached file to disk and attach its disk path (generic
    * attach-any-file button). Routes to /api/documents/land, which writes the
@@ -755,7 +801,7 @@ export function useChatComposerState({
       if (file.size > 500 * 1024 * 1024) {
         addMessage({
           type: 'error',
-          content: `File too large (max 500MB): ${file.name}`,
+          content: `${file.name} 超过 500MB,单个附件最多 500MB。`,
           timestamp: new Date(),
         });
         continue;
@@ -778,12 +824,15 @@ export function useChatComposerState({
         // 多绕一趟 start/chunk/complete 只是徒增三次往返与失败面。
         let payload: LandPayload;
         if (file.size > chunkBytes) {
-          payload = await landFileInChunks(file, chunkBytes, reportPercent);
+          payload = await landFileInChunks(
+            file, chunkBytes, reportPercent, selectedProjectId, currentSessionId,
+          );
         } else {
           const formData = new FormData();
           formData.append('document', file);
           payload = await uploadFormDataWithProgress<LandPayload>(
-            '/api/documents/land', formData, reportPercent,
+            `/api/documents/land${attachmentQuery(selectedProjectId, currentSessionId)}`,
+            formData, reportPercent,
           );
         }
         setAttachedDocs((previous) => [...previous, {
@@ -799,7 +848,7 @@ export function useChatComposerState({
       } catch (error) {
         addMessage({
           type: 'error',
-          content: `Failed to upload ${file.name}: ${error instanceof Error ? error.message : String(error)}`,
+          content: `${file.name} 上传失败:${error instanceof Error ? error.message : String(error)}`,
           timestamp: new Date(),
         });
       } finally {
@@ -807,7 +856,7 @@ export function useChatComposerState({
         setDocUploadProgress((current) => (current && current.fileName === file.name ? null : current));
       }
     }
-  }, [addMessage]);
+  }, [addMessage, selectedProjectId, currentSessionId]);
 
   /** prism: fetch a public URL's readable text and attach it. */
   const attachDocFromUrl = useCallback(async (url: string) => {
@@ -836,7 +885,7 @@ export function useChatComposerState({
     } catch (error) {
       addMessage({
         type: 'error',
-        content: `Failed to fetch URL: ${error instanceof Error ? error.message : String(error)}`,
+        content: `抓取网页失败:${error instanceof Error ? error.message : String(error)}`,
         timestamp: new Date(),
       });
     } finally {
@@ -891,38 +940,51 @@ export function useChatComposerState({
     }
   }, [sessionKey, setInput, textareaRef, addMessage]);
 
+  /**
+   * 粘贴或拖进来的文件,按类型分流。
+   *
+   * 图片走图片那条(会随消息以 image 块发给模型),其余任何类型走 land ——
+   * 和回形针按钮完全一样。原先这里只认 `image/*`,粘一个 PDF 进来是
+   * **静默无反应**:没有附件、没有报错、连一个请求都不发。能力本来就有,
+   * 只是这两个入口没接上去。
+   */
+  const acceptDroppedFiles = useCallback((files: File[]) => {
+    const incoming = files.filter((file) => file && file.size >= 0);
+    if (incoming.length === 0) return;
+    const images = incoming.filter((file) => (file.type || '').startsWith('image/'));
+    const others = incoming.filter((file) => !(file.type || '').startsWith('image/'));
+    if (images.length > 0) handleImageFiles(images);
+    if (others.length > 0) void handleAnyFiles(others);
+  }, [handleImageFiles, handleAnyFiles]);
+
   const handlePaste = useCallback(
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
-      const items = Array.from(event.clipboardData.items);
+      const clipboard = event.clipboardData;
+      if (!clipboard) return;
 
-      items.forEach((item) => {
-        if (!item.type.startsWith('image/')) {
-          return;
-        }
-        const file = item.getAsFile();
-        if (file) {
-          handleImageFiles([file]);
-        }
-      });
+      // `items` 里既有文件也有文本片段;只挑 kind === 'file' 的。
+      // 纯文本粘贴必须原样放过去 —— 拦下来就没法粘代码了。
+      const fromItems = Array.from(clipboard.items)
+        .filter((item) => item.kind === 'file')
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => Boolean(file));
 
-      if (items.length === 0 && event.clipboardData.files.length > 0) {
-        const files = Array.from(event.clipboardData.files);
-        const imageFiles = files.filter((file) => file.type.startsWith('image/'));
-        if (imageFiles.length > 0) {
-          handleImageFiles(imageFiles);
-        }
-      }
+      const files = fromItems.length > 0 ? fromItems : Array.from(clipboard.files || []);
+      if (files.length === 0) return;
+
+      // 有文件就别再把它的"文本表示"也插进输入框(某些系统会同时给一份路径字符串)。
+      event.preventDefault();
+      acceptDroppedFiles(files);
     },
-    [handleImageFiles],
+    [acceptDroppedFiles],
   );
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
-    accept: {
-      'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'],
-    },
-    maxSize: 5 * 1024 * 1024,
+    // 不再限定 image/*:拖进来的任何类型都收,分流交给 acceptDroppedFiles。
+    // 大小上限也不在这里卡 —— 图片 5MB、其他 500MB 是两套阈值,由各自那条路
+    // 去判并给出对应的提示;在这里统一卡一个数只会让其中一边的提示是错的。
     maxFiles: 5,
-    onDrop: handleImageFiles,
+    onDrop: acceptDroppedFiles,
     noClick: true,
     noKeyboard: true,
   });
@@ -1002,8 +1064,9 @@ export function useChatComposerState({
         if (textareaRef.current) {
           textareaRef.current.style.height = 'auto';
         }
-        // selectedProject is guaranteed by the guard at the top of handleSubmit.
-        safeLocalStorage.removeItem(`draft_input_${selectedProject.projectId}`);
+        if (activeDraftKey) {
+          safeLocalStorage.removeItem(activeDraftKey);
+        }
         return;
       }
 
@@ -1060,15 +1123,30 @@ export function useChatComposerState({
       // the websocket send. Both of those are HTTP and can succeed while the
       // socket is down, which would leave the user an orphaned empty session
       // and uploaded attachments for a message that never went anywhere.
+      //
+      // 断网不再报错让用户自己重试:走排队通道(和"回合进行中"同一条路),
+      // 排队卡立刻可见、可编辑可删除;连接恢复后自动重放 handleSubmit 发出。
       if (!isConnected) {
-        addMessage({
-          type: 'error',
-          content:
-            'Not connected to the server, so this message was not sent. '
-            + 'Your text is still in the composer — reconnection is automatic, '
-            + 'so try again in a moment.',
-          timestamp: new Date(),
+        queuedDraftSessionRef.current = sessionKey;
+        setQueuedDraft({
+          content: messageContent,
+          images: attachedImages,
+          options: buildSendOptions(currentInput),
         });
+        setAttachedDocs([]);
+        setInput('');
+        inputValueRef.current = '';
+        setAttachedImages([]);
+        setUploadingImages(new Map());
+        setImageErrors(new Map());
+        resetCommandMenuState();
+        setIsTextareaExpanded(false);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
+        if (activeDraftKey) {
+          safeLocalStorage.removeItem(activeDraftKey);
+        }
         return;
       }
 
@@ -1080,14 +1158,13 @@ export function useChatComposerState({
         });
 
         try {
-          const response = await authenticatedFetch('/api/assets/images', {
-            method: 'POST',
-            headers: {},
-            body: formData,
-          });
+          const response = await authenticatedFetch(
+            `/api/assets/images${attachmentQuery(selectedProjectId, currentSessionId)}`,
+            { method: 'POST', headers: {}, body: formData },
+          );
 
           if (!response.ok) {
-            throw new Error('Failed to upload images');
+            throw new Error('图片上传失败');
           }
 
           const result = await response.json();
@@ -1097,7 +1174,7 @@ export function useChatComposerState({
           console.error('Image upload failed:', error);
           addMessage({
             type: 'error',
-            content: `Failed to upload images: ${message}`,
+            content: `图片上传失败:${message}`,
             timestamp: new Date(),
           });
           return;
@@ -1137,7 +1214,7 @@ export function useChatComposerState({
           console.error('Session creation failed:', error);
           addMessage({
             type: 'error',
-            content: `Failed to start a new session: ${message}`,
+            content: `新建会话失败:${message}`,
             timestamp: new Date(),
           });
           return;
@@ -1146,7 +1223,7 @@ export function useChatComposerState({
         if (!targetSessionId) {
           addMessage({
             type: 'error',
-            content: 'Failed to start a new session: no session id returned.',
+            content: '新建会话失败:服务端没有返回会话号。',
             timestamp: new Date(),
           });
           return;
@@ -1169,6 +1246,10 @@ export function useChatComposerState({
       // left the client cannot leave behind a user bubble, a spinner that
       // never stops, and an emptied composer — which is what happened when the
       // socket dropped between the connectivity check above and this line.
+      // 隐藏上下文只搭这一班车:构包即消费,发没发出去都不留给下一条普通消息。
+      const hiddenContext = pendingHiddenContextRef.current;
+      pendingHiddenContextRef.current = null;
+
       const sent = sendMessage({
         type: 'chat.send',
         sessionId: targetSessionId,
@@ -1177,18 +1258,32 @@ export function useChatComposerState({
           ...buildSendOptions(messageContent),
           images: uploadedImages,
           ...(forkInfo ? { forkFrom: forkInfo } : {}),
+          ...(hiddenContext ? { hiddenContext } : {}),
         },
       });
 
       if (!sent) {
-        addMessage({
-          type: 'error',
-          content:
-            'The connection dropped while sending, so this message was not '
-            + 'delivered. Your text is still in the composer — try again once '
-            + 'the connection is back.',
-          timestamp: new Date(),
+        // 连通性检查之后、真正 send 之前的一瞬掉线:同样入队,恢复后自动发。
+        queuedDraftSessionRef.current = sessionKey || targetSessionId;
+        setQueuedDraft({
+          content: messageContent,
+          images: attachedImages,
+          options: buildSendOptions(currentInput),
         });
+        setAttachedDocs([]);
+        setInput('');
+        inputValueRef.current = '';
+        setAttachedImages([]);
+        setUploadingImages(new Map());
+        setImageErrors(new Map());
+        resetCommandMenuState();
+        setIsTextareaExpanded(false);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
+        if (activeDraftKey) {
+          safeLocalStorage.removeItem(activeDraftKey);
+        }
         return;
       }
 
@@ -1231,10 +1326,16 @@ export function useChatComposerState({
         textareaRef.current.style.height = 'auto';
       }
 
-      safeLocalStorage.removeItem(`draft_input_${selectedProject.projectId}`);
+      // 发送成功即清历史回看状态与草稿。
+      historyWalkRef.current = null;
+      if (activeDraftKey) {
+        safeLocalStorage.removeItem(activeDraftKey);
+      }
     },
     [
+      selectedProjectId,
       selectedSession,
+      activeDraftKey,
       attachedImages,
       attachedDocs,
       buildSendOptions,
@@ -1277,7 +1378,9 @@ export function useChatComposerState({
       return;
     }
 
-    if (isLoading || !queuedDraft) {
+    // 断网期间不冲队:重放 handleSubmit 只会再次入队(750ms 一圈的空转)。
+    // isConnected 翻真时本 effect 会重跑,那时再发。
+    if (isLoading || !queuedDraft || !isConnected) {
       return;
     }
 
@@ -1303,7 +1406,7 @@ export function useChatComposerState({
       }, 0);
     }, delay);
     return () => clearTimeout(timer);
-  }, [isLoading, queuedDraft, sessionKey, setInput]);
+  }, [isLoading, queuedDraft, sessionKey, setInput, isConnected]);
 
   const editQueuedDraft = useCallback(() => {
     if (!queuedDraft) {
@@ -1324,28 +1427,76 @@ export function useChatComposerState({
     inputValueRef.current = input;
   }, [input]);
 
+  // 「让 Claude 创建定时任务」等入口的预填:切到聊天页后把整段话术塞进输入框。
   useEffect(() => {
-    if (!selectedProjectId) {
+    const onPrefill = (event: Event) => {
+      const text = (event as CustomEvent<{ text?: string }>).detail?.text;
+      if (typeof text !== 'string' || !text) return;
+      historyWalkRef.current = null;
+      setInput(text);
+      inputValueRef.current = text;
+      window.setTimeout(() => textareaRef.current?.focus(), 50);
+    };
+    window.addEventListener('prism:prefill-chat-input', onPrefill);
+    return () => window.removeEventListener('prism:prefill-chat-input', onPrefill);
+  }, []);
+
+  // 「让 Claude 创建定时任务」等入口的**直发**:一句人话直接作为用户消息发出去
+  // (像 Cowork 那样),技术细节(票据、接口用法)走 hiddenContext,页面上不出现。
+  useEffect(() => {
+    const onDirectSend = (event: Event) => {
+      const detail = (event as CustomEvent<{ text?: string; hiddenContext?: string }>).detail;
+      const text = detail?.text;
+      if (typeof text !== 'string' || !text.trim()) return;
+      historyWalkRef.current = null;
+      setInput(text);
+      inputValueRef.current = text;
+      pendingHiddenContextRef.current = typeof detail?.hiddenContext === 'string' && detail.hiddenContext
+        ? detail.hiddenContext
+        : null;
+      // 等切页/渲染落定再提交;submit 读的是 inputValueRef,不受 state 时序影响。
+      window.setTimeout(() => {
+        handleSubmitRef.current?.(createFakeSubmitEvent());
+      }, 80);
+    };
+    window.addEventListener('prism:send-chat-message', onDirectSend);
+    return () => window.removeEventListener('prism:send-chat-message', onDirectSend);
+  }, []);
+
+  // 输入草稿持久化,owner-ref 防跨会话串写(和下面 queuedDraft 的写法同款):
+  // 切会话的那一个 commit 里,`activeDraftKey` 已指向新会话而 `input` 还是旧
+  // 会话的文字 —— 持久化 effect 靠 ref 不相等跳过那一拍,换草稿 effect 随后
+  // 更新 ref 并从新键恢复。持久化 effect 必须声明在换草稿 effect **之前**。
+  const inputDraftKeyRef = useRef<string | null>(activeDraftKey);
+
+  useEffect(() => {
+    if (!activeDraftKey || inputDraftKeyRef.current !== activeDraftKey) {
       return;
     }
-    const savedInput = safeLocalStorage.getItem(`draft_input_${selectedProjectId}`) || '';
+    if (input !== '') {
+      safeLocalStorage.setItem(activeDraftKey, input);
+    } else {
+      safeLocalStorage.removeItem(activeDraftKey);
+    }
+  }, [input, activeDraftKey]);
+
+  useEffect(() => {
+    inputDraftKeyRef.current = activeDraftKey;
+    historyWalkRef.current = null;
+    let savedInput = (activeDraftKey ? safeLocalStorage.getItem(activeDraftKey) : null) || '';
+    // ck:cj 版「让 Claude 创建定时任务」把整段带票据的 curl 话术预填进过输入框,
+    // 没发送就会作为会话草稿存进 localStorage —— 升级后打开目标会话,这坨机器
+    // 文本还会被恢复出来(用户反馈)。票据一次性且早已过期,识别到就直接丢弃。
+    if (savedInput && /X-Prism-Task-Ticket|\/api\/tasks\/via-ticket/.test(savedInput)) {
+      savedInput = '';
+      if (activeDraftKey) safeLocalStorage.removeItem(activeDraftKey);
+    }
     setInput((previous) => {
       const next = previous === savedInput ? previous : savedInput;
       inputValueRef.current = next;
       return next;
     });
-  }, [selectedProjectId]);
-
-  useEffect(() => {
-    if (!selectedProjectId) {
-      return;
-    }
-    if (input !== '') {
-      safeLocalStorage.setItem(`draft_input_${selectedProjectId}`, input);
-    } else {
-      safeLocalStorage.removeItem(`draft_input_${selectedProjectId}`);
-    }
-  }, [input, selectedProjectId]);
+  }, [activeDraftKey]);
 
   // Persist the queued draft under its session's key. Must be defined BEFORE
   // the swap effect below: on a session switch there is one commit where
@@ -1399,6 +1550,9 @@ export function useChatComposerState({
       const newValue = event.target.value;
       const cursorPos = event.target.selectionStart;
 
+      // 用户开始编辑,历史回看就此结束(改过的内容不再当历史看)。
+      historyWalkRef.current = null;
+
       setInput(newValue);
       inputValueRef.current = newValue;
       setCursorPosition(cursorPos);
@@ -1431,6 +1585,38 @@ export function useChatComposerState({
         return;
       }
 
+      // ↑/↓ 历史回填(readline 风格):只在输入框为空时 ↑ 进入回看,回看中
+      // ↑/↓ 前后翻,↓ 越过最新一条恢复空输入。有内容时不抢光标移动。
+      if (
+        (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+        && !showCommandMenu
+        && !showFileDropdown
+        && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey
+        && !event.nativeEvent.isComposing
+      ) {
+        const direction = event.key === 'ArrowUp' ? 'back' : 'forward';
+        const step = stepHistoryWalk(
+          historyWalkRef.current,
+          direction,
+          () => getUserMessageHistory?.() ?? [],
+          inputValueRef.current,
+        );
+        historyWalkRef.current = step.state;
+        if (step.input !== null) {
+          event.preventDefault();
+          setInput(step.input);
+          inputValueRef.current = step.input;
+          // 等回填渲染后把光标放到末尾(默认会停在开头)。
+          requestAnimationFrame(() => {
+            const el = textareaRef.current;
+            if (el) {
+              el.selectionStart = el.selectionEnd = el.value.length;
+            }
+          });
+          return;
+        }
+      }
+
       if (event.key === 'Enter') {
         if (event.nativeEvent.isComposing) {
           return;
@@ -1453,6 +1639,7 @@ export function useChatComposerState({
       sendByCtrlEnter,
       showCommandMenu,
       showFileDropdown,
+      getUserMessageHistory,
     ],
   );
 
@@ -1552,7 +1739,11 @@ export function useChatComposerState({
         }
       }
 
-      validIds.forEach((requestId) => {
+      // 逐条发,并记下哪些**真的发出去了**。断线瞬间点"允许/拒绝"时,
+      // sendMessage 会返回 false(socket 没连上),但旧代码不看返回值就把请求
+      // 从列表里抹掉 —— 弹窗消失、run 却仍挂着那条待批,要等重连 ack 才重新冒
+      // 出来,中间一片空白。只移除确认送达的,发失败的留在原地并提示。
+      const deliveredIds = validIds.filter((requestId) =>
         sendMessage({
           type: 'chat.permission-response',
           requestId,
@@ -1560,14 +1751,24 @@ export function useChatComposerState({
           updatedInput: decision?.updatedInput,
           message: decision?.message,
           rememberEntry: decision?.rememberEntry,
-        });
-      });
-
-      setPendingPermissionRequests((previous) =>
-        previous.filter((request) => !validIds.includes(request.requestId)),
+        }),
       );
+
+      if (deliveredIds.length > 0) {
+        setPendingPermissionRequests((previous) =>
+          previous.filter((request) => !deliveredIds.includes(request.requestId)),
+        );
+      }
+
+      if (deliveredIds.length < validIds.length) {
+        addMessage({
+          type: 'error',
+          content: '连接已断开,授权未发送成功,请在恢复连接后重试。',
+          timestamp: new Date(),
+        });
+      }
     },
-    [sendMessage, setPendingPermissionRequests],
+    [sendMessage, setPendingPermissionRequests, addMessage],
   );
 
   const [isInputFocused, setIsInputFocused] = useState(false);
@@ -1580,9 +1781,25 @@ export function useChatComposerState({
     [onInputFocusChange],
   );
 
+  /**
+   * 失败重试:把给定正文按正常提交路径重发。回合在跑会自动入队,断网也
+   * 自动入队 —— 都不会丢。图片附件不随重试恢复(原 File 已不在)。
+   */
+  const resendUserMessage = useCallback((content: string) => {
+    if (!String(content || '').trim()) {
+      return;
+    }
+    setInput(content);
+    inputValueRef.current = content;
+    setTimeout(() => {
+      handleSubmitRef.current?.(createFakeSubmitEvent());
+    }, 0);
+  }, []);
+
   return {
     input,
     setInput,
+    resendUserMessage,
     textareaRef,
     inputHighlightRef,
     isTextareaExpanded,

@@ -8,7 +8,8 @@
     "chat": "Chat",
     "shell": "Shell",
     "files": "Files",
-    "notebook": "Notebook"
+    "notebook": "Notebook",
+    "tasks": "Tasks"
   },
   "status": {
     "completed": "Completed"
@@ -78,7 +79,8 @@
     "toast": {
       "pathCopied": "Path copied to clipboard",
       "copyFailed": "Failed to copy path"
-    }
+    },
+    "truncatedNotice": "This directory has too many entries; only part of it is shown. Open a subfolder to see more."
   },
   "projectWizard": {
     "title": "Create New Project",
@@ -163,5 +165,146 @@
     "installHint": "Install it on the server, then retry:",
     "startFailed": "JupyterLab failed to start",
     "retry": "Retry"
+  },
+  "palette": {
+    "title": "Command palette",
+    "pages": {
+      "actions": "Actions",
+      "files": "Files",
+      "sessions": "Sessions"
+    },
+    "backToAll": "Back to all",
+    "backspaceHint": "Backspace to go back",
+    "searchPage": "Search {{page}}…",
+    "searchAnything": "Type to search anything…",
+    "noResults": "No results.",
+    "groupActions": "Actions",
+    "groupNavigate": "Navigate",
+    "groupSettings": "Settings",
+    "groupSessions": "Sessions",
+    "groupFiles": "Files",
+    "startNewChat": "Start new chat",
+    "selectProjectFirst": "Select a project first",
+    "openSettings": "Open settings",
+    "toggleTheme": "Toggle theme",
+    "goToChat": "Go to Chat",
+    "goToFiles": "Go to Files",
+    "goToShell": "Go to Shell",
+    "settingsPrefix": "Settings: {{label}}",
+    "browseAllSessions": "Browse all sessions ({{count}})",
+    "browseAllFiles": "Browse all files ({{count}})"
+  },
+  "reasoning": {
+    "thinking": "Thinking...",
+    "thoughtFewSeconds": "Thought for a few seconds",
+    "thoughtSeconds": "Thought for {{duration}} seconds"
+  },
+  "tooltips": {
+    "exportSessionFailed": "Failed to export session. Please retry."
+  },
+  "folderBrowser": {
+    "title": "Select Folder",
+    "loadFailed": "Failed to load folders",
+    "createFailed": "Failed to create folder",
+    "hideHidden": "Hide hidden folders",
+    "showHidden": "Show hidden folders",
+    "createNew": "Create new folder",
+    "newFolderName": "New folder name",
+    "create": "Create",
+    "cancel": "Cancel",
+    "path": "Path:",
+    "noSubfolders": "No subfolders found",
+    "select": "Select"
+  },
+  "imageViewer": {
+    "loading": "Loading image..."
+  },
+  "tasksPage": {
+    "title": "Scheduled tasks",
+    "subtitle": "Run tasks on a schedule or on demand; results land in the target session. Scheduled server-side — they run even with the browser closed.",
+    "searchPh": "Search tasks…",
+    "newTask": "New task",
+    "createWithClaude": "Create with Claude",
+    "setupManually": "Fill in the form manually",
+    "loading": "Loading…",
+    "empty": "No scheduled tasks yet. Click “New task” — let Claude ask for the details, or fill in the form yourself.",
+    "noMatch": "No matching tasks.",
+    "back": "Back to tasks",
+    "edit": "Edit",
+    "delete": "Delete",
+    "running": "Running",
+    "runNow": "Run now",
+    "enabled": "Enabled",
+    "paused": "Paused",
+    "history": "History",
+    "statusOk": "Success",
+    "statusFail": "Failed",
+    "neverRan": "Never ran yet.",
+    "openSession": "Open target session →",
+    "instructions": "Instructions",
+    "target": "Target",
+    "fixedSession": "Fixed session",
+    "newSession": "New session each run",
+    "repeats": "Repeats",
+    "nextRun": "Next: {{when}}",
+    "execution": "Execution",
+    "modelIs": "Model {{model}}",
+    "defaultModel": "Default model",
+    "confirmDelete": "Delete scheduled task “{{name}}”? This cannot be undone.",
+    "runStarted": "Task started — open the target session to watch it.",
+    "alreadyRunning": "Task is already running",
+    "freq": {
+      "manual": "Manual",
+      "hourly": "Hourly at :{{minute}}",
+      "daily": "Daily at {{time}}",
+      "weekdays": "Weekdays at {{time}}",
+      "weekly": "Weekly on {{day}} at {{time}}",
+      "monthly": "Monthly on day {{day}} at {{time}}"
+    },
+    "freqOpt": {
+      "hourly": "Hourly",
+      "daily": "Daily",
+      "weekdays": "Weekdays",
+      "weekly": "Weekly",
+      "monthly": "Monthly"
+    },
+    "form": {
+      "createTitle": "Create scheduled task",
+      "editTitle": "Edit scheduled task",
+      "name": "Name",
+      "namePh": "e.g. Daily morning report",
+      "instructions": "Instructions",
+      "instructionsPh": "The message sent to Claude when the task fires, e.g. summarize yesterday's log metrics into a table.",
+      "pickProject": "Pick a project…",
+      "defaultModel": "Default model",
+      "frequency": "Frequency",
+      "time": "Time",
+      "manualHint": "Runs only when you click “Run now”",
+      "sessionMode": "Session",
+      "sessionFixed": "Fixed session (continuous history, recommended)",
+      "sessionNew": "New session each run",
+      "permissions": "Permissions",
+      "permAuto": "Run automatically (unattended)",
+      "permEdits": "Auto-approve edits",
+      "permDefault": "Default (tools need approval; stalls unattended)",
+      "required": "Name, instructions and project are all required",
+      "cancel": "Cancel",
+      "save": "Save task",
+      "saving": "Saving…",
+      "targetSession": "Target session",
+      "targetSessionAuto": "Auto-create one and pin it (default)"
+    },
+    "claudeStarted": "Request sent to Claude — continue the conversation in the chat tab.",
+    "needProject": "Pick a project in the sidebar first, then let Claude create the task.",
+    "select": {
+      "noMatch": "No matches",
+      "searchProjects": "Search projects…",
+      "searchSessions": "Search sessions…",
+      "browseFolder": "Choose a different folder…"
+    },
+    "fixedSessionPending": "Created and pinned on the first run",
+    "newTaskHint": "Choose how to create it: let Claude ask for the details, or fill in the form",
+    "createWithClaudeHint": "Describe it in a sentence; Claude asks for the rest",
+    "setupManuallyHint": "Set name, frequency and target session yourself"
   }
 }

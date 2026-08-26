@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
@@ -17,7 +17,11 @@ type ChatMessageImagesProps = {
  * (`~/.cloudcli/assets`), then from the project files route as a fallback for
  * sessions recorded before attachments moved to the global store.
  */
-function useChatImageSrc(image: ChatImage, projectId?: string | null): { src: string | null; failed: boolean } {
+function useChatImageSrc(
+  image: ChatImage,
+  projectId?: string | null,
+  enabled: boolean = true,
+): { src: string | null; failed: boolean } {
   const [src, setSrc] = useState<string | null>(image.data || null);
   const [failed, setFailed] = useState(false);
 
@@ -25,6 +29,13 @@ function useChatImageSrc(image: ChatImage, projectId?: string | null): { src: st
     if (image.data) {
       setSrc(image.data);
       setFailed(false);
+      return;
+    }
+
+    // 还没滚到视野附近:不发请求,占位块先顶着。附件图取的是**原图** blob,
+    // 长会话里几十张图在挂载瞬间全量并发拉取,既堵网络又白占内存 ——
+    // 进入视口(带预读余量)再拉。
+    if (!enabled) {
       return;
     }
 
@@ -36,12 +47,25 @@ function useChatImageSrc(image: ChatImage, projectId?: string | null): { src: st
     }
 
     const filename = imagePath.split(/[\\/]/).pop() || '';
-    const candidateUrls = [
-      `/api/assets/images/${encodeURIComponent(filename)}`,
-      ...(projectId
-        ? [`/api/projects/${projectId}/files/content?path=${encodeURIComponent(imagePath)}`]
-        : []),
-    ];
+    const globalUrl = `/api/assets/images/${encodeURIComponent(filename)}`;
+    const projectUrl = projectId
+      ? `/api/projects/${projectId}/files/content?path=${encodeURIComponent(imagePath)}`
+      : null;
+
+    /**
+     * 两条路都留着,但**先试哪条要看路径长什么样**。
+     *
+     * 新传的附件落在项目的 `attachments/` 下,历史里存的是绝对路径;
+     * 早于这次改动传的图还在全局 `~/.prism/assets` 里,存的路径也在那儿。
+     * 一律先试全局那条的话,每张项目内的图都要先白挨一个 404 —— 一屏十张图
+     * 就是十个必然失败的请求。按路径里有没有 `attachments/` 分一下,
+     * 命中的那条排前面,另一条仍然留作兜底(路径形态之外的意外情况)。
+     */
+    const looksProjectScoped = /[\\/]attachments[\\/]/.test(imagePath);
+    const candidateUrls = (looksProjectScoped && projectUrl
+      ? [projectUrl, globalUrl]
+      : [globalUrl, projectUrl]
+    ).filter((url): url is string => Boolean(url));
 
     let objectUrl: string | null = null;
     const controller = new AbortController();
@@ -76,9 +100,41 @@ function useChatImageSrc(image: ChatImage, projectId?: string | null): { src: st
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [image.data, image.path, projectId]);
+  }, [image.data, image.path, projectId, enabled]);
 
   return { src, failed };
+}
+
+/**
+ * 元素滚进视口(带 rootMargin 预读余量)后置真,并保持为真。
+ * 环境没有 IntersectionObserver(jsdom / 极老浏览器)时直接视为可见。
+ */
+function useNearViewport<T extends Element>(): { ref: (node: T | null) => void; visible: boolean } {
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined');
+  const observerRef = useRef<IntersectionObserver | null>(null);
+
+  const ref = (node: T | null) => {
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+      observerRef.current = null;
+    }
+    if (!node || visible || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '400px' },
+    );
+    observer.observe(node);
+    observerRef.current = observer;
+  };
+
+  useEffect(() => () => observerRef.current?.disconnect(), []);
+
+  return { ref, visible };
 }
 
 /**
@@ -125,7 +181,8 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
 }
 
 function ChatMessageImage({ image, projectId }: { image: ChatImage; projectId?: string | null }) {
-  const { src, failed } = useChatImageSrc(image, projectId);
+  const { ref, visible } = useNearViewport<HTMLDivElement>();
+  const { src, failed } = useChatImageSrc(image, projectId, visible);
   const [expanded, setExpanded] = useState(false);
   const alt = image.name || 'Attached image';
 
@@ -138,7 +195,7 @@ function ChatMessageImage({ image, projectId }: { image: ChatImage; projectId?: 
   }
 
   if (!src) {
-    return <div className="h-28 w-28 rounded-lg border border-border bg-muted" />;
+    return <div ref={ref} className="h-28 w-28 rounded-lg border border-border bg-muted" />;
   }
 
   return (
@@ -152,6 +209,8 @@ function ChatMessageImage({ image, projectId }: { image: ChatImage; projectId?: 
         <img
           src={src}
           alt={alt}
+          loading="lazy"
+          decoding="async"
           className="h-28 w-28 cursor-zoom-in object-cover"
         />
       </button>

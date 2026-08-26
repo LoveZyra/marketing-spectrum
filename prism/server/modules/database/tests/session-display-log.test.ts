@@ -113,3 +113,42 @@ describe('显示日志:没有 id 的消息', () => {
     );
   });
 });
+
+// bx / E 组:解析缓存(E1)与批量事务(E2)。
+describe('显示日志:解析缓存与批量写', () => {
+  it('append 后 listForSession 反映最新内容(指纹失效,不吃旧缓存)', () => {
+    sessionMessagesDb.append('s-cache', message({ id: 'c1', sessionId: 's-cache', content: '一' }));
+    assert.deepEqual(sessionMessagesDb.listForSession('s-cache').map((r) => r.content), ['一']);
+    // 第二次读命中缓存,内容一致
+    assert.deepEqual(sessionMessagesDb.listForSession('s-cache').map((r) => r.content), ['一']);
+    // 再 append 一条 → 指纹变(行数+maxid),缓存必须失效
+    sessionMessagesDb.append('s-cache', message({ id: 'c2', sessionId: 's-cache', content: '二' }));
+    assert.deepEqual(sessionMessagesDb.listForSession('s-cache').map((r) => r.content), ['一', '二']);
+  });
+
+  it('返回浅拷贝:改动返回数组不污染缓存', () => {
+    sessionMessagesDb.append('s-copy', message({ id: 'p1', sessionId: 's-copy', content: 'x' }));
+    const first = sessionMessagesDb.listForSession('s-copy');
+    first.push(message({ id: 'injected', sessionId: 's-copy', content: 'DIRTY' }) as never);
+    // 再读一次(命中缓存)不应带上被外部 push 进去的脏行
+    assert.deepEqual(sessionMessagesDb.listForSession('s-copy').map((r) => r.content), ['x']);
+  });
+
+  it('delete 后缓存失效,读回空', () => {
+    sessionMessagesDb.append('s-cdel', message({ id: 'd1', sessionId: 's-cdel' }));
+    assert.equal(sessionMessagesDb.listForSession('s-cdel').length, 1);
+    sessionMessagesDb.deleteForSession('s-cdel');
+    assert.equal(sessionMessagesDb.listForSession('s-cdel').length, 0);
+  });
+
+  it('appendMany 批量写入,幂等去重,顺序保持', () => {
+    const msgs = [
+      message({ id: 'b1', sessionId: 's-many', content: 'A' }),
+      message({ id: 'b2', sessionId: 's-many', content: 'B' }),
+      message({ id: 'b1', sessionId: 's-many', content: 'A-dup' }), // 与 b1 撞唯一键,吞掉
+    ];
+    const seeded = sessionMessagesDb.appendMany('s-many', msgs as never);
+    assert.equal(seeded, 2);
+    assert.deepEqual(sessionMessagesDb.listForSession('s-many').map((r) => r.content), ['A', 'B']);
+  });
+});

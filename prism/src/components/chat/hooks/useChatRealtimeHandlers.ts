@@ -34,11 +34,13 @@ interface UseChatRealtimeHandlersArgs {
   provider: LLMProvider;
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
-  setTokenBudget: (budget: Record<string, unknown> | null) => void;
+  setTokenBudget: Dispatch<SetStateAction<Record<string, unknown> | null>>;
   pendingPermissionRequests: PendingPermissionRequest[];
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
-  streamTimerRef: MutableRefObject<number | null>;
-  accumulatedStreamRef: MutableRefObject<string>;
+  /** 每会话一个批处理定时器,键是 sessionId。 */
+  streamTimerRef: MutableRefObject<Map<string, number>>;
+  /** 每会话一段流式缓冲,键是 sessionId。 */
+  accumulatedStreamRef: MutableRefObject<Map<string, string>>;
   /**
    * Highest live `seq` observed per session. Essential for reconnect catch-up:
    * `chat.subscribe` sends this value as `lastSeq` so the server replays only
@@ -193,35 +195,37 @@ export function useChatRealtimeHandlers({
       // --- Streaming: buffer for performance ---
       if (msg.kind === 'stream_delta') {
         const text = (msg.content as string) || '';
-        if (!text) return;
-        accumulatedStreamRef.current += text;
-        if (!streamTimerRef.current) {
-          streamTimerRef.current = window.setTimeout(() => {
-            streamTimerRef.current = null;
-            if (sid) {
-              sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
-            }
-          }, 100);
+        if (!text || !sid) return;
+        const buffers = accumulatedStreamRef.current;
+        buffers.set(sid, (buffers.get(sid) || '') + text);
+        const timers = streamTimerRef.current;
+        if (!timers.has(sid)) {
+          // 定时器与 provider 都按这个 sid 闭包捕获,刷的永远是这个会话自己的缓冲。
+          const flushSid = sid;
+          const flushProvider = provider;
+          timers.set(flushSid, window.setTimeout(() => {
+            timers.delete(flushSid);
+            const buffered = accumulatedStreamRef.current.get(flushSid);
+            if (buffered) sessionStore.updateStreaming(flushSid, buffered, flushProvider);
+          }, 100));
         }
-        // Also route to store for non-active sessions
-        if (sid && sid !== activeViewSessionId) {
-          sessionStore.appendRealtime(sid, msg as unknown as NormalizedMessage);
-        }
+        // 不再对非活跃会话额外 appendRealtime 原始 delta:上面的 100ms 定时器
+        // 会对**任意** sid(包括后台会话)调 updateStreaming,把累积文本写成一条
+        // `__streaming_<sid>` 消息。再追加一份原始 delta,等于同一段内容存两份 ——
+        // 切回该会话时就看到"碎片气泡 + 累积行"两套(fetch 不剪 realtime,碎片
+        // 一直留到下次 refresh)。累积消息才是唯一正确表示。
         return;
       }
 
       if (msg.kind === 'stream_end') {
-        if (streamTimerRef.current) {
-          clearTimeout(streamTimerRef.current);
-          streamTimerRef.current = null;
-        }
         if (sid) {
-          if (accumulatedStreamRef.current) {
-            sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
-          }
+          const t = streamTimerRef.current.get(sid);
+          if (t) { clearTimeout(t); streamTimerRef.current.delete(sid); }
+          const buffered = accumulatedStreamRef.current.get(sid);
+          if (buffered) sessionStore.updateStreaming(sid, buffered, provider);
           sessionStore.finalizeStreaming(sid);
+          accumulatedStreamRef.current.delete(sid);
         }
-        accumulatedStreamRef.current = '';
         return;
       }
 
@@ -259,15 +263,16 @@ export function useChatRealtimeHandlers({
       switch (msg.kind) {
         case 'complete': {
           // Flush any remaining streaming state
-          if (streamTimerRef.current) {
-            clearTimeout(streamTimerRef.current);
-            streamTimerRef.current = null;
+          if (sid) {
+            const t = streamTimerRef.current.get(sid);
+            if (t) { clearTimeout(t); streamTimerRef.current.delete(sid); }
+            const buffered = accumulatedStreamRef.current.get(sid);
+            if (buffered) {
+              sessionStore.updateStreaming(sid, buffered, provider);
+              sessionStore.finalizeStreaming(sid);
+            }
+            accumulatedStreamRef.current.delete(sid);
           }
-          if (sid && accumulatedStreamRef.current) {
-            sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
-            sessionStore.finalizeStreaming(sid);
-          }
-          accumulatedStreamRef.current = '';
 
           // `complete` is the unified terminal event — every provider run ends
           // with exactly one, regardless of success, failure, or abort. The
@@ -347,7 +352,15 @@ export function useChatRealtimeHandlers({
 
         case 'status': {
           if (msg.text === 'token_budget' && msg.tokenBudget) {
-            setTokenBudget(msg.tokenBudget as Record<string, unknown>);
+            // costUsd 只在 result 帧上出现;中途的 usage 帧没有它。整体替换会把
+            // 已经拿到的费用抹掉,所以缺席时沿用上一次的值(F4)。
+            setTokenBudget((previous: Record<string, unknown> | null) => {
+              const next = msg.tokenBudget as Record<string, unknown>;
+              const previousCost = previous && typeof previous === 'object' ? (previous as Record<string, unknown>).costUsd : undefined;
+              return next.costUsd === undefined && previousCost !== undefined
+                ? { ...next, costUsd: previousCost }
+                : next;
+            });
           } else if (msg.text && sid) {
             onSessionProcessing?.(sid, {
               statusText: msg.text as string,

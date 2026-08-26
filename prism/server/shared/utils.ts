@@ -562,10 +562,31 @@ const isProviderSessionActiveModelChangeCacheEntry = (
   );
 };
 
+// 解析结果的 (mtimeMs, size) 指纹缓存。这个文件每次 send 都要读+parse 一遍,
+// 而它变动很少 —— 指纹没变就直接返回上次解析结果,免掉重复读盘与 JSON.parse。
+// 写入方(writeProviderSessionActiveModelChangeCacheFile)会主动失效对应条目,
+// 避免"同一秒内写完又读到旧缓存"的 mtime 粒度竞争。
+const providerSessionActiveModelChangeParseCache = new Map<
+  string,
+  { mtimeMs: number; size: number; data: ProviderSessionActiveModelChangeCacheFile }
+>();
+
 const readProviderSessionActiveModelChangeCacheFile = async (
   filePath: string,
 ): Promise<ProviderSessionActiveModelChangeCacheFile> => {
   try {
+    let fingerprint: { mtimeMs: number; size: number } | null = null;
+    try {
+      const fileStat = await stat(filePath);
+      fingerprint = { mtimeMs: fileStat.mtimeMs, size: fileStat.size };
+      const cached = providerSessionActiveModelChangeParseCache.get(filePath);
+      if (cached && cached.mtimeMs === fingerprint.mtimeMs && cached.size === fingerprint.size) {
+        return cached.data;
+      }
+    } catch {
+      // stat 失败(文件不存在等)→ 走下面的读取,由 catch 回落空表。
+    }
+
     const raw = await readFile(filePath, 'utf8');
     const parsed = readObjectRecord(JSON.parse(raw));
     if (
@@ -585,10 +606,14 @@ const readProviderSessionActiveModelChangeCacheFile = async (
       ),
     );
 
-    return {
+    const data: ProviderSessionActiveModelChangeCacheFile = {
       version: PROVIDER_SESSION_ACTIVE_MODEL_CHANGE_CACHE_VERSION,
       entries,
     };
+    if (fingerprint) {
+      providerSessionActiveModelChangeParseCache.set(filePath, { ...fingerprint, data });
+    }
+    return data;
   } catch {
     return {
       version: PROVIDER_SESSION_ACTIVE_MODEL_CHANGE_CACHE_VERSION,
@@ -603,6 +628,9 @@ const writeProviderSessionActiveModelChangeCacheFile = async (
 ): Promise<void> => {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  // 主动失效解析缓存:刚写完的下一次读必须重新解析(否则 mtime 同秒粒度下
+  // 可能命中旧缓存)。
+  providerSessionActiveModelChangeParseCache.delete(filePath);
 };
 
 const buildUnsupportedProviderSessionActiveModelChange = (

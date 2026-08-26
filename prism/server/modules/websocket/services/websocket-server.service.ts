@@ -32,7 +32,10 @@ export function createWebSocketServer(
   server: HttpServer,
   dependencies: WebSocketServerDependencies
 ): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
+  // maxPayload:ws 库默认单帧上限是 100MiB —— 任何一个已登录 socket 发一帧就能
+  // 造成 JSON.parse 的内存/CPU 尖峰。聊天入站帧(文本+图片引用+审批应答)远小于
+  // 4MiB;真正的大文件走 HTTP 分片上传通道,不走 WS。超限帧由 ws 以 1009 关闭。
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
 
   server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;

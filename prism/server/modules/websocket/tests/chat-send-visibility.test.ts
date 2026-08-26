@@ -9,6 +9,7 @@ import {
   closeConnection,
   initializeDatabase,
   projectsDb,
+  sessionMessagesDb,
   sessionsDb,
   userDb,
 } from '@/modules/database/index.js';
@@ -84,7 +85,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 
 /** 把一个 socket 接上 chat 协议,并记录 provider 运行时被拉起了几次。 */
 function connect(user: { id: number; username: string } | null) {
-  const spawned: Array<{ command: string; sessionId: unknown }> = [];
+  const spawned: Array<{ command: string; sessionId: unknown; forwardedHiddenContext?: unknown }> = [];
   const ws = createFakeSocket();
 
   handleChatConnection(
@@ -93,7 +94,7 @@ function connect(user: { id: number; username: string } | null) {
     {
       spawnFns: {
         claude: async (command: string, options: Record<string, unknown>) => {
-          spawned.push({ command, sessionId: options.sessionId });
+          spawned.push({ command, sessionId: options.sessionId, forwardedHiddenContext: options.hiddenContext });
         },
       },
       abortFns: { claude: () => true },
@@ -162,6 +163,40 @@ describe('chat.send 的归属校验', () => {
       await send(ws, { type: 'chat.send', sessionId: 's-alice', content: 'hi' });
 
       assert.equal(spawned.length, 1, 'PRISM_ROOT_USERS 里的账号不该被这道门挡住');
+    });
+  });
+
+  /**
+   * hiddenContext(ck 轮):「让 Claude 创建定时任务」把票据与接口用法装在
+   * options.hiddenContext 里随消息走。约定三条:提示词= 人话+隐藏块;显示日志
+   * 的用户行**只有人话**(刷新后气泡不能冒出大段 curl);隐藏块不顺流进运行时
+   * 的 options(它只属于提示词层)。
+   */
+  test('hiddenContext:进提示词,不进显示日志、不进运行时 options', async () => {
+    await withIsolatedDatabase(async () => {
+      const alice = { id: Number(userDb.createUser('alice', 'hash').id), username: 'alice' };
+      projectsDb.createProjectPath('/workspace/alice', null, alice.id);
+      sessionsDb.createAppSession('s-hidden', 'claude', '/workspace/alice', alice.id);
+
+      const { ws, spawned } = connect(alice);
+      await send(ws, {
+        type: 'chat.send',
+        sessionId: 's-hidden',
+        content: '我想设置一个定时任务。',
+        options: { hiddenContext: '[技术说明]ticket tt_secret 的 curl 用法……' },
+      });
+
+      assert.equal(spawned.length, 1);
+      const prompt = String(spawned[0].command);
+      assert.ok(prompt.startsWith('我想设置一个定时任务。'), '提示词应以用户可见文本开头');
+      assert.ok(prompt.includes('tt_secret'), '隐藏块必须进提示词');
+      assert.equal(spawned[0].forwardedHiddenContext, undefined, '隐藏块不该出现在运行时 options 里');
+
+      const userRows = sessionMessagesDb.listForSession('s-hidden').filter((row) => (row as { role?: string }).role === 'user');
+      assert.equal(userRows.length, 1);
+      const logged = String((userRows[0] as { content?: unknown }).content ?? '');
+      assert.equal(logged, '我想设置一个定时任务。', '显示日志的用户行只落人话');
+      assert.ok(!logged.includes('tt_secret'));
     });
   });
 

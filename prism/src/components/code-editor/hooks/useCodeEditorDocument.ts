@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { api } from '../../../utils/api';
+import { useToast } from '../../../shared/view/ui';
 import type { CodeEditorFile } from '../types/types';
 import { isBinaryFile } from '../utils/binaryFile';
 import { getPreviewKind } from '../utils/previewableFile';
@@ -19,6 +20,11 @@ const getErrorMessage = (error: unknown) => {
 };
 
 export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocumentParams) => {
+  const { toast } = useToast();
+  // 保存冲突基线:加载/成功保存后记录磁盘 mtime,保存时回传给服务端(D1)。
+  const baseMtimeRef = useRef<number | null>(null);
+  // 冲突后置真:下一次保存跳过基线检测(用户选择覆盖)。
+  const forceNextSaveRef = useRef(false);
   const [content, setContent] = useState('');
   // What the server last confirmed. The HTML preview reads the file from disk,
   // so it needs to know when the buffer has moved on without it.
@@ -43,6 +49,10 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
   const fileName = file.name;
   const fileDiffNewString = file.diffInfo?.new_string;
   const fileDiffOldString = file.diffInfo?.old_string;
+  // Diff 视图(从聊天的 Edit 工具卡点开):缓冲区里装的是 **new_string 片段**,
+  // 不是整个文件。这个标志是保存闸门 —— 片段被 Ctrl+S 写回,等于把真文件
+  // 截断成几行。判定条件与下面 load 的 diff 分支完全一致。
+  const isDiffView = Boolean(file.diffInfo && fileDiffNewString !== undefined && fileDiffOldString !== undefined);
 
   useEffect(() => {
     const loadFileContent = async () => {
@@ -71,6 +81,9 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         // Diff payload may already include full old/new snapshots, so avoid disk read.
         if (file.diffInfo && fileDiffNewString !== undefined && fileDiffOldString !== undefined) {
           setContent(fileDiffNewString);
+          // 同步 persisted:diff 视图只是"看改动",不算未保存编辑 ——
+          // 否则 hasUnsavedChanges 恒真,beforeunload 会对着一个只读视图拦人。
+          setPersistedContent(fileDiffNewString);
           setLoading(false);
           return;
         }
@@ -87,6 +100,8 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         const data = await response.json();
         setContent(data.content);
         setPersistedContent(data.content);
+        // 记录加载时的 mtime 作保存冲突基线(D1)。
+        baseMtimeRef.current = typeof data.mtimeMs === 'number' ? data.mtimeMs : null;
         setLoadError(null);
       } catch (error) {
         const message = getErrorMessage(error);
@@ -111,6 +126,12 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
       return;
     }
 
+    // Diff 视图的缓冲区是 new_string **片段** —— 写回等于把整个文件截断成几行。
+    // 头部在 diff 模式下已藏掉保存按钮,这里是对 Ctrl+S 的最后一道闸。
+    if (isDiffView) {
+      return;
+    }
+
     // 读失败时缓冲区里是错误注释,不是文件内容。绝不能保存 —— 那会用注释覆盖
     // 真文件。让用户重新打开成功后再编辑。
     if (loadError) {
@@ -126,7 +147,22 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         throw new Error('Missing project identifier');
       }
 
-      const response = await api.saveFile(fileProjectId, filePath, content);
+      // 冲突后再次点保存 = 用户选择"仍然覆盖":这次不带基线,跳过冲突检测。
+      const useForce = forceNextSaveRef.current;
+      forceNextSaveRef.current = false;
+      const baseMtime = useForce ? undefined : (baseMtimeRef.current ?? undefined);
+
+      const response = await api.saveFile(fileProjectId, filePath, content, baseMtime);
+
+      // 409:磁盘版本在编辑期间变过。不覆盖,给用户"重载 / 仍覆盖"两条路 ——
+      // 重载 = 关掉重新打开;仍覆盖 = 再点一次保存(下一次带 force)。
+      if (response.status === 409) {
+        forceNextSaveRef.current = true;
+        const conflictMsg = '文件在你编辑期间被改动过。再次点击保存将覆盖磁盘版本;或关闭后重新打开以加载最新内容。';
+        setSaveError(conflictMsg);
+        toast({ message: '文件已被改动,未覆盖', description: '再次保存=覆盖;重新打开=加载最新', variant: 'error' });
+        return;
+      }
 
       if (!response.ok) {
         const contentType = response.headers.get('content-type');
@@ -140,7 +176,9 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         throw new Error(`Save failed: ${response.status} ${response.statusText}`);
       }
 
-      await response.json();
+      const saved = await response.json().catch(() => ({}));
+      // 更新基线为这次写入后的 mtime,后续保存以它为准。
+      if (typeof saved?.mtimeMs === 'number') baseMtimeRef.current = saved.mtimeMs;
 
       setPersistedContent(content);
       setSaveSuccess(true);
@@ -152,7 +190,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
     } finally {
       setSaving(false);
     }
-  }, [content, filePath, fileProjectId, previewKind, fileName, loadError]);
+  }, [content, filePath, fileProjectId, previewKind, fileName, isDiffView, loadError, toast]);
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([content], { type: 'text/plain' });
@@ -179,6 +217,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
     saveError,
     loadError,
     isBinary,
+    isDiffView,
     previewKind,
     fileProjectId,
     handleSave,

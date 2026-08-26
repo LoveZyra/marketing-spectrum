@@ -7,6 +7,7 @@ import { WebSocket, type RawData } from 'ws';
 
 import { projectsDb } from '@/modules/database/index.js';
 import { claimForShell, releaseShellClaim } from '@/modules/websocket/services/conversation-ownership.service.js';
+import { pushReplayChunk } from '@/modules/websocket/services/shell-replay-buffer.js';
 import { readSocketViewer, stampSocketViewer } from '@/shared/project-visibility.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
@@ -31,6 +32,8 @@ type PtySessionEntry = {
   pty: IPty;
   ws: WebSocket | null;
   buffer: string[];
+  /** buffer 里所有 chunk 的字节数合计 —— 回放缓冲的预算按字节收,不按条数。 */
+  bufferedBytes: number;
   timeoutId: NodeJS.Timeout | null;
   projectPath: string;
   sessionId: string | null;
@@ -50,6 +53,14 @@ type PtySessionEntry = {
 const ptySessionsMap = new Map<string, PtySessionEntry>();
 const PTY_SESSION_TIMEOUT = 30 * 60 * 1000;
 const SHELL_URL_PARSE_BUFFER_LIMIT = 32768;
+/**
+ * 回放缓冲的字节预算。老的上限只数**条数**(5000 chunk),而 chunk 大小不设限 ——
+ * 终端里 `cat` 一个大文件,单个 PTY 的缓冲能挂住几十 MB 直到 30 分钟超时回收
+ * (chat 侧的 run registry 早改成字节预算了,这里当时漏掉)。2MiB 足够回放一屏
+ * 滚动历史;超预算从头部裁,行为与旧的 shift 一致。
+ */
+const PTY_REPLAY_BUFFER_MAX_BYTES = 2 * 1024 * 1024;
+const PTY_REPLAY_BUFFER_MAX_CHUNKS = 5000;
 
 type ShellWebSocketDependencies = {
   /**
@@ -445,6 +456,7 @@ export function handleShellConnection(
           pty: shellProcess,
           ws,
           buffer: [],
+          bufferedBytes: 0,
           timeoutId: null,
           projectPath,
           sessionId,
@@ -462,12 +474,15 @@ export function handleShellConnection(
             return;
           }
 
-          if (session.buffer.length < 5000) {
-            session.buffer.push(chunk);
-          } else {
-            session.buffer.shift();
-            session.buffer.push(chunk);
-          }
+          // 双预算裁剪(字节为主 + 条数兜底)抽成纯函数,便于单测。
+          session.bufferedBytes = pushReplayChunk(
+            session.buffer,
+            session.bufferedBytes,
+            chunk,
+            PTY_REPLAY_BUFFER_MAX_BYTES,
+            PTY_REPLAY_BUFFER_MAX_CHUNKS,
+            (text) => Buffer.byteLength(text),
+          );
 
           if (session.ws && session.ws.readyState === WebSocket.OPEN) {
             let outputData = chunk;

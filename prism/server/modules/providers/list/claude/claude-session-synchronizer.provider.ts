@@ -18,6 +18,51 @@ type ParsedSession = {
   sessionName?: string;
 };
 
+const TAIL_BYTES = 64 * 1024;
+
+/**
+ * 尾部内容的 (mtimeMs, size) 指纹缓存。
+ *
+ * 一次同步里,同一个文件的尾部会被读两遍:`extractLastActivityFromEnd`(取最后
+ * 活动时间)和 `extractSessionAiTitleFromEnd`(取 AI 标题,会话还叫 Untitled 时
+ * 每 3s 一次)。两次都是 stat+open+read(64KB)+切首行,读的是**同一段 64KB**。
+ * 用指纹缓存把这一趟同步里的第二次读省掉;文件一变(mtime/size 变)即失效。
+ * 只留很小的容量 —— 它是同一 pass 内的短时复用,不是长期缓存。
+ */
+const jsonlTailCache = new Map<string, { mtimeMs: number; size: number; content: string }>();
+const JSONL_TAIL_CACHE_MAX = 16;
+
+async function readJsonlTailCached(filePath: string): Promise<string> {
+  const stats = await stat(filePath);
+  const hit = jsonlTailCache.get(filePath);
+  if (hit && hit.mtimeMs === stats.mtimeMs && hit.size === stats.size) {
+    return hit.content;
+  }
+
+  let content: string;
+  if (stats.size > TAIL_BYTES) {
+    const handle = await open(filePath, 'r');
+    try {
+      const buffer = Buffer.alloc(TAIL_BYTES);
+      await handle.read(buffer, 0, TAIL_BYTES, stats.size - TAIL_BYTES);
+      const tail = buffer.toString('utf8');
+      content = tail.slice(tail.indexOf('\n') + 1); // 首行大概率被截断,丢掉
+    } finally {
+      await handle.close();
+    }
+  } else {
+    content = await readFile(filePath, 'utf8');
+  }
+
+  jsonlTailCache.set(filePath, { mtimeMs: stats.mtimeMs, size: stats.size, content });
+  while (jsonlTailCache.size > JSONL_TAIL_CACHE_MAX) {
+    const oldest = jsonlTailCache.keys().next().value;
+    if (oldest === undefined) break;
+    jsonlTailCache.delete(oldest);
+  }
+  return content;
+}
+
 /**
  * Session indexer for Claude transcript artifacts.
  */
@@ -63,13 +108,14 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       }
 
       const timestamps = await readFileTimestamps(filePath);
+      const lastActivity = await this.extractLastActivityFromEnd(filePath);
       sessionsDb.createSession(
         parsed.sessionId,
         this.provider,
         parsed.projectPath,
         parsed.sessionName,
         timestamps.createdAt,
-        timestamps.updatedAt,
+        lastActivity ?? timestamps.updatedAt,
         filePath
       );
       processed += 1;
@@ -96,13 +142,14 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     }
 
     const timestamps = await readFileTimestamps(filePath);
+    const lastActivity = await this.extractLastActivityFromEnd(filePath);
     return sessionsDb.createSession(
       parsed.sessionId,
       this.provider,
       parsed.projectPath,
       parsed.sessionName,
       timestamps.createdAt,
-      timestamps.updatedAt,
+      lastActivity ?? timestamps.updatedAt,
       filePath
     );
   }
@@ -185,32 +232,38 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     return map;
   }
 
+  /**
+   * 会话的「真实最后活动时间」= transcript 里最后一条真实消息(user/assistant)的
+   * timestamp,而不是文件 mtime。
+   *
+   * 为什么不能用 mtime(即 readFileTimestamps().updatedAt):点开一个会话会触发
+   * 预热(`claude --resume`),SDK 会**碰一下这个 JSONL 的 mtime 却不追加任何消息**
+   * (实测行数不变、mtime 变成点击时刻)。侧栏按 updated_at 排序,于是"只是点一下、
+   * 没说话"也会把会话顶到最前 —— 这正是用户报的乱序。改用最后一条 user/assistant
+   * 消息的时间后:预热碰 mtime 不影响排序,真正发过话才会前移。
+   *
+   * 只读尾部 64KB(消息在文件末尾),从后往前找第一条 user/assistant 且带合法
+   * timestamp 的行。找不到(空会话 / 尾部无对话行)就回 undefined,调用方回落到 mtime。
+   */
+  private async extractLastActivityFromEnd(filePath: string): Promise<string | undefined> {
+    try {
+      return pickLastActivityTimestamp(await readJsonlTailCached(filePath));
+    } catch {
+      // 读不了就交给调用方回落到 mtime。
+    }
+    return undefined;
+  }
+
   private async extractSessionAiTitleFromEnd(
     filePath: string,
     sessionId: string
   ): Promise<string | undefined> {
     try {
-      // 只读文件尾部。标题事件(如果有)总在末尾附近,而这个函数对一个始终叫
-      // "Untitled Claude Session" 的会话每 3 秒就会被调用一次 —— 原来是把整份
-      // transcript 读进内存、切成行数组、从后往前全部 JSON.parse 一遍再返回
-      // undefined。24 MB 的会话就是每 3 秒 135 ms 加上万个临时数组元素。
-      const TAIL_BYTES = 64 * 1024;
-      const stats = await stat(filePath);
-      let content: string;
-      if (stats.size > TAIL_BYTES) {
-        const handle = await open(filePath, 'r');
-        try {
-          const buffer = Buffer.alloc(TAIL_BYTES);
-          await handle.read(buffer, 0, TAIL_BYTES, stats.size - TAIL_BYTES);
-          const tail = buffer.toString('utf8');
-          // 首行大概率被从中间截断,丢掉。
-          content = tail.slice(tail.indexOf('\n') + 1);
-        } finally {
-          await handle.close();
-        }
-      } else {
-        content = await readFile(filePath, 'utf8');
-      }
+      // 只读文件尾部(标题事件总在末尾附近)。这个尾读与 extractLastActivityFromEnd
+      // 读的是同一段 64KB,共用 readJsonlTailCached 的指纹缓存,一次同步里不会把
+      // 同一段读两遍。原来是把整份 transcript 读进来切行全 parse,24MB 会话每 3s
+      // 135ms + 上万临时数组元素。
+      const content = await readJsonlTailCached(filePath);
       const lines = content.split(/\r?\n/);
 
       for (let index = lines.length - 1; index >= 0; index -= 1) {
@@ -247,4 +300,39 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
 
     return undefined;
   }
+}
+
+
+/**
+ * 从一段 JSONL 文本里挑出「最后一条真实对话消息」的时间戳。
+ *
+ * 从后往前扫,第一条 `type` 为 user/assistant 且带合法 `timestamp` 的行即为所求。
+ * 别的行(queue-operation / mode / custom-title / summary / system compact_boundary
+ * 等)是元数据,不代表"发生了会话",一律跳过。找不到回 undefined。
+ *
+ * 抽成纯函数是为了能脱离文件 I/O 单测 —— 这正是「点一下不该改排序、真发过话才改」
+ * 这条规则的核心判断。
+ */
+export function pickLastActivityTimestamp(content: string): string | undefined {
+  const lines = content.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim();
+    if (!line) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const data = parsed as Record<string, unknown>;
+    const type = typeof data.type === 'string' ? data.type : undefined;
+    const ts = typeof data.timestamp === 'string' ? data.timestamp : undefined;
+    if ((type === 'user' || type === 'assistant') && ts) {
+      const parsedTs = new Date(ts);
+      if (!Number.isNaN(parsedTs.getTime())) {
+        return parsedTs.toISOString();
+      }
+    }
+  }
+  return undefined;
 }

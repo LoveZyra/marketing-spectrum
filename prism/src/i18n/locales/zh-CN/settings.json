@@ -58,7 +58,8 @@
     }
   },
   "terminalShortcuts": {
-    "scrollDown": "滚动到底部"
+    "scrollDown": "滚动到底部",
+    "paste": "粘贴"
   },
   "mainTabs": {
     "agents": "智能体",
@@ -182,7 +183,8 @@
     }
   },
   "saveStatus": {
-    "success": "设置保存成功！"
+    "success": "设置保存成功！",
+    "error": "保存失败,请重试"
   },
   "apiKeys": {
     "title": "API 密钥",
@@ -205,8 +207,8 @@
     },
     "confirmDelete": "确定要删除此 API 密钥吗？",
     "status": {
-      "active": "激活",
-      "inactive": "未激活"
+      "active": "使用中",
+      "inactive": "已停用"
     },
     "github": {
       "title": "GitHub 令牌",
@@ -225,7 +227,13 @@
       "confirmDelete": "确定要删除此 GitHub 令牌吗？"
     },
     "apiDocsLink": "API 文档",
-    "loading": "加载中..."
+    "loading": "加载中...",
+    "action": {
+      "disable": "停用",
+      "enable": "启用",
+      "disableHint": "停用后,用这把密钥的请求会被拒绝",
+      "enableHint": "启用后,这把密钥即可用于外部 API 请求"
+    }
   },
   "agents": {
     "authStatus": {
@@ -386,5 +394,42 @@
     "gateway": "模型网关",
     "gatewayDown": "不可达",
     "gatewayUnset": "未配置 BASE_URL"
+  },
+  "skills": {
+    "title": "技能",
+    "scopeUser": "用户",
+    "scopePlugin": "插件",
+    "scopeProject": "项目",
+    "sizeLimit": "所选技能文件夹总大小需小于 30 MB。",
+    "noSkillMd": "所选文件夹里没有 SKILL.md 文件。",
+    "readFailed": "读取技能文件夹失败",
+    "dropHint2": "请拖入一个或多个 markdown 文件,或包含 SKILL.md 的文件夹。",
+    "addFilesFirst": "请先添加一个或多个 markdown 文件。",
+    "markdownFile": "Markdown 文件",
+    "hideInstallPath": "收起安装位置",
+    "showInstallPath": "装到哪里?",
+    "searchPlaceholder": "搜索技能…",
+    "searchAria": "搜索技能",
+    "clearSearch": "清空搜索",
+    "scanning": "正在扫描项目技能…",
+    "closeAddDialog": "关闭添加技能对话框",
+    "savedOk": "技能保存成功。",
+    "installOne": "安装技能",
+    "installMany": "安装 {{count}} 个技能",
+    "dropTitle": "拖入技能文件夹或 SKILL.md",
+    "dropSubtitle": "文件夹可包含脚本、参考资料与素材。",
+    "chooseFiles": "选择文件",
+    "chooseFolder": "选择文件夹",
+    "readyToInstall": "待安装",
+    "addSkill": "添加技能",
+    "refresh": "刷新",
+    "uploadHint": "上传一个 SKILL.md 文件或完整的技能文件夹。",
+    "nameHint": "文件夹上传沿用所选文件夹名;单文件使用 SKILL.md 里的 `name`。",
+    "cancel": "取消",
+    "emptyTitle": "还没有发现技能",
+    "emptyHint": "在上方添加全局技能,或在工作区里创建项目级技能文件夹。",
+    "noMatchTitle": "没有匹配的技能",
+    "noMatchHint": "换个命令、名称、范围、项目或来源路径试试。",
+    "source": "来源"
   }
 }

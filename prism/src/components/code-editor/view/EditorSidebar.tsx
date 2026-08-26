@@ -47,6 +47,16 @@ export default function EditorSidebar({
   const containerRef = useRef<HTMLDivElement>(null);
   const [effectiveWidth, setEffectiveWidth] = useState(editorWidth);
 
+  // 编辑器真正关掉(editingFile 清空)时才收回弹出态。以前是在 onClose 里
+  // 先 setPoppedOut(false) 再调 onCloseEditor —— 现在关闭可能被"未保存改动"
+  // 确认框拒绝,顺序反了会把编辑器从弹出弹回侧栏(重挂载,恰好丢掉刚保住的
+  // 改动)。状态跟着事实走:关没关成,看 editingFile。
+  useEffect(() => {
+    if (!editingFile) {
+      setPoppedOut(false);
+    }
+  }, [editingFile]);
+
   // Adjust editor width when container size changes to ensure buttons are always visible
   useEffect(() => {
     if (!editingFile || isMobile || poppedOut) return;
@@ -97,10 +107,7 @@ export default function EditorSidebar({
       <Suspense fallback={<PanelLoadingFallback />}>
         <CodeEditor
           file={editingFile}
-          onClose={() => {
-            setPoppedOut(false);
-            onCloseEditor();
-          }}
+          onClose={onCloseEditor}
           projectPath={projectPath}
           isSidebar={false}
         />

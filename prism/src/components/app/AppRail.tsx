@@ -1,4 +1,4 @@
-import { MessageSquare, Terminal, Folder, NotebookPen, PanelLeftClose, PanelLeftOpen, Wrench, Settings } from 'lucide-react';
+import { MessageSquare, Terminal, Folder, NotebookPen, Clock, PanelLeftClose, PanelLeftOpen, Wrench, Settings } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -17,6 +17,8 @@ type RailTab = {
 
 const RAIL_TABS: RailTab[] = [
   { id: 'chat', labelKey: 'tabs.chat', icon: MessageSquare },
+  // 定时任务(cj 轮,用户指定:对话与终端之间,时钟图标)
+  { id: 'tasks', labelKey: 'tabs.tasks', icon: Clock },
   { id: 'shell', labelKey: 'tabs.shell', icon: Terminal },
   { id: 'files', labelKey: 'tabs.files', icon: Folder },
   { id: 'notebook', labelKey: 'tabs.notebook', icon: NotebookPen },

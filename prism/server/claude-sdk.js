@@ -518,12 +518,15 @@ function mapCliOptionsToSDK(options = {}, stderrTail = null) {
  * @param {Object} queryInstance - SDK query instance
  * @param {Object} writer - WebSocket writer for reconnect support
  */
-function addSession(sessionId, queryInstance, writer = null) {
+function addSession(sessionId, queryInstance, writer = null, abortController = null) {
   activeSessions.set(sessionId, {
     instance: queryInstance,
     startTime: Date.now(),
     status: 'active',
-    writer
+    writer,
+    // 硬撕通道:interrupt() 走与子进程的协商通道,子进程僵死时它也跟着挂 ——
+    // 而"停止"恰恰最常发生在僵死的时候。超时后用它直接拆 query + 杀子进程。
+    abortController
   });
 }
 
@@ -618,6 +621,11 @@ function extractTokenBudget(sdkMessage, runtime = null) {
     return null;
   }
 
+  // 会话累计费用(美元)。只有 result 帧带它;顺着 token_budget 状态帧透传,
+  // 前端聚合时对缺席帧保留上一次的值(见 useChatRealtimeHandlers)。
+  const costUsd = readNumber(sdkMessage.total_cost_usd ?? sdkMessage.totalCostUsd);
+  const costField = costUsd > 0 ? { costUsd } : {};
+
   const messageUsage = sdkMessage.message?.usage || sdkMessage.usage;
   if (messageUsage && typeof messageUsage === 'object') {
     const directInputTokens = readNumber(messageUsage.input_tokens ?? messageUsage.inputTokens);
@@ -637,6 +645,7 @@ function extractTokenBudget(sdkMessage, runtime = null) {
       cacheReadTokens,
       cacheCreationTokens,
       cacheTokens,
+      ...costField,
       breakdown: {
         input: inputTokens,
         output: outputTokens,
@@ -666,6 +675,7 @@ function extractTokenBudget(sdkMessage, runtime = null) {
     total: contextWindow,
     inputTokens,
     outputTokens,
+    ...costField,
     breakdown: {
       input: inputTokens,
       output: outputTokens,
@@ -808,6 +818,12 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
     if (mcpServers) {
       sdkOptions.mcpServers = mcpServers;
     }
+
+    // 一次性路径此前没有任何硬撕手柄(持久路径在 buildPersistentSdkOptions 里
+    // 有):interrupt() 挂死时停止按钮就废了。给 SDK 传一个 abortController,
+    // 超时兜底直接 abort 掉子进程。
+    const oneShotAbortController = new AbortController();
+    sdkOptions.abortController = oneShotAbortController;
 
     // Turns with image attachments switch to streaming input so the images
     // ride along as real content blocks. Built per query attempt because an
@@ -954,9 +970,10 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
     // on the gateway run entry (abort-by-runId before the id is known).
     if (runEntry) {
       runEntry.queryInstance = queryInstance;
+      runEntry.oneShotAbortController = oneShotAbortController;
     }
     if (capturedSessionId) {
-      addSession(capturedSessionId, queryInstance, ws);
+      addSession(capturedSessionId, queryInstance, ws, oneShotAbortController);
     }
 
     // Process streaming messages
@@ -966,7 +983,7 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
       if (message.session_id && !capturedSessionId) {
 
         capturedSessionId = message.session_id;
-        addSession(capturedSessionId, queryInstance, ws);
+        addSession(capturedSessionId, queryInstance, ws, oneShotAbortController);
 
         // Set session ID on writer
         if (ws.setSessionId && typeof ws.setSessionId === 'function') {
@@ -1070,6 +1087,37 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
  *   conversation's first turn has no provider-native id yet)
  * @returns {boolean} True if session was aborted, false if not found
  */
+/**
+ * interrupt() 加超时竞速。
+ *
+ * interrupt() 是与子进程的**协商**:请它体面收尾。但用户按停止的高频场景恰恰是
+ * 子进程已经僵死 —— 协商永远没有回音,`await` 挂住,abort 处理器拿不到返回、
+ * 终止帧发不出去,停止按钮看起来"没反应",要等几十分钟的看门狗兜底。
+ * 超时(默认 5s)即放弃协商,由调用方升级到 abortController 硬撕。
+ *
+ * 注意给原 promise 挂兜底 catch:超时后它可能才姗姗来迟地 reject,不接住就是
+ * unhandledRejection。
+ */
+const INTERRUPT_TIMEOUT_MS = 5000;
+async function interruptWithTimeout(queryLike, label, timeoutMs = INTERRUPT_TIMEOUT_MS) {
+  let timer = null;
+  const interruptPromise = queryLike.interrupt();
+  interruptPromise.catch(() => { /* 超时放弃后迟到的拒绝,不让它变成 unhandled */ });
+  try {
+    await Promise.race([
+      interruptPromise,
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`interrupt() timed out after ${timeoutMs}ms (${label})`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function abortClaudeSDKSession(sessionId, context = {}) {
   const session = sessionId ? getSession(sessionId) : null;
 
@@ -1095,8 +1143,23 @@ async function abortClaudeSDKSession(sessionId, context = {}) {
     abortedSessionIds.add(sessionId);
     if (runEntry) runEntry.aborted = true;
 
-    // Call interrupt() on the query instance
-    await session.instance.interrupt();
+    try {
+      await interruptWithTimeout(session.instance, `session ${sessionId}`);
+    } catch (interruptError) {
+      // 协商超时/失败:升级为硬撕。abortController 直接拆 query + 杀子进程,
+      // run 循环会以 AbortError 收尾(runEntry.aborted 已置,按中止归类)。
+      if (session.abortController) {
+        console.error(
+          `[Claude SDK] interrupt failed for ${sessionId}, escalating to hard abort:`,
+          interruptError?.message || interruptError,
+        );
+        try { session.abortController.abort(); } catch { /* best effort */ }
+      } else {
+        // 没有硬撕手柄(不该发生 —— 两条路径现在都传了):保持旧语义,
+        // 当作中止失败,run 继续、由它自己发终止帧。
+        throw interruptError;
+      }
+    }
 
     // Update session status
     session.status = 'aborted';
@@ -1130,6 +1193,21 @@ function isClaudeSDKSessionActive(sessionId) {
  */
 function getActiveClaudeSDKSessions() {
   return getAllSessions();
+}
+
+/**
+ * 关停时清空整个常驻池。
+ *
+ * shutdown 原先只 abort **有活跃 turn** 的会话(activeSessions),而常驻池里
+ * 空闲(无 turn)的 runtime —— 最多 MAX_RUNTIMES 个 claude 子进程 —— 一个都没碰,
+ * 全靠 process.exit 断父子管道连带退出。给它一个显式的 dispose-all,让关停
+ * 干净地收掉每个子进程,而不是靠"父进程一死子进程自然没了"的隐式行为。
+ */
+async function disposeAllRuntimes() {
+  const runtimes = [...claudeRuntimes.values()];
+  if (runtimes.length === 0) return 0;
+  await Promise.allSettled(runtimes.map((runtime) => disposePersistentRuntime(runtime)));
+  return runtimes.length;
 }
 
 /**
@@ -1403,7 +1481,11 @@ function buildPersistentSdkOptions(options, runtime) {
   // 子代理的工具调用另有正路(agent-*.jsonl → subagentTools),不缺信息。
   // 显式钉成 false,不吃默认值。
   sdkOptions.forwardSubagentText = false;
-  sdkOptions.maxTurns = 100;
+  // 不设 maxTurns:streaming-input 模式下一个 query 贯穿整段对话,num_turns 是
+  // **跨用户回合累计**的 —— 设 100 意味着聊到第一百个来回(或几轮重 agentic
+  // 任务)后必撞 error_max_turns,这一轮莫名失败、runtime 报废,而且越活跃的
+  // 会话死得越早。单回合的失控自有 turn 看门狗(空转/工具静默超时)兜着,
+  // 一次性路径也从来没设过这个上限,两条路径行为对齐。
 
   if (options.resumeSessionId) sdkOptions.resume = options.resumeSessionId;
 
@@ -1549,7 +1631,7 @@ async function readPersistentRuntime(runtime) {
 
       if (message.session_id && !turn.capturedSessionId) {
         turn.capturedSessionId = message.session_id;
-        addSession(turn.capturedSessionId, runtime.query, turn.ws);
+        addSession(turn.capturedSessionId, runtime.query, turn.ws, runtime.abortController);
         if (turn.ws.setSessionId && typeof turn.ws.setSessionId === 'function') {
           turn.ws.setSessionId(turn.capturedSessionId);
         }
@@ -1703,6 +1785,10 @@ function failActiveTurn(runtime, error) {
   // streamed yet (a replay after partial output would duplicate content).
   if (error && typeof error === 'object') {
     error.prismStreamed = Boolean(turn.streamed);
+    // B8:输入是否已递交 + 回合起点。分发器用它们判断"重放会不会造出重复的
+    // 用户消息"(递交之后 CLI 可能已把消息写进 transcript)。
+    error.prismInputDelivered = Boolean(turn.inputDelivered);
+    error.prismTurnStartedAtMs = turn.startedAtMs || null;
     // 子进程的 stderr 跟着错误一起往上走 —— 分发器那边会把它拼进用户看到的
     // 那条 error 里,否则用户只拿到一个退出码。
     const tail = runtime.stderrTail?.text();
@@ -1751,21 +1837,24 @@ async function abortClaudeSDKRun(runId) {
   try {
     if (runtime && !runtime.disposed && runtime.turn) {
       console.log(`[Claude SDK] Aborting run ${runId} via runtime interrupt`);
-      await runtime.query.interrupt();
+      await interruptWithTimeout(runtime.query, `run ${runId} (runtime)`);
       return true;
     }
     if (entry.queryInstance) {
       console.log(`[Claude SDK] Aborting run ${runId} via one-shot interrupt`);
-      await entry.queryInstance.interrupt();
+      await interruptWithTimeout(entry.queryInstance, `run ${runId} (one-shot)`);
       return true;
     }
   } catch (error) {
-    console.error(`[Claude SDK] Abort by runId ${runId} failed, disposing runtime:`, error?.message || error);
+    // interrupt 协商失败或超时(子进程僵死):升级为硬撕。
+    console.error(`[Claude SDK] Abort by runId ${runId} failed, escalating:`, error?.message || error);
     if (runtime && !runtime.disposed) {
       try {
         runtime.abortController?.abort();
       } catch { /* best effort */ }
       await disposePersistentRuntime(runtime).catch(() => {});
+    } else if (entry.oneShotAbortController) {
+      try { entry.oneShotAbortController.abort(); } catch { /* best effort */ }
     }
     return true;
   }
@@ -1964,6 +2053,10 @@ async function runPersistentTurn(runtime, { command, images, cwd, ws, sessionSum
     capturedSessionId: runtime.sessionId || null,
     sessionCreatedSent: false,
     sawCompactBoundary: false,
+    // B8:回合起点与"输入已递交给 CLI"标志。回退重放的安全性判断要用 ——
+    // 输入递交之后 CLI 可能已把用户消息写进 transcript,盲目重放=重复消息。
+    startedAtMs: Date.now(),
+    inputDelivered: false,
     // 在途工具调用(见过 tool_use、还没等到 tool_result 的 id):工具执行期间
     // 流上可以完全安静(长 SQL 不吐 stdout),不能按静默判死。
     pendingToolUses: new Set(),
@@ -1980,7 +2073,7 @@ async function runPersistentTurn(runtime, { command, images, cwd, ws, sessionSum
 
   runtime.turn = turn;
   runtime.lastUsed = Date.now();
-  if (runtime.sessionId) addSession(runtime.sessionId, runtime.query, ws);
+  if (runtime.sessionId) addSession(runtime.sessionId, runtime.query, ws, runtime.abortController);
 
   try {
     runtime.input.push({
@@ -1989,6 +2082,9 @@ async function runPersistentTurn(runtime, { command, images, cwd, ws, sessionSum
       parent_tool_use_id: null,
       message: { role: 'user', content },
     });
+    // push 成功 = 消息已进 CLI 的输入流。从这一刻起,CLI 随时可能把它落进
+    // transcript —— 之后的失败不能再无条件重放。
+    turn.inputDelivered = true;
   } catch (error) {
     runtime.turn = null;
     throw error;
@@ -2346,6 +2442,56 @@ let pruneCounter = 0;
  * @param {Object|null} runEntry - Gateway run registry entry
  * @param {boolean} degradeNotice - True when the fallback is due to the runtime limit (tells the user)
  */
+/**
+ * B8:回退重放前的"transcript 有没有收到这条用户消息"侦察。
+ *
+ * 场景:常驻回合在**输入已递交、还没流出任何内容**的窗口里崩掉。此时有两种世界:
+ *   a) 子进程早死了,根本没读到消息 → transcript 没动 → 重放安全;
+ *   b) 子进程收下消息、写进 transcript 后才崩 → 重放会造出**重复的用户消息**。
+ * 区分办法:看 transcript 尾部有没有 timestamp 晚于回合起点的 user 行。
+ * 只读尾部 64KB(与 last-activity 提取同款);拿不准(读失败/没有 resume id)
+ * 一律按"已落盘"处理 —— 宁可让用户重发一次,不制造重复消息。
+ */
+const TRANSCRIPT_PROBE_TAIL_BYTES = 64 * 1024;
+async function userTurnReachedTranscript(options, sinceMs) {
+  const providerSessionId = options?.resumeSessionId;
+  const cwd = options?.cwd || options?.projectPath;
+  if (!providerSessionId || !cwd || !Number.isFinite(sinceMs)) return true; // 拿不准按最坏处理
+  try {
+    const encoded = String(cwd).replace(/[^a-zA-Z0-9-]/g, '-');
+    const transcriptPath = path.join(os.homedir(), '.claude', 'projects', encoded, `${providerSessionId}.jsonl`);
+    const stat = await fs.stat(transcriptPath);
+    // 文件自回合起点(留 2s 时钟余量)就没动过 → 消息肯定没落盘。
+    if (stat.mtimeMs < sinceMs - 2000) return false;
+    const start = Math.max(0, stat.size - TRANSCRIPT_PROBE_TAIL_BYTES);
+    const handle = await fs.open(transcriptPath, 'r');
+    let tailText = '';
+    try {
+      const length = stat.size - start;
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, start);
+      tailText = buffer.toString('utf8');
+    } finally {
+      await handle.close();
+    }
+    const lines = tailText.split(/\r?\n/);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index]?.trim();
+      if (!line) continue;
+      let parsed;
+      try { parsed = JSON.parse(line); } catch { continue; }
+      if (parsed?.type !== 'user' || typeof parsed.timestamp !== 'string') continue;
+      const ts = Date.parse(parsed.timestamp);
+      if (Number.isFinite(ts) && ts >= sinceMs - 2000) return true;
+      // 行按时间只增,遇到更老的 user 行即可停。
+      if (Number.isFinite(ts)) return false;
+    }
+    return false;
+  } catch {
+    return true; // 读不了 transcript:按已落盘处理,不重放
+  }
+}
+
 async function runOneShotFallback(command, options, ws, runEntry, degradeNotice) {
   const budget = MAX_RUNTIMES + MAX_ONESHOT_OVERFLOW;
   if (claudeRuntimes.size + activeOneShotFallbacks >= budget) {
@@ -2524,13 +2670,27 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
         // budget (with a visible notice) or fail fast when it is exhausted.
         console.warn('[Claude SDK] Runtime pool full, attempting budgeted one-shot fallback:', message);
         await runOneShotFallback(command, options, ws, runEntry, true);
+      } else if (
+        error?.prismInputDelivered
+        && (await userTurnReachedTranscript(options, error.prismTurnStartedAtMs))
+      ) {
+        // 输入已递交且 transcript 侦察显示消息可能已落盘:重放会造出重复的
+        // 用户消息。老实报错让用户重发,比悄悄污染 transcript 好。
+        console.warn('[Claude SDK] Persistent turn failed after input delivery; transcript may hold the message — not replaying:', message);
+        ws.send(createNormalizedMessage({ kind: 'error', content: `${displayMessage}\n\n(回合在消息递交后失败,为避免重复消息未自动重试,请重新发送)`, sessionId: options.sessionId || null, provider: 'claude' }));
+        ws.send(createCompleteMessage({ provider: 'claude', sessionId: options.sessionId || null, exitCode: 1 }));
       } else {
         console.warn('[Claude SDK] Persistent turn failed, falling back to one-shot mode:', message);
         await runOneShotFallback(command, options, ws, runEntry, false);
       }
     }
   } else {
-    await queryClaudeSDKOnce(command, options, ws, runEntry);
+    // 有意的一次性路径(外部 API 的 options.oneShot、或 PRISM_PERSISTENT_SESSIONS=0)
+    // 也必须进预算闸:每个一次性回合就是一个真实的 CLI 子进程,直呼
+    // queryClaudeSDKOnce 等于绕开 MAX_RUNTIMES+overflow 的全局并发预算 ——
+    // API 流量可以无上限打出上百个进程,仅剩 IP 限流兜底。
+    // degradeNotice=false:这不是降级,不发"已降级"提示,只做配额与计数。
+    await runOneShotFallback(command, options, ws, runEntry, false);
   }
 
   // -------- post-turn changed-files summary --------
@@ -2702,6 +2862,9 @@ export {
   toSdkModel,
   mapCliOptionsToSDK,
   readTurnWatchdogConfig,
+  interruptWithTimeout,
+  INTERRUPT_TIMEOUT_MS,
+  userTurnReachedTranscript,
   collectToolUseDelta,
   queryClaudeSDK,
   prewarmClaudeSession,
@@ -2711,6 +2874,7 @@ export {
   abortClaudeSDKRun,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
+  disposeAllRuntimes,
   getToolApprovalSessionId,
   resolveToolApproval,
   getPendingApprovalsForSession,

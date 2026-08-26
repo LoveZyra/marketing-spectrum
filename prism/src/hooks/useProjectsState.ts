@@ -119,7 +119,7 @@ const normalizeSessionProvider = (session: ProjectSession): ProjectSession => ({
   __provider: getSessionProvider(session),
 });
 
-const projectsHaveChanges = (
+export const projectsHaveChanges = (
   prevProjects: Project[],
   nextProjects: Project[],
 ): boolean => {
@@ -138,6 +138,13 @@ const projectsHaveChanges = (
       nextProject.displayName !== prevProject.displayName ||
       nextProject.fullPath !== prevProject.fullPath ||
       Boolean(nextProject.isStarred) !== Boolean(prevProject.isStarred) ||
+      // 权限徽标(公共 / 已共享·N / 仅 root)由这四项算出来。漏掉它们,改完权限后
+      // handleSidebarRefresh 虽然拉到了新数据,却会因"这里判定没变"而跳过 setProjects,
+      // 徽标一直停在旧值,必须整页刷新才更新 —— 用户报的就是这个。
+      Boolean(nextProject.isPublic) !== Boolean(prevProject.isPublic) ||
+      (nextProject.ownerUserId ?? null) !== (prevProject.ownerUserId ?? null) ||
+      Boolean(nextProject.sharedWithViewer) !== Boolean(prevProject.sharedWithViewer) ||
+      (nextProject.sharedUserCount ?? 0) !== (prevProject.sharedUserCount ?? 0) ||
       serialize(nextProject.sessionMeta) !== serialize(prevProject.sessionMeta) ||
       serialize(nextProject.sessions) !== serialize(prevProject.sessions)
     );

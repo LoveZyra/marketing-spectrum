@@ -11,6 +11,7 @@ import { useCodeEditorSettings } from '../hooks/useCodeEditorSettings';
 import { useEditorKeyboardShortcuts } from '../hooks/useEditorKeyboardShortcuts';
 import { useHtmlPreview } from '../hooks/useHtmlPreview';
 import type { CodeEditorFile } from '../types/types';
+import { setEditorDirty } from '../utils/editorDirtyState';
 import { createMinimapExtension, createScrollToFirstChunkExtension, getLanguageExtensions } from '../utils/editorExtensions';
 import { getEditorStyles } from '../utils/editorStyles';
 import { createEditorToolbarPanelExtension } from '../utils/editorToolbarPanel';
@@ -69,6 +70,7 @@ export default function CodeEditor({
     saveError,
     loadError,
     isBinary,
+    isDiffView,
     previewKind,
     fileProjectId,
     handleSave,
@@ -89,6 +91,14 @@ export default function CodeEditor({
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [hasUnsavedChanges]);
+
+  // 应用内的关闭/换文件同样要拦(beforeunload 只管浏览器级离开):把脏态登记进
+  // 单例,useEditorSidebar 在关闭与打开新文件前查它。diff 视图与读失败缓冲不算
+  // 脏(那不是用户的编辑);卸载时清零,别让残影拦住下一次打开。
+  useEffect(() => {
+    setEditorDirty(hasUnsavedChanges && !isDiffView && !loadError);
+    return () => setEditorDirty(false);
+  }, [hasUnsavedChanges, isDiffView, loadError]);
 
   const isMarkdownFile = useMemo(() => {
     const extension = file.name.split('.').pop()?.toLowerCase();
@@ -298,6 +308,7 @@ export default function CodeEditor({
             notebookRaw={notebookRaw}
             saving={saving}
             saveSuccess={saveSuccess}
+            canSave={!isDiffView}
             onToggleMarkdownPreview={() => setMarkdownPreview((previous) => !previous)}
             onToggleHtmlPreview={() => setHtmlPreview((previous) => !previous)}
             onToggleNotebookRaw={() => setNotebookRaw((previous) => !previous)}

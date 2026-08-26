@@ -134,7 +134,9 @@ export function toolDuration(
 /** 时间轴左侧图标的语义分类 —— 组件按它取 lucide 图标。 */
 export type ActivityIconKey =
   | 'read' | 'write' | 'edit' | 'bash' | 'search' | 'glob'
-  | 'fetch' | 'agent' | 'todo' | 'mcp' | 'thinking' | 'tool';
+  | 'fetch' | 'agent' | 'todo' | 'mcp' | 'thinking' | 'tool'
+  /** 回合中夹在工具之间的过渡性正文(cd 轮起收进时间轴) */
+  | 'narration';
 
 /** 行文案的动词分类。`generic` 表示没有合适的动词,直接用工具名。 */
 export type ActivityVerb =
@@ -271,7 +273,7 @@ export type ActivitySummarySegment = {
 
 // 显示顺序固定 —— 同一段活动每次刷新都该读出同一句话
 const SUMMARY_ORDER: ActivityIconKey[] = [
-  'bash', 'write', 'edit', 'read', 'search', 'glob', 'fetch', 'agent', 'todo', 'mcp', 'tool', 'thinking',
+  'bash', 'write', 'edit', 'read', 'search', 'glob', 'fetch', 'agent', 'todo', 'mcp', 'tool', 'narration', 'thinking',
 ];
 
 /**
@@ -279,14 +281,16 @@ const SUMMARY_ORDER: ActivityIconKey[] = [
  * 按图标分类计数,空类不出现。
  */
 export function summarizeActivityRun(
-  messages: Array<{ isThinking?: boolean; toolName?: string }>,
+  messages: Array<{ isThinking?: boolean; isToolUse?: boolean; toolName?: string }>,
 ): ActivitySummarySegment[] {
   const counts = new Map<ActivityIconKey, number>();
 
   for (const message of messages) {
     const key: ActivityIconKey = message.isThinking
       ? 'thinking'
-      : activityIconKey(message.toolName || '');
+      : !message.isToolUse && !message.toolName
+        ? 'narration'
+        : activityIconKey(message.toolName || '');
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
 
@@ -298,7 +302,11 @@ export function summarizeActivityRun(
 /** 还在跑时,收起状态下留几步在外面。 */
 export const ACTIVITY_TAIL_ROWS = 3;
 
-/** 少于这个步数就不折 —— 两三行的东西再折一层是添乱。 */
+/**
+ * **还在跑**的那一段,少于这个步数就不折 —— 两三行的东西再折一层是添乱。
+ *
+ * 这条只管进行中的段。已经跑完的段无论几步都整段收起,见 `planActivityFold`。
+ */
 export const ACTIVITY_MIN_ROWS = 3;
 
 export type ActivityFoldPlan = {
@@ -316,13 +324,13 @@ export type ActivityFoldPlan = {
  * 一轮活动收起时露出多少行。
  *
  * - **还在跑**:留最新 `ACTIVITY_TAIL_ROWS` 步 —— 用户盯的是"现在在干什么"。
- * - **已跑完**:整段收成抬头一行 —— 做完的活儿不该继续占几十行屏幕。
- * - **太短(不足 `ACTIVITY_MIN_ROWS` 步)的完成段**:不折,折了反而添乱。
+ *   不足这个步数就全摊着,没什么可折的。
+ * - **已跑完**:**无论几步都整段收成抬头一行**。做完的活儿不该继续占着屏幕,
+ *   哪怕只有一两步 —— 一屏里躺着七八段各留两行的"残骸",比一段长的还碎。
+ *   「摊开最新三步」是**进行中**那一段的特权。
  */
 export function planActivityFold(total: number, hasRunning: boolean): ActivityFoldPlan {
-  const visibleCount = hasRunning
-    ? Math.min(total, ACTIVITY_TAIL_ROWS)
-    : (total >= ACTIVITY_MIN_ROWS ? 0 : total);
+  const visibleCount = hasRunning ? Math.min(total, ACTIVITY_TAIL_ROWS) : 0;
   const foldedCount = total - visibleCount;
   return {
     visibleCount,

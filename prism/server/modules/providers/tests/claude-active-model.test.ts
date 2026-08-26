@@ -102,4 +102,31 @@ describe('/models 报告的当前模型', () => {
     const active = await new ClaudeProviderModels().getCurrentActiveModel('');
     assert.equal(active.model, 'default');
   });
+
+  // bx / E4:超过 64KB 的大 transcript 走尾读,不整读也要读出最新模型。
+  test('大 transcript(>64KB)只读尾部也能读出最近模型', async () => {
+    tempDirectory = await mkdtemp(path.join(tmpdir(), 'claude-active-model-big-'));
+    previousDataDir = process.env.PRISM_DATA_DIR;
+    process.env.PRISM_DATA_DIR = tempDirectory;
+    const jsonlPath = path.join(tempDirectory, 'big.jsonl');
+
+    // 头部一条旧模型,中间灌 ~200KB 的用户/助手消息,末尾一条新模型的 assistant。
+    const lines: string[] = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: PROVIDER_SESSION_ID, model: 'claude-opus-4-1' }),
+    ];
+    const filler = 'x'.repeat(400);
+    for (let i = 0; i < 500; i += 1) {
+      lines.push(JSON.stringify({ type: 'user', session_id: PROVIDER_SESSION_ID, message: { role: 'user', content: `${filler}${i}` } }));
+    }
+    lines.push(JSON.stringify({ type: 'assistant', session_id: PROVIDER_SESSION_ID, message: { model: 'claude-sonnet-4-5', content: [] } }));
+    await writeFile(jsonlPath, `${lines.join('\n')}\n`, 'utf8');
+
+    sessionsDb.getSessionById = ((id: string) => (id === APP_SESSION_ID
+      ? { jsonl_path: jsonlPath, provider_session_id: PROVIDER_SESSION_ID }
+      : null)) as typeof sessionsDb.getSessionById;
+
+    const active = await new ClaudeProviderModels().getCurrentActiveModel(APP_SESSION_ID);
+    // 末尾那条 assistant 的模型,尾读必须命中(不是头部的 opus)。
+    assert.equal(active.model, 'claude-sonnet-4-5');
+  });
 });

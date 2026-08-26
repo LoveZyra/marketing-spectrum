@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import { userDb, appConfigDb } from '../modules/database/index.js';
 import { IS_PLATFORM } from '../constants/config.js';
 import { isRootUser } from '../shared/root-users.js';
+import { consumeSseTicket } from '../shared/sse-tickets.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
@@ -69,8 +70,23 @@ const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
   let token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
-  // Also check query param for SSE endpoints (EventSource can't set headers)
-  if (!token && req.query.token) {
+  // SSE(EventSource)设不了 Authorization 头,只能把凭据放 URL 里。**别放 JWT** ——
+  // URL 会进反代日志和浏览器历史。放一张短命票据:泄了 60 秒后也就废了。
+  if (!token && req.query.ticket) {
+    const consumed = consumeSseTicket(req.query.ticket);
+    if (consumed) {
+      const user = userDb.getUserById(consumed.userId); // getUserById 只返回 is_active 用户
+      if (user) {
+        req.user = withRootFlag(user);
+        return next();
+      }
+    }
+    return res.status(401).json({ error: '票据无效或已过期,请重试。' });
+  }
+
+  // 遗留的 `?token=<JWT>`:默认**不再接受**(这正是 SSE 票据要替换掉的泄漏面)。
+  // 只有显式设了 PRISM_ALLOW_QUERY_TOKEN=1 的部署才放行,与 WS 升级那边一致。
+  if (!token && req.query.token && process.env.PRISM_ALLOW_QUERY_TOKEN === '1') {
     token = req.query.token;
   }
 

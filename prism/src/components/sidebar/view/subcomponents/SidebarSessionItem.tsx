@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Check, Edit2, FileDown, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { Tooltip, buttonVariants } from '../../../../shared/view/ui';
+import { Tooltip, buttonVariants, useToast } from '../../../../shared/view/ui';
 import { downloadSessionExport } from '../../../../utils/session-export';
 import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
@@ -89,6 +89,7 @@ export default function SidebarSessionItem({
   onDeleteSession,
   t,
 }: SidebarSessionItemProps) {
+  const { toast } = useToast();
   const sessionView = createSessionViewModel(session, currentTime, t);
   const isSelected = selectedSession?.id === session.id;
   const isEditing = editingSession === session.id;
@@ -314,7 +315,8 @@ export default function SidebarSessionItem({
                   onClick={(event) => {
                     event.stopPropagation();
                     void downloadSessionExport(session.id, sessionView.sessionName).catch(() => {
-                      // 下载失败不打断侧栏;通常是网络/权限,重试即可。
+                      // 失败不再静默:点了没反应最让人困惑。给一条提示,侧栏其余不受影响。
+                      toast({ message: t('tooltips.exportSessionFailed', { defaultValue: '导出会话失败,请重试。' }), variant: 'error' });
                     });
                   }}
                   title={t('tooltips.exportSession', { defaultValue: '导出会话 (Markdown)' })}

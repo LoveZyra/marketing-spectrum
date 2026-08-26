@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, FolderOpen, FolderPlus, Plus, X } from 'lucide-react';
 
 import { Button, Input } from '../../../shared/view/ui';
@@ -19,6 +20,7 @@ export default function FolderBrowserModal({
   onClose,
   onFolderSelected,
 }: FolderBrowserModalProps) {
+  const { t } = useTranslation('common');
   const [currentPath, setCurrentPath] = useState('~');
   const [folders, setFolders] = useState<FolderSuggestion[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
@@ -37,11 +39,11 @@ export default function FolderBrowserModal({
       setCurrentPath(result.path);
       setFolders(result.suggestions);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Failed to load folders');
+      setError(loadError instanceof Error ? loadError.message : t('folderBrowser.loadFailed'));
     } finally {
       setLoadingFolders(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -85,11 +87,11 @@ export default function FolderBrowserModal({
       resetNewFolderState();
       await loadFolders(createdPath);
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : 'Failed to create folder');
+      setError(createError instanceof Error ? createError.message : t('folderBrowser.createFailed'));
     } finally {
       setCreatingFolder(false);
     }
-  }, [currentPath, loadFolders, newFolderName]);
+  }, [currentPath, loadFolders, newFolderName, t]);
 
   const parentPath = getParentPath(currentPath);
 
@@ -105,7 +107,7 @@ export default function FolderBrowserModal({
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/[0.08]">
               <FolderOpen className="h-4 w-4 text-primary" />
             </div>
-            <h3 className="text-lg font-semibold text-foreground">Select Folder</h3>
+            <h3 className="text-lg font-semibold text-foreground">{t('folderBrowser.title')}</h3>
           </div>
 
           <div className="flex items-center gap-2">
@@ -116,7 +118,7 @@ export default function FolderBrowserModal({
                   ? 'bg-primary/[0.08] text-foreground dark:text-primary'
                   : 'text-muted-foreground hover:bg-muted hover:text-body'
               }`}
-              title={showHiddenFolders ? 'Hide hidden folders' : 'Show hidden folders'}
+              title={showHiddenFolders ? t('folderBrowser.hideHidden') : t('folderBrowser.showHidden')}
             >
               {showHiddenFolders ? <Eye className="h-5 w-5" /> : <EyeOff className="h-5 w-5" />}
             </button>
@@ -127,7 +129,7 @@ export default function FolderBrowserModal({
                   ? 'bg-primary/[0.08] text-foreground dark:text-primary'
                   : 'text-muted-foreground hover:bg-muted hover:text-body'
               }`}
-              title="Create new folder"
+              title={t('folderBrowser.createNew')}
             >
               <Plus className="h-5 w-5" />
             </button>
@@ -147,7 +149,7 @@ export default function FolderBrowserModal({
                 type="text"
                 value={newFolderName}
                 onChange={(event) => setNewFolderName(event.target.value)}
-                placeholder="New folder name"
+                placeholder={t('folderBrowser.newFolderName')}
                 className="flex-1"
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
@@ -171,11 +173,11 @@ export default function FolderBrowserModal({
                     aria-hidden
                   />
                 ) : (
-                  'Create'
+                  t('folderBrowser.create')
                 )}
               </Button>
               <Button size="sm" variant="ghost" onClick={resetNewFolderState}>
-                Cancel
+                {t('folderBrowser.cancel')}
               </Button>
             </div>
           </div>
@@ -206,7 +208,7 @@ export default function FolderBrowserModal({
 
               {visibleFolders.length === 0 ? (
                 <div className="py-8 text-center text-muted-foreground">
-                  No subfolders found
+                  {t('folderBrowser.noSubfolders')}
                 </div>
               ) : (
                 visibleFolders.map((folder) => (
@@ -226,7 +228,7 @@ export default function FolderBrowserModal({
                       onClick={() => onFolderSelected(folder.path, autoAdvanceOnSelect)}
                       className="px-3 text-xs"
                     >
-                      Select
+                      {t('folderBrowser.select')}
                     </Button>
                   </div>
                 ))
@@ -237,7 +239,7 @@ export default function FolderBrowserModal({
 
         <div className="border-t border-border">
           <div className="flex items-center gap-2 bg-muted px-4 py-3">
-            <span className="text-sm text-body">Path:</span>
+            <span className="text-sm text-body">{t('folderBrowser.path')}</span>
             <code className="flex-1 truncate font-mono text-sm text-foreground">
               {currentPath}
             </code>

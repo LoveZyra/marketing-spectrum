@@ -1,4 +1,5 @@
 import { IS_PLATFORM } from "../constants/config";
+import { emitToast } from "../shared/view/ui/toastBus";
 
 // Only accept a refreshed token that has this app's issued JWT shape
 // (three base64url segments). An attacker-injected/malformed header value
@@ -48,9 +49,34 @@ export const authenticatedFetch = (url, options = {}) => {
     if (isValidRefreshedToken(refreshedToken)) {
       localStorage.setItem('auth-token', refreshedToken);
     }
+    // 全局 401 兜底:令牌过期/被撤销后,原先各面板表现为"点了没反应"(只有文件树
+    // 单独分辨过 401)。这里集中处理一次 —— 登录态下拿到 401,弹一条提示并派发
+    // session-expired 事件,由 AuthProvider 清会话跳回登录。用去抖避免一次并发风暴
+    // 弹一堆重复提示。auth 端点自己走裸 fetch,不经这里,所以这里的 401 一定是
+    // "会话失效"而非"密码错"。
+    if (response.status === 401 && !IS_PLATFORM && token) {
+      handleSessionExpired();
+    }
     return response;
   });
 };
+
+let sessionExpiredNotifiedAt = 0;
+function handleSessionExpired() {
+  const now = Date.now();
+  // 5s 去抖:并发请求同时 401 时只提示一次。
+  if (now - sessionExpiredNotifiedAt < 5000) return;
+  sessionExpiredNotifiedAt = now;
+  try {
+    emitToast({
+      message: '登录已过期,请重新登录。',
+      variant: 'error',
+    });
+  } catch { /* toast 不可用不阻断 */ }
+  try {
+    window.dispatchEvent(new CustomEvent('prism:session-expired'));
+  } catch { /* 环境无 window(测试)时忽略 */ }
+}
 
 // API endpoints
 export const api = {
@@ -150,10 +176,18 @@ export const api = {
       method: 'DELETE',
     });
   },
-  searchConversationsUrl: (query, limit = 50) => {
-    const token = localStorage.getItem('auth-token');
+  // EventSource 没法带 Authorization 头。过去这里把完整 JWT 拼进 `?token=` ——
+  // 而 URL 会进反代日志和浏览器历史。改成:先用带 Bearer 头的 POST 换一张短命
+  // 票据,再拿票据连 SSE,JWT 不进 URL。
+  issueSearchTicket: async () => {
+    const res = await authenticatedFetch('/api/providers/search/ticket', { method: 'POST' });
+    if (!res.ok) throw new Error(`Failed to obtain search ticket (${res.status})`);
+    const data = await res.json();
+    return data.ticket;
+  },
+  searchConversationsUrl: (query, ticket, limit = 50) => {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
-    if (token) params.set('token', token);
+    if (ticket) params.set('ticket', ticket);
     return `/api/providers/search/sessions?${params.toString()}`;
   },
   createProject: (projectData) =>
@@ -188,10 +222,16 @@ export const api = {
     authenticatedFetch(`/api/projects/${projectId}/file?filePath=${encodeURIComponent(filePath)}`),
   readFileBlob: (projectId, filePath) =>
     authenticatedFetch(`/api/projects/${projectId}/files/content?path=${encodeURIComponent(filePath)}`),
-  saveFile: (projectId, filePath, content) =>
+  // baseMtimeMs:保存冲突检测基线(加载时拿到的 mtime)。传了它,服务端会在磁盘
+  // 版本更新过时回 409(FILE_MODIFIED),避免静默覆盖别人的改动。
+  saveFile: (projectId, filePath, content, baseMtimeMs) =>
     authenticatedFetch(`/api/projects/${projectId}/file`, {
       method: 'PUT',
-      body: JSON.stringify({ filePath, content }),
+      body: JSON.stringify(
+        typeof baseMtimeMs === 'number'
+          ? { filePath, content, baseMtimeMs }
+          : { filePath, content },
+      ),
     }),
   // `dirPath` lists a directory other than the project root (the file tree's
   // "up one level"). Omit it for the project's own tree — the server bounds

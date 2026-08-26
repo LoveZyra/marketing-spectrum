@@ -8,12 +8,12 @@ import spawn from 'cross-spawn';
 import express from 'express';
 import { Octokit } from '@octokit/rest';
 
-import { userDb, apiKeysDb, githubTokensDb, projectsDb, sessionsDb, canViewerSeeSession } from '../modules/database/index.js';
+import { userDb, apiKeysDb, githubTokensDb, projectsDb, sessionsDb, sessionMessagesDb, canViewerSeeSession } from '../modules/database/index.js';
 import { chatRunRegistry } from '../modules/websocket/index.js';
-import { queryClaudeSDK } from '../claude-sdk.js';
+import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
 import { IS_PLATFORM } from '../constants/config.js';
 import { readRequestViewer } from '../shared/project-visibility.js';
-import { normalizeProjectPath, WORKSPACES_ROOT } from '../shared/utils.js';
+import { normalizeProjectPath, WORKSPACES_ROOT, generateMessageId } from '../shared/utils.js';
 
 const router = express.Router();
 
@@ -371,8 +371,22 @@ async function createGitHubPR(octokit, owner, repo, branchName, title, body, bas
 async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
   return new Promise(async (resolve, reject) => {
     try {
-      // Validate GitHub URL
-      if (!githubUrl || !githubUrl.includes('github.com')) {
+      // Validate GitHub URL —— 必须真的是 github.com 的 https 地址。
+      // 老判定是 includes('github.com'),`https://evil.com/github.com` 也能过;
+      // 现在凭据走 http.extraHeader 随请求发出,主机名不锁死等于把 token 交给
+      // 任意主机。
+      let parsedRepoUrl = null;
+      try {
+        parsedRepoUrl = new URL(String(githubUrl ?? ''));
+      } catch {
+        parsedRepoUrl = null;
+      }
+      const repoHost = parsedRepoUrl?.hostname ?? '';
+      if (
+        !parsedRepoUrl
+        || parsedRepoUrl.protocol !== 'https:'
+        || !(repoHost === 'github.com' || repoHost.endsWith('.github.com'))
+      ) {
         throw new Error('Invalid GitHub URL');
       }
 
@@ -403,20 +417,32 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
       // Ensure parent directory exists
       await fs.mkdir(path.dirname(cloneDir), { recursive: true });
 
-      // Prepare the git clone URL with authentication if token is provided
-      let cloneUrl = githubUrl;
+      // 凭据不进 URL、不进 argv:老写法把 token 拼成 https://<token>@github.com,
+      // 它会随 git 的报错原样出现在 stderr(下面还 console.log)、落进服务日志,
+      // 还会被写进克隆产物的 .git/config(origin URL)。改走环境变量注入的
+      // http.extraHeader(GIT_CONFIG_* 是 git 2.31+ 的正路),token 全程不落
+      // URL / argv / 磁盘;远端 URL 保持干净的 githubUrl。
+      const gitEnv = { ...process.env };
       if (githubToken) {
-        // Convert HTTPS URL to authenticated URL
-        // Example: https://github.com/user/repo -> https://token@github.com/user/repo
-        cloneUrl = githubUrl.replace('https://github.com', `https://${githubToken}@github.com`);
+        gitEnv.GIT_CONFIG_COUNT = '1';
+        gitEnv.GIT_CONFIG_KEY_0 = 'http.extraHeader';
+        gitEnv.GIT_CONFIG_VALUE_0 =
+          `Authorization: Basic ${Buffer.from(`x-access-token:${githubToken}`).toString('base64')}`;
+        // 防呆:凭据只该从上面这条 header 进来,禁用交互式追问。
+        gitEnv.GIT_TERMINAL_PROMPT = '0';
       }
 
-      console.log('🔄 Cloning repository:', githubUrl);
+      // 兜底脱敏:就算 URL 里被调用方塞了凭据(githubUrl 本身带 user:pass@),
+      // 日志与报错也不放行。
+      const scrubSecrets = (text) => String(text ?? '').replace(/(https?:\/\/)[^\s/@]+@/gi, '$1***@');
+
+      console.log('🔄 Cloning repository:', scrubSecrets(githubUrl));
       console.log('📁 Destination:', cloneDir);
 
       // Execute git clone
-      const gitProcess = spawn('git', ['clone', '--depth', '1', cloneUrl, cloneDir], {
-        stdio: ['pipe', 'pipe', 'pipe']
+      const gitProcess = spawn('git', ['clone', '--depth', '1', githubUrl, cloneDir], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: gitEnv,
       });
 
       let stdout = '';
@@ -428,7 +454,7 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
 
       gitProcess.stderr.on('data', (data) => {
         stderr += data.toString();
-        console.log('Git stderr:', data.toString());
+        console.log('Git stderr:', scrubSecrets(data.toString()));
       });
 
       gitProcess.on('close', (code) => {
@@ -436,8 +462,9 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
           console.log('✅ Repository cloned successfully');
           resolve(cloneDir);
         } else {
-          console.error('❌ Git clone failed:', stderr);
-          reject(new Error(`Git clone failed: ${stderr}`));
+          const cleanStderr = scrubSecrets(stderr);
+          console.error('❌ Git clone failed:', cleanStderr);
+          reject(new Error(`Git clone failed: ${cleanStderr}`));
         }
       });
 
@@ -724,7 +751,8 @@ router.post('/sessions', validateExternalApiKey, async (req, res) => {
     }
 
     const sessionId = crypto.randomUUID();
-    // owner 必须传:不传等于把这个项目标成"公共",全服务器可见。
+    // owner 必须传:不传 = 项目无主(非公共目录仅 root 可见 / 公共目录下全员可见),
+    // 调用者自己反而丢掉归属。
     sessionsDb.createAppSession(sessionId, provider, finalProjectPath, req.user.id);
 
     return res.status(201).json({
@@ -737,6 +765,113 @@ router.post('/sessions', validateExternalApiKey, async (req, res) => {
   } catch (error) {
     console.error('[Agent API] 领会话号失败:', error);
     return res.status(400).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/agent/sessions — 本 key 可见的会话列表(F5)。
+ *
+ * 可见性与网页端同一道闸(canViewerSeeSession):自己项目的会话 + 公共目录
+ * 项目的会话。默认不含已归档,`?includeArchived=1` 才带。`running` 来自
+ * 运行注册表,轮询它即可知道回合是否还在跑。
+ */
+router.get('/sessions', validateExternalApiKey, (req, res) => {
+  try {
+    const viewer = readRequestViewer(req);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const includeArchived = req.query.includeArchived === '1' || req.query.includeArchived === 'true';
+
+    const rows = [
+      ...sessionsDb.getAllSessions(),
+      ...(includeArchived ? sessionsDb.getArchivedSessions() : []),
+    ]
+      .filter((row) => canViewerSeeSession(row.session_id, viewer))
+      .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+
+    const page = rows.slice(offset, offset + limit).map((row) => ({
+      sessionId: row.session_id,
+      provider: row.provider,
+      projectPath: row.project_path,
+      name: row.custom_name || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      archived: Boolean(row.isArchived),
+      running: chatRunRegistry.isProcessing(row.session_id),
+      sessionPath: `/session/${row.session_id}`,
+    }));
+
+    return res.json({ success: true, total: rows.length, offset, limit, sessions: page });
+  } catch (error) {
+    console.error('[Agent API] 列会话失败:', error);
+    return res.status(500).json({ error: 'Failed to list sessions' });
+  }
+});
+
+/**
+ * GET /api/agent/runs/:sessionId — 会话的运行状态(F5)。
+ *
+ * 不可见与不存在同形 404。空闲会话返回 status:'idle';跑过的返回注册表里的
+ * 最后状态(running/completed)与起止时间。
+ */
+router.get('/runs/:sessionId', validateExternalApiKey, (req, res) => {
+  const { sessionId } = req.params;
+  const viewer = readRequestViewer(req);
+  if (!canViewerSeeSession(sessionId, viewer)) {
+    return res.status(404).json({ error: `Session "${sessionId}" was not found.`, code: 'SESSION_NOT_FOUND' });
+  }
+
+  const run = chatRunRegistry.getRun(sessionId);
+  if (!run) {
+    return res.json({ success: true, sessionId, status: 'idle' });
+  }
+
+  return res.json({
+    success: true,
+    sessionId,
+    status: run.status,
+    provider: run.provider,
+    startedAt: new Date(run.startedAt).toISOString(),
+    completedAt: run.completedAt ? new Date(run.completedAt).toISOString() : null,
+    lastSeq: run.lastSeq,
+  });
+});
+
+/**
+ * POST /api/agent/sessions/:sessionId/abort — 中止正在跑的回合(F5)。
+ *
+ * 与网页端 chat.abort 同一条路:先按 provider 原生 id 中止,拿不到(新会话
+ * 第一轮)再按 runId(app 会话 id)兜底;随后在注册表里落终态,订阅中的
+ * 浏览器会照常收到 complete 帧。
+ */
+router.post('/sessions/:sessionId/abort', validateExternalApiKey, async (req, res) => {
+  const { sessionId } = req.params;
+  const viewer = readRequestViewer(req);
+  if (!canViewerSeeSession(sessionId, viewer)) {
+    return res.status(404).json({ error: `Session "${sessionId}" was not found.`, code: 'SESSION_NOT_FOUND' });
+  }
+
+  const run = chatRunRegistry.getRun(sessionId);
+  if (!run || run.status !== 'running') {
+    return res.status(409).json({ error: `Session "${sessionId}" has no active run.`, code: 'NO_ACTIVE_RUN' });
+  }
+
+  try {
+    let success = false;
+    if (run.provider === 'claude') {
+      if (run.providerSessionId) {
+        success = Boolean(await abortClaudeSDKSession(run.providerSessionId, { runId: sessionId }));
+      }
+      if (!success) {
+        success = Boolean(await abortClaudeSDKSession('', { runId: sessionId }));
+      }
+    }
+
+    chatRunRegistry.completeRun(sessionId, { exitCode: success ? 0 : 1, aborted: true });
+    return res.json({ success: true, aborted: success, sessionId });
+  } catch (error) {
+    console.error('[Agent API] 中止失败:', error);
+    return res.status(500).json({ error: 'Failed to abort run' });
   }
 });
 
@@ -1101,8 +1236,14 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
     finalProjectPath = normalizeProjectPath(finalProjectPath);
 
-    // Register project path in DB (or reuse existing active registration)
-    const registrationResult = projectsDb.createProjectPath(finalProjectPath, null);
+    // Register project path in DB (or reuse existing active registration).
+    //
+    // owner 必须在这里就传对:这次预注册先落行,后面 createAppSession 内部的
+    // createProjectPath 走 ON CONFLICT 分支、按设计**不改归属** —— 也就是说
+    // 这里少传 owner,新路径的项目就永远无主。无主项目在现行可见性规则下
+    // 非公共目录仅 root 可见:API 调用者自己都打不开返回的 /session/<id> 链接;
+    // 恰在公共目录下则对全服务器公开。两个方向都不是"归调用者所有"的本意。
+    const registrationResult = projectsDb.createProjectPath(finalProjectPath, null, req.user.id);
     if (registrationResult.outcome === 'active_conflict') {
       console.log('Project registration already exists for:', finalProjectPath);
     } else {
@@ -1110,14 +1251,17 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     }
 
     /**
-     * 传进来的 `sessionId` 到底是什么意思 —— 三种情况,判据只有一条:
+     * 传进来的 `sessionId` 到底是什么意思 —— 判据只有一条:
      * **库里那行的 `provider_session_id` 空不空。**
      *
-     * 1. 库里没这行 → 老语义,当成 provider 原生 id 直接续对话(行为不变)。
-     * 2. 库里有行、`provider_session_id` 为空 → 这是 `POST /api/agent/sessions`
+     * 1. 库里有行、`provider_session_id` 为空 → 这是 `POST /api/agent/sessions`
      *    领过号但还没跑过的会话 → **用这个 id 新建**。此时若按 resume 处理,
      *    CLI 会去找一份根本不存在的 transcript,直接失败。
-     * 3. 库里有行、`provider_session_id` 有值 → 续那个 provider 会话。
+     * 2. 库里有行、`provider_session_id` 有值 → 续那个 provider 会话。
+     * 3. 库里没这行 → **404**。以前的老语义是"当成 provider 原生 id 直接续",
+     *    但那条路绕开了 `canViewerSeeSession`(行还没被 watcher 索引进库时,
+     *    等于拿任意 id 以 bypassPermissions 续别人的 transcript)。收口:先经
+     *    `POST /api/agent/sessions` 领号,或等索引完成后用库里的 id。
      */
     let appSessionId = sessionId || null;
     let resumeProviderSessionId = null;
@@ -1134,7 +1278,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         if (row.provider_session_id) resumeProviderSessionId = row.provider_session_id;
         else createWithSessionId = sessionId;
       } else {
-        resumeProviderSessionId = sessionId;
+        return res.status(404).json({ error: `Session "${sessionId}" was not found.` });
       }
     }
 
@@ -1180,6 +1324,18 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         });
       }
 
+      // 用户这条指令写进显示日志(与 chat.send 的 cb 修复同源):外部 API 发起
+      // 的回合,网页打开会话也要能看到"是谁让它干的什么",重启/刷新都不丢。
+      sessionMessagesDb.append(appSessionId, {
+        id: generateMessageId('user'),
+        sessionId: appSessionId,
+        timestamp: new Date().toISOString(),
+        provider,
+        kind: 'text',
+        role: 'user',
+        content: message.trim(),
+      });
+
       res.status(202).json({
         success: true,
         sessionId: appSessionId,
@@ -1216,6 +1372,40 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       return;
     }
 
+    // B2:同步路径(stream / 非 stream)也要占用运行位。此前它不 startRun、
+    // 不查 holder —— 于是同一个 provider 会话可以被网页聊天的常驻 runtime 与这条
+    // 同步 API 回合**同时写同一份 transcript**(正是所有权机制要消灭的双写)。
+    // 只在"指向了某个已有会话"(appSessionId 有值:领过号或续已存在会话)时占位
+    // 并做冲突检查 —— 这正是双写会发生的场景;全新会话(appSessionId 为空)没有
+    // 可冲突的目标,保持原语义不动。冲突回 409;runId 一并传给 queryClaudeSDK,
+    // 顺带让 chat.abort 也能中止这条同步回合。
+    let syncRun = null;
+    if (appSessionId) {
+      syncRun = chatRunRegistry.startRun({
+        appSessionId,
+        provider,
+        providerSessionId: resumeProviderSessionId,
+        connection: null,
+        userId: req.user.id,
+      });
+      if (!syncRun) {
+        return res.status(409).json({
+          error: `Session "${appSessionId}" already has a run in progress.`,
+          sessionId: appSessionId,
+        });
+      }
+      // 同上:同步路径的用户指令也落显示日志。
+      sessionMessagesDb.append(appSessionId, {
+        id: generateMessageId('user'),
+        sessionId: appSessionId,
+        timestamp: new Date().toISOString(),
+        provider,
+        kind: 'text',
+        role: 'user',
+        content: message.trim(),
+      });
+    }
+
     // Set up writer based on streaming mode
     if (stream) {
       // Set up SSE headers for streaming
@@ -1248,17 +1438,25 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     if (provider === 'claude') {
       console.log('🤖 Starting Claude SDK session');
 
-      await queryClaudeSDK(message.trim(), {
-        projectPath: finalProjectPath,
-        cwd: finalProjectPath,
-        sessionId: resumeProviderSessionId,
-        // 领过号但还没跑过的会话:用这个 id 新建,transcript 落盘就是它。
-        newSessionId: createWithSessionId ?? undefined,
-        model: model,
-        effort,
-        permissionMode: 'bypassPermissions', // Bypass all permissions for API calls
-        oneShot: true // API turns stay on the per-turn path (no resident runtime)
-      }, writer);
+      try {
+        await queryClaudeSDK(message.trim(), {
+          projectPath: finalProjectPath,
+          cwd: finalProjectPath,
+          sessionId: resumeProviderSessionId,
+          // 领过号但还没跑过的会话:用这个 id 新建,transcript 落盘就是它。
+          newSessionId: createWithSessionId ?? undefined,
+          // 占了运行位就带上 runId,让 chat.abort 能中止这条同步回合。
+          runId: syncRun ? appSessionId : undefined,
+          model: model,
+          effort,
+          permissionMode: 'bypassPermissions', // Bypass all permissions for API calls
+          oneShot: true // API turns stay on the per-turn path (no resident runtime)
+        }, writer);
+      } finally {
+        // 释放运行位:回合结束(成功/失败)都要放,否则这个会话会被永久标成
+        // "有回合在跑",后续请求全被 409 挡下。
+        if (syncRun) chatRunRegistry.completeRunIfCurrent(syncRun, { exitCode: 0 });
+      }
 
       /**
        * 领过号的会话:回合一跑完就把映射补上,别等 watcher。

@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import type { PermissionPanelProps } from '../../configs/permissionPanelRegistry';
 import type { Question } from '../../../types/types';
@@ -7,6 +8,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
   request,
   onDecision,
 }) => {
+  const { t } = useTranslation('chat');
   const input = request.input as { questions?: Question[] } | undefined;
   const questions: Question[] = input?.questions || [];
 
@@ -148,6 +150,9 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
       ref={containerRef}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
+      // 待回答的交互面板:它自己吃 Esc(跳过)。全局的 Esc-中止监听靠这个标记
+      // 认出面板存在时就放行,不然运行中在这里按 Esc 会把整轮 run 一起中止。
+      data-interactive-prompt="true"
       className={`w-full outline-none transition-colors duration-500 ease-out ${
         mounted ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0'
       }`}
@@ -171,7 +176,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
 
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                Claude needs your input
+                {t('askUser.title', { defaultValue: '等待你的回答' })}
               </span>
               {q.header && (
                 <span className="inline-flex items-center rounded border border-primary/[0.32] bg-transparent px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-foreground dark:text-primary">
@@ -293,7 +298,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
                   ? 'font-medium text-foreground'
                   : 'text-muted-foreground'
               }`}>
-                Other...
+                {t('askUser.other', { defaultValue: '自定义…' })}
               </span>
               {isOtherOn && (
                 <svg className="ml-auto h-4 w-4 flex-shrink-0 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
@@ -320,7 +325,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
                       // Prevent container keydown from firing
                       e.stopPropagation();
                     }}
-                    placeholder="Type your answer..."
+                    placeholder={t('askUser.typeAnswer', { defaultValue: '输入你的回答…' })}
                     className="w-full rounded-md border-0 bg-muted px-3 py-1.5 text-[13px] text-foreground outline-none ring-1 ring-border transition-shadow duration-200 placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/[0.32]"
                   />
                   <kbd className="absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border bg-muted px-1 py-0.5 font-mono text-[9px] text-muted-foreground">
@@ -339,7 +344,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
             onClick={handleSkip}
             className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
           >
-            {isSingle ? 'Skip' : 'Skip all'}
+            {isSingle ? t('askUser.skip', { defaultValue: '跳过' }) : t('askUser.skipAll', { defaultValue: '全部跳过' })}
             <span className="ml-1 font-mono text-[9px] text-muted-foreground">Esc</span>
           </button>
 
@@ -353,7 +358,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
                 <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
                 </svg>
-                Back
+                {t('askUser.back', { defaultValue: '上一题' })}
               </button>
             )}
 
@@ -364,7 +369,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
                 disabled={!hasCurrentSelection && !Object.keys(buildAnswers()).length}
                 className="inline-flex items-center gap-1 rounded-md bg-primary px-3.5 py-1.5 text-[11px] font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-30"
               >
-                Submit
+                {t('askUser.submit', { defaultValue: '提交' })}
                 <span className="ml-0.5 font-mono text-[9px] opacity-70">Enter</span>
               </button>
             ) : (
@@ -373,7 +378,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
                 onClick={() => setCurrentStep(s => s + 1)}
                 className="inline-flex items-center gap-1 rounded-md bg-primary px-3.5 py-1.5 text-[11px] font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
               >
-                Next
+                {t('askUser.next', { defaultValue: '下一题' })}
                 <span className="ml-0.5 font-mono text-[9px] opacity-70">Enter</span>
               </button>
             )}

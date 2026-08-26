@@ -7,40 +7,26 @@ interface PrismLogoProps {
 }
 
 /**
- * 品牌标记 —— `design_handoff_prism_ui/数据查询.svg`,矢量原图直接用。
+ * 品牌标记 —— 棱镜彩虹图(`public/brand/logo.png`)。
  *
- * 换成 SVG 是为了清晰度:原来的两张 PNG 在 2× 屏与放大尺寸下都会糊,
- * 矢量在任何倍率下都是实边。写死的 `width/height="200"` 已经在资产里去掉,
+ * 这是一张自发光的玻璃棱镜 + 彩虹光带图,底色透明、明暗两个主题下都读得清,
+ * 所以**明暗共用同一张图**,不再分浅/深两份资产。原图 1254² 已裁掉透明边、
+ * 居中放进正方形并压到 256²(约 60KB),≤72px 展示位在 2×/3× 屏下都够清晰。
  * 尺寸完全交给这里的 `size`。
- *
- * 明暗仍然是两份资产,但**不是两张图** —— 深色那份只把线稿的板岩灰
- * `#495460` 提亮到 `#93A3B1`,形状一笔没动。原色压在近黑画布上只有 2.6:1,
- * 整张纸的轮廓基本看不见;提亮后约 5.9:1,读起来才是同一张图。
  */
 export default function PrismLogo({ size = 32, tile = false, className }: PrismLogoProps) {
   const markSize = tile ? Math.round(size * 0.62) : size;
 
   const mark = (
-    <>
-      <img
-        src="/brand/logo.svg"
-        width={markSize}
-        height={markSize}
-        alt=""
-        aria-hidden="true"
-        className="block select-none dark:hidden"
-        draggable={false}
-      />
-      <img
-        src="/brand/logo-dark.svg"
-        width={markSize}
-        height={markSize}
-        alt=""
-        aria-hidden="true"
-        className="hidden select-none dark:block"
-        draggable={false}
-      />
-    </>
+    <img
+      src="/brand/logo.png"
+      width={markSize}
+      height={markSize}
+      alt=""
+      aria-hidden="true"
+      className="block select-none"
+      draggable={false}
+    />
   );
 
   if (!tile) {

@@ -58,7 +58,8 @@
     }
   },
   "terminalShortcuts": {
-    "scrollDown": "Scroll Down"
+    "scrollDown": "Scroll Down",
+    "paste": "Paste"
   },
   "mainTabs": {
     "agents": "Agents",
@@ -182,7 +183,8 @@
     }
   },
   "saveStatus": {
-    "success": "Settings saved successfully!"
+    "success": "Settings saved successfully!",
+    "error": "Save failed. Please retry."
   },
   "apiKeys": {
     "title": "API Keys",
@@ -205,8 +207,8 @@
     },
     "confirmDelete": "Are you sure you want to delete this API key?",
     "status": {
-      "active": "Active",
-      "inactive": "Inactive"
+      "active": "In use",
+      "inactive": "Disabled"
     },
     "github": {
       "title": "GitHub Tokens",
@@ -225,7 +227,13 @@
       "confirmDelete": "Are you sure you want to delete this GitHub token?"
     },
     "apiDocsLink": "API Documentation",
-    "loading": "Loading..."
+    "loading": "Loading...",
+    "action": {
+      "disable": "Disable",
+      "enable": "Enable",
+      "disableHint": "Requests using this key will be rejected once disabled",
+      "enableHint": "Once enabled, this key can be used for external API requests"
+    }
   },
   "agents": {
     "authStatus": {
@@ -386,5 +394,42 @@
     "gateway": "Model gateway",
     "gatewayDown": "unreachable",
     "gatewayUnset": "BASE_URL not configured"
+  },
+  "skills": {
+    "title": "Skills",
+    "scopeUser": "User",
+    "scopePlugin": "Plugin",
+    "scopeProject": "Project",
+    "sizeLimit": "Selected skill folders must be smaller than 30 MB in total.",
+    "noSkillMd": "The selected folder does not contain a SKILL.md file.",
+    "readFailed": "Failed to read skill folder",
+    "dropHint2": "Drop one or more markdown files or a folder containing SKILL.md.",
+    "addFilesFirst": "Add one or more markdown files first.",
+    "markdownFile": "Markdown file",
+    "hideInstallPath": "Hide install location",
+    "showInstallPath": "Where will this install?",
+    "searchPlaceholder": "Search skills...",
+    "searchAria": "Search skills",
+    "clearSearch": "Clear skill search",
+    "scanning": "Scanning project skills...",
+    "closeAddDialog": "Close add skill dialog",
+    "savedOk": "Skills saved successfully.",
+    "installOne": "Install Skill",
+    "installMany": "Install {{count}} Skills",
+    "dropTitle": "Drop a skill folder or SKILL.md",
+    "dropSubtitle": "Folders can include scripts, references, and assets.",
+    "chooseFiles": "Choose Files",
+    "chooseFolder": "Choose Folder",
+    "readyToInstall": "Ready to install",
+    "addSkill": "Add Skill",
+    "refresh": "Refresh",
+    "uploadHint": "Upload a SKILL.md file or a complete skill folder.",
+    "nameHint": "Folder uploads keep the selected folder name; standalone files use the `name` in `SKILL.md`.",
+    "cancel": "Cancel",
+    "emptyTitle": "No skills discovered yet",
+    "emptyHint": "Add a global skill above or create project-specific skill folders in your workspace.",
+    "noMatchTitle": "No matching skills",
+    "noMatchHint": "Try a different command, name, scope, project, or source path.",
+    "source": "Source"
   }
 }

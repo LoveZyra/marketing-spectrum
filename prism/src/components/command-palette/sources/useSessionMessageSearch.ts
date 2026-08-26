@@ -48,10 +48,19 @@ export function useSessionMessageSearch(
 
     const handle = setTimeout(() => {
       const seq = ++seqRef.current;
-      const url = api.searchConversationsUrl(trimmed);
-      const es = new EventSource(url);
-      esRef.current = es;
       const accumulated: SessionMessageMatch[] = [];
+      // 先换一张短命 SSE 票据(JWT 不进 URL),再连流。取票是异步的,回来后
+      // 若查询已被后续输入取代(seq 变了)就放弃这次。
+      void (async () => {
+        let ticket: string;
+        try {
+          ticket = await api.issueSearchTicket();
+        } catch {
+          return;
+        }
+        if (seq !== seqRef.current) return;
+        const es = new EventSource(api.searchConversationsUrl(trimmed, ticket));
+        esRef.current = es;
 
       es.addEventListener('result', (evt) => {
         if (seq !== seqRef.current) {
@@ -81,8 +90,9 @@ export function useSessionMessageSearch(
         es.close();
         esRef.current = null;
       };
-      es.addEventListener('done', finish);
-      es.addEventListener('error', finish);
+        es.addEventListener('done', finish);
+        es.addEventListener('error', finish);
+      })();
     }, DEBOUNCE_MS);
 
     return () => {

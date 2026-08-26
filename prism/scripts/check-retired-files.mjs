@@ -29,9 +29,11 @@ const RETIRED_FILES = [
   'src/contexts/ThemeContext.jsx',
   // bb —— 深浅开关换成界面主题三选卡片
   'src/shared/view/ui/DarkModeToggle.tsx',
-  // at —— 换矢量 logo
-  'public/brand/logo.png',
+  // at —— 换矢量 logo;bt 又把 logo.png 换回位图,故此处只余深色位图仍是退役态
   'public/brand/logo-dark.png',
+  // bt —— logo 换回位图,退役 at 引入的两份矢量图
+  'public/brand/logo.svg',
+  'public/brand/logo-dark.svg',
   // aa/ac —— 前端设计语言换版
   'src/components/chat/view/subcomponents/ToolGroupContainer.tsx',
   'src/components/sidebar/view/subcomponents/SidebarCollapsed.tsx',

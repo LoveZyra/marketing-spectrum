@@ -49,5 +49,8 @@
     "legacyFormat": "这个 notebook 是很老的 nbformat 3 格式,预览不支持 —— 可切换到源码视图查看,或在 JupyterLab 里打开(会自动升级格式)。",
     "parseFailed": "无法解析这个 notebook 文件(JSON 结构不对)。可切换到源码视图检查内容。",
     "empty": "空 notebook —— 还没有任何单元格。"
+  },
+  "unsaved": {
+    "confirmDiscard": "当前文件有未保存的改动,离开将丢失这些改动。确定丢弃吗?"
   }
 }

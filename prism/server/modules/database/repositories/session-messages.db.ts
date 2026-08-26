@@ -1,3 +1,5 @@
+import type { Statement } from 'better-sqlite3';
+
 import { getConnection } from '@/modules/database/connection.js';
 import type { MessageKind, NormalizedMessage } from '@/shared/types.js';
 import { generateMessageId } from '@/shared/utils.js';
@@ -31,6 +33,64 @@ export function isDurableDisplayMessage(message: { kind?: unknown }): boolean {
   return typeof message?.kind === 'string' && DURABLE_KINDS.has(message.kind as MessageKind);
 }
 
+/**
+ * 连接感知的 prepared statement 缓存。
+ *
+ * `append` 是所有出站消息的唯一收口 —— 每条 durable 消息都会 `db.prepare` 一次,
+ * 重复编译同一句 SQL。缓存下来复用即可。但 prepared statement 绑在具体连接上,
+ * 而库在备份 / 关停时会 close+reopen(见 connection.ts),换了连接旧 statement 就
+ * 失效。所以按"当前连接是不是上次那个"来判定,连接一变就重新 prepare。
+ */
+type PreparedCache = {
+  db: ReturnType<typeof getConnection> | null;
+  append: Statement | null;
+  count: Statement | null;
+  list: Statement | null;
+  fingerprint: Statement | null;
+};
+const prepared: PreparedCache = { db: null, append: null, count: null, list: null, fingerprint: null };
+
+function ensurePrepared() {
+  const db = getConnection();
+  if (prepared.db !== db) {
+    prepared.db = db;
+    prepared.append = db.prepare(`
+      INSERT OR IGNORE INTO session_display_messages
+        (session_id, message_id, kind, timestamp, payload)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    prepared.count = db.prepare('SELECT COUNT(*) AS total FROM session_display_messages WHERE session_id = ?');
+    prepared.list = db.prepare('SELECT payload FROM session_display_messages WHERE session_id = ? ORDER BY id ASC');
+    prepared.fingerprint = db.prepare('SELECT COUNT(*) AS c, MAX(id) AS m FROM session_display_messages WHERE session_id = ?');
+  }
+  return prepared;
+}
+
+/**
+ * 解析后的整段消息缓存。
+ *
+ * `listForSession` 是新会话的主显示路径 —— 每次打开 / 每次上翻都把整段日志读出来、
+ * 逐条 JSON.parse 再交给上层切片,会话越长越慢,而 transcript 那条路的 LRU 完全
+ * 覆盖不到它。这里按 (行数, 最大 id) 指纹缓存解析结果:日志没变(指纹一致)就直接
+ * 返回上次解析好的数组,免掉重复读盘 + parse。写入(append/appendMany/delete)会
+ * 使对应会话的缓存失效。容量有限,LRU 淘汰。
+ */
+const parsedListCache = new Map<string, { fingerprint: string; messages: NormalizedMessage[] }>();
+const PARSED_LIST_CACHE_MAX = 32;
+
+function displayLogFingerprint(sessionId: string): string {
+  try {
+    const row = ensurePrepared().fingerprint!.get(sessionId) as { c?: number; m?: number | null } | undefined;
+    return `${Number(row?.c || 0)}:${row?.m ?? 0}`;
+  } catch {
+    return 'err';
+  }
+}
+
+function invalidateParsedList(sessionId: string): void {
+  parsedListCache.delete(sessionId);
+}
+
 export const sessionMessagesDb = {
   /**
    * 追加一条显示日志。
@@ -56,20 +116,14 @@ export const sessionMessagesDb = {
       : generateMessageId('display');
 
     try {
-      const db = getConnection();
-      const result = db
-        .prepare(`
-          INSERT OR IGNORE INTO session_display_messages
-            (session_id, message_id, kind, timestamp, payload)
-          VALUES (?, ?, ?, ?, ?)
-        `)
-        .run(
-          sessionId,
-          messageId,
-          String(message.kind),
-          String(message.timestamp || new Date().toISOString()),
-          JSON.stringify(message),
-        );
+      const result = ensurePrepared().append!.run(
+        sessionId,
+        messageId,
+        String(message.kind),
+        String(message.timestamp || new Date().toISOString()),
+        JSON.stringify(message),
+      );
+      if (result.changes > 0) invalidateParsedList(sessionId);
       return result.changes > 0;
     } catch (error) {
       console.warn('[display-log] append failed:', (error as Error)?.message || error);
@@ -77,13 +131,35 @@ export const sessionMessagesDb = {
     }
   },
 
+  /**
+   * 批量追加(老会话首次 seed 用),整批一个事务。
+   *
+   * 老会话第一条消息发送前要把几百上千条历史抄进日志,逐条 append 就是几百次
+   * 独立的隐式事务(每次都 fsync),明显卡顿。用 better-sqlite3 的 transaction
+   * 包起来,一次提交。返回真正写进去的行数(唯一键去重后)。永不抛。
+   */
+  appendMany(sessionId: string, messages: NormalizedMessage[]): number {
+    if (!sessionId || !Array.isArray(messages) || messages.length === 0) return 0;
+    try {
+      const db = getConnection();
+      let seeded = 0;
+      const run = db.transaction((items: NormalizedMessage[]) => {
+        for (const message of items) {
+          if (sessionMessagesDb.append(sessionId, message)) seeded += 1;
+        }
+      });
+      run(messages);
+      return seeded;
+    } catch (error) {
+      console.warn('[display-log] appendMany failed:', (error as Error)?.message || error);
+      return 0;
+    }
+  },
+
   /** 这个会话有没有自己的显示日志 —— 决定回放走日志还是回落到 transcript。 */
   countForSession(sessionId: string): number {
     try {
-      const db = getConnection();
-      const row = db
-        .prepare('SELECT COUNT(*) AS total FROM session_display_messages WHERE session_id = ?')
-        .get(sessionId) as { total?: number } | undefined;
+      const row = ensurePrepared().count!.get(sessionId) as { total?: number } | undefined;
       return Number(row?.total || 0);
     } catch {
       return 0;
@@ -98,10 +174,21 @@ export const sessionMessagesDb = {
    */
   listForSession(sessionId: string): NormalizedMessage[] {
     try {
-      const db = getConnection();
-      const rows = db
-        .prepare('SELECT payload FROM session_display_messages WHERE session_id = ? ORDER BY id ASC')
-        .all(sessionId) as DisplayMessageRow[];
+      // 指纹一致(行数 + 最大 id 都没变)→ 直接返回上次解析好的数组,免掉整段
+      // 读盘 + JSON.parse。注意返回缓存数组本体:上层只读不改(切片会自己拷),
+      // 若未来有改数组的调用方,应在这里改成返回浅拷贝。
+      const fingerprint = displayLogFingerprint(sessionId);
+      const cached = parsedListCache.get(sessionId);
+      if (cached && cached.fingerprint === fingerprint) {
+        // 刷新 LRU 近度
+        parsedListCache.delete(sessionId);
+        parsedListCache.set(sessionId, cached);
+        // 返回浅拷贝:防上层对数组做 in-place 改动污染缓存(省的是 JSON.parse,
+        // 一次数组浅拷贝相对可忽略)。
+        return [...cached.messages];
+      }
+
+      const rows = ensurePrepared().list!.all(sessionId) as DisplayMessageRow[];
       const messages: NormalizedMessage[] = [];
       for (const row of rows) {
         try {
@@ -110,7 +197,15 @@ export const sessionMessagesDb = {
           // 单行坏了就跳过,不要让一条脏数据把整个会话读不出来。
         }
       }
-      return messages;
+
+      parsedListCache.set(sessionId, { fingerprint, messages });
+      while (parsedListCache.size > PARSED_LIST_CACHE_MAX) {
+        const oldest = parsedListCache.keys().next().value;
+        if (oldest === undefined) break;
+        parsedListCache.delete(oldest);
+      }
+      // 同 cache-hit 分支:返回浅拷贝,绝不把缓存持有的数组本体交出去。
+      return [...messages];
     } catch (error) {
       console.warn('[display-log] read failed:', (error as Error)?.message || error);
       return [];
@@ -122,6 +217,7 @@ export const sessionMessagesDb = {
       getConnection()
         .prepare('DELETE FROM session_display_messages WHERE session_id = ?')
         .run(sessionId);
+      invalidateParsedList(sessionId);
     } catch (error) {
       console.warn('[display-log] delete failed:', (error as Error)?.message || error);
     }

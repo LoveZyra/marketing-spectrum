@@ -42,7 +42,9 @@
     "openCommandPalette": "Open command palette",
     "attentionRequiredIndicator": "Session needs attention",
     "approvalPendingIndicator": "Waiting for you to approve a tool",
-    "exportSession": "Export session (Markdown)"
+    "exportSession": "Export session (Markdown)",
+    "processingSessionIndicator": "Session running",
+    "exportSessionFailed": "Failed to export session. Please retry."
   },
   "actions": {
     "settings": "Settings",

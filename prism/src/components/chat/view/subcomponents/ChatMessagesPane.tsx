@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo, useRef } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 
 import type { ChatMessage } from '../../types/types';
@@ -11,11 +11,13 @@ import type {
 import { Shimmer } from '../../../../shared/view/ui';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
-import { groupConsecutiveTools, isToolGroupItem } from '../../utils/toolGrouping';
+import { groupConsecutiveTools, isSubagentGroupItem, isToolGroupItem, stabilizeGroupIdentity } from '../../utils/toolGrouping';
+import type { SubagentGroupItem, ToolGroupItem } from '../../utils/toolGrouping';
 
 import MessageComponent from './MessageComponent';
 import ChatEmptyState from './ChatEmptyState';
 import ActivityTimeline from './ActivityTimeline';
+import SubagentGroupCard from './SubagentGroupCard';
 import ActivityIndicator from './ActivityIndicator';
 import LoadAllMessagesOverlay from './LoadAllMessagesOverlay';
 
@@ -47,6 +49,8 @@ interface ChatMessagesPaneProps {
   isLoadingAllMessages: boolean;
   loadAllJustFinished: boolean;
   showLoadAllOverlay: boolean;
+  /** 补页放弃、容器滚不动时为真:浮层常驻、不自动淡出。 */
+  loadAllStuck?: boolean;
   createDiff: any;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onShowSettings?: () => void;
@@ -56,6 +60,8 @@ interface ChatMessagesPaneProps {
   selectedProject: Project;
   /** Prism: fork + edit-and-rerun from a user message. */
   onEditRerun?: (message: ChatMessage) => void;
+  /** F2:失败一键重试 —— 重发最近一条用户消息。 */
+  onRetryLastTurn?: () => void;
 }
 
 function ChatMessagesPane({
@@ -83,6 +89,7 @@ function ChatMessagesPane({
   isLoadingAllMessages,
   loadAllJustFinished,
   showLoadAllOverlay,
+  loadAllStuck,
   createDiff,
   onFileOpen,
   onShowSettings,
@@ -91,10 +98,18 @@ function ChatMessagesPane({
   showThinking,
   selectedProject,
   onEditRerun,
+  onRetryLastTurn,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
+  // 上一轮的组对象,按段首消息身份索引 —— 见 stabilizeGroupIdentity 的注释。
+  const groupIdentityRef = useRef<WeakMap<ChatMessage, ToolGroupItem | SubagentGroupItem>>(new WeakMap());
   const groupedVisibleMessages = useMemo(
-    () => groupConsecutiveTools(visibleMessages, Boolean(showThinking)),
+    () => {
+      const grouped = groupConsecutiveTools(visibleMessages, Boolean(showThinking));
+      const { items, nextByAnchor } = stabilizeGroupIdentity(grouped, groupIdentityRef.current);
+      groupIdentityRef.current = nextByAnchor;
+      return items;
+    },
     [visibleMessages, showThinking],
   );
 
@@ -118,7 +133,7 @@ function ChatMessagesPane({
       keys.set(message, seen === 0 ? intrinsicKey : `${intrinsicKey}__${seen}`);
     };
     for (const item of groupedVisibleMessages) {
-      if (isToolGroupItem(item)) {
+      if (isToolGroupItem(item) || isSubagentGroupItem(item)) {
         item.messages.forEach(assign);
       } else {
         assign(item);
@@ -127,10 +142,15 @@ function ChatMessagesPane({
     return keys;
   }, [groupedVisibleMessages]);
 
+  // getMessageKey 的引用要**恒定**:它是 ActivityTimeline 的 prop,每轮换新
+  // 引用会把上面组身份保持换来的 memo 又全部击穿。改成经 ref 读,值永远是本轮
+  // 的 key 表(ref 在渲染期先于子组件赋值),引用一次都不变。
+  const messageKeyMapRef = useRef(messageKeyMap);
+  messageKeyMapRef.current = messageKeyMap;
   const getMessageKey = useCallback(
     (message: ChatMessage) =>
-      messageKeyMap.get(message) ?? getIntrinsicMessageKey(message) ?? 'message-generated',
-    [messageKeyMap],
+      messageKeyMapRef.current.get(message) ?? getIntrinsicMessageKey(message) ?? 'message-generated',
+    [],
   );
 
   return (
@@ -183,6 +203,7 @@ function ChatMessagesPane({
             showLoadAllOverlay={showLoadAllOverlay}
             isLoadingAllMessages={isLoadingAllMessages}
             loadAllJustFinished={loadAllJustFinished}
+            stuck={loadAllStuck}
             totalMessages={totalMessages}
             onLoadAllMessages={loadAllMessages}
           />
@@ -206,8 +227,22 @@ function ChatMessagesPane({
 
           {(() => {
             let prevMessage: ChatMessage | null = null;
+            const lastItem = groupedVisibleMessages[groupedVisibleMessages.length - 1];
 
             return groupedVisibleMessages.map((item) => {
+              // 子代理卡片组:抬头 + 网格子卡 + 点开看各自的步骤时间轴(ci 轮)。
+              if (isSubagentGroupItem(item)) {
+                const groupPrevMessage = item.messages[item.messages.length - 1] || prevMessage;
+                prevMessage = groupPrevMessage;
+                return (
+                  <SubagentGroupCard
+                    key={`subagents-${getMessageKey(item.messages[0])}`}
+                    group={item}
+                    getMessageKey={getMessageKey}
+                  />
+                );
+              }
+
               if (isToolGroupItem(item)) {
                 const groupPrevMessage = prevMessage;
                 prevMessage = item.messages[item.messages.length - 1] || prevMessage;
@@ -232,6 +267,15 @@ function ChatMessagesPane({
               const messagePrevMessage = prevMessage;
               prevMessage = item;
 
+              // 只有**收尾在错误上**的对话才给重试按钮:老错误早被后面的
+              // 对话翻篇了,回合在跑时也不该再塞一条。
+              const showRetry = Boolean(
+                onRetryLastTurn
+                && item === lastItem
+                && item.type === 'error'
+                && !isProcessing,
+              );
+
               return (
                 <MessageComponent
                   key={getMessageKey(item)}
@@ -245,6 +289,8 @@ function ChatMessagesPane({
                   showThinking={showThinking}
                   selectedProject={selectedProject}
                   onEditRerun={onEditRerun}
+                  showRetry={showRetry}
+                  onRetry={onRetryLastTurn}
                 />
               );
             });

@@ -4,7 +4,8 @@ import path from 'node:path';
 
 import express, { type RequestHandler, type Router } from 'express';
 
-import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { canViewerSeeSession, projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { readRequestViewer } from '@/shared/project-visibility.js';
 
 type UsageRouterDependencies = {
   authenticateToken: RequestHandler;
@@ -132,6 +133,14 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
       const messageId = typeof req.body?.messageId === 'string' ? req.body.messageId : '';
       if (!appSessionId) return res.status(400).json({ error: 'sessionId is required' });
 
+      // 可见性闸门:同目录的 prewarm / context-usage / active-model 都有这道,
+      // 这两个端点(fork-point / token-usage)当年从 index.js 迁出时漏挂了 ——
+      // 少了它,任何登录用户拿会话 id 就能套出别人的 provider_session_id 与
+      // 项目路径。不可见与不存在同形 404,不给存在性探针。
+      if (!canViewerSeeSession(appSessionId, readRequestViewer(req))) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
       const row = sessionsDb.getSessionById(appSessionId);
       if (!row?.provider_session_id) {
         return res.status(404).json({ error: 'Session has no provider transcript yet' });
@@ -191,6 +200,12 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
       const safeSessionId = String(sessionId).replace(/[^a-zA-Z0-9._-]/g, '');
       if (!safeSessionId || safeSessionId !== String(sessionId)) {
         return res.status(400).json({ error: 'Invalid sessionId' });
+      }
+
+      // 可见性闸门(与 fork-point 同理,迁移时漏挂):token 用量也是会话数据,
+      // 不可见一律 404 同形。
+      if (!canViewerSeeSession(safeSessionId, readRequestViewer(req))) {
+        return res.status(404).json({ error: 'Session not found', sessionId: safeSessionId });
       }
 
       // Provider artifacts on disk (Claude JSONL file names) are keyed by the

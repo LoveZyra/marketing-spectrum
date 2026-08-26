@@ -42,7 +42,9 @@
     "openCommandPalette": "打开命令面板",
     "attentionRequiredIndicator": "会话需要处理",
     "approvalPendingIndicator": "等待你确认工具权限",
-    "exportSession": "导出会话 (Markdown)"
+    "exportSession": "导出会话 (Markdown)",
+    "processingSessionIndicator": "会话运行中",
+    "exportSessionFailed": "导出会话失败,请重试。"
   },
   "actions": {
     "settings": "设置",

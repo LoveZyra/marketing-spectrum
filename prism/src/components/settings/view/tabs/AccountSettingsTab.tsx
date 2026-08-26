@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../auth/context/AuthContext';
 import { api, isValidRefreshedToken } from '../../../../utils/api';
 
+import AttachmentUsageCard from './AttachmentUsageCard';
+
 /**
  * 我的账号:当前登录身份 + 退出登录/切换账号 + 退出所有设备。
  *
@@ -101,6 +103,8 @@ export default function AccountSettingsTab() {
           <p className="text-xs text-muted-foreground">{t('account.signedInAs')}</p>
         </div>
       </div>
+
+      <AttachmentUsageCard />
 
       {/* 修改密码 */}
       <div className="overflow-hidden rounded-lg border border-border">

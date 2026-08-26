@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect, useRef } from 'react';
+import { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import type { DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Check, X, Folder, Upload } from 'lucide-react';
@@ -53,6 +53,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   const {
     files,
     loading,
+    truncated,
     refreshFiles,
     location,
     isInProject,
@@ -61,11 +62,19 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   } = useFileTreeData(selectedProject);
 
   const { viewMode, changeViewMode } = useFileTreeViewMode();
-  const { expandedDirs, toggleDirectory, expandDirectories, collapseAll } = useExpandedDirectories();
-  const { searchQuery, setSearchQuery, filteredFiles } = useFileTreeSearch({
+  const { expandedDirs, toggleDirectory, collapseAll } = useExpandedDirectories();
+  const { searchQuery, setSearchQuery, filteredFiles, searchExpandedPaths } = useFileTreeSearch({
     files,
-    expandDirectories,
   });
+
+  // 搜索期间的展开是**临时并集**:命中项的祖先在渲染时临时摊开,清空关键词即还原,
+  // 不再把它们永久写进用户的展开状态(旧行为:搜一次,整棵树永远摊开)。
+  const effectiveExpandedDirs = useMemo(() => {
+    if (searchExpandedPaths.size === 0) return expandedDirs;
+    const union = new Set(expandedDirs);
+    for (const path of searchExpandedPaths) union.add(path);
+    return union;
+  }, [expandedDirs, searchExpandedPaths]);
 
   // File operations
   const operations = useFileTreeOperations({
@@ -287,12 +296,21 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           </div>
         )}
 
+        {truncated && (
+          // 服务端因条目上限截断了列表(X-Prism-Truncated)。此前前端不读这个头,
+          // 大目录静默少显示 —— 用户以为看到的就是全部。
+          <div className="flex items-center gap-2 border-b border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>{t('fileTree.truncatedNotice', '目录条目过多,仅显示部分内容。可进入子目录查看更多。')}</span>
+          </div>
+        )}
+
         <FileTreeBody
           files={files}
           filteredFiles={filteredFiles}
           searchQuery={searchQuery}
           viewMode={viewMode}
-          expandedDirs={expandedDirs}
+          expandedDirs={effectiveExpandedDirs}
           onItemClick={handleItemClick}
           renderFileIcon={renderFileIcon}
           formatFileSize={formatFileSize}

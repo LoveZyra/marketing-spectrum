@@ -106,8 +106,27 @@ const normalizeNotificationPreferences = (
   };
 };
 
+/**
+ * 自动保存基线签名:把会自动保存的那几项(权限 / 排序 / 通知偏好)拍成一个串。
+ * loadSettings 记录加载后的基线,auto-save 只在当前签名与基线不同时才写。
+ */
+const settingsSignature = (
+  perms: ClaudePermissionsState,
+  sortOrder: ProjectSortOrder,
+  notif: NotificationPreferencesState,
+): string => JSON.stringify({
+  allowedTools: perms.allowedTools,
+  disallowedTools: perms.disallowedTools,
+  skipPermissions: perms.skipPermissions,
+  projectSortOrder: sortOrder,
+  notif,
+});
+
 export function useSettingsController({ isOpen, initialTab }: UseSettingsControllerArgs) {
   const closeTimerRef = useRef<number | null>(null);
+  // 自动保存门:加载完成前不写;加载后只在签名变化时写。见 loadSettings / auto-save。
+  const loadCompleteRef = useRef(false);
+  const lastPersistedSigRef = useRef<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<SettingsMainTab>(() => normalizeMainTab(initialTab));
   const [saveStatus, setSaveStatus] = useState<'success' | 'error' | null>(null);
@@ -137,34 +156,43 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         localStorage.getItem('claude-settings'),
         {},
       );
-      setClaudePermissions({
+      const loadedPerms = {
         allowedTools: savedClaudeSettings.allowedTools || [],
         disallowedTools: savedClaudeSettings.disallowedTools || [],
         skipPermissions: Boolean(savedClaudeSettings.skipPermissions),
-      });
-      setProjectSortOrder(savedClaudeSettings.projectSortOrder === 'date' ? 'date' : 'name');
+      };
+      const loadedSortOrder: ProjectSortOrder = savedClaudeSettings.projectSortOrder === 'date' ? 'date' : 'name';
+      setClaudePermissions(loadedPerms);
+      setProjectSortOrder(loadedSortOrder);
 
+      let loadedNotifPrefs = createDefaultNotificationPreferences();
       try {
         const notificationResponse = await authenticatedFetch('/api/settings/notification-preferences');
         if (notificationResponse.ok) {
           const notificationData = await toResponseJson<NotificationPreferencesResponse>(notificationResponse);
           if (notificationData.success && notificationData.preferences) {
-            setNotificationPreferences(normalizeNotificationPreferences(notificationData.preferences));
-          } else {
-            setNotificationPreferences(createDefaultNotificationPreferences());
+            loadedNotifPrefs = normalizeNotificationPreferences(notificationData.preferences);
           }
-        } else {
-          setNotificationPreferences(createDefaultNotificationPreferences());
         }
       } catch {
-        setNotificationPreferences(createDefaultNotificationPreferences());
+        // 保留默认值。
       }
+      setNotificationPreferences(loadedNotifPrefs);
 
+      // 记录"已加载"基线签名并放开自动保存。auto-save 只在**当前签名 ≠ 该基线**时
+      // 才写 —— 这样 loadSettings 的异步 setState(尤其通知偏好 GET 失败回落默认值时)
+      // 不会把默认值 PUT 回去覆盖服务端已存偏好;只有用户真正改动才触发保存。
+      lastPersistedSigRef.current = settingsSignature(loadedPerms, loadedSortOrder, loadedNotifPrefs);
+      loadCompleteRef.current = true;
     } catch (error) {
       console.error('Error loading settings:', error);
-      setClaudePermissions(createEmptyClaudePermissions());
-      setNotificationPreferences(createDefaultNotificationPreferences());
+      const fallbackPerms = createEmptyClaudePermissions();
+      const fallbackNotif = createDefaultNotificationPreferences();
+      setClaudePermissions(fallbackPerms);
+      setNotificationPreferences(fallbackNotif);
       setProjectSortOrder('name');
+      lastPersistedSigRef.current = settingsSignature(fallbackPerms, 'name', fallbackNotif);
+      loadCompleteRef.current = true;
     }
   }, []);
 
@@ -210,15 +238,15 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         throw new Error('Failed to save notification preferences');
       }
 
+      // 更新基线:保存成功后当前值即新的"已持久化"状态,后续没变就不再重复写。
+      lastPersistedSigRef.current = settingsSignature(claudePermissions, projectSortOrder, notificationPreferences);
       setSaveStatus('success');
     } catch (error) {
       console.error('Error saving settings:', error);
       setSaveStatus('error');
     }
   }, [
-    claudePermissions.allowedTools,
-    claudePermissions.disallowedTools,
-    claudePermissions.skipPermissions,
+    claudePermissions,
     notificationPreferences,
     projectSortOrder,
   ]);
@@ -254,12 +282,17 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
 
   // Auto-save permissions and sort order with debounce
   const autoSaveTimerRef = useRef<number | null>(null);
-  const isInitialLoadRef = useRef(true);
 
   useEffect(() => {
-    // Skip auto-save on initial load (settings are being loaded from localStorage)
-    if (isInitialLoadRef.current) {
-      isInitialLoadRef.current = false;
+    // 加载还没完成:一律不写(避免 loadSettings 的异步 setState 触发回写)。
+    if (!loadCompleteRef.current) {
+      return;
+    }
+
+    const currentSig = settingsSignature(claudePermissions, projectSortOrder, notificationPreferences);
+    // 与已加载/已保存的基线一致 → 不是用户改动(通常是 load 的多段 setState 落定),
+    // 不写。这就堵住了"打开设置即回写默认值覆盖服务端偏好"。
+    if (currentSig === lastPersistedSigRef.current) {
       return;
     }
 
@@ -268,7 +301,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     }
 
     autoSaveTimerRef.current = window.setTimeout(() => {
-      saveSettings();
+      void saveSettings();
     }, 500);
 
     return () => {
@@ -276,7 +309,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         window.clearTimeout(autoSaveTimerRef.current);
       }
     };
-  }, [saveSettings]);
+  }, [saveSettings, claudePermissions, projectSortOrder, notificationPreferences]);
 
   // Clear save status after 2 seconds
   useEffect(() => {
@@ -288,10 +321,11 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     return () => window.clearTimeout(timer);
   }, [saveStatus]);
 
-  // Reset initial load flag when settings dialog opens
+  // 每次打开设置对话框:重置加载门,等 loadSettings 重新记录基线后才放开自动保存。
   useEffect(() => {
     if (isOpen) {
-      isInitialLoadRef.current = true;
+      loadCompleteRef.current = false;
+      lastPersistedSigRef.current = null;
     }
   }, [isOpen]);
 

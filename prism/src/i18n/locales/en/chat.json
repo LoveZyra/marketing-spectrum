@@ -63,7 +63,12 @@
     },
     "attachmentPath": "path",
     "modelHint": "Current model: {{model}} · click to switch",
-    "queueShort": "Queue"
+    "queueShort": "Queue",
+    "attachDocuments": "Attach documents (PDF, Word, Excel, PPT…)",
+    "attachUrl": "Fetch a URL as context",
+    "attachUrlPrompt": "Enter a URL to fetch its readable text:",
+    "removeDocument": "Remove document",
+    "parsingDocument": "Parsing document…"
   },
   "providerSelection": {
     "pressToSearch": "Press <kbd>{{shortcut}}</kbd> to search sessions, files, and commits"
@@ -216,7 +221,8 @@
       "todo": "updated the task list {{count}} times",
       "mcp": "{{count}} external tool calls",
       "tool": "{{count}} other tool calls",
-      "thinking": "thought {{count}} times"
+      "thinking": "thought {{count}} times",
+      "narration": "{{count}} notes"
     },
     "foldedCount": "+{{count}}",
     "collapseRun": "Collapse"
@@ -236,5 +242,113 @@
   },
   "compactSummary": {
     "title": "Context compacted — earlier turns were folded into a summary"
+  },
+  "askUser": {
+    "title": "Claude needs your input",
+    "other": "Other...",
+    "typeAnswer": "Type your answer...",
+    "skip": "Skip",
+    "skipAll": "Skip all",
+    "back": "Back",
+    "next": "Next",
+    "submit": "Submit"
+  },
+  "plan": {
+    "title": "Implementation plan",
+    "generating": "Generating plan...",
+    "rawParams": "raw params",
+    "build": "Build",
+    "revise": "Revise"
+  },
+  "fork": {
+    "editRerun": "Edit & rerun",
+    "editRerunTitle": "Fork here: edit this message and rerun"
+  },
+  "commandResult": {
+    "builtins": {
+      "models": "Browse available models for the active provider.",
+      "cost": "Review token usage for the active session.",
+      "status": "Inspect runtime, version, provider, and environment status.",
+      "memory": "Open the project CLAUDE.md memory file.",
+      "config": "Open settings and configuration.",
+      "help": "Show command documentation and syntax."
+    },
+    "filterCommands": "Filter commands...",
+    "noDescription": "No description available.",
+    "unknown": "Unknown",
+    "changeModelFailed": "Unable to change the model right now.",
+    "refreshModels": "Refresh model list from providers",
+    "activeModel": "Active model",
+    "nextBadge": "→ {{model}} next",
+    "sessionScopeNote": "Your choice applies to this session on the next response.",
+    "defaultScopeNote": "Your choice becomes the default model for new turns.",
+    "totalTokens": "Total tokens used",
+    "inputTokens": "Input tokens",
+    "outputTokens": "Output tokens",
+    "breakdown": "Breakdown",
+    "unavailable": "Unavailable",
+    "contextWindow": "Context window",
+    "package": "Package",
+    "help": {
+      "eyebrow": "Command center",
+      "title": "Help & Shortcuts",
+      "subtitle": "Search built-ins, syntax patterns, and command usage without leaving the chat."
+    },
+    "models": {
+      "eyebrow": "Model selection",
+      "title": "Choose a Model",
+      "subtitle": "Pick the model this provider should use."
+    },
+    "cost": {
+      "eyebrow": "Session telemetry",
+      "title": "Token Usage",
+      "subtitle": "Input, output, and total token counts for this session.",
+      "model": "Model",
+      "provider": "Provider"
+    },
+    "status": {
+      "eyebrow": "Runtime health",
+      "title": "System Status",
+      "subtitle": "Version, provider, runtime, and environment details in one place.",
+      "package": "Package",
+      "version": "Version",
+      "uptime": "Uptime",
+      "provider": "Provider",
+      "model": "Model",
+      "node": "Node.js",
+      "platform": "Platform",
+      "memory": "Memory",
+      "runtimeOnline": "Runtime online",
+      "processResponding": "Process {{pid}} is responding.",
+      "healthy": "Healthy"
+    },
+    "fallbackTitle": "Command Result",
+    "closeAria": "Close command result modal",
+    "escHint": "Esc closes the modal.",
+    "sessionCost": "Session cost"
+  },
+  "retry": {
+    "lastTurn": "Resend last message"
+  },
+  "findBar": {
+    "placeholder": "Find in conversation…",
+    "noMatches": "No results",
+    "previous": "Previous (Shift+Enter)",
+    "next": "Next (Enter)",
+    "close": "Close (Esc)"
+  },
+  "mermaid": {
+    "renderFailed": "Mermaid rendering failed; showing source."
+  },
+  "subagent": {
+    "groupTitle": "Ran {{count}} agents",
+    "totalSteps": "{{count}} steps total",
+    "steps": "{{count}} steps",
+    "runningCount": "{{count}} running",
+    "defaultTitle": "Subagent task",
+    "promptLabel": "Prompt:",
+    "resultLabel": "Agent report",
+    "noStepsYet": "No steps yet — the agent is starting up.",
+    "failed": "Agent failed:"
   }
 }

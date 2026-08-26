@@ -104,6 +104,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
     void checkAuthStatus();
   }, [checkAuthStatus]);
 
+  // 全局 401 兜底:api.js 拿到 401(令牌过期/被撤销)会派发这个事件,这里清会话
+  // 跳回登录。不调登出端点 —— 令牌已经无效,再打一枪没意义。
+  useEffect(() => {
+    if (IS_PLATFORM) return;
+    const onExpired = () => clearSession();
+    window.addEventListener('prism:session-expired', onExpired);
+    return () => window.removeEventListener('prism:session-expired', onExpired);
+  }, [clearSession]);
+
   const login = useCallback<AuthContextValue['login']>(
     async (username, password) => {
       try {

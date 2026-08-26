@@ -11,9 +11,11 @@ import express from 'express';
 import compression from 'compression';
 import cors from 'cors';
 
-import { AppError } from '@/shared/utils.js';
+import { AppError, generateMessageId } from '@/shared/utils.js';
 import { closeSessionsWatcher, initializeSessionsWatcher } from '@/modules/providers/index.js';
 import { createWebSocketServer } from '@/modules/websocket/index.js';
+import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
+import { createTasksRouter, startTaskScheduler, stopTaskScheduler } from '@/modules/tasks/index.js';
 import { createFilesRouter } from '@/modules/files/index.js';
 import {
     createSystemPublicRouter,
@@ -31,6 +33,7 @@ import {
     releaseClaudeSession,
     abortClaudeSDKSession,
     getActiveClaudeSDKSessions,
+    disposeAllRuntimes,
     getToolApprovalSessionId,
     resolveToolApproval,
     getPendingApprovalsForSession,
@@ -53,8 +56,9 @@ import settingsRoutes from './routes/settings.js';
 import agentRoutes from './routes/agent.js';
 import projectModuleRoutes from './modules/projects/projects.routes.js';
 import providerRoutes from './modules/providers/provider.routes.js';
-import { assetsRoutes } from './modules/assets/index.js';
-import { canViewerSeeSession, closeConnection, initializeDatabase, sessionsDb, stopDatabaseBackups } from './modules/database/index.js';
+import { assetsRoutes, attachmentUsageRoutes } from './modules/assets/index.js';
+import { startAttachmentSweeper } from './shared/attachment-storage.js';
+import { canViewerSeeSession, closeConnection, initializeDatabase, sessionMessagesDb, sessionsDb, stopDatabaseBackups } from './modules/database/index.js';
 import { readRequestViewer } from './shared/project-visibility.js';
 import { currentHolder } from './modules/websocket/services/conversation-ownership.service.js';
 import { validateApiKey, authenticateToken, requireRoot, authenticateWebSocket } from './middleware/auth.js';
@@ -315,11 +319,19 @@ app.use('/api/projects', createPreviewRouter({ authenticateToken }));
 // Projects API Routes (protected)
 app.use('/api/projects', authenticateToken, projectModuleRoutes);
 
+// 定时任务(cj 轮):CRUD + 立即运行 + Claude 直建票据通道。
+app.use('/api/tasks', createTasksRouter({ authenticateToken }));
+
 // Account administration — approval queue. Root only (PRISM_ROOT_USERS).
 app.use('/api/admin', createAdminRouter({ authenticateToken, requireRoot, runningVersion: RUNNING_VERSION }));
 
-// Chat image asset upload/serving (global assets store, see server/modules/assets; protected)
+// Chat image asset upload/serving (see server/modules/assets; protected)
 app.use('/api/assets', authenticateToken, assetsRoutes);
+
+// 附件用量:设置页里"我占了多少配额"那一块的数据源
+app.use('/api/attachments', authenticateToken, attachmentUsageRoutes);
+// 过期附件清扫:启动跑一次,之后每小时一轮。只删台账记过的文件。
+startAttachmentSweeper();
 
 
 // Checkpoints: per-turn git snapshots with transactional rollback (prism)
@@ -419,15 +431,19 @@ app.get('*', (req, res) => {
 });
 
 // global error middleware must be last
+//
+// 错误体形状统一:全站 245 处手写响应都是 `{ error: "<字符串>" }`,而所有前端消费
+// 方(api.js、文件树、侧栏、向导…)读的也都是 `data.error` 当字符串。AppError 这条
+// 分支原先把 `error` 写成 `{code,message,details}` 对象 —— 同名字段一边字符串一边
+// 对象,前端 `data.error` 直接渲染就得到 "[object Object]"。这里对齐成:`error` 恒为
+// 字符串(消息),结构化信息放同级的 `code` / `details`。
 app.use((err, req, res, next) => {
   if (err instanceof AppError) {
     return res.status(err.statusCode).json({
       success: false,
-      error: {
-        code: err.code,
-        message: err.message,
-        details: err.details,
-      },
+      error: err.message,
+      code: err.code,
+      ...(err.details !== undefined ? { details: err.details } : {}),
     });
   }
 
@@ -435,10 +451,8 @@ app.use((err, req, res, next) => {
 
   return res.status(500).json({
     success: false,
-    error: {
-      code: 'INTERNAL_ERROR',
-      message: 'Internal server error',
-    },
+    error: 'Internal server error',
+    code: 'INTERNAL_ERROR',
   });
 });
 
@@ -501,8 +515,27 @@ async function shutdown(signal) {
         wss.close();
     });
 
-    // Abort in-flight Claude runs. claude-sdk exports no dispose-all, so use
-    // the supported per-session abort API.
+    // F14c:优雅关停(部署重启)时,给每个**在跑**的会话补一条「回合被中断」——
+    // 落进显示日志,重启后打开会话即见,且它是收尾错误行,cb 轮的「重发上一条
+    // 消息」按钮会自动出现,一键续上。强杀(kill -9)写不了,认了。
+    await shutdownStep('task scheduler stop', () => stopTaskScheduler());
+
+    await shutdownStep('interrupted-run markers', () => {
+        const running = chatRunRegistry.listRunningRuns();
+        for (const run of running) {
+            sessionMessagesDb.append(run.sessionId, {
+                id: generateMessageId('restart'),
+                sessionId: run.sessionId,
+                timestamp: new Date().toISOString(),
+                provider: run.provider,
+                kind: 'error',
+                content: '服务已重启,这一回合被中断。点下方「重发上一条消息」可继续。',
+            });
+        }
+        if (running.length > 0) console.log(`[Shutdown] Marked ${running.length} interrupted run(s)`);
+    });
+
+    // Abort in-flight Claude runs (sessions with a live turn)…
     await shutdownStep('claude aborts', async () => {
         const activeSessionIds = getActiveClaudeSDKSessions() || [];
         if (activeSessionIds.length === 0) return;
@@ -510,6 +543,15 @@ async function shutdown(signal) {
         await Promise.allSettled(
             activeSessionIds.map((sessionId) => Promise.resolve(abortClaudeSDKSession(sessionId)))
         );
+    });
+
+    // …then dispose the idle resident pool. abort above only touches sessions
+    // with a live turn; idle runtimes (up to MAX_RUNTIMES claude subprocesses)
+    // would otherwise be left for process.exit to sever implicitly. Dispose
+    // them explicitly so every subprocess is closed cleanly.
+    await shutdownStep('claude runtime dispose', async () => {
+        const disposed = await disposeAllRuntimes();
+        if (disposed > 0) console.log(`[Shutdown] Disposed ${disposed} idle Claude runtime(s)`);
     });
 
     // JupyterLab 子进程(SIGTERM;kernel 落盘由 jupyter 自己负责)。
@@ -574,6 +616,10 @@ async function startServer() {
 
         server.listen(SERVER_PORT, HOST, async () => {
             const appInstallPath = APP_ROOT;
+            // 定时任务调度器:服务就绪即装载(执行走与网页聊天同一条 run 通道)。
+            try { startTaskScheduler(queryClaudeSDK); } catch (error) {
+                console.warn('[Tasks] 调度器启动失败:', error?.message || error);
+            }
             await writeLocalServerMarker(LOCAL_SERVER_MARKER_PATH, buildLocalServerMarker()).catch((error) => {
                 console.warn('[WARN] Could not write local server marker:', error.message);
             });

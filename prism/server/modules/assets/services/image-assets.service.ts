@@ -29,6 +29,8 @@ type StoredImageAsset = {
 type UploadedImageFile = {
   originalname: string;
   filename: string;
+  /** multer 实际写入的目录;项目 attachments/ 或全局回落目录。 */
+  destination?: string;
   size: number;
   mimetype: string;
 };
@@ -77,6 +79,31 @@ export function inlineContentTypeForFile(fileName: string): string | null {
   return ext === '.jpeg' ? 'image/jpeg' : null;
 }
 
+/**
+ * 落盘文件名。
+ *
+ * 附件目录现在是**明放在项目文件树里**的,所以名字得让人认得出来 ——
+ * 原先的 `1787648734803-93142742.png` 在文件树里就是一串噪音。但可读不能
+ * 以放松约束为代价,下面三条一条都不能松:
+ *
+ *   1. **扩展名只由已校验的 MIME 决定**。让上传方决定扩展名,配合按扩展名
+ *      定 Content-Type 的取文件路由,就能在应用同源下拿到一个 inline 的
+ *      HTML 文档 —— 而 JWT 就在 localStorage 里。
+ *   2. **不留任何路径分隔符**,`basename` 之后再洗一遍。
+ *   3. **必带随机后缀**,否则同名文件会互相覆盖(两个人各传一张 `截图.png`)。
+ */
+export function buildAttachmentFilename(originalName: string, mimeType: string): string {
+  const raw = typeof originalName === 'string' ? originalName : '';
+  // 先取 basename 去掉目录部分,再把控制字符、分隔符、以及各系统的保留字符洗掉。
+  const base = path.basename(raw.replace(/\\/g, '/'))
+    .replace(/[\u0000-\u001f\u007f/\\:*?"<>|]/g, '_')
+    .replace(/^\.+/, '')
+    .trim();
+  const stem = (base.includes('.') ? base.slice(0, base.lastIndexOf('.')) : base).slice(0, 60) || 'attachment';
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `${stem}-${suffix}${canonicalExtensionForMimeType(mimeType)}`;
+}
+
 /** Creates the global `~/.prism/assets` folder if needed and returns it. */
 export async function ensureImageAssetsDir(): Promise<string> {
   const assetsDir = getGlobalImageAssetsDir();
@@ -90,10 +117,11 @@ export async function ensureImageAssetsDir(): Promise<string> {
  * history carries back to the UI.
  */
 export function buildStoredImageRecords(files: UploadedImageFile[]): StoredImageAsset[] {
-  const assetsDir = getGlobalImageAssetsDir();
   return files.map((file) => ({
     name: file.originalname,
-    path: toPosixPath(path.join(assetsDir, file.filename)),
+    // 目录由 multer 的 destination 决定(项目 attachments/ 或全局回落),
+    // 不能再假定就是全局目录 —— 假定错了,历史里存的路径会指向不存在的文件。
+    path: toPosixPath(path.join(file.destination || getGlobalImageAssetsDir(), file.filename)),
     size: file.size,
     mimeType: file.mimetype,
   }));

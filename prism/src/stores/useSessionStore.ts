@@ -116,6 +116,11 @@ export interface SessionSlot {
   hasMore: boolean;
   offset: number;
   tokenUsage: unknown;
+  /**
+   * 最近一次被访问(读或写)的时刻,LRU 淘汰按它排序。后台会话的实时帧
+   * 也会刷新它 —— 正在跑的会话因此天然不会被淘汰。
+   */
+  lastTouchedAt: number;
 }
 
 const EMPTY: NormalizedMessage[] = [];
@@ -135,6 +140,7 @@ function createEmptySlot(): SessionSlot {
     tokenUsage: null,
     _fetchSeq: 0,
     _appliedFetchSeq: 0,
+    lastTouchedAt: Date.now(),
   };
 }
 
@@ -468,6 +474,38 @@ const STALE_THRESHOLD_MS = 30_000;
 
 const MAX_REALTIME_MESSAGES = 500;
 
+/**
+ * 槽位 LRU 上限与保护窗。
+ *
+ * 原设计是"切会话不清、旧数据全留"—— 换回上一个会话零等待。但槽位从不
+ * 淘汰意味着逛几十个长会话后内存只涨不落(每个槽位攥着全量消息数组和它们
+ * 的 merged 副本)。折中:保留最近用过的 N 个,其余在**切会话**这个自然
+ * 边界上丢弃 —— 被丢的会话再次打开时走正常的首屏拉取,和冷启动一个体验。
+ * 60 秒保护窗兜住"正在后台跑着流"的会话:实时帧会刷新 lastTouchedAt,
+ * 只要还有动静就不会进候选。
+ */
+const MAX_SESSION_SLOTS = 12;
+const SLOT_EVICTION_MIN_IDLE_MS = 60_000;
+
+/**
+ * 纯函数:算出该淘汰哪些会话槽位。当前会话永不淘汰;60 秒内被碰过的不淘汰;
+ * 其余按最久未用先走,留到不超过 max 为止。
+ */
+export function planSlotEviction(
+  entries: Array<{ sessionId: string; lastTouchedAt: number }>,
+  activeSessionId: string | null,
+  now: number,
+  max: number = MAX_SESSION_SLOTS,
+  minIdleMs: number = SLOT_EVICTION_MIN_IDLE_MS,
+): string[] {
+  if (entries.length <= max) return [];
+  const candidates = entries
+    .filter((entry) => entry.sessionId !== activeSessionId && now - entry.lastTouchedAt >= minIdleMs)
+    .sort((a, b) => a.lastTouchedAt - b.lastTouchedAt);
+  const overflow = entries.length - max;
+  return candidates.slice(0, overflow).map((entry) => entry.sessionId);
+}
+
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useSessionStore() {
@@ -486,6 +524,17 @@ export function useSessionStore() {
 
   const setActiveSession = useCallback((sessionId: string | null) => {
     activeSessionIdRef.current = sessionId;
+    // 切会话是淘汰的自然边界:此刻丢掉最久未用的槽位,当前会话与仍在
+    // 后台推流的会话(60 秒保护窗)都不在候选里。
+    const store = storeRef.current;
+    if (sessionId) {
+      const slot = store.get(sessionId);
+      if (slot) slot.lastTouchedAt = Date.now();
+    }
+    const entries = Array.from(store, ([id, slot]) => ({ sessionId: id, lastTouchedAt: slot.lastTouchedAt }));
+    for (const evictId of planSlotEviction(entries, sessionId, Date.now())) {
+      store.delete(evictId);
+    }
   }, []);
 
   const getSlot = useCallback((sessionId: string): SessionSlot => {
@@ -493,7 +542,9 @@ export function useSessionStore() {
     if (!store.has(sessionId)) {
       store.set(sessionId, createEmptySlot());
     }
-    return store.get(sessionId)!;
+    const slot = store.get(sessionId)!;
+    slot.lastTouchedAt = Date.now();
+    return slot;
   }, []);
 
   const has = useCallback((sessionId: string) => {
@@ -602,9 +653,21 @@ export function useSessionStore() {
       }
       slot._appliedFetchSeq = fetchTicket;
 
-      // Prepend older messages (they're earlier in the conversation)
-      slot.serverMessages = [...olderMessages, ...slot.serverMessages];
+      // Prepend older messages (they're earlier in the conversation).
+      //
+      // 去重:流式期间新行不断落盘,total 在涨,而 fetchMore 是按"已加载条数"
+      // 算 offset 从尾部取页 —— 这一页可能和已加载窗口重叠,直接 prepend 会出现
+      // 重复消息。按 id 过滤掉已在 serverMessages 里的,再拼接。
+      const existingIds = new Set(
+        slot.serverMessages.map((m) => m.id).filter((id): id is string => typeof id === 'string'),
+      );
+      const freshOlder = olderMessages.filter(
+        (m) => typeof m.id !== 'string' || !existingIds.has(m.id),
+      );
+      slot.serverMessages = [...freshOlder, ...slot.serverMessages];
       slot.hasMore = Boolean(data.hasMore);
+      // offset 仍按"这一页服务端返回了多少条"推进(而非去重后的条数)——
+      // 它对应服务端的分页游标位置,和本地去重无关。
       slot.offset = slot.offset + olderMessages.length;
       recomputeMergedIfNeeded(slot);
       notify(sessionId);

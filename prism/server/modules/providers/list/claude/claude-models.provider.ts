@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { open, readFile, stat } from 'node:fs/promises';
 
 import { sessionsDb } from '@/modules/database/index.js';
 import type { IProviderModels } from '@/shared/interfaces.js';
@@ -205,11 +205,11 @@ const extractClaudeModelFromMessageContent = (content: unknown): string | null =
   return null;
 };
 
-const readClaudeSessionModelFromJsonl = async (
+/** 从一段文本里从后往前找第一条带 model 的事件。 */
+const scanModelFromEnd = (
+  content: string,
   sessionId: string,
-  jsonlPath: string,
-): Promise<ProviderCurrentActiveModel | null> => {
-  const content = await readFile(jsonlPath, 'utf8');
+): ProviderCurrentActiveModel | null => {
   const lines = content
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -228,6 +228,38 @@ const readClaudeSessionModelFromJsonl = async (
   }
 
   return null;
+};
+
+const MODEL_TAIL_BYTES = 64 * 1024;
+
+const readClaudeSessionModelFromJsonl = async (
+  sessionId: string,
+  jsonlPath: string,
+): Promise<ProviderCurrentActiveModel | null> => {
+  // 先只读尾部 64KB(与 synchronizer 的尾读同法):当前模型来自最近的 assistant/
+  // init 事件,几乎总在尾部,不必把几十 MB 的 transcript 整个读进来。尾部第一行
+  // 可能被截断,`scanModelFromEnd` 的 JSON.parse 会跳过坏行。
+  try {
+    const { size } = await stat(jsonlPath);
+    if (size > MODEL_TAIL_BYTES) {
+      const handle = await open(jsonlPath, 'r');
+      try {
+        const start = size - MODEL_TAIL_BYTES;
+        const buffer = Buffer.alloc(MODEL_TAIL_BYTES);
+        await handle.read(buffer, 0, MODEL_TAIL_BYTES, start);
+        const tailHit = scanModelFromEnd(buffer.toString('utf8'), sessionId);
+        if (tailHit) return tailHit;
+      } finally {
+        await handle.close();
+      }
+      // 尾部没找到(罕见:尾段全是 user 消息、无 model 事件)→ 回落整读。
+    }
+  } catch {
+    // stat/尾读失败 → 回落整读。
+  }
+
+  const content = await readFile(jsonlPath, 'utf8');
+  return scanModelFromEnd(content, sessionId);
 };
 
 export class ClaudeProviderModels implements IProviderModels {

@@ -158,4 +158,44 @@ describe('项目可见性(列表与实时广播共用)', () => {
       assert.equal(isPublicBadge(42, path.join(PUB, 'shared')), false); // 有主即便在目录下也不是公共
     });
   });
+
+  /**
+   * bq:「公共 → 个人」改不回的根因与修复不变量。
+   *
+   * 无主项目落在公共目录下 = 对所有人可见(= 公共)。此前选「个人」只清 visibility 列、
+   * 不认领归属,项目仍无主 → 仍在公共目录下 → 还是所有人可见,于是"改回个人还是公共"。
+   * 修复:选「个人 / 共享」时把无主项目认领给操作者。这里锁住的正是"一旦有主,
+   * 公共目录下的无主口径就不再适用、他人立即看不见"这个不变量。
+   */
+  describe('bq 权限互斥:个人必须让项目有主', () => {
+    test('无主 + 公共目录 = 所有人可见(改之前的"公共"态)', () => {
+      process.env.PRISM_PUBLIC_WORKSPACE = PUB;
+      assert.equal(
+        canViewerSeeProject({ ownerUserId: null, viewerUserId: 8, viewerUsername: 'carol', projectPath: path.join(PUB, 'lqm'), visibility: null }),
+        true,
+      );
+    });
+
+    test('认领归属后(个人态):owner 可见、他人不可见 —— 这才是"个人"生效', () => {
+      process.env.PRISM_PUBLIC_WORKSPACE = PUB;
+      const proj = { projectPath: path.join(PUB, 'lqm'), visibility: null, sharedUserIds: [] };
+      // owner 认领给 id=2
+      assert.equal(canViewerSeeProject({ ...proj, ownerUserId: 2, viewerUserId: 2, viewerUsername: 'demo' }), true);
+      assert.equal(canViewerSeeProject({ ...proj, ownerUserId: 2, viewerUserId: 8, viewerUsername: 'carol' }), false);
+    });
+
+    test('公共 → 个人 → 公共 → 个人:每一步都唯一生效', () => {
+      process.env.PRISM_PUBLIC_WORKSPACE = PUB;
+      const p2 = path.join(PUB, 'lqm');
+      const other = { viewerUserId: 8, viewerUsername: 'carol', projectPath: p2 };
+      // 公共(visibility=public,owner 认领给 2)
+      assert.equal(canViewerSeeProject({ ...other, ownerUserId: 2, visibility: 'public', sharedUserIds: [] }), true);
+      // 个人(visibility=null,owner=2)
+      assert.equal(canViewerSeeProject({ ...other, ownerUserId: 2, visibility: null, sharedUserIds: [] }), false);
+      // 共享给 8
+      assert.equal(canViewerSeeProject({ ...other, ownerUserId: 2, visibility: null, sharedUserIds: [8] }), true);
+      // 再回个人:8 立刻看不见
+      assert.equal(canViewerSeeProject({ ...other, ownerUserId: 2, visibility: null, sharedUserIds: [] }), false);
+    });
+  });
 });
