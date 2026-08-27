@@ -1,0 +1,21 @@
+prism/server/modules/assets/attachment-usage.routes.ts
+  s_2fe7525f4eb7f4::t_1002413da73a2d 26-29
+prism/server/shared/attachment-storage.ts
+  s_2fe7525f4eb7f4::t_d1ad920f53f611 4,35-57,111,158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "2a900232a2e1eee7eda2232fba9b02c46afc5cb4",
+  "prompts": {},
+  "sessions": {
+    "s_2fe7525f4eb7f4": {
+      "agent_id": {
+        "tool": "windsurf",
+        "id": "f704766a-2d1b-4e8b-b625-fe4ba61f769d",
+        "model": "GLM-5.2 High"
+      },
+      "human_author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
