@@ -1,11 +1,20 @@
+import { lazy, Suspense } from 'react';
+
 import type { AgentCategoryContentSectionProps } from '../types';
 import type { McpProject } from '../../../../../mcp/types';
-import { McpServers } from '../../../../../mcp';
 import type { SkillsProject } from '../../../../../skills/types';
-import { ProviderSkills } from '../../../../../skills';
+import { PanelLoadingFallback } from '../../../../../../shared/view/LazyPanel';
 
 import AccountContent from './content/AccountContent';
 import PermissionsContent from './content/PermissionsContent';
+
+/**
+ * G3:MCP 与技能两页各自带着一整套上传/拖放/表单逻辑,而它们只在设置弹窗的
+ * 某个分类被点开时才用得上 —— 打包进主块等于让**每个人**在首屏为两个多数时候
+ * 不会打开的页面付费。懒加载之后它们各自成块,点到才拉。
+ */
+const McpServers = lazy(() => import('../../../../../mcp/view/McpServers'));
+const ProviderSkills = lazy(() => import('../../../../../skills/view/ProviderSkills'));
 
 export default function AgentCategoryContentSection({
   selectedCategory,
@@ -42,6 +51,7 @@ export default function AgentCategoryContentSection({
       )}
 
       {selectedCategory === 'mcp' && (
+        <Suspense fallback={<PanelLoadingFallback />}>
         // SettingsProject.name is populated from the DB projectId by
         // normalizeProjectForSettings, so we can map it straight through.
         <McpServers
@@ -53,18 +63,21 @@ export default function AgentCategoryContentSection({
             path: project.path,
           }))}
         />
+        </Suspense>
       )}
 
       {selectedCategory === 'skills' && (
-        <ProviderSkills
-          selectedProvider="claude"
-          currentProjects={projects.map<SkillsProject>((project) => ({
-            projectId: project.name,
-            displayName: project.displayName,
-            fullPath: project.fullPath,
-            path: project.path,
-          }))}
-        />
+        <Suspense fallback={<PanelLoadingFallback />}>
+          <ProviderSkills
+            selectedProvider="claude"
+            currentProjects={projects.map<SkillsProject>((project) => ({
+              projectId: project.name,
+              displayName: project.displayName,
+              fullPath: project.fullPath,
+              path: project.path,
+            }))}
+          />
+        </Suspense>
       )}
     </div>
   );

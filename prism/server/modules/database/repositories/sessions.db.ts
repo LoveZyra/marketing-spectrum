@@ -1,5 +1,6 @@
 import { getConnection } from '@/modules/database/connection.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
+import { buildProjectVisibilityClause, type VisibilityScope } from '@/modules/database/visibility-sql.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
 
 type SessionRow = {
@@ -292,6 +293,55 @@ export const sessionsDb = {
     return normalizeSessionRows(rows);
   },
 
+  /**
+   * 归档会话分页 + **可见性下推 SQL**(E10)。
+   *
+   * 原来是"全表捞回来 → 每行跑一次 canViewerSeeSession"。那一次判定自己又要
+   * 三次查询(会话行 / 项目行 / 授权名单),归档攒到几百条,打开一次归档面板
+   * 就是上千次查询;而且过滤发生在 JS 侧,根本没法分页 —— 先分页再过滤,每页
+   * 剩几条全看运气。这里把同一条规则下推进 SQL(见 visibility-sql.ts),
+   * 一次查询出页,一次查询出总数。
+   *
+   * 会话没有自己的 owner,它挂在项目上,所以 LEFT JOIN 项目行。项目行**可能
+   * 不存在**(会话先被 watcher 索引、项目还没落行),此时 owner 为 NULL,判定
+   * 回落到"会话自己记的路径在不在公共目录下" —— 与 JS 侧同义。会话路径为空
+   * 时仅 root 可见,也与 JS 侧那条 `ownerUserId: -1` 同义。
+   */
+  getArchivedSessionsPage(
+    scope: VisibilityScope,
+    limit: number,
+    offset: number,
+  ): { rows: SessionRow[]; total: number } {
+    const db = getConnection();
+
+    let where = 's.isArchived = 1';
+    let params: unknown[] = [];
+    if (scope.kind === 'user') {
+      const visibility = buildProjectVisibilityClause({
+        userId: scope.userId,
+        projectIdColumn: 'p.project_id',
+        ownerColumn: 'p.owner_user_id',
+        visibilityColumn: 'p.visibility',
+        pathColumn: 's.project_path',
+      });
+      where += ` AND TRIM(COALESCE(s.project_path, '')) <> '' AND ${visibility.sql}`;
+      params = visibility.params;
+    }
+
+    const from = `FROM sessions s LEFT JOIN projects p ON p.project_path = s.project_path WHERE ${where}`;
+    const prefixed = SESSION_ROW_COLUMNS.split(', ').map((column) => `s.${column}`).join(', ');
+    const rows = db
+      .prepare(
+        `SELECT ${prefixed} ${from}
+         ORDER BY datetime(COALESCE(s.updated_at, s.created_at)) DESC, s.session_id DESC
+         LIMIT ? OFFSET ?`
+      )
+      .all(...params, limit, offset) as SessionRow[];
+    const totalRow = db.prepare(`SELECT COUNT(*) AS count ${from}`).get(...params) as { count: number } | undefined;
+
+    return { rows: normalizeSessionRows(rows), total: Number(totalRow?.count ?? 0) };
+  },
+
   getSessionsByProjectPath(projectPath: string): SessionRow[] {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
@@ -340,6 +390,68 @@ export const sessionsDb = {
       .all(normalizedProjectPath, limit, offset) as SessionRow[];
 
     return normalizeSessionRows(rows);
+  },
+
+  /**
+   * 批量版:一次取**多个项目各自的首页会话**(E7)。
+   *
+   * 项目列表原来是每个项目三次查询(首页 / 计数 / 授权),项目一多就是典型的
+   * N+1 —— 30 个项目 = 90 次 prepare+执行。这里用窗口函数
+   * `ROW_NUMBER() OVER (PARTITION BY project_path ORDER BY …)` 一次把所有项目的
+   * 前 limit 条捞回来,排序与 `getSessionsByProjectPathPage` **逐字一致**。
+   *
+   * 只服务 offset=0(项目列表的默认形态);翻页仍走单项目那条,不做复杂化。
+   */
+  getFirstSessionsForProjectPaths(projectPaths: string[], limit: number): Map<string, SessionRow[]> {
+    const out = new Map<string, SessionRow[]>();
+    if (projectPaths.length === 0 || limit <= 0) return out;
+    const db = getConnection();
+    const normalized = projectPaths.map((p) => normalizeProjectPath(p));
+    const placeholders = normalized.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT ${SESSION_ROW_COLUMNS} FROM (
+           SELECT ${SESSION_ROW_COLUMNS},
+                  ROW_NUMBER() OVER (
+                    PARTITION BY project_path
+                    ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC
+                  ) AS rn
+           FROM sessions
+           WHERE project_path IN (${placeholders})
+             AND isArchived = 0
+         ) WHERE rn <= ?`
+      )
+      .all(...normalized, limit) as SessionRow[];
+
+    for (const row of normalizeSessionRows(rows)) {
+      // WHERE project_path IN (…) 已经把 NULL 挡在外面,这里的守卫只为收窄类型。
+      const key = row.project_path;
+      if (!key) continue;
+      const bucket = out.get(key);
+      if (bucket) bucket.push(row);
+      else out.set(key, [row]);
+    }
+    return out;
+  },
+
+  /** 批量计数(E7):一次 GROUP BY 顶掉 N 次 COUNT。 */
+  countSessionsByProjectPaths(projectPaths: string[]): Map<string, number> {
+    const out = new Map<string, number>();
+    if (projectPaths.length === 0) return out;
+    const db = getConnection();
+    const normalized = projectPaths.map((p) => normalizeProjectPath(p));
+    const placeholders = normalized.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT project_path, COUNT(*) AS count
+         FROM sessions
+         WHERE project_path IN (${placeholders})
+           AND isArchived = 0
+         GROUP BY project_path`
+      )
+      .all(...normalized) as Array<{ project_path: string; count: number }>;
+    for (const row of rows) out.set(row.project_path, Number(row.count) || 0);
+    return out;
   },
 
   countSessionsByProjectPath(projectPath: string): number {

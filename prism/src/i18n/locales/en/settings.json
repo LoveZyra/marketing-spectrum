@@ -44,7 +44,6 @@
       "toolDisplay": "Tool Display",
       "inputSettings": "Input Settings"
     },
-    "darkMode": "Dark Mode",
     "showRawParameters": "Show raw parameters",
     "showThinking": "Show thinking",
     "sendByCtrlEnter": "Send by Ctrl+Enter",
@@ -393,7 +392,32 @@
     "jupyterIdle": "idle (starts when the Notebook tab is first opened)",
     "gateway": "Model gateway",
     "gatewayDown": "unreachable",
-    "gatewayUnset": "BASE_URL not configured"
+    "gatewayUnset": "BASE_URL not configured",
+    "runtimeTitle": "In-process resources",
+    "runtimePool": "Resident sessions",
+    "runtimeBusy": "{{busy}} running",
+    "overflow": "overflow",
+    "runsRunning": "Runs in flight",
+    "oldestRun": "oldest",
+    "ptyTitle": "Terminals",
+    "ptyDetached": "detached",
+    "historyCache": "History cache",
+    "cacheEntries": "entries",
+    "pendingApprovals": "pending",
+    "runtimeByOwner": "Resident sessions by account",
+    "ptyByOwner": "Terminals by account",
+    "busyShort": "running",
+    "anonymousOwner": "anonymous",
+    "quotaTitle": "Attachment quota",
+    "quotaDefault": "global default",
+    "quotaHint": "Leave blank to follow the global default (PRISM_ATTACHMENT_QUOTA_MB). Unit: MB.",
+    "quotaUser": "Account",
+    "quotaUsed": "Used",
+    "quotaLimit": "Limit",
+    "quotaOverride": "Override (MB)",
+    "quotaFollowDefault": "default",
+    "quotaSave": "Save",
+    "quotaCancel": "Cancel"
   },
   "skills": {
     "title": "Skills",
@@ -430,6 +454,14 @@
     "emptyHint": "Add a global skill above or create project-specific skill folders in your workspace.",
     "noMatchTitle": "No matching skills",
     "noMatchHint": "Try a different command, name, scope, project, or source path.",
-    "source": "Source"
+    "source": "Source",
+    "remove": "Uninstall",
+    "removeTitle": "Uninstall this skill?",
+    "removeBody": "This deletes the entire skill directory for \"{{name}}\". It cannot be undone.",
+    "removeCancel": "Cancel",
+    "removeConfirm": "Uninstall",
+    "removing": "Uninstalling…",
+    "removeDone": "Uninstalled \"{{name}}\"",
+    "removeFailed": "Uninstall failed, please try again."
   }
 }

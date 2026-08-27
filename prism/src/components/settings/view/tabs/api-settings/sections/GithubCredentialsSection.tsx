@@ -1,5 +1,6 @@
 import { Eye, EyeOff, Github, Plus, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import { Button, Input } from '../../../../../../shared/view/ui';
 import type { GithubCredentialItem } from '../types';
 
@@ -44,8 +45,8 @@ export default function GithubCredentialsSection({
     <div>
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Github className="h-5 w-5" />
-          <h3 className="text-lg font-semibold">{t('apiKeys.github.title')}</h3>
+          <Github className="h-3.5 w-3.5 text-muted-foreground" />
+          <h3 className="text-[11px] font-medium uppercase tracking-[1.4px] text-muted-foreground">{t('apiKeys.github.title')}</h3>
         </div>
         <Button size="sm" onClick={() => onShowNewGithubFormChange(!showNewGithubForm)}>
           <Plus className="mr-1 h-4 w-4" />
@@ -56,7 +57,7 @@ export default function GithubCredentialsSection({
       <p className="mb-4 text-sm text-muted-foreground">{t('apiKeys.github.descriptionAlt')}</p>
 
       {showNewGithubForm && (
-        <div className="mb-4 space-y-3 rounded-lg border bg-card p-4">
+        <div className="mb-4 space-y-3 rounded-lg border border-border p-4">
           <Input
             placeholder={t('apiKeys.github.form.namePlaceholder')}
             value={newGithubName}
@@ -98,7 +99,7 @@ export default function GithubCredentialsSection({
             href="https://github.com/settings/tokens"
             target="_blank"
             rel="noopener noreferrer"
-            className="block text-xs text-primary hover:underline"
+            className="block text-xs text-card-foreground hover:underline dark:text-primary"
           >
             {t('apiKeys.github.form.howToCreate')}
           </a>
@@ -110,7 +111,7 @@ export default function GithubCredentialsSection({
           <p className="text-sm italic text-muted-foreground">{t('apiKeys.github.empty')}</p>
         ) : (
           githubCredentials.map((credential) => (
-            <div key={credential.id} className="flex items-center justify-between rounded-lg border p-3">
+            <div key={credential.id} className="flex items-center justify-between rounded-lg border border-border p-3">
               <div className="flex-1">
                 <div className="font-medium">{credential.credential_name}</div>
                 {credential.description && (

@@ -20,6 +20,8 @@ export type ShellInitMessage = {
    * 对话,两个进程互相覆盖)。
    */
   takeover?: boolean;
+  /** F10:多标签时每个终端一个 id;服务端据此各给一个 PTY。 */
+  terminalId?: string;
   forceRestart?: boolean;
 };
 
@@ -52,6 +54,8 @@ export type UseShellRuntimeOptions = {
   isRestarting: boolean;
   onProcessComplete?: ((exitCode: number) => void) | null;
   onOutputRef?: MutableRefObject<(() => void) | null>;
+  /** F10:多标签时每个终端一个 id;不传 = 与改动前行为逐字一致(单终端)。 */
+  terminalId?: string | null;
 };
 
 export type ShellSharedRefs = {

@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import type { ChangeEvent } from 'react';
-import { ChevronDown, CornerLeftUp, Eye, FileText, FolderPlus, Home, List, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
+import { CheckSquare, ChevronDown, FileSearch, CornerLeftUp, Eye, FileText, FolderPlus, Home, List, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../../shared/view/ui';
@@ -19,6 +19,12 @@ type FileTreeHeaderProps = {
   onUploadFiles?: (files: FileList) => void;
   onRefresh?: () => void;
   onCollapseAll?: () => void;
+  /** F9:进入/退出多选。默认动作是打开文件,所以多选必须显式进入。 */
+  onToggleSelectionMode?: () => void;
+  selectionMode?: boolean;
+  /** F10:全局内容搜索(与上面那个文件名搜索框是两回事)。 */
+  onToggleSearch?: () => void;
+  searchPanelOpen?: boolean;
   // Navigation
   /** Absolute path of the directory currently listed. */
   currentPath?: string | null;
@@ -59,6 +65,10 @@ export default function FileTreeHeader({
   onUploadFiles,
   onRefresh,
   onCollapseAll,
+  onToggleSelectionMode,
+  selectionMode,
+  onToggleSearch,
+  searchPanelOpen,
   currentPath,
   parentPath,
   isInProject = true,
@@ -191,6 +201,33 @@ export default function FileTreeHeader({
               disabled={operationLoading}
             >
               <FolderPlus className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          {onToggleSearch && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn('h-7 w-7 p-0', searchPanelOpen && 'bg-accent text-foreground')}
+              onClick={onToggleSearch}
+              title={t('fileTree.search.toggle', '在项目内搜索内容 (Ctrl+Shift+F)')}
+              aria-label={t('fileTree.search.toggle', '在项目内搜索内容 (Ctrl+Shift+F)')}
+              aria-pressed={Boolean(searchPanelOpen)}
+            >
+              <FileSearch className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          {onToggleSelectionMode && !readOnly && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn('h-7 w-7 p-0', selectionMode && 'bg-accent text-foreground')}
+              onClick={onToggleSelectionMode}
+              title={t('fileTree.selectionMode', '多选')}
+              aria-label={t('fileTree.selectionMode', '多选')}
+              aria-pressed={Boolean(selectionMode)}
+              disabled={operationLoading}
+            >
+              <CheckSquare className="h-3.5 w-3.5" />
             </Button>
           )}
           {onRefresh && (

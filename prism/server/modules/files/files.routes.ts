@@ -20,6 +20,7 @@ import {
   validatePathInProject,
   type ProjectPathValidation,
 } from '@/modules/files/services/path-validation.service.js';
+import { searchProjectFiles } from '@/modules/files/services/project-search.service.js';
 import { validateWorkspacePath, WORKSPACES_ROOT } from '@/shared/utils.js';
 
 // The file tree can browse above the project root (see the ?path= parameter on
@@ -1053,6 +1054,42 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
     });
   };
+
+  /**
+   * F10:跨文件全局搜索(内容,不是文件名)。
+   *
+   * 搜索根**必须**是调用者可见的项目目录 —— `resolveVisibleProjectRoot` 同时做
+   * 归属校验与路径解析,拿不到就是 404(与"项目不存在"同形,不做存在性预言机)。
+   */
+  router.get('/api/projects/:projectId/search', authenticateToken, async (req, res) => {
+    const projectRoot = resolveVisibleProjectRoot(readRequestViewer(req), req.params.projectId);
+    if (!projectRoot) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const query = typeof req.query.q === 'string' ? req.query.q : '';
+    if (!query.trim()) {
+      return res.status(400).json({ error: '搜索内容不能为空' });
+    }
+    // 单字符搜索几乎必然命中上限然后被截断 —— 与其给一屏噪音,不如直说。
+    if (query.trim().length < 2) {
+      return res.status(400).json({ error: '搜索内容至少 2 个字符' });
+    }
+
+    const result = await searchProjectFiles(projectRoot, query, {
+      caseSensitive: req.query.caseSensitive === 'true',
+      regex: req.query.regex === 'true',
+      wholeWord: req.query.wholeWord === 'true',
+      glob: typeof req.query.glob === 'string' && req.query.glob.trim() ? req.query.glob.trim() : undefined,
+    });
+
+    res.json({
+      query,
+      matches: result.matches,
+      truncated: result.truncated,
+      error: result.error,
+    });
+  });
 
   // 前端据此决定"多大才分片"以及每片多大。硬编码在前端的副本会随部署漂移。
   router.get('/api/projects/:projectId/files/upload/limits', authenticateToken, (_req, res) => {

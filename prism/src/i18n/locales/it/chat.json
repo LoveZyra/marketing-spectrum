@@ -19,9 +19,6 @@
   "tools": {
     "settings": "Impostazioni strumento"
   },
-  "search": {
-    "in": "in:"
-  },
   "interactive": {
     "title": "Prompt interattivo",
     "waiting": "In attesa della tua risposta nella CLI",

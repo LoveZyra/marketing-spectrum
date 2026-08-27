@@ -48,10 +48,19 @@ const DIFF_TURN_LIMIT = 240_000; // whole-turn diff cap (chars)
 const CHECKPOINT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // prune checkpoints older than 7 days
 const MAX_CHECKPOINTS_PER_SESSION = 40;
 const MAX_REPORTED_COMMITS = 20; // commit details listed in a COMMITS_AFTER_CHECKPOINT refusal
+const REUSE_SCAN_LIMIT = 200; // newest checkpoint dirs scanned when looking for a reusable snapshot
 
 /** Reasons a checkpoint snapshot can be incomplete (meta.incompleteReason). */
 export const INCOMPLETE_TOO_MANY_UNTRACKED = 'too_many_untracked';
 export const INCOMPLETE_UNTRACKED_BYTES_BUDGET = 'untracked_bytes_budget';
+
+/** `cp-<base36 毫秒>-<hex>` → 毫秒时间戳;不是 checkpoint 目录名就返回 null。 */
+function checkpointIdTime(name) {
+  const match = /^cp-([0-9a-z]+)-[0-9a-f]+$/.exec(name);
+  if (!match) return null;
+  const at = parseInt(match[1], 36);
+  return Number.isFinite(at) ? at : null;
+}
 
 export function getCheckpointRoot() {
   return process.env.PRISM_CHECKPOINT_DIR
@@ -285,14 +294,30 @@ export function assessSnapshotCompleteness({ untrackedCount, budgetExhausted, ma
  * Snapshot untracked files into the checkpoint store.
  * Symlinks are re-created as symlinks; regular files are copied.
  *
- * @returns {{ stored: Array, totalBytes: number, budgetExhausted: boolean }}
+ * E9 —— 增量快照:每回合都全量 copyFile 一遍 untracked,在带 node_modules /
+ * 构建产物的仓库里就是每轮几百 MB 的纯浪费。这里带上一份「上一份 checkpoint
+ * 存过什么」的索引(`reuse`),同一路径只要 **size + mtimeMs + inode 三者全同**
+ * 就用硬链接指向上一份的副本:没有读写、没有额外磁盘,内容与 copy 逐字节相同。
+ * 判据比 git 自己的 stat 缓存还严一档(git 只看 size+mtime),因为多存一个
+ * inode 几乎不要钱,却能挡住"改完再改回同样大小、mtime 被 touch 回去"这种
+ * 极端替换。链接失败(跨设备 EXDEV / 文件系统不支持 EPERM / 上一份已被清理
+ * ENOENT)一律静默回落成 copyFile,不影响正确性。
+ *
+ * 硬链接共享 inode:老 checkpoint 被 TTL 清掉时只掉一个链接数,新 checkpoint
+ * 里的那份照样在;restore 走的是 copyFile(store → 工作区),也不会把 store 的
+ * inode 带进工作区。
+ *
+ * @returns {{ stored: Array, totalBytes: number, budgetExhausted: boolean, linked: number }}
  *   `budgetExhausted` is true when MAX_UNTRACKED_BYTES stopped the snapshot
- *   before every listed file's content was saved.
+ *   before every listed file's content was saved. 复用成硬链接的字节**不计入**
+ *   预算 —— 预算管的是这份 checkpoint 真正占的磁盘,而硬链接一个字节不占,
+ *   且那份内容确实已经完整存下(不能因此判 incomplete)。
  */
-async function snapshotUntracked(cwd, checkpointDir, paths, { startBytes = 0, markIgnored = false } = {}) {
+async function snapshotUntracked(cwd, checkpointDir, paths, { startBytes = 0, markIgnored = false, reuse = null } = {}) {
   const stored = [];
   let totalBytes = startBytes;
   let budgetExhausted = false;
+  let linked = 0;
 
   for (const relPath of paths) {
     const source = path.join(cwd, relPath);
@@ -309,6 +334,28 @@ async function snapshotUntracked(cwd, checkpointDir, paths, { startBytes = 0, ma
         continue;
       }
       if (!stat.isFile()) continue;
+
+      const entry = markIgnored
+        ? { path: relPath, symlink: false, size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, ignored: true }
+        : { path: relPath, symlink: false, size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino };
+
+      const previous = reuse ? reuse.get(relPath) : null;
+      if (previous
+        && previous.size === stat.size
+        && previous.mtimeMs === stat.mtimeMs
+        && previous.ino === stat.ino) {
+        try {
+          await fs.mkdir(path.dirname(target), { recursive: true });
+          await fs.link(previous.storePath, target);
+          entry.linked = true;
+          stored.push(entry);
+          linked += 1;
+          continue;
+        } catch {
+          // 上一份被清了 / 跨设备 / 文件系统不支持 —— 回落成普通拷贝。
+        }
+      }
+
       totalBytes += stat.size;
       if (totalBytes > MAX_UNTRACKED_BYTES) {
         budgetExhausted = true;
@@ -316,15 +363,63 @@ async function snapshotUntracked(cwd, checkpointDir, paths, { startBytes = 0, ma
       }
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.copyFile(source, target);
-      stored.push(markIgnored
-        ? { path: relPath, symlink: false, size: stat.size, ignored: true }
-        : { path: relPath, symlink: false, size: stat.size });
+      stored.push(entry);
     } catch (error) {
       console.warn(`[Checkpoint] Skipping untracked snapshot for ${relPath}:`, error.message);
     }
   }
 
-  return { stored, totalBytes, budgetExhausted };
+  return { stored, totalBytes, budgetExhausted, linked };
+}
+
+/**
+ * 上一份 checkpoint(同一个 cwd,最新的那份)存过的 untracked 文件索引,
+ * 供 snapshotUntracked 判定"这个文件没变,直接硬链过来"。
+ *
+ * 只取最新一份就够:文件一直没动的话,每一轮都会从上一轮链过来,链条自己
+ * 往前接。带 `linked` 的条目同样可复用 —— 硬链接的硬链接还是同一个 inode。
+ */
+export async function buildUntrackedReuseIndex(cwd) {
+  const index = new Map();
+  const resolvedCwd = path.resolve(cwd);
+  let entries = [];
+  try {
+    entries = await fs.readdir(getCheckpointRoot());
+  } catch {
+    return index;
+  }
+
+  // 不走 listCheckpoints():那会把整个 store 的 meta.json 全 parse 一遍,而这里
+  // 每回合都要跑。checkpoint id 形如 `cp-<base36 毫秒>-<hex>`,按时间戳倒序扫,
+  // 命中同一个 cwd 就停 —— 正常情况下第一条就是。
+  const ordered = entries
+    .map((name) => ({ name, at: checkpointIdTime(name) }))
+    .filter((item) => item.at !== null)
+    .sort((a, b) => b.at - a.at)
+    .slice(0, REUSE_SCAN_LIMIT);
+
+  let previous = null;
+  for (const item of ordered) {
+    const meta = await readCheckpoint(item.name);
+    if (meta && meta.cwd === resolvedCwd) {
+      previous = meta;
+      break;
+    }
+  }
+  if (!previous || !Array.isArray(previous.untrackedStored)) return index;
+
+  const previousDir = path.join(getCheckpointRoot(), previous.id, 'untracked');
+  for (const entry of previous.untrackedStored) {
+    if (!entry || entry.symlink) continue;
+    if (typeof entry.size !== 'number' || typeof entry.mtimeMs !== 'number' || typeof entry.ino !== 'number') continue;
+    index.set(entry.path, {
+      storePath: path.join(previousDir, entry.path),
+      size: entry.size,
+      mtimeMs: entry.mtimeMs,
+      ino: entry.ino,
+    });
+  }
+  return index;
 }
 
 /**
@@ -360,14 +455,16 @@ async function createCheckpointLocked(cwd, context = {}) {
     }
   }
 
-  // 3. Snapshot untracked files.
+  // 3. Snapshot untracked files.(E9:能硬链就不拷贝,见 snapshotUntracked)
   const untracked = await untrackedPaths(cwd);
   const listedUntracked = untracked.slice(0, MAX_UNTRACKED_FILES);
   await fs.mkdir(checkpointDir, { recursive: true });
+  const reuse = listedUntracked.length > 0 ? await buildUntrackedReuseIndex(cwd) : null;
   const snapshot = listedUntracked.length > 0
-    ? await snapshotUntracked(cwd, checkpointDir, listedUntracked)
-    : { stored: [], totalBytes: 0, budgetExhausted: false };
+    ? await snapshotUntracked(cwd, checkpointDir, listedUntracked, { reuse })
+    : { stored: [], totalBytes: 0, budgetExhausted: false, linked: 0 };
   const untrackedStored = snapshot.stored;
+  let untrackedLinked = snapshot.linked || 0;
 
   // 3b. Optionally snapshot gitignored files too (opt-in, shared byte budget).
   // Ignored files never appear in the restore keep-set NOR in the delete
@@ -384,8 +481,10 @@ async function createCheckpointLocked(cwd, context = {}) {
       const ignoredSnapshot = await snapshotUntracked(cwd, checkpointDir, ignored.slice(0, MAX_UNTRACKED_FILES), {
         startBytes: snapshot.totalBytes,
         markIgnored: true,
+        reuse,
       });
       untrackedStored.push(...ignoredSnapshot.stored);
+      untrackedLinked += ignoredSnapshot.linked || 0;
       ignoredStoredCount = ignoredSnapshot.stored.length;
       ignoredTruncated = ignoredSnapshot.budgetExhausted || ignored.length > MAX_UNTRACKED_FILES;
     }
@@ -419,6 +518,8 @@ async function createCheckpointLocked(cwd, context = {}) {
     meta.incompleteReason = completeness.reason;
   }
   if (hasSubmodules) meta.hasSubmodules = true;
+  // 复用了多少份(观测用:0 说明这轮全是新拷贝)。
+  if (untrackedLinked > 0) meta.untrackedLinked = untrackedLinked;
   if (ignoredIncluded) {
     meta.ignoredIncluded = true;
     meta.ignoredStoredCount = ignoredStoredCount;

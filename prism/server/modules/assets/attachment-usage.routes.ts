@@ -23,7 +23,10 @@ type SoonRow = { abs_path: string; bytes: number; created_at: string };
  */
 router.get('/usage', (req, res) => {
   const viewer = readRequestViewer(req);
-  const quotaBytes = getAttachmentQuotaBytes();
+  // F6:配额可以按账号覆盖,所以这里必须带 userId 去问 —— 否则用户看到的是
+  // 全局默认,和实际拦他的那个数不是一回事。
+  const viewerId = typeof viewer.userId === 'number' ? viewer.userId : null;
+  const quotaBytes = getAttachmentQuotaBytes(viewerId);
   const ttlDays = getAttachmentTtlDays();
 
   if (viewer.userId == null) {

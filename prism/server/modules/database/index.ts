@@ -2,6 +2,7 @@ export { initializeDatabase, startDatabaseBackups, stopDatabaseBackups } from '@
 export { backupDatabase, closeConnection, getConnection, getDatabasePath } from '@/modules/database/connection.js';
 export { canViewerSeeSession } from '@/modules/database/session-visibility.js';
 export { projectVisibilityInput, resolveVisibleProjectRoot } from '@/modules/database/project-access.js';
+export { NO_SUCH_USER_ID, type VisibilityScope } from '@/modules/database/visibility-sql.js';
 export { apiKeysDb } from '@/modules/database/repositories/api-keys.js';
 export { auditLogDb } from '@/modules/database/repositories/audit-log.js';
 export type { AuditEntry, AuditEvent, AuditRow } from '@/modules/database/repositories/audit-log.js';
@@ -15,6 +16,7 @@ export { scanStateDb } from '@/modules/database/repositories/scan-state.db.js';
 export { scheduledTasksDb } from '@/modules/database/repositories/scheduled-tasks.db.js';
 export type { ScheduledTaskRow, ScheduledTaskInsert, TaskFrequency, TaskSessionMode } from '@/modules/database/repositories/scheduled-tasks.db.js';
 export { sessionsDb } from '@/modules/database/repositories/sessions.db.js';
+export { uiSettingsDb, type UiSettingsRecord } from '@/modules/database/repositories/ui-settings.db.js';
 export { userDb } from '@/modules/database/repositories/users.js';
 export type { ApprovalStatus, UserAdminRow } from '@/modules/database/repositories/users.js';
 export { attachmentsDb, type AttachmentKind, type AttachmentRecord } from '@/modules/database/repositories/attachments.db.js';

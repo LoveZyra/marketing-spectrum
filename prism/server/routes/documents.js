@@ -17,7 +17,7 @@
  *     re-pins with a fresh agent. One overall deadline covers connect + headers
  *     + body (slow-loris safe).
  *   - zip-based formats (docx/pptx/xlsx/xlsm) are pre-scanned with JSZip and
- *     stream-inflated with byte counters before mammoth/xlsx see the buffer
+ *     stream-inflated with byte counters before mammoth/exceljs see the buffer
  *     (zip-bomb caps: entries, per-entry, total uncompressed).
  *   - pdf.js (pdfjs-dist) runs inside a worker_thread with a hard terminate() deadline.
  *   - plain text decoding: strict UTF-8 -> GB18030 -> Shift_JIS -> Latin-1.
@@ -504,23 +504,58 @@ async function extractPptx(buffer) {
   return parts.join('\n\n');
 }
 
-async function extractXlsx(buffer) {
-  // .xlsx/.xlsm are zip containers; legacy .xls is an OLE/CFB binary, so only
-  // pre-scan when the bytes actually are a zip.
-  if (isZipBuffer(buffer)) await assertZipSafe(buffer);
-  const XLSX = await import('xlsx');
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const parts = [];
-  for (const sheetName of workbook.SheetNames) {
-    const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' });
-    if (rows.length === 0) continue;
-    const rendered = rows
-      .map((row) => row.map((cell) => String(cell ?? '').trim()).join(' | '))
-      .filter((line) => line.replace(/\|/g, '').trim())
-      .join('\n');
-    parts.push(`[Sheet: ${sheetName}]\n${rendered}`);
+/**
+ * 一个 exceljs 单元格 → 一段纯文本。
+ *
+ * exceljs 的 `cell.value` 不只有原始量:富文本是 `{richText:[{text}]}`,公式是
+ * `{formula, result}`,超链接是 `{text, hyperlink}`,还有 Date 和 `{error}`。
+ * 老的 xlsx 只会 `String(cell)`,碰到这些会渲染成 `[object Object]`。
+ */
+function xlsxCellToText(value) {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) return value.toISOString().slice(0, 19).replace('T', ' ');
+  if (typeof value === 'object') {
+    if (Array.isArray(value.richText)) return value.richText.map((run) => run.text ?? '').join('');
+    if ('result' in value) return xlsxCellToText(value.result);        // 公式取算好的值
+    if ('text' in value) return String(value.text);                     // 超链接
+    if ('error' in value) return String(value.error);                   // #REF! 之类
+    return '';
   }
+  return String(value);
+}
+
+/**
+ * 表格提取(cp 轮从 sheetjs/xlsx 换成 exceljs)。
+ *
+ * 换的原因是安全:`xlsx@0.18.5` 带两个高危(GHSA-4r6h-8v6p-xvw6 原型污染、
+ * ReDoS),而 **npm 上没有修复版本** —— SheetJS 0.19.3+ 只发在自家 CDN,
+ * `npm audit` 对它是 `fixAvailable:false`。这条链路恰好解析**用户上传的**
+ * 表格,是最不该留 CVE 的地方。
+ *
+ * 代价:exceljs 只吃 zip 容器(.xlsx/.xlsm),不认旧版 .xls(OLE/CFB 二进制),
+ * 所以 .xls 现在明确报错让用户另存为 .xlsx,而不是悄悄解析出乱码。
+ */
+async function extractXlsx(buffer) {
+  if (!isZipBuffer(buffer)) {
+    throw new Error('旧版 .xls 格式不再支持,请用 Excel/WPS 另存为 .xlsx 后重试');
+  }
+  await assertZipSafe(buffer);
+
+  const ExcelJS = (await import('exceljs')).default;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+
+  const parts = [];
+  workbook.eachSheet((sheet) => {
+    const lines = [];
+    sheet.eachRow({ includeEmpty: false }, (row) => {
+      // row.values 是 1 基数组(下标 0 恒为空洞),slice 掉再渲染。
+      const cells = Array.isArray(row.values) ? row.values.slice(1) : [];
+      const rendered = cells.map((cell) => xlsxCellToText(cell).trim()).join(' | ');
+      if (rendered.replace(/\|/g, '').trim()) lines.push(rendered);
+    });
+    if (lines.length > 0) parts.push(`[Sheet: ${sheet.name}]\n${lines.join('\n')}`);
+  });
   return parts.join('\n\n');
 }
 
@@ -608,6 +643,8 @@ const EXTRACTORS = {
   '.pptx': extractPptx,
   '.xlsx': extractXlsx,
   '.xlsm': extractXlsx,
+  // .xls 仍然登记在册 —— 让 extractXlsx 给出"请另存为 .xlsx"的明确提示,
+  // 比在这里删掉、让它落进"不支持的格式"通用错误更好懂。
   '.xls': extractXlsx,
   '.csv': (buffer) => extractPlainText(buffer),
   '.tsv': (buffer) => extractPlainText(buffer),

@@ -5,7 +5,6 @@ import type { IProviderModels } from '@/shared/interfaces.js';
 import type {
   ProviderChangeActiveModelInput,
   ProviderCurrentActiveModel,
-  ProviderModelOption,
   ProviderModelsDefinition,
   ProviderSessionActiveModelChange,
 } from '@/shared/types.js';
@@ -113,14 +112,6 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
   DEFAULT: 'default',
 };
 
-export const findClaudeModelOption = (model: string | undefined | null): ProviderModelOption | null => {
-  const normalizedModel = typeof model === 'string' ? model.trim() : '';
-  if (!normalizedModel) {
-    return null;
-  }
-
-  return CLAUDE_FALLBACK_MODELS.OPTIONS.find((option) => option.value === normalizedModel) ?? null;
-};
 type ClaudeInitEvent = {
   sessionId?: string;
   session_id?: string;

@@ -6,7 +6,7 @@ import { sessionSynchronizerService } from '@/modules/providers/index.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import { canViewerSeeProject, isPublicWorkspacePath } from '@/shared/project-visibility.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+import { AppError, normalizeProjectPath } from '@/shared/utils.js';
 
 type SessionSummary = {
   id: string;
@@ -310,6 +310,32 @@ export async function getProjectsWithSessions(
     ? new Set(projectsDb.getStarredProjectIdsForUser(options.starsFor))
     : null;
 
+  /*
+   * E7:项目列表原来每个项目三次查询(首页会话 / 会话计数 / 授权名单),
+   * 30 个项目就是 90 次 prepare+执行 —— 典型 N+1,而且全在**首屏那次请求**里。
+   * 这里先批量取三份,循环里只做内存查表:
+   *   - 会话首页:窗口函数一次取每个项目的前 N 条(仅 offset=0,即列表的默认
+   *     形态;翻页仍走单项目分页,不为少见路径把 SQL 复杂化);
+   *   - 会话计数:一次 GROUP BY;
+   *   - 授权名单:一次 IN。
+   * 三次固定查询取代 3N 次。
+   */
+  const pagination = normalizeSessionPagination({
+    limit: options.sessionsLimit,
+    offset: options.sessionsOffset,
+  });
+  const canBatchSessions = pagination.offset === 0 && projectRows.length > 0;
+  const projectPaths = projectRows.map((row) => row.project_path);
+  const batchedSessions = canBatchSessions
+    ? sessionsDb.getFirstSessionsForProjectPaths(projectPaths, pagination.limit)
+    : null;
+  const batchedCounts = projectRows.length > 0
+    ? sessionsDb.countSessionsByProjectPaths(projectPaths)
+    : new Map<string, number>();
+  const batchedShares = projectRows.length > 0
+    ? projectsDb.getSharedUserIdsForProjects(projectRows.map((row) => row.project_id))
+    : new Map<string, number[]>();
+
   for (const row of projectRows) {
     processedProjects += 1;
 
@@ -328,13 +354,23 @@ export async function getProjectsWithSessions(
         ? row.custom_project_name
         : await generateDisplayName(path.basename(projectPath) || projectPath, projectPath);
 
-    const sessionsPage = readProjectSessionsPageByPath(projectPath, {
-      limit: options.sessionsLimit,
-      offset: options.sessionsOffset,
-    });
+    const sessionsPage = batchedSessions
+      ? (() => {
+        const rows = batchedSessions.get(normalizeProjectPath(projectPath)) ?? [];
+        const total = batchedCounts.get(normalizeProjectPath(projectPath)) ?? rows.length;
+        return {
+          sessions: rows.map(mapSessionRowToSummary),
+          total,
+          hasMore: rows.length < total,
+        };
+      })()
+      : readProjectSessionsPageByPath(projectPath, {
+        limit: options.sessionsLimit,
+        offset: options.sessionsOffset,
+      });
 
-    // 授权名单取一次,喂两个字段(是否授权给我 + 人数),避免双查。
-    const sharedUserIds = projectsDb.getProjectSharedUserIds(row.project_id);
+    // 授权名单来自上面那次批量 IN 查询,喂两个字段(是否授权给我 + 人数)。
+    const sharedUserIds = batchedShares.get(row.project_id) ?? [];
 
     projects.push({
       projectId,

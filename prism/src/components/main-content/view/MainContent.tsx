@@ -77,6 +77,9 @@ function MainContent({
 
   const {
     editingFile,
+    openFiles,
+    handleSelectFile,
+    handleCloseFile,
     editorWidth,
     editorExpanded,
     hasManualWidth,
@@ -224,6 +227,9 @@ function MainContent({
 
         <EditorSidebar
           editingFile={editingFile}
+          openFiles={openFiles}
+          onSelectFile={handleSelectFile}
+          onCloseFile={handleCloseFile}
           isMobile={isMobile}
           editorExpanded={editorExpanded}
           editorWidth={editorWidth}

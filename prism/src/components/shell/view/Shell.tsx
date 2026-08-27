@@ -31,6 +31,8 @@ type ShellProps = {
   onProcessComplete?: ((exitCode: number) => void) | null;
   minimal?: boolean;
   autoConnect?: boolean;
+  /** F10:多标签时每个终端一个 id。 */
+  terminalId?: string | null;
   isActive?: boolean;
 };
 
@@ -42,6 +44,7 @@ export default function Shell({
   onProcessComplete = null,
   minimal = false,
   autoConnect = false,
+  terminalId = null,
   isActive = true,
 }: ShellProps) {
   const { t } = useTranslation('chat');
@@ -73,6 +76,7 @@ export default function Shell({
     isRestarting,
     onProcessComplete,
     onOutputRef,
+    terminalId,
   });
 
   // Check xterm.js buffer for CLI prompt patterns (❯ N. label)

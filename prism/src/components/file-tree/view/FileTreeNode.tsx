@@ -32,6 +32,21 @@ type FileTreeNodeProps = {
   handleCancelRename?: () => void;
   renameInputRef?: RefObject<HTMLInputElement>;
   operationLoading?: boolean;
+  /**
+   * F9:拖放到**指定文件夹**。
+   *
+   * `handleItemDragOver` / `handleItemDrop` 在 useFileTreeUpload 里写好了但从来
+   * 没接到任何节点上 —— 于是拖进来的文件永远落在项目根,拖到哪个文件夹上都一样。
+   * 这两个回调把"悬停在哪个目录上"告诉上传逻辑。
+   */
+  onItemDragOver?: (event: React.DragEvent, itemPath: string) => void;
+  onItemDrop?: (event: React.DragEvent, itemPath: string) => void;
+  /** 当前拖放目标路径 —— 命中的那个目录会高亮,让人知道文件会落在哪。 */
+  dropTarget?: string | null;
+  /** F9:多选。选中集合由上层持有(跨渲染保持),整棵树共用一份。 */
+  selectedPaths?: ReadonlySet<string>;
+  onToggleSelect?: (item: FileTreeNodeType, event: React.MouseEvent) => void;
+  selectionMode?: boolean;
 };
 
 type TreeItemIconProps = {
@@ -90,7 +105,15 @@ function FileTreeNode({
   handleCancelRename,
   renameInputRef,
   operationLoading,
+  onItemDragOver,
+  onItemDrop,
+  dropTarget,
+  selectedPaths,
+  onToggleSelect,
+  selectionMode,
 }: FileTreeNodeProps) {
+  const isDropTarget = dropTarget === item.path;
+  const isSelected = Boolean(selectedPaths?.has(item.path));
   const isDirectory = item.type === 'directory';
   const isOpen = isDirectory && expandedDirs.has(item.path);
   const hasChildren = Boolean(isDirectory && item.children && item.children.length > 0);
@@ -122,6 +145,10 @@ function FileTreeNode({
     // 行间分隔交给主题:纸构蓝图给一条次级发丝线(图纸的行格),
     // 另外两套什么都不加(见 index.css 的 .prism-row)。
     'prism-row',
+    // F9:拖放悬停在这个目录上 —— 让人看得见文件会落在哪。
+    isDropTarget && 'bg-primary/[0.10] border-l-primary/40',
+    // F9:多选选中态。
+    isSelected && 'bg-primary/[0.08]',
   );
 
   // Render rename input if this item is being renamed
@@ -159,8 +186,30 @@ function FileTreeNode({
     <div
       className={rowClassName}
       style={{ paddingLeft: `${level * 16 + 4}px` }}
-      onClick={() => onItemClick(item)}
+      onClick={(event) => {
+        // F9:选择模式下,或按住 Ctrl/Cmd/Shift 点击 —— 都是"选中",不是"打开"。
+        if (onToggleSelect && (selectionMode || event.ctrlKey || event.metaKey || event.shiftKey)) {
+          event.preventDefault();
+          event.stopPropagation();
+          onToggleSelect(item, event);
+          return;
+        }
+        onItemClick(item);
+      }}
+      // F9:目录才接受拖放定位 —— 拖到文件上没有意义,反而会让人以为能"放进文件里"。
+      onDragOver={isDirectory && onItemDragOver ? (event) => onItemDragOver(event, item.path) : undefined}
+      onDrop={isDirectory && onItemDrop ? (event) => onItemDrop(event, item.path) : undefined}
     >
+      {selectionMode && onToggleSelect && (
+        <input
+          type="checkbox"
+          checked={Boolean(isSelected)}
+          onClick={(event) => event.stopPropagation()}
+          onChange={() => onToggleSelect(item, { ctrlKey: true } as React.MouseEvent)}
+          aria-label={item.name}
+          className="mr-1 h-3.5 w-3.5 flex-shrink-0"
+        />
+      )}
       {viewMode === 'detailed' ? (
         <>
           <div className="col-span-5 flex min-w-0 items-center gap-1.5">
@@ -251,6 +300,12 @@ function FileTreeNode({
               handleCancelRename={handleCancelRename}
               renameInputRef={renameInputRef}
               operationLoading={operationLoading}
+              onItemDragOver={onItemDragOver}
+              onItemDrop={onItemDrop}
+              dropTarget={dropTarget}
+              selectedPaths={selectedPaths}
+              onToggleSelect={onToggleSelect}
+              selectionMode={selectionMode}
             />
           ))}
         </div>

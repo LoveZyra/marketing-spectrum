@@ -78,9 +78,32 @@
     "uploadInProjectOnly": "上传只会写入项目目录，请先回到项目目录再上传",
     "toast": {
       "pathCopied": "路径已复制到剪贴板",
-      "copyFailed": "复制失败"
+      "copyFailed": "复制失败",
+      "folderDownloadedPartial": "已打包,但 {{skipped}} 个子目录未包含(层级太深没加载):{{preview}}。进入该子目录后再单独下载可拿到完整内容。"
     },
-    "truncatedNotice": "目录条目过多,仅显示部分内容。可进入子目录查看更多。"
+    "truncatedNotice": "目录条目过多,仅显示部分内容。可进入子目录查看更多。",
+    "selectionMode": "多选",
+    "selectedCount": "已选 {{count}} 项",
+    "batchDownload": "批量下载",
+    "batchDelete": "批量删除",
+    "exitSelection": "退出多选",
+    "batchDeleteConfirm": "删除选中的 {{count}} 项?此操作不可撤销。",
+    "batchDeletePartial": "有 {{failed}} 项删除失败",
+    "batchDownloadPartial": "有 {{failed}} 项下载失败",
+    "search": {
+      "toggle": "在项目内搜索内容 (Ctrl+Shift+F)",
+      "placeholder": "在项目内搜索内容…",
+      "close": "关闭搜索",
+      "caseSensitive": "区分大小写",
+      "regex": "正则",
+      "glob": "文件过滤,如 *.ts",
+      "run": "搜索",
+      "searching": "搜索中…",
+      "noMatches": "没有找到匹配内容",
+      "tooShort": "搜索内容至少 2 个字符",
+      "summary": "{{matches}} 处命中 · {{files}} 个文件",
+      "truncated": "已达上限,结果被截断"
+    }
   },
   "projectWizard": {
     "title": "创建新项目",
@@ -306,5 +329,19 @@
     "newTaskHint": "选择创建方式:让 Claude 问齐细节,或自己填表",
     "createWithClaudeHint": "说一句需求,缺的细节它会问你",
     "setupManuallyHint": "自己填名称、频率、目标会话"
+  },
+  "export": {
+    "md": "Markdown",
+    "mdHint": "给人读、贴进文档",
+    "html": "HTML",
+    "htmlHint": "独立网页,双击即看",
+    "json": "JSON",
+    "jsonHint": "给程序读、二次加工",
+    "includeTools": "含工具过程"
+  },
+  "shellTabs": {
+    "add": "新建终端",
+    "close": "关闭 {{name}}",
+    "label": "终端 {{index}}"
   }
 }

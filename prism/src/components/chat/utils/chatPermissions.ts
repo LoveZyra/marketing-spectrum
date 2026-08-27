@@ -1,5 +1,5 @@
 import { safeJsonParse } from '../../../lib/utils.js';
-import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult } from '../types/types.js';
+import type { PermissionGrantResult } from '../types/types.js';
 
 import { CLAUDE_SETTINGS_KEY, getClaudeSettings, safeLocalStorage } from './chatStorage';
 
@@ -28,22 +28,6 @@ export function formatToolInputForDisplay(input: unknown) {
   } catch {
     return String(input);
   }
-}
-
-export function getClaudePermissionSuggestion(
-  message: ChatMessage | null | undefined,
-  provider: string,
-): ClaudePermissionSuggestion | null {
-  if (provider !== 'claude') return null;
-  if (!message?.toolResult?.isError) return null;
-
-  const toolName = message?.toolName;
-  const entry = buildClaudeToolPermissionEntry(toolName, message.toolInput);
-  if (!entry) return null;
-
-  const settings = getClaudeSettings();
-  const isAllowed = settings.allowedTools.includes(entry);
-  return { toolName: toolName || 'UnknownTool', entry, isAllowed };
 }
 
 export function grantClaudeToolPermission(entry: string | null): PermissionGrantResult {

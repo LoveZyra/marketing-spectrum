@@ -71,6 +71,16 @@ function Sidebar({
     archivedProjects,
     archivedSessions,
     archivedSessionsCount,
+    archivedSessionsTotal,
+    archivedSessionsHasMore,
+    isLoadingMoreArchivedSessions,
+    loadMoreArchivedSessions,
+    selectedArchivedIds,
+    toggleArchivedSelection,
+    clearArchivedSelection,
+    bulkArchivedAction,
+    emptyArchive,
+    isBulkArchiving,
     isArchivedSessionsLoading,
     toggleProject,
     handleSessionClick,
@@ -209,6 +219,16 @@ function Sidebar({
             archivedProjects={archivedProjects}
             archivedSessions={archivedSessions}
             archivedSessionsCount={archivedSessionsCount}
+            archivedSessionsTotal={archivedSessionsTotal}
+            archivedSessionsHasMore={archivedSessionsHasMore}
+            isLoadingMoreArchivedSessions={isLoadingMoreArchivedSessions}
+            onLoadMoreArchivedSessions={loadMoreArchivedSessions}
+            selectedArchivedIds={selectedArchivedIds}
+            onToggleArchivedSelection={toggleArchivedSelection}
+            onClearArchivedSelection={clearArchivedSelection}
+            onBulkArchivedAction={bulkArchivedAction}
+            onEmptyArchive={emptyArchive}
+            isBulkArchiving={isBulkArchiving}
             isArchivedSessionsLoading={isArchivedSessionsLoading}
             searchFilter={searchFilter}
             onSearchFilterChange={setSearchFilter}

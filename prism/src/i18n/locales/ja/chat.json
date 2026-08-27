@@ -19,9 +19,6 @@
   "tools": {
     "settings": "ツール設定"
   },
-  "search": {
-    "in": "場所:"
-  },
   "interactive": {
     "title": "インタラクティブプロンプト",
     "waiting": "CLIでの応答を待っています",

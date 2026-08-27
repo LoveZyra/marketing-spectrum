@@ -15,6 +15,7 @@ import { useUiPreferences } from '../../hooks/useUiPreferences';
 import { useProjectsState } from '../../hooks/useProjectsState';
 import { useQueuedMessageAutoSend } from '../../hooks/useQueuedMessageAutoSend';
 import { api } from '../../utils/api';
+import { pullAccountSettings } from '../../utils/accountSettings';
 import SettingsModalHost from '../settings/view/SettingsModalHost';
 
 import AppRail from './AppRail';
@@ -59,7 +60,25 @@ function AppContentInner() {
   const { t } = useTranslation('common');
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { sendMessage, subscribe, isConnected } = useWebSocket();
-  const pendingApprovalCount = usePendingApprovalCount(Boolean(useAuth().user?.isRoot));
+  const authUser = useAuth().user;
+  const pendingApprovalCount = usePendingApprovalCount(Boolean(authUser?.isRoot));
+
+  /**
+   * F11:登录后把账号级界面偏好拉下来。
+   *
+   * localStorage 仍然是**读的那一份**(同步、无网络、不会在启动时闪一下默认值);
+   * 服务端只是它的备份与跨设备通道。服务端那份更新时落到本机并整页重载 ——
+   * 权限清单、编辑器偏好散在十几个组件的初始 state 里,逐个通知比重载复杂得多,
+   * 而这条路径一个账号一次登录只会走一次。
+   */
+  const accountSettingsPulledRef = useRef(false);
+  useEffect(() => {
+    if (!authUser || accountSettingsPulledRef.current) return;
+    accountSettingsPulledRef.current = true;
+    void pullAccountSettings().then((changed) => {
+      if (changed) window.location.reload();
+    });
+  }, [authUser]);
   const { preferences: uiPreferences, setPreference } = useUiPreferences();
   // 折叠后只留图标轨:侧栏与它的外层边框一起不渲染
   const isSidebarCollapsed = !isMobile && !uiPreferences.sidebarVisible;

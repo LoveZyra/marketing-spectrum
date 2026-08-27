@@ -69,6 +69,9 @@ type ArchivedSessionsApiPayload = {
   success?: boolean;
   data?: {
     sessions?: ArchivedSessionListItem[];
+    /** E10:服务端分页后的总数与"还有没有下一页"。老响应没有这两个字段。 */
+    total?: number;
+    hasMore?: boolean;
   };
 };
 
@@ -139,6 +142,14 @@ export function useSidebarController({
   const [archivedProjects, setArchivedProjects] = useState<ArchivedProjectListItem[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<ArchivedSessionListItem[]>([]);
   const [isArchivedSessionsLoading, setIsArchivedSessionsLoading] = useState(false);
+  // E10:归档会话改成服务端分页。这两个状态是"别静默截断"的凭据 —— 页面要能
+  // 说清还有多少条没列出来,并且给得出下一页。
+  const [archivedSessionsTotal, setArchivedSessionsTotal] = useState(0);
+  const [archivedSessionsHasMore, setArchivedSessionsHasMore] = useState(false);
+  const [isLoadingMoreArchivedSessions, setIsLoadingMoreArchivedSessions] = useState(false);
+  /** F8:回收站多选。攒到几百条时一条条点纯粹是体力活。 */
+  const [selectedArchivedIds, setSelectedArchivedIds] = useState<Set<string>>(new Set());
+  const [isBulkArchiving, setIsBulkArchiving] = useState(false);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [optimisticStarByProjectId, setOptimisticStarByProjectId] = useState<Map<string, boolean>>(new Map());
   const [loadingMoreProjects, setLoadingMoreProjects] = useState<Set<string>>(new Set());
@@ -146,6 +157,7 @@ export function useSidebarController({
   const eventSourceRef = useRef<EventSource | null>(null);
   const starToggleSequenceByProjectRef = useRef<Map<string, number>>(new Map());
   const migrationStartedRef = useRef(false);
+  const archivedSessionsFetchedRef = useRef(0);
   const onRefreshRef = useRef(onRefresh);
 
   const isSidebarCollapsed = !isMobile && !sidebarVisible;
@@ -247,18 +259,62 @@ export function useSidebarController({
       const archivedSessionsPayload = (await archivedSessionsResponse.json()) as ArchivedSessionsApiPayload;
       const nextProjects = Array.isArray(archivedProjectsPayload.data?.projects) ? archivedProjectsPayload.data.projects : [];
       const archivedProjectIds = new Set(nextProjects.map((project) => project.projectId));
-      const nextStandaloneSessions = Array.isArray(archivedSessionsPayload.data?.sessions)
-        ? archivedSessionsPayload.data.sessions.filter((session) => !session.projectId || !archivedProjectIds.has(session.projectId))
+      const returnedSessions = Array.isArray(archivedSessionsPayload.data?.sessions)
+        ? archivedSessionsPayload.data.sessions
         : [];
+      const nextStandaloneSessions = returnedSessions
+        .filter((session) => !session.projectId || !archivedProjectIds.has(session.projectId));
 
       setArchivedProjects(nextProjects);
       setArchivedSessions(nextStandaloneSessions);
+      // total/hasMore 是这一轮才有的字段;老响应缺字段时按"就这些"处理。
+      setArchivedSessionsTotal(archivedSessionsPayload.data?.total ?? returnedSessions.length);
+      setArchivedSessionsHasMore(Boolean(archivedSessionsPayload.data?.hasMore));
+      archivedSessionsFetchedRef.current = returnedSessions.length;
     } catch (error) {
       console.error('[Sidebar] Failed to load archived sessions:', error);
     } finally {
       setIsArchivedSessionsLoading(false);
     }
   }, []);
+
+  /**
+   * 已经从服务端取回多少条(不是列表长度 —— 列表还会剔掉"属于归档项目"的那些),
+   * 下一页的 offset 必须按这个算,否则会漏条。
+   */
+  const loadMoreArchivedSessions = useCallback(async () => {
+    if (isLoadingMoreArchivedSessions) return;
+    setIsLoadingMoreArchivedSessions(true);
+
+    try {
+      const response = await api.getArchivedSessions({ offset: archivedSessionsFetchedRef.current });
+      if (!response.ok) {
+        throw new Error(`Failed to load archived sessions: ${response.status}`);
+      }
+
+      const payload = (await response.json()) as ArchivedSessionsApiPayload;
+      const returnedSessions = Array.isArray(payload.data?.sessions) ? payload.data.sessions : [];
+      archivedSessionsFetchedRef.current += returnedSessions.length;
+
+      setArchivedProjects((currentProjects) => {
+        const archivedProjectIds = new Set(currentProjects.map((project) => project.projectId));
+        setArchivedSessions((current) => {
+          const seen = new Set(current.map((session) => session.sessionId));
+          const appended = returnedSessions
+            .filter((session) => !session.projectId || !archivedProjectIds.has(session.projectId))
+            .filter((session) => !seen.has(session.sessionId));
+          return appended.length > 0 ? [...current, ...appended] : current;
+        });
+        return currentProjects;
+      });
+      setArchivedSessionsTotal(payload.data?.total ?? archivedSessionsFetchedRef.current);
+      setArchivedSessionsHasMore(Boolean(payload.data?.hasMore));
+    } catch (error) {
+      console.error('[Sidebar] Failed to load more archived sessions:', error);
+    } finally {
+      setIsLoadingMoreArchivedSessions(false);
+    }
+  }, [isLoadingMoreArchivedSessions]);
 
   useEffect(() => {
     if (migrationStartedRef.current) {
@@ -866,6 +922,78 @@ export function useSidebarController({
     }
   }, [fetchArchivedSessions, onRefresh, t]);
 
+  const toggleArchivedSelection = useCallback((sessionId: string) => {
+    setSelectedArchivedIds((current) => {
+      const next = new Set(current);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  }, []);
+
+  const clearArchivedSelection = useCallback(() => setSelectedArchivedIds(new Set()), []);
+
+  /**
+   * F8:对选中的归档会话批量恢复或永久删除。
+   *
+   * 删除要二次确认(不可逆),恢复不用(错了再归档一次就行)。服务端逐条鉴权,
+   * 看不见的会被静默跳过 —— 所以这里如实报"实际处理了几条",而不是假设全成。
+   */
+  const bulkArchivedAction = useCallback(async (action: 'restore' | 'delete') => {
+    const ids = [...selectedArchivedIds];
+    if (ids.length === 0 || isBulkArchiving) return;
+    if (action === 'delete'
+      && !window.confirm(t('messages.bulkDeleteConfirm', {
+        count: ids.length,
+        defaultValue: `永久删除选中的 ${ids.length} 条归档会话?此操作不可撤销。`,
+      }))) {
+      return;
+    }
+
+    setIsBulkArchiving(true);
+    try {
+      const response = await api.bulkSessions(action, ids);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = (await response.json()) as { data?: { succeeded?: string[] } };
+      const done = payload.data?.succeeded?.length ?? 0;
+      if (done < ids.length) {
+        // 少于请求数说明有的看不见或失败了 —— 说出来,不要装作全成。
+        console.warn(`[Sidebar] 批量${action}:请求 ${ids.length} 条,实际 ${done} 条`);
+      }
+      clearArchivedSelection();
+      await Promise.all([Promise.resolve(onRefresh()), fetchArchivedSessions()]);
+    } catch (error) {
+      console.error('[Sidebar] 批量操作失败:', error);
+      alert(t('messages.bulkActionFailed', '批量操作失败,请重试。'));
+    } finally {
+      setIsBulkArchiving(false);
+    }
+  }, [selectedArchivedIds, isBulkArchiving, clearArchivedSelection, fetchArchivedSessions, onRefresh, t]);
+
+  /** F8:清空回收站。不可逆,所以确认里写清会删多少条。 */
+  const emptyArchive = useCallback(async () => {
+    if (isBulkArchiving) return;
+    if (!window.confirm(t('messages.emptyTrashConfirm', {
+      count: archivedSessionsTotal,
+      defaultValue: `清空回收站将永久删除 ${archivedSessionsTotal} 条归档会话,此操作不可撤销。继续?`,
+    }))) {
+      return;
+    }
+
+    setIsBulkArchiving(true);
+    try {
+      const response = await api.emptyArchivedSessions();
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      clearArchivedSelection();
+      await Promise.all([Promise.resolve(onRefresh()), fetchArchivedSessions()]);
+    } catch (error) {
+      console.error('[Sidebar] 清空回收站失败:', error);
+      alert(t('messages.bulkActionFailed', '批量操作失败,请重试。'));
+    } finally {
+      setIsBulkArchiving(false);
+    }
+  }, [isBulkArchiving, archivedSessionsTotal, clearArchivedSelection, fetchArchivedSessions, onRefresh, t]);
+
   const restoreArchivedSession = useCallback(async (sessionId: string) => {
     try {
       const response = await api.restoreSession(sessionId);
@@ -960,6 +1088,10 @@ export function useSidebarController({
     archivedProjects: filteredArchivedProjects,
     archivedSessions: filteredArchivedSessions,
     archivedSessionsCount: archivedProjects.length + archivedSessions.length,
+    archivedSessionsTotal,
+    archivedSessionsHasMore,
+    isLoadingMoreArchivedSessions,
+    loadMoreArchivedSessions,
     isArchivedSessionsLoading,
     toggleProject,
     handleSessionClick,
@@ -978,6 +1110,12 @@ export function useSidebarController({
     openArchivedSession,
     restoreArchivedProject,
     restoreArchivedSession,
+    selectedArchivedIds,
+    toggleArchivedSelection,
+    clearArchivedSelection,
+    bulkArchivedAction,
+    emptyArchive,
+    isBulkArchiving,
     refreshProjects,
     updateSessionSummary,
     collapseSidebar,

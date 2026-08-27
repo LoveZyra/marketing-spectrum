@@ -154,10 +154,29 @@ export const api = {
       method: 'DELETE',
     });
   },
-  getArchivedSessions: () =>
-    authenticatedFetch('/api/providers/sessions/archived'),
+  // E10:归档会话服务端分页(默认 200/页)。不传参数 = 第一页。
+  getArchivedSessions: ({ limit, offset } = {}) => {
+    const params = new URLSearchParams();
+    if (Number.isFinite(limit)) params.set('limit', String(limit));
+    if (Number.isFinite(offset) && offset > 0) params.set('offset', String(offset));
+    const qs = params.toString();
+    return authenticatedFetch(`/api/providers/sessions/archived${qs ? `?${qs}` : ''}`);
+  },
   runningSessions: () =>
     authenticatedFetch('/api/providers/sessions/running'),
+  // F8:批量归档 / 恢复 / 删除。逐条鉴权在服务端做,看不见的静默跳过。
+  bulkSessions: (action, sessionIds) =>
+    authenticatedFetch('/api/providers/sessions/bulk', {
+      method: 'POST',
+      body: JSON.stringify({ action, sessionIds }),
+    }),
+  // F8:清空回收站(永久删除当前用户看得见的归档会话)。
+  emptyArchivedSessions: ({ olderThanDays } = {}) => {
+    const params = new URLSearchParams();
+    if (Number.isFinite(olderThanDays) && olderThanDays > 0) params.set('olderThanDays', String(olderThanDays));
+    const qs = params.toString();
+    return authenticatedFetch(`/api/providers/sessions/archived${qs ? `?${qs}` : ''}`, { method: 'DELETE' });
+  },
   restoreSession: (sessionId) =>
     authenticatedFetch(`/api/providers/sessions/${sessionId}/restore`, {
       method: 'POST',

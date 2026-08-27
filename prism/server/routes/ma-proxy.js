@@ -30,28 +30,22 @@ import http from 'http';
 
 import express from 'express';
 
+import {
+  HOP_BY_HOP,
+  buildUpstreamHeaders,
+  connectionListed,
+  parseUpstream,
+} from './proxy-kit.js';
+
+// parseUpstream / buildUpstreamHeaders 搬进了 proxy-kit(recsys-proxy 要用同一份),
+// 这里原样再导出一次:它们是本文件公开过的接口,不该因为内部搬家就让调用方改 import。
+export { buildUpstreamHeaders, parseUpstream };
+
 /** 挂载前缀。index.js 和测试共用这一个常量,别两头各写一遍。 */
 export const MA_PROXY_PREFIX = '/api/ma';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_BODY = 256 * 1024;
-
-// RFC 7230 逐跳首部:代理必须就地消费,不能转发。
-const HOP_BY_HOP = new Set([
-  'connection',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-]);
-
-// Prism 自己的凭据,不带去下游。
-const PRISM_CREDENTIAL_HEADERS = new Set(['authorization', 'cookie', 'x-prism-api-key']);
-
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
 // 只放行诊断服务真实存在的接口。job_id 用 [A-Za-z0-9_-] 是照着
 // job_20260729_114613_cf123e 这种实际形态收的;顺带把 %2e%2e 这类编码穿越
@@ -69,38 +63,6 @@ const ROUTES = [
 const SAFE_QUERY = /^[A-Za-z0-9_\-=&%.,:+]{0,512}$/;
 
 /**
- * 解析上游地址。只认回环 —— 见文件头第 1 条。
- * @returns {{ok: true, host: string, port: number, label: string} | {ok: false, reason: string}}
- */
-export function parseUpstream(raw) {
-  const text = String(raw ?? '').trim();
-  if (!text) return { ok: false, reason: 'empty' };
-
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `http://${text}`;
-  let url;
-  try {
-    url = new URL(withScheme);
-  } catch {
-    return { ok: false, reason: 'unparsable' };
-  }
-  if (url.protocol !== 'http:') {
-    return { ok: false, reason: 'protocol_not_http' };
-  }
-  const hostname = url.hostname.toLowerCase();
-  if (!LOOPBACK_HOSTS.has(hostname)) {
-    // 故意不给"改成回环就行"之外的出路:非回环目标一律拒绝。
-    return { ok: false, reason: 'not_loopback' };
-  }
-  const port = Number.parseInt(url.port || '80', 10);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    return { ok: false, reason: 'bad_port' };
-  }
-  // hostname 对 IPv6 会带方括号,http.request 要的是不带的。
-  const host = hostname.startsWith('[') ? hostname.slice(1, -1) : hostname;
-  return { ok: true, host, port, label: `${hostname}:${port}` };
-}
-
-/**
  * 把挂载点之后的剩余路径映射成上游路径。
  * @returns {{ok: true, path: string} | {ok: false, status: 404|405}}
  */
@@ -113,49 +75,6 @@ export function resolveUpstreamPath(method, pathname) {
   }
   // 路径认识但方法不对 → 405,让调用方一眼看出是自己发错了动词。
   return { ok: false, status: pathMatched ? 405 : 404 };
-}
-
-/** 按 RFC,Connection 里点名的首部也算逐跳,一并剥掉。 */
-function connectionListed(headers) {
-  const raw = headers.connection;
-  if (typeof raw !== 'string') return new Set();
-  return new Set(
-    raw
-      .split(',')
-      .map((token) => token.trim().toLowerCase())
-      .filter(Boolean)
-  );
-}
-
-/**
- * 组装转发给上游的首部:剥逐跳、剥 Prism 凭据、补 X-Forwarded-*。
- * 导出是为了让测试能直接盯住"到底带了什么下去"。
- */
-export function buildUpstreamHeaders(req, upstreamLabel) {
-  const dropped = connectionListed(req.headers);
-  const out = {};
-  for (const [name, value] of Object.entries(req.headers)) {
-    const lower = name.toLowerCase();
-    if (lower === 'host') continue;
-    if (HOP_BY_HOP.has(lower)) continue;
-    if (PRISM_CREDENTIAL_HEADERS.has(lower)) continue;
-    if (dropped.has(lower)) continue;
-    if (value === undefined) continue;
-    out[lower] = value;
-  }
-  out.host = upstreamLabel;
-
-  const clientAddress = req.ip || req.socket?.remoteAddress || '';
-  const priorForwarded = req.headers['x-forwarded-for'];
-  const chain = [
-    typeof priorForwarded === 'string' && priorForwarded ? priorForwarded : null,
-    clientAddress || null,
-  ].filter(Boolean);
-  if (chain.length > 0) out['x-forwarded-for'] = chain.join(', ');
-  out['x-forwarded-proto'] = req.protocol || 'http';
-  if (typeof req.headers.host === 'string') out['x-forwarded-host'] = req.headers.host;
-
-  return out;
 }
 
 /**

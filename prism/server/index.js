@@ -12,8 +12,8 @@ import compression from 'compression';
 import cors from 'cors';
 
 import { AppError, generateMessageId } from '@/shared/utils.js';
-import { closeSessionsWatcher, initializeSessionsWatcher } from '@/modules/providers/index.js';
-import { createWebSocketServer } from '@/modules/websocket/index.js';
+import { closeSessionsWatcher, initializeSessionsWatcher, markInterruptedTurnsOnStartup, sessionsService, startArchiveRetentionSweeper } from '@/modules/providers/index.js';
+import { broadcastRuntimeEvicted, createWebSocketServer } from '@/modules/websocket/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { createTasksRouter, startTaskScheduler, stopTaskScheduler } from '@/modules/tasks/index.js';
 import { createFilesRouter } from '@/modules/files/index.js';
@@ -30,6 +30,7 @@ import { findAppRoot, getModuleDir, getDataDir, migrateLegacyDataDir } from './u
 import {
     queryClaudeSDK,
     prewarmClaudeSession,
+    setRuntimeEvictionNotifier,
     releaseClaudeSession,
     abortClaudeSDKSession,
     getActiveClaudeSDKSessions,
@@ -39,6 +40,7 @@ import {
     getPendingApprovalsForSession,
     getClaudeContextUsage,
     getClaudeSlashCommands,
+    getRuntimePoolStats,
 } from './claude-sdk.js';
 import checkpointsRoutes from './routes/checkpoints.js';
 import documentsRoutes from './routes/documents.js';
@@ -49,6 +51,7 @@ import {
     shouldAutoOpenUrlFromOutput,
 } from './utils/url-detection.js';
 import { createMaProxyRouterFromEnv, MA_PROXY_PREFIX } from './routes/ma-proxy.js';
+import { createRecsysProxyRouterFromEnv, RECSYS_PROXY_PREFIX } from './routes/recsys-proxy.js';
 import { createMaServiceFromEnv } from './services/ma-service.js';
 import authRoutes from './routes/auth.js';
 import commandsRoutes from './routes/commands.js';
@@ -123,6 +126,9 @@ const wss = createWebSocketServer(server, {
         getToolApprovalSessionId,
         resolveToolApproval,
         getPendingApprovalsForSession,
+        // F14:打开一段对话即预热它的常驻运行时,把冷启动塞进"读上文 + 打字"
+        // 那几秒里,而不是让用户按下回车之后再等。
+        prewarmSession: prewarmClaudeSession,
     },
     // /jupyter/* 的 WebSocket(kernel channels 等)整体交给 jupyter 反代隧道。
     jupyterUpgrade: handleJupyterUpgrade,
@@ -143,6 +149,10 @@ const wss = createWebSocketServer(server, {
 
 // Make WebSocket server available to routes
 app.locals.wss = wss;
+
+// F14:常驻进程被名额挤掉时,给还在看那段对话的人推一条状态帧。
+// claude-sdk 不认识 websocket 层,由组合根接线。
+setRuntimeEvictionNotifier(broadcastRuntimeEvicted);
 
 // Behind nginx/Caddy the socket address is the proxy's. Opt-in only: trusting
 // X-Forwarded-For unconditionally would let any direct client forge a fresh
@@ -208,6 +218,35 @@ const maProxyRouter = createMaProxyRouterFromEnv(process.env, console);
 if (maProxyRouter) {
     app.use(MA_PROXY_PREFIX, apiRateLimiter, maProxyRouter);
     console.log(`${c.info('[INFO]')} 营销诊断反代已挂载: ${MA_PROXY_PREFIX}/* -> ${maProxyRouter.maProxyTarget}`);
+}
+
+// recsys 反代(/recsys/* -> 本机回环的推荐算法点位监控),PRISM_RECSYS_TARGET 不配
+// 就完全不挂载。位置的三条讲究与上面 ma-proxy 完全相同,不再重复;唯一要额外说的是
+// 它挂在 Prism 的前端静态资源之前 —— 否则 /recsys 会先被前端路由接走。
+const recsysProxyRouter = createRecsysProxyRouterFromEnv(process.env, console);
+if (recsysProxyRouter) {
+    app.use(RECSYS_PROXY_PREFIX, apiRateLimiter, recsysProxyRouter);
+    console.log(`${c.info('[INFO]')} 推荐算法点位反代已挂载: ${RECSYS_PROXY_PREFIX}/* -> ${recsysProxyRouter.recsysTarget}`);
+} else {
+    // 没配 PRISM_RECSYS_TARGET 时给一句人话。不接的话 /recsys 会一路掉到 SPA 的
+    // catch-all,浏览器里看到的是 Prism 自己的界面套在一个奇怪地址上 —— 那比 404
+    // 还难懂,而且会让人以为是前端坏了。欢迎页上那个"算法效果查询"是常驻入口,
+    // 所以这条路必须有人接着。
+    app.use(RECSYS_PROXY_PREFIX, apiRateLimiter, (req, res) => {
+        res.status(503).type('html').send(
+            '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+            + '<title>算法效果查询未配置</title></head>'
+            + '<body style="font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1.5rem;line-height:1.7">'
+            + '<h1 style="font-size:1.25rem">算法效果查询还没接上</h1>'
+            + '<p>这台 Prism 没有配置 recsys 反代,所以 <code>/recsys</code> 后面没有东西。</p>'
+            + '<p>在 Prism 的 <code>.env</code> 里加上这一行,然后重启:</p>'
+            + '<pre style="background:#f4f4f5;padding:.75rem 1rem;border-radius:.375rem;overflow-x:auto">'
+            + 'PRISM_RECSYS_TARGET=127.0.0.1:3010</pre>'
+            + '<p style="color:#666;font-size:.9rem">目标必须是回环地址;上游 recsys 那边记得配 '
+            + '<code>HOST=127.0.0.1</code>。</p></body></html>'
+        );
+    });
+    console.log(`${c.info('[INFO]')} 推荐算法点位反代未配置(PRISM_RECSYS_TARGET 未设置),${RECSYS_PROXY_PREFIX} 会给出配置提示页`);
 }
 
 // 反代只负责"转",不负责"上游是否活着"。配了 PRISM_MA_API_AUTOSTART 就顺带把上游那个
@@ -323,7 +362,13 @@ app.use('/api/projects', authenticateToken, projectModuleRoutes);
 app.use('/api/tasks', createTasksRouter({ authenticateToken }));
 
 // Account administration — approval queue. Root only (PRISM_ROOT_USERS).
-app.use('/api/admin', createAdminRouter({ authenticateToken, requireRoot, runningVersion: RUNNING_VERSION }));
+app.use('/api/admin', createAdminRouter({
+  authenticateToken,
+  requireRoot,
+  runningVersion: RUNNING_VERSION,
+  // F6:常驻池快照注入(admin 模块不直接 import claude-sdk.js)。
+  runtimePool: getRuntimePoolStats,
+}));
 
 // Chat image asset upload/serving (see server/modules/assets; protected)
 app.use('/api/assets', authenticateToken, assetsRoutes);
@@ -332,6 +377,14 @@ app.use('/api/assets', authenticateToken, assetsRoutes);
 app.use('/api/attachments', authenticateToken, attachmentUsageRoutes);
 // 过期附件清扫:启动跑一次,之后每小时一轮。只删台账记过的文件。
 startAttachmentSweeper();
+// F8:归档保留期清扫。**默认关**(PRISM_ARCHIVE_RETENTION_DAYS 未配或为 0)——
+// 永久删除不可逆,不能因为升级了一版就悄悄开始删用户的东西。
+startArchiveRetentionSweeper({
+    deleteSession: (sessionId) => sessionsService.deleteOrArchiveSessionById(sessionId, {
+        force: true,
+        deletedFromDisk: true,
+    }),
+});
 
 
 // Checkpoints: per-turn git snapshots with transactional rollback (prism)
@@ -589,6 +642,11 @@ async function startServer() {
         // migrations (the columns must exist) and is a no-op once its
         // app_config flag is set, or while no configured root has registered.
         backfillProjectOwners();
+
+        // F14:给「回合跑到一半被重启打断」的会话补一条「请重发」标记。
+        // **必须在这一刻做** —— 判据是"日志最后一条是用户消息",而正在流式输出
+        // 的会话看起来一模一样;进程刚起来时不存在这种会话,晚一秒都可能误伤。
+        markInterruptedTurnsOnStartup();
 
         // 首次部署最容易踩的坑:PRISM_ROOT_USERS 配空或拼错 → 没人是 root →
         // 没人能开审批队列 → 同事注册后全部卡在待审、登不进,而产品里没有任何提示。

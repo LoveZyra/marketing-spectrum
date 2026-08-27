@@ -19,6 +19,8 @@ type UseShellConnectionOptions = {
   selectedSessionRef: MutableRefObject<ProjectSession | null | undefined>;
   initialCommandRef: MutableRefObject<string | null | undefined>;
   takeoverRef: MutableRefObject<boolean>;
+  /** F10:多标签时每个终端一个 id;不传则与改动前行为逐字一致。 */
+  terminalIdRef?: MutableRefObject<string | null>;
   isPlainShellRef: MutableRefObject<boolean>;
   onProcessCompleteRef: MutableRefObject<((exitCode: number) => void) | null | undefined>;
   isInitialized: boolean;
@@ -44,6 +46,7 @@ export function useShellConnection({
   selectedSessionRef,
   initialCommandRef,
   takeoverRef,
+  terminalIdRef,
   isPlainShellRef,
   onProcessCompleteRef,
   isInitialized,
@@ -175,6 +178,8 @@ export function useShellConnection({
               initialCommand: initialCommandRef.current,
               isPlainShell: isPlainShellRef.current,
               takeover: takeoverRef.current,
+              // F10:多标签时每个终端一个 id,服务端据此各给一个 PTY。
+              terminalId: terminalIdRef?.current ?? undefined,
               forceRestart,
             });
           }, TERMINAL_INIT_DELAY_MS);
@@ -226,6 +231,7 @@ export function useShellConnection({
       isPlainShellRef,
       selectedProjectRef,
       selectedSessionRef,
+      terminalIdRef,
       terminalRef,
       wsRef,
     ],

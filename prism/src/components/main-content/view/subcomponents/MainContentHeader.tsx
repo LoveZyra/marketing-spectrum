@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useToast } from '../../../../shared/view/ui';
-import { downloadSessionExport } from '../../../../utils/session-export';
+import { downloadSessionExport, type SessionExportOptions } from '../../../../utils/session-export';
+import SessionExportMenu from '../../../../shared/view/SessionExportMenu';
 import type { MainContentHeaderProps } from '../../types/types';
 
 import MobileMenuButton from './MobileMenuButton';
@@ -31,13 +32,14 @@ export default function MainContentHeader({
   const showExport = activeTab === 'chat' && Boolean(selectedSession);
   const showPersistentPill = !isMobile && activeTab === 'chat' && Boolean(selectedSession) && isPersistentSession;
 
-  const handleExport = async () => {
+  const handleExport = async (options: SessionExportOptions) => {
     if (!selectedSession || isExporting) return;
     setIsExporting(true);
     try {
       await downloadSessionExport(
         selectedSession.id,
         (selectedSession.summary as string) || 'session',
+        options,
       );
     } catch {
       // 失败给提示,不再静默(点了没反应最困惑);当前会话不受影响。
@@ -80,18 +82,23 @@ export default function MainContentHeader({
           </span>
         )}
 
-        {/* 桌面端右侧动作:导出 */}
+        {/* 桌面端右侧动作:导出(F12 起点开选格式) */}
         {!isMobile && showExport && (
-          <button
-            type="button"
-            onClick={() => void handleExport()}
-            disabled={isExporting}
-            className="hidden flex-shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-card-foreground transition-colors hover:border-border-strong hover:bg-card active:translate-y-px disabled:opacity-60 md:inline-flex"
-          >
-            {isExporting
-              ? t('mainContent.exporting', { defaultValue: '导出中…' })
-              : t('mainContent.export')}
-          </button>
+          <SessionExportMenu onExport={(options) => void handleExport(options)}>
+            {({ onClick, ref }) => (
+              <button
+                ref={ref}
+                type="button"
+                onClick={onClick}
+                disabled={isExporting}
+                className="hidden flex-shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-card-foreground transition-colors hover:border-border-strong hover:bg-card active:translate-y-px disabled:opacity-60 md:inline-flex"
+              >
+                {isExporting
+                  ? t('mainContent.exporting', { defaultValue: '导出中…' })
+                  : t('mainContent.export')}
+              </button>
+            )}
+          </SessionExportMenu>
         )}
       </div>
     </div>

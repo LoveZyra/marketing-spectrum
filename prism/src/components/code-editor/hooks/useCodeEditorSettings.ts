@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { pushAccountSettings } from '../../../utils/accountSettings';
 import {
   CODE_EDITOR_DEFAULTS,
   CODE_EDITOR_SETTINGS_CHANGED_EVENT,
@@ -37,6 +38,8 @@ export const useCodeEditorSettings = () => {
   // Keep legacy behavior where the editor writes wrap settings directly.
   useEffect(() => {
     localStorage.setItem(CODE_EDITOR_STORAGE_KEYS.wordWrap, String(wordWrap));
+    // F11:编辑器偏好跟着账号走 —— 换台电脑不该从头调一遍。
+    void pushAccountSettings();
   }, [wordWrap]);
 
   useEffect(() => {

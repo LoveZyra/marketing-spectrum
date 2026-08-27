@@ -42,7 +42,7 @@
     "openCommandPalette": "打开命令面板",
     "attentionRequiredIndicator": "会话需要处理",
     "approvalPendingIndicator": "等待你确认工具权限",
-    "exportSession": "导出会话 (Markdown)",
+    "exportSession": "导出会话",
     "processingSessionIndicator": "会话运行中",
     "exportSessionFailed": "导出会话失败,请重试。"
   },
@@ -68,7 +68,10 @@
     "restoreProjectFailed": "恢复项目失败，请重试。",
     "restoreProjectError": "恢复项目时出错，请重试。",
     "restoreSessionFailed": "恢复会话失败，请重试。",
-    "restoreSessionError": "恢复会话时出错，请重试。"
+    "restoreSessionError": "恢复会话时出错，请重试。",
+    "bulkDeleteConfirm": "永久删除选中的 {{count}} 条归档会话?此操作不可撤销。",
+    "emptyTrashConfirm": "清空回收站将永久删除 {{count}} 条归档会话,此操作不可撤销。继续?",
+    "bulkActionFailed": "批量操作失败,请重试。"
   },
   "search": {
     "modeProjects": "项目",
@@ -104,5 +107,15 @@
     "sharedHint": "他人共享给你的项目",
     "sharedOutHint": "已共享给 {{count}} 人",
     "sharedOutRootOnlyHint": "已共享给 {{count}} 人 —— 此外仅 root 可见"
+  },
+  "archived": {
+    "loadMore": "加载更多(共 {{total}} 条)",
+    "loadingMore": "正在加载…",
+    "select": "选中",
+    "emptyTrash": "清空回收站",
+    "selectedCount": "已选 {{count}} 条",
+    "bulkRestore": "批量恢复",
+    "bulkDelete": "批量永久删除",
+    "clearSelection": "取消选择"
   }
 }

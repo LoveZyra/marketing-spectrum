@@ -4,6 +4,9 @@ import { useTranslation } from 'react-i18next';
 
 import { authenticatedFetch } from '../../../../utils/api';
 
+import AttachmentQuotaSection from './AttachmentQuotaSection';
+import RuntimeStatsSection from './RuntimeStatsSection';
+
 type ServerStatus = {
   now: string;
   appVersion: string | null;
@@ -203,6 +206,11 @@ export default function ServerStatusTab() {
               )}
             </div>
           </div>
+
+          {/* F6:进程内资源 + 每账号附件配额。机器指标很闲而 Prism 很慢时,
+              原因通常在这两块里,而它们此前一个都看不见。 */}
+          <RuntimeStatsSection refreshMs={REFRESH_MS} />
+          <AttachmentQuotaSection />
         </>
       )}
     </div>

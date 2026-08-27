@@ -19,9 +19,6 @@
   "tools": {
     "settings": "Werkzeugeinstellungen"
   },
-  "search": {
-    "in": "in:"
-  },
   "interactive": {
     "title": "Interaktive Eingabeaufforderung",
     "waiting": "Warte auf deine Antwort in der CLI",

@@ -19,9 +19,6 @@
   "tools": {
     "settings": "Paramètres de l'outil"
   },
-  "search": {
-    "in": "dans :"
-  },
   "interactive": {
     "title": "Invite interactive",
     "waiting": "En attente de votre réponse dans le CLI",

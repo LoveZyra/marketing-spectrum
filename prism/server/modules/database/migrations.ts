@@ -12,6 +12,7 @@ import {
   PROJECT_STARS_TABLE_SCHEMA_SQL,
   SESSIONS_TABLE_SCHEMA_SQL,
   USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL,
+  USER_UI_SETTINGS_TABLE_SCHEMA_SQL,
 } from '@/modules/database/schema.js';
 import { listRootUsernames } from '@/shared/root-users.js';
 
@@ -689,6 +690,9 @@ export const runMigrations = (db: Database) => {
     );
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'approved_at', 'DATETIME');
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'reviewed_by', 'INTEGER');
+    // F6:附件配额的**每用户覆盖**(MB)。NULL = 跟随全局默认
+    // (PRISM_ATTACHMENT_QUOTA_MB),所以存量账号一行都不用动。
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'attachment_quota_mb', 'INTEGER');
 
     migrateApiKeysToHashed(db);
 
@@ -699,6 +703,8 @@ export const runMigrations = (db: Database) => {
 
     db.exec(APP_CONFIG_TABLE_SCHEMA_SQL);
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL);
+    // F11:账号级界面偏好(权限清单 / 项目排序 / 编辑器偏好)。
+    db.exec(USER_UI_SETTINGS_TABLE_SCHEMA_SQL);
 
     dropWebPushAndDesktopNotificationTables(db);
     dropPublishedPagesTable(db);

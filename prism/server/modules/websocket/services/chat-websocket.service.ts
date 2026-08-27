@@ -77,6 +77,14 @@ type ChatWebSocketDependencies = {
     (providerSessionId: string, context?: { runId?: string }) => boolean | Promise<boolean>
   >;
   /**
+   * F14:把一段对话的常驻运行时先拉起来(可选注入)。
+   *
+   * 打开一段旧对话到发出第一条消息之间,通常有几秒到十几秒的空档 —— 用户在读
+   * 上文、在打字。冷启动那几秒本可以塞进这个空档,而不是让他按下回车之后再等。
+   * 失败一律吞掉:预热是优化,不是功能,失败最多回到原来的速度。
+   */
+  prewarmSession?: (options: { sessionId: string; cwd?: string }) => Promise<unknown>;
+  /**
    * 反查一个待批准请求挂在哪个 provider 会话上,给鉴权用 —— 这条消息只带
    * requestId,没有它就无法判断调用方有没有资格替这个会话作决定。
    */
@@ -148,6 +156,103 @@ function sendProtocolError(
     sessionId: sessionId ?? null,
     timestamp: new Date().toISOString(),
   });
+}
+
+/**
+ * F7 —— 一条会话最多收一条「排队中」的消息。
+ *
+ * 之前 `chat.send` 撞上在跑的回合就直接 `RUN_IN_PROGRESS` 打回去。前端确实有
+ * 自己的排队(cb 轮那条,存在浏览器 localStorage 里),但它盖不住两种情况:
+ *
+ *   1. **判定竞态** —— 前端以为空闲、服务端还在跑(上一轮刚结束的帧还在路上、
+ *      或者另一台设备刚发过一条)。这时前端不会入队,而是照常发,然后吃一个
+ *      协议错误 —— 那条消息就没了。
+ *   2. **关掉标签页** —— 前端的队列是 localStorage,页面一关就没人替它发。
+ *
+ * 服务端收下这一条,回合结束后自动续发。**只收一条**:排两条以上就等于允许
+ * 用户把一串指令扔进黑盒,而中间那条的结果他根本没看到就发了下一条 ——
+ * 那不是排队,是盲发。第二条明确拒绝,并告诉他已经有一条在等。
+ *
+ * 撤销:`chat.cancel-queued`。
+ */
+type PendingSend = {
+  ws: WebSocket;
+  userId: string | number | null;
+  data: AnyRecord;
+  enqueuedAt: number;
+  /** 预览文案,给"已排队"提示用;不参与发送。 */
+  preview: string;
+};
+
+const pendingSends = new Map<string, PendingSend>();
+
+/** 排队消息的存活上限。超时的不再发 —— 半小时前那句话的语境早就不在了。 */
+const PENDING_SEND_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * 把一帧发给**所有能看到这条会话**的在线 socket。
+ *
+ * 排队状态不是私事:同一个人开两个标签页、或者共享项目里的另一位,都该看到
+ * "有一条在等"。只回给发起方会让另一个标签页在回合结束后突然冒出一条不知
+ * 哪来的消息。
+ */
+function broadcastToSessionViewers(sessionId: string, payload: unknown): void {
+  const frame = JSON.stringify(payload);
+  for (const client of connectedClients) {
+    try {
+      const socket = client as unknown as WebSocket;
+      if (socket.readyState !== WS_OPEN_STATE) continue;
+      if (!canViewerSeeSession(sessionId, readSocketViewer(socket))) continue;
+      socket.send(frame);
+    } catch {
+      // 单个 socket 出错不影响其余
+    }
+  }
+}
+
+/**
+ * F14:某段对话的常驻进程被名额挤掉了,告诉正在看它的人一声。
+ *
+ * 被挤掉本身是正常且必要的(池子有上限),问题在于它**静默**:那段对话的下一条
+ * 消息要重建进程并 resume,慢几秒,而用户只会觉得"今天特别卡"。这条帧让界面
+ * 能给一句可解释的提示。用 `status` 类型是因为它就是状态,不是错误 ——
+ * 什么都没坏,也没有任何东西需要用户处理。
+ */
+export function broadcastRuntimeEvicted(payload: { sessionId: string; reason: string }): void {
+  if (!payload?.sessionId) return;
+  broadcastToSessionViewers(payload.sessionId, {
+    kind: 'status',
+    sessionId: payload.sessionId,
+    status: 'runtime_evicted',
+    reason: payload.reason,
+    content: '这段对话的常驻进程因为名额被回收了 —— 下一条消息会重新拉起它,可能稍慢几秒。',
+    timestamp: new Date().toISOString(),
+  });
+}
+
+function queuedFrame(sessionId: string, pending: PendingSend) {
+  return {
+    kind: 'chat_queued',
+    sessionId,
+    preview: pending.preview,
+    enqueuedAt: new Date(pending.enqueuedAt).toISOString(),
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/**
+ * 丢弃一条排队消息并广播。`reason` 会显示给用户 —— "被撤销"和"因为你中止了
+ * 回合"是两回事,不说清楚就变成消息凭空消失。
+ */
+function dropPendingSend(sessionId: string, reason: 'cancelled' | 'aborted' | 'expired'): boolean {
+  if (!pendingSends.delete(sessionId)) return false;
+  broadcastToSessionViewers(sessionId, {
+    kind: 'chat_queue_cancelled',
+    sessionId,
+    reason,
+    timestamp: new Date().toISOString(),
+  });
+  return true;
 }
 
 function readRequiredSessionId(data: AnyRecord): string | null {
@@ -238,12 +343,27 @@ async function handleChatSend(
   });
 
   if (!run) {
-    sendProtocolError(
+    // F7:不再直接打回去 —— 收下这一条,回合结束自动续发(见 pendingSends)。
+    if (pendingSends.has(sessionId)) {
+      sendProtocolError(
+        ws,
+        'QUEUE_FULL',
+        '这条会话已经有一条消息在排队了。等它发出去,或者先撤销那一条。',
+        sessionId,
+      );
+      return;
+    }
+
+    const rawContent = typeof data.content === 'string' ? data.content : '';
+    const pending: PendingSend = {
       ws,
-      'RUN_IN_PROGRESS',
-      `Session "${sessionId}" already has a run in progress.`,
-      sessionId
-    );
+      userId,
+      data,
+      enqueuedAt: Date.now(),
+      preview: rawContent.slice(0, 120),
+    };
+    pendingSends.set(sessionId, pending);
+    broadcastToSessionViewers(sessionId, queuedFrame(sessionId, pending));
     return;
   }
 
@@ -323,7 +443,41 @@ async function handleChatSend(
     // a queued message can start the session's next run before this promise
     // settles, and the session-keyed completeRun would kill that new run.
     chatRunRegistry.completeRunIfCurrent(run, { exitCode: 1 });
+    // F7:这一轮结束了,把排队那条接上去。放在 setImmediate 里是为了先让当前
+    // 调用栈退干净 —— 续发会再走一遍 handleChatSend,直接递归 await 会把两轮
+    // 叠在同一个栈上,出错时的堆栈也读不出是哪一轮。
+    scheduleDrainPendingSend(sessionId, dependencies);
   }
+}
+
+/**
+ * 把排队那条消息接到刚结束的回合后面(F7)。
+ *
+ * 先 delete 再发:这是"认领"动作 —— 中途再有人调 drain(例如 subscribe 那条
+ * 兜底)也不会把同一条发两次。
+ */
+function scheduleDrainPendingSend(sessionId: string, dependencies: ChatWebSocketDependencies): void {
+  setImmediate(() => {
+    const pending = pendingSends.get(sessionId);
+    if (!pending) return;
+    if (chatRunRegistry.isProcessing(sessionId)) return; // 新回合已经开跑,让它先跑完
+
+    if (Date.now() - pending.enqueuedAt > PENDING_SEND_TTL_MS) {
+      // 半小时前那句话的语境早就不在了,发出去只会让人困惑。
+      dropPendingSend(sessionId, 'expired');
+      return;
+    }
+
+    pendingSends.delete(sessionId);
+    broadcastToSessionViewers(sessionId, {
+      kind: 'chat_queue_flushed',
+      sessionId,
+      timestamp: new Date().toISOString(),
+    });
+    void handleChatSend(pending.ws, pending.userId, pending.data, dependencies).catch((error) => {
+      console.error('[Chat] 排队消息续发失败:', error instanceof Error ? error.message : String(error));
+    });
+  });
 }
 
 /**
@@ -391,6 +545,10 @@ async function handleChatAbort(
     exitCode: success ? 0 : 1,
     aborted: true,
   });
+
+  // F7:中止的意思是"停",不是"停这一条然后接着跑下一条"。排队那条一并丢掉,
+  // 并且说清楚是被中止带走的 —— 否则用户只会看到消息凭空消失。
+  dropPendingSend(sessionId, 'aborted');
 }
 
 /**
@@ -407,6 +565,14 @@ function handleChatSubscribe(
   dependencies: ChatWebSocketDependencies
 ): void {
   const targets = Array.isArray(data.sessions) ? data.sessions : [];
+  /**
+   * 只有**单条**订阅才预热。
+   *
+   * 批量订阅是侧栏在同步"哪些会话在跑",一次能带十几条 —— 给它们逐个预热会把
+   * 常驻池(默认 20 个名额)瞬间填满speculative 进程,再配上按人公平淘汰,
+   * 结果是互相踢来踢去。单条订阅才是"用户打开了这段对话"这个信号。
+   */
+  const isSingleTarget = targets.length === 1;
 
   for (const target of targets) {
     if (!target || typeof target !== 'object') {
@@ -433,6 +599,19 @@ function handleChatSubscribe(
 
     const run = chatRunRegistry.getRun(sessionId);
     const isProcessing = chatRunRegistry.isProcessing(sessionId);
+    const pending = pendingSends.get(sessionId);
+
+    // F7 兜底:回合可能不是从 handleChatSend 的 finally 里结束的(看门狗、
+    // 运行时崩溃)。那条路上没人来接排队消息,它会一直躺着。订阅是页面回到
+    // 这条会话的时刻,顺手检查一次最便宜。
+    if (!isProcessing && pending) {
+      scheduleDrainPendingSend(sessionId, dependencies);
+    }
+
+    // F14:打开一段对话时把它的运行时预热起来(见下面的 maybePrewarm)。
+    if (!isProcessing && isSingleTarget) {
+      maybePrewarm(sessionId, dependencies);
+    }
 
     // Future live events for this run should land on the socket that asked —
     // this is what makes mid-stream page refreshes work for all providers.
@@ -465,6 +644,11 @@ function handleChatSubscribe(
       isProcessing,
       lastSeq: run?.lastSeq ?? 0,
       pendingPermissions,
+      // F7:排队中的那条也要报出来 —— 刷新页面或换设备后,"有一条在等"这件事
+      // 不能只活在发起它的那个标签页里。
+      queued: pending
+        ? { preview: pending.preview, enqueuedAt: new Date(pending.enqueuedAt).toISOString() }
+        : null,
       timestamp: new Date().toISOString(),
     });
 
@@ -477,6 +661,62 @@ function handleChatSubscribe(
         sendJson(ws, event);
       }
     }
+  }
+}
+
+/** 预热去抖:同一条会话 60 秒内只预热一次。 */
+const PREWARM_DEBOUNCE_MS = 60_000;
+const lastPrewarmAt = new Map<string, number>();
+
+/**
+ * 打开一段对话时把常驻运行时先拉起来(F14)。
+ *
+ * 只对**已有原生会话 id** 的对话预热 —— 新会话的第一条消息本来就要新建进程,
+ * 提前建一个没有 resume 目标的空进程只是白占名额。
+ *
+ * 全程 best-effort:任何失败都吞掉,预热是优化不是功能。
+ */
+function maybePrewarm(sessionId: string, dependencies: ChatWebSocketDependencies): void {
+  const prewarm = dependencies.prewarmSession;
+  if (!prewarm) return;
+
+  const now = Date.now();
+  const last = lastPrewarmAt.get(sessionId) ?? 0;
+  if (now - last < PREWARM_DEBOUNCE_MS) return;
+  lastPrewarmAt.set(sessionId, now);
+
+  let session;
+  try {
+    session = sessionsDb.getSessionById(sessionId);
+  } catch {
+    return;
+  }
+  if (!session?.provider_session_id) return;
+
+  void Promise.resolve(
+    prewarm({ sessionId: session.provider_session_id, cwd: session.project_path ?? undefined }),
+  ).catch(() => {
+    // 预热失败只意味着下一条消息回到原来的速度,不该有任何用户可见的后果。
+  });
+}
+
+/**
+ * F7:撤销排队中的那条消息。
+ *
+ * 能看到这条会话的人都能撤 —— 与"谁都能中止这条会话的回合"同一口径。排队消息
+ * 本来就是公开可见的(subscribe 里报了),对它的操作也没理由更严。
+ */
+function handleCancelQueued(ws: WebSocket, data: AnyRecord): void {
+  const sessionId = readRequiredSessionId(data);
+  if (!sessionId) {
+    sendProtocolError(ws, 'SESSION_ID_REQUIRED', 'chat.cancel-queued requires a sessionId.');
+    return;
+  }
+  if (!assertSocketMaySeeSession(ws, sessionId)) {
+    return;
+  }
+  if (!dropPendingSend(sessionId, 'cancelled')) {
+    sendProtocolError(ws, 'NO_QUEUED_MESSAGE', `Session "${sessionId}" has no queued message.`, sessionId);
   }
 }
 
@@ -525,12 +765,13 @@ function handlePermissionResponse(
  * - `chat.send`                { sessionId, content, options? }
  * - `chat.abort`               { sessionId }
  * - `chat.subscribe`           { sessions: [{ sessionId, lastSeq? }] }
+ * - `chat.cancel-queued`       { sessionId }
  * - `chat.permission-response` { requestId, allow, updatedInput?, message?, rememberEntry? }
  *
  * Outbound protocol (server to client): every frame is `kind`-based — either
  * a provider `NormalizedMessage` (with `seq`) or a gateway event
  * (`chat_subscribed`, `session_upserted`, `loading_progress`,
- * `protocol_error`).
+ * `chat_queued`, `chat_queue_cancelled`, `chat_queue_flushed`, `protocol_error`).
  */
 export function handleChatConnection(
   ws: WebSocket,
@@ -573,6 +814,9 @@ export function handleChatConnection(
           return;
         case 'chat.subscribe':
           handleChatSubscribe(ws, data, dependencies);
+          return;
+        case 'chat.cancel-queued':
+          handleCancelQueued(ws, data);
           return;
         case 'chat.permission-response':
           handlePermissionResponse(ws, data, dependencies);

@@ -58,6 +58,14 @@ interface UseChatRealtimeHandlersArgs {
   onCheckpointCreated?: (payload: { sessionId: string | null; checkpoint: Record<string, unknown> }) => void;
   /** prism: post-turn changed-files summary relative to the checkpoint. */
   onChangedFiles?: (payload: { sessionId: string | null; checkpointId: string | null; files: unknown[]; truncated?: boolean }) => void;
+  /**
+   * F7:服务端排队状态变了(收下/撤销/续发)。
+   *
+   * 与 composer 自己那份浏览器内的排队是两回事:这一份**存在服务端**,所以
+   * 刷新页面、换设备、甚至关掉标签页之后它都还在,也因此必须由服务端的帧来
+   * 驱动显示,不能靠本地状态推断。
+   */
+  onServerQueueChange?: (sessionId: string, queued: { preview: string; enqueuedAt: string } | null) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -91,6 +99,7 @@ export function useChatRealtimeHandlers({
   sessionStore,
   onCheckpointCreated,
   onChangedFiles,
+  onServerQueueChange,
 }: UseChatRealtimeHandlersArgs) {
   // Session switches can send `chat.subscribe` before this effect has a chance
   // to rebind the websocket listener. Read the visible session id from a ref
@@ -145,6 +154,13 @@ export function useChatRealtimeHandlers({
             });
           }
 
+          // F7:服务端排队状态随 ack 一起回来 —— 刷新后"有一条在等"这件事
+          // 不能只活在发起它的那个标签页里。
+          onServerQueueChange?.(
+            sid,
+            (msg.queued as { preview: string; enqueuedAt: string } | null) ?? null,
+          );
+
           const isViewedSession = sid === activeViewSessionId;
           if (isViewedSession && Array.isArray(msg.pendingPermissions)) {
             const nextPendingPermissionRequests = msg.pendingPermissions as PendingPermissionRequest[];
@@ -174,6 +190,36 @@ export function useChatRealtimeHandlers({
               provider,
               kind: 'error',
               content: String(msg.error || 'Request failed'),
+            } as NormalizedMessage);
+          }
+          return;
+        }
+
+        // F7:服务端排队(chat.send 撞上在跑的回合时收下的那一条)。
+        case 'chat_queued': {
+          if (!sid) return;
+          onServerQueueChange?.(sid, {
+            preview: String(msg.preview ?? ''),
+            enqueuedAt: String(msg.enqueuedAt ?? new Date().toISOString()),
+          });
+          return;
+        }
+
+        case 'chat_queue_cancelled':
+        case 'chat_queue_flushed': {
+          if (!sid) return;
+          onServerQueueChange?.(sid, null);
+          // 被中止带走 / 过期作废的那条要说一声 —— 否则用户只会看到消息凭空消失。
+          if (msg.kind === 'chat_queue_cancelled' && msg.reason !== 'cancelled') {
+            sessionStore.appendRealtime(sid, {
+              id: `queue_${msg.reason}_${Date.now()}`,
+              sessionId: sid,
+              timestamp: new Date().toISOString(),
+              provider,
+              kind: 'error',
+              content: msg.reason === 'aborted'
+                ? '排队中的那条消息随本轮中止一起取消了,没有发送。'
+                : '排队中的那条消息等待超过 30 分钟,已作废,没有发送。',
             } as NormalizedMessage);
           }
           return;
@@ -397,5 +443,6 @@ export function useChatRealtimeHandlers({
     sessionStore,
     onCheckpointCreated,
     onChangedFiles,
+    onServerQueueChange,
   ]);
 }

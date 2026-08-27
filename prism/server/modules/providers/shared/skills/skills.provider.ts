@@ -23,6 +23,20 @@ const resolveWorkspacePath = (workspacePath?: string): string =>
 
 const stripMarkdownExtension = (value: string): string => value.replace(/\.md$/i, '');
 
+/**
+ * 一个技能文件在受管根目录下的**目录名**,不在根目录下一层就返回 undefined。
+ *
+ * `~/.claude/skills/foo/SKILL.md` → `foo`;`~/.claude/skills/foo/bar/SKILL.md`
+ * 或根目录之外的一律 undefined —— 卸载删的是整个目录,只有"这个目录就是这个技能"
+ * 时删它才安全。
+ */
+function managedSkillDirectoryName(managedRoot: string, skillPath: string): string | undefined {
+  const relative = path.relative(managedRoot, path.resolve(skillPath));
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
+  const segments = relative.split(path.sep);
+  return segments.length === 2 ? segments[0] : undefined;
+}
+
 const normalizeSkillDirectoryName = (value: string): string => (
   value
     .trim()
@@ -96,6 +110,12 @@ export abstract class SkillsProvider implements IProviderSkills {
     const workspacePath = resolveWorkspacePath(options?.workspacePath);
     const sources = await this.getSkillSources(workspacePath);
     const skills: ProviderSkill[] = [];
+    // F13:能卸载的只有"用户级、直接躺在受管根目录下一层"的技能。project 作用域
+    // 住在项目目录里(用文件树删),plugin 作用域属于插件包(删单个会让插件处于
+    // 半装状态)。目录名由这里算,不让前端从路径猜 —— 猜错会画出一个点了会失败
+    // 的按钮。
+    const globalSkillSource = await this.getGlobalSkillSource().catch(() => null);
+    const managedRoot = globalSkillSource ? path.resolve(globalSkillSource.rootDir) : null;
 
     for (const source of sources) {
       const skillFiles = await findProviderSkillMarkdownFiles(source.rootDir, {
@@ -117,6 +137,9 @@ export abstract class SkillsProvider implements IProviderSkills {
             sourcePath: skillPath,
             pluginName: source.pluginName,
             pluginId: source.pluginId,
+            ...(managedRoot && !source.pluginName
+              ? { directoryName: managedSkillDirectoryName(managedRoot, skillPath) }
+              : {}),
           });
         } catch {
           // A malformed or unreadable skill markdown file should not hide other valid skills.

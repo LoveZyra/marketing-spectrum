@@ -4,6 +4,7 @@ import type { TFunction } from 'i18next';
 
 import { Tooltip, buttonVariants, useToast } from '../../../../shared/view/ui';
 import { downloadSessionExport } from '../../../../utils/session-export';
+import SessionExportMenu from '../../../../shared/view/SessionExportMenu';
 import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
@@ -310,19 +311,26 @@ export default function SidebarSessionItem({
               </>
             ) : (
               <>
-                <button
-                  className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void downloadSessionExport(session.id, sessionView.sessionName).catch(() => {
+                {/* F12:点开选格式(md / html / json)+「含工具过程」开关。 */}
+                <SessionExportMenu
+                  onExport={(options) => {
+                    void downloadSessionExport(session.id, sessionView.sessionName, options).catch(() => {
                       // 失败不再静默:点了没反应最让人困惑。给一条提示,侧栏其余不受影响。
                       toast({ message: t('tooltips.exportSessionFailed', { defaultValue: '导出会话失败,请重试。' }), variant: 'error' });
                     });
                   }}
-                  title={t('tooltips.exportSession', { defaultValue: '导出会话 (Markdown)' })}
                 >
-                  <FileDown className="h-3 w-3 text-muted-foreground" />
-                </button>
+                  {({ onClick, ref }) => (
+                    <button
+                      ref={ref}
+                      className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
+                      onClick={onClick}
+                      title={t('tooltips.exportSession', { defaultValue: '导出会话' })}
+                    >
+                      <FileDown className="h-3 w-3 text-muted-foreground" />
+                    </button>
+                  )}
+                </SessionExportMenu>
                 <button
                   className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
                   onClick={(event) => {

@@ -19,9 +19,6 @@
   "tools": {
     "settings": "Tool Settings"
   },
-  "search": {
-    "in": "in:"
-  },
   "interactive": {
     "title": "Interactive Prompt",
     "waiting": "Waiting for your response in the CLI",
@@ -59,11 +56,12 @@
       "label": "Queued",
       "willSend": "Will send when this finishes",
       "edit": "Edit queued message",
-      "delete": "Delete queued message"
+      "delete": "Delete queued message",
+      "serverLabel": "Queued on server",
+      "serverHint": "Sends when this turn ends · survives closing the tab"
     },
     "attachmentPath": "path",
     "modelHint": "Current model: {{model}} · click to switch",
-    "queueShort": "Queue",
     "attachDocuments": "Attach documents (PDF, Word, Excel, PPT…)",
     "attachUrl": "Fetch a URL as context",
     "attachUrlPrompt": "Enter a URL to fetch its readable text:",

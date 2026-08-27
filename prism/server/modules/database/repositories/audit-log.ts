@@ -31,7 +31,8 @@ export type AuditEvent =
   | 'user_activated'
   | 'user_approved'
   | 'user_rejected'
-  | 'project_owner_changed';
+  | 'project_owner_changed'
+  | 'attachment_quota_changed';
 
 export type AuditOutcome = 'success' | 'failure';
 

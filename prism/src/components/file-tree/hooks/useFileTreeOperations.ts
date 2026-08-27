@@ -13,7 +13,8 @@ const RESERVED_NAMES = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
 
 export type ToastMessage = {
   message: string;
-  type: 'success' | 'error';
+  /** `warning` 用于"做完了,但结果不完整" —— 例如 ZIP 少打了没加载到的子目录。 */
+  type: 'success' | 'error' | 'warning';
 };
 
 export type DeleteConfirmation = {
@@ -24,7 +25,7 @@ export type DeleteConfirmation = {
 export type UseFileTreeOperationsOptions = {
   selectedProject: Project | null;
   onRefresh: () => void;
-  showToast: (message: string, type: 'success' | 'error') => void;
+  showToast: (message: string, type: ToastMessage['type']) => void;
 };
 
 export type UseFileTreeOperationsResult = {
@@ -41,6 +42,11 @@ export type UseFileTreeOperationsResult = {
   handleStartDelete: (item: FileTreeNode) => void;
   handleCancelDelete: () => void;
   handleConfirmDelete: () => Promise<void>;
+  /**
+   * F9:不经确认框直接删一项 —— 批量删除自己已经确认过一次了,
+   * 逐项再弹一次就成了点二十下"确定"。抛错交给调用方计数。
+   */
+  deleteItemDirectly: (item: FileTreeNode) => Promise<void>;
 
   // Create operations
   isCreating: boolean;
@@ -188,6 +194,18 @@ export function useFileTreeOperations({
     }
   }, [deleteConfirmation, selectedProject, showToast, t, onRefresh, handleCancelDelete]);
 
+  const deleteItemDirectly = useCallback(async (item: FileTreeNode) => {
+    if (!selectedProject) return;
+    const response = await api.deleteFile(selectedProject.projectId, {
+      path: item.path,
+      type: item.type,
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error((data as { error?: string }).error || 'Failed to delete');
+    }
+  }, [selectedProject]);
+
   // Create operations
   const handleStartCreate = useCallback((parentPath: string, type: 'file' | 'directory') => {
     setNewItemParent(parentPath || '');
@@ -324,11 +342,23 @@ export function useFileTreeOperations({
     triggerBrowserDownload(blob, item.name);
   }, [selectedProject, triggerBrowserDownload, describeDownloadFailure]);
 
-  // Download folder as ZIP
+  /**
+   * 打包下载目录(D6:残缺必须说出来)。
+   *
+   * ZIP 是拿**前端已经加载的那棵树**打的,而那棵树不是全量:服务端的目录遍历
+   * 有深度上限(超过就不带 `children`)和条目预算(超了整棵树打截断标记),
+   * node_modules/.git 这类目录则压根不进树。原来这些情况一律静默跳过 ——
+   * 用户拿到一个看着正常、其实少了整棵子树的包,而且无从知道。
+   *
+   * 现在:未加载的子目录被记下来,并且**照样在包里建出空目录**(保住结构),
+   * 打完给一条"少了什么、去哪儿拿"的提示。真正的修法是服务端流式 zip
+   * (中期),但在那之前,残缺至少不能是无声的。
+   */
   const downloadFolderAsZip = useCallback(async (folder: FileTreeNode) => {
     if (!selectedProject) return;
 
     const zip = new JSZip();
+    const skippedDirectories: string[] = [];
 
     // Recursively get all files in the folder
     const collectFiles = async (node: FileTreeNode, currentPath: string) => {
@@ -343,11 +373,27 @@ export function useFileTreeOperations({
         // Store raw bytes in the archive so binary files stay intact.
         const fileBytes = await response.arrayBuffer();
         zip.file(fullPath, fileBytes);
-      } else if (node.type === 'directory' && node.children) {
-        // Recursively process children
-        for (const child of node.children) {
-          await collectFiles(child, fullPath);
-        }
+        return;
+      }
+
+      if (node.type !== 'directory') return;
+
+      // `children === undefined` = 服务端遍历到深度上限就没往下走(不是"空目录",
+      // 空目录给的是 `[]`)。这才是真正被吞掉的那部分。
+      if (!node.children) {
+        skippedDirectories.push(fullPath);
+        zip.folder(fullPath);
+        return;
+      }
+
+      // 空目录也显式建出来,否则 JSZip 只按文件路径推目录,空的就没了。
+      if (node.children.length === 0) {
+        zip.folder(fullPath);
+        return;
+      }
+
+      for (const child of node.children) {
+        await collectFiles(child, fullPath);
       }
     };
 
@@ -361,6 +407,21 @@ export function useFileTreeOperations({
     // Generate ZIP file
     const zipBlob = await zip.generateAsync({ type: 'blob' });
     triggerBrowserDownload(zipBlob, `${folder.name}.zip`);
+
+    if (skippedDirectories.length > 0) {
+      const preview = skippedDirectories.slice(0, 3).join('、');
+      showToast(
+        t('fileTree.toast.folderDownloadedPartial', {
+          // 用 skipped 而不是 count:i18next 见到 count 会走复数键(_one/_other),
+          // 这条文案不需要复数变体。
+          skipped: skippedDirectories.length,
+          preview,
+          defaultValue: `已打包,但 ${skippedDirectories.length} 个子目录未包含(层级太深没加载):${preview}${skippedDirectories.length > 3 ? ' 等' : ''}。进入该子目录后再单独下载可拿到完整内容。`,
+        }),
+        'warning',
+      );
+      return;
+    }
 
     showToast(t('fileTree.toast.folderDownloaded', 'Folder downloaded as ZIP'), 'success');
   }, [selectedProject, showToast, t, triggerBrowserDownload, describeDownloadFailure]);
@@ -379,6 +440,7 @@ export function useFileTreeOperations({
     handleStartDelete,
     handleCancelDelete,
     handleConfirmDelete,
+    deleteItemDirectly,
 
     // Create operations
     isCreating,

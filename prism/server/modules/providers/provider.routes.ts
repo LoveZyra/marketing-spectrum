@@ -95,6 +95,23 @@ const readOptionalQueryString = (value: unknown): string | undefined => {
   return normalized.length > 0 ? normalized : undefined;
 };
 
+/** `?limit=`/`?offset=` —— 非法值直接 400,不静默当成默认页(那会让"翻页翻不动"变成谜)。 */
+const parseOptionalCountQuery = (value: unknown, name: string): number | undefined => {
+  const normalized = readOptionalQueryString(value);
+  if (normalized === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+    throw new AppError(`${name} must be a non-negative integer.`, {
+      code: 'INVALID_QUERY_PARAMETER',
+      statusCode: 400,
+    });
+  }
+  return parsed;
+};
+
 const parseOptionalBooleanQuery = (value: unknown, name: string): boolean | undefined => {
   if (value === undefined) {
     return undefined;
@@ -697,8 +714,60 @@ router.get(
 router.get(
   '/sessions/archived',
   asyncHandler(async (req: Request, res: Response) => {
-    const sessions = sessionsService.listArchivedSessions(readRequestViewer(req));
-    res.json(createApiSuccessResponse({ sessions }));
+    // E10:分页 + 可见性下推 SQL。`sessions` 字段名不变,老前端照常拿到数组;
+    // 新增的 total/hasMore 让界面能说清"还有多少条没列出来"。
+    const page = sessionsService.listArchivedSessions(readRequestViewer(req), {
+      limit: parseOptionalCountQuery(req.query.limit, 'limit'),
+      offset: parseOptionalCountQuery(req.query.offset, 'offset'),
+    });
+    res.json(createApiSuccessResponse(page));
+  }),
+);
+
+/**
+ * F8:批量归档 / 恢复 / 删除。逐条鉴权(看不见的静默跳过,不报错 —— 报错等于
+ * 告诉调用方那个 id 存在),一条失败不中断其余,最后给一份账。
+ *
+ * 放在 `/sessions/:sessionId` 之前:否则 `bulk` 会被当成一个 sessionId。
+ */
+router.post(
+  '/sessions/bulk',
+  asyncHandler(async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const action = typeof body.action === 'string' ? body.action : '';
+    if (action !== 'archive' && action !== 'restore' && action !== 'delete') {
+      throw new AppError('action must be archive, restore or delete', {
+        code: 'INVALID_BULK_ACTION',
+        statusCode: 400,
+      });
+    }
+
+    const ids = Array.isArray(body.sessionIds)
+      ? body.sessionIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [];
+    // 上限只是防手滑/防滥用:一次几千条会让请求跑很久且没有进度可言。
+    if (ids.length === 0 || ids.length > 500) {
+      throw new AppError('sessionIds must contain 1 to 500 ids', {
+        code: 'INVALID_BULK_IDS',
+        statusCode: 400,
+      });
+    }
+
+    const result = await sessionsService.bulkSessionAction(ids, action, readRequestViewer(req));
+    res.json(createApiSuccessResponse(result));
+  }),
+);
+
+/**
+ * F8:清空回收站 —— 永久删除**当前访问者看得见的**归档会话。
+ * `?olderThanDays=N` 只清超过 N 天的(给"保留最近一周"这种用法)。
+ */
+router.delete(
+  '/sessions/archived',
+  asyncHandler(async (req: Request, res: Response) => {
+    const olderThanDays = parseOptionalCountQuery(req.query.olderThanDays, 'olderThanDays');
+    const result = await sessionsService.emptyArchivedSessions(readRequestViewer(req), { olderThanDays });
+    res.json(createApiSuccessResponse(result));
   }),
 );
 
@@ -739,8 +808,8 @@ router.put(
 );
 
 /**
- * 会话导出:?format=md(默认)|html。可见性校验与 messages 同门;
- * 全量拉取(limit=null),只渲染正文,attachment 直接触发浏览器下载。
+ * 会话导出:?format=md(默认)|html|json,?includeTools=true 带上工具过程。
+ * 可见性校验与 messages 同门;全量拉取(limit=null),attachment 直接触发浏览器下载。
  */
 router.get(
   '/sessions/:sessionId/export',
@@ -749,12 +818,15 @@ router.get(
     sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
 
     const formatRaw = readOptionalQueryString(req.query.format) ?? 'md';
-    if (formatRaw !== 'md' && formatRaw !== 'html') {
-      throw new AppError('format must be md or html', {
+    if (formatRaw !== 'md' && formatRaw !== 'html' && formatRaw !== 'json') {
+      throw new AppError('format must be md, html or json', {
         code: 'INVALID_QUERY_PARAMETER',
         statusCode: 400,
       });
     }
+    // F12:默认不带工具过程(多数导出是给人读的);要排查"它当时改了哪个文件"
+    // 时才打开,而不是替谁做决定。
+    const includeTools = parseOptionalBooleanQuery(req.query.includeTools, 'includeTools') ?? false;
 
     const history = await sessionsService.fetchHistory(sessionId, { limit: null, offset: 0 });
     const dbSession = sessionsDb.getSessionById(sessionId);
@@ -768,6 +840,7 @@ router.get(
         messages: history.messages as ExportableMessage[],
       },
       formatRaw,
+      { includeTools },
     );
 
     const asciiName = `session-${sessionId.slice(0, 8)}.${rendered.extension}`;

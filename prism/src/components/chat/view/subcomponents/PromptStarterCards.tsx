@@ -1,11 +1,10 @@
 import { useMemo } from 'react';
 import {
   Megaphone,
-  Stethoscope,
-  BarChart3,
+  Microscope,
   Binary,
-  Network,
   Lightbulb,
+  ExternalLink,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -14,11 +13,19 @@ interface PromptStarterCardsProps {
   onPick: (prompt: string) => void;
 }
 
+interface StarterLink {
+  label: string;
+  /** 相对路径。真实地址由服务端给,前端不写死。 */
+  href: string;
+}
+
 interface StarterCategory {
   key: string;
   label: string;
   icon: LucideIcon;
   prompts: string[];
+  /** 外链入口,点了是跳页面而不是填输入框。运行时才知道挂没挂上,所以是可选的。 */
+  links?: StarterLink[];
 }
 
 /**
@@ -37,21 +44,12 @@ const CATEGORIES: StarterCategory[] = [
     ],
   },
   {
-    key: 'diagnosis',
-    label: '场景诊断',
-    icon: Stethoscope,
+    key: 'analyst',
+    label: '分析专家',
+    icon: Microscope,
     prompts: [
-      '帮我诊断这个先知场景的圈人逻辑，检查分支是否互斥完备',
-      '检查这个场景的人群配置和标签口径有没有问题',
-    ],
-  },
-  {
-    key: 'analysis',
-    label: '数据分析',
-    icon: BarChart3,
-    prompts: [
-      '分析这份用户行为数据，找出关键转化瓶颈',
-      '对比 A/B 实验两组指标的显著性差异',
+      '做一份外部专题调研：这个行业近一年的竞争格局和主要玩家动向',
+      '做一份内部业务经营分析：拆解这条业务线的收入结构和同比变化',
     ],
   },
   {
@@ -67,25 +65,15 @@ const CATEGORIES: StarterCategory[] = [
     key: 'consulting',
     label: '方案咨询',
     icon: Lightbulb,
-    prompts: [
-      '推荐一个适合冷启动推荐的算法方案',
-      '这个排序场景该选什么模型，讲讲权衡',
-    ],
-  },
-  {
-    key: 'algomodel',
-    label: '算法模型',
-    icon: Network,
-    prompts: [
-      '训练一个用户流失预测模型，评估 AUC 和特征重要性',
-      '为这个分类任务做模型选型与调参，比较几种方案的效果',
-    ],
+    // 只留一个例子,给"算法效果查询"腾出位置 —— 这样这张卡也是两行,和其余三张齐平。
+    prompts: ['推荐一个适合冷启动推荐的算法方案'],
+    links: [{ label: '算法效果查询', href: '/recsys' }],
   },
 ];
 
 export default function PromptStarterCards({ onPick }: PromptStarterCardsProps) {
-  // 营销活动诊断 stays pinned first and 量化策略 pinned last; the two middle
-  // slots are randomized once per mount for freshness.
+  // 四张卡全展示:营销活动诊断固定第一、方案咨询固定最后,中间两张(分析专家/算法建模)
+  // 每次挂载随机换个先后。所以"算法效果查询"这个入口一定在场。
   const categories = useMemo(() => {
     const first = CATEGORIES[0];
     const last = CATEGORIES[CATEGORIES.length - 1];
@@ -94,7 +82,7 @@ export default function PromptStarterCards({ onPick }: PromptStarterCardsProps) 
       const j = Math.floor(Math.random() * (i + 1));
       [middle[i], middle[j]] = [middle[j], middle[i]];
     }
-    return [first, ...middle.slice(0, 2), last];
+    return [first, ...middle, last];
   }, []);
 
   return (
@@ -126,6 +114,18 @@ export default function PromptStarterCards({ onPick }: PromptStarterCardsProps) 
                   >
                     {prompt}
                   </button>
+                ))}
+                {category.links?.map((link) => (
+                  <a
+                    key={link.href}
+                    href={link.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex w-full items-center justify-between gap-2 rounded-md border border-primary/25 bg-primary/5 px-3.5 py-2.5 text-left text-sm leading-relaxed text-body transition-colors hover:border-primary/45 hover:bg-primary/10 hover:text-foreground"
+                  >
+                    <span>{link.label}</span>
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+                  </a>
                 ))}
               </div>
             </div>

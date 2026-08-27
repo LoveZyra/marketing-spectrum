@@ -19,9 +19,6 @@
   "tools": {
     "settings": "Araç Ayarları"
   },
-  "search": {
-    "in": "şurada:"
-  },
   "interactive": {
     "title": "Etkileşimli Prompt",
     "waiting": "CLI'da yanıtın bekleniyor",

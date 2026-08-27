@@ -3,8 +3,8 @@ import path from 'node:path';
 import readline from 'node:readline';
 
 import { spawn } from 'cross-spawn';
-import { rgPath } from '@vscode/ripgrep';
 
+import { resolveRipgrepPath } from '@/shared/ripgrep-path.js';
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { canViewerSeeProject } from '@/shared/project-visibility.js';
 import { isInternalContent } from '@/modules/providers/list/claude/transcript-provenance.js';
@@ -544,7 +544,8 @@ async function runRipgrepFilesWithMatches(
       pattern,
       ...filePaths,
     ];
-    const rg = spawn(rgPath, args, {
+    // 自带二进制可能根本没下载下来(内网安装 / --ignore-scripts),回落到 PATH 里的 rg。
+    const rg = spawn(resolveRipgrepPath() ?? 'rg', args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });

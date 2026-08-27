@@ -8,7 +8,7 @@ import { copyTextToClipboard } from '../../../utils/clipboard';
 import { FAMILY_COLOR_CLASS, ICON_SIZE_CLASS, getFileFamily, getFileIconData } from '../constants/fileIcons';
 import { useExpandedDirectories } from '../hooks/useExpandedDirectories';
 import { useFileTreeData } from '../hooks/useFileTreeData';
-import { useFileTreeOperations } from '../hooks/useFileTreeOperations';
+import { useFileTreeOperations, type ToastMessage } from '../hooks/useFileTreeOperations';
 import { useFileTreeSearch } from '../hooks/useFileTreeSearch';
 import { useFileTreeViewMode } from '../hooks/useFileTreeViewMode';
 import { useFileTreeUpload } from '../hooks/useFileTreeUpload';
@@ -22,6 +22,7 @@ import FileTreeDetailedColumns from './FileTreeDetailedColumns';
 import FileTreeHeader from './FileTreeHeader';
 import FileTreeLoadingState from './FileTreeLoadingState';
 import FileTreeUploadProgress from './FileTreeUploadProgress';
+import ProjectSearchPanel from './ProjectSearchPanel';
 import ImageViewer from './ImageViewer';
 
 
@@ -30,22 +31,47 @@ type FileTreeProps = {
   onFileOpen?: (filePath: string) => void;
 };
 
+/** 按路径集合从树里捞出对应节点(深度优先,顺序即显示顺序)。 */
+function collectByPaths(nodes: FileTreeNode[], paths: ReadonlySet<string>): FileTreeNode[] {
+  const found: FileTreeNode[] = [];
+  const walk = (list: FileTreeNode[]) => {
+    for (const node of list) {
+      if (paths.has(node.path)) found.push(node);
+      if (node.children) walk(node.children);
+    }
+  };
+  walk(nodes);
+  return found;
+}
+
 export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps) {
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+  /**
+   * F9:多选。
+   *
+   * 选择模式明确用一个开关进入,而不是"点着点着就进去了" —— 文件树的默认动作是
+   * 打开文件,把它偷偷改成选中会让人删错东西。开关之外,按住 Ctrl/Cmd/Shift
+   * 点击也算选中(与文件管理器一致)。
+   */
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  /** F10:全局内容搜索面板(与文件名搜索是两回事,所以是独立面板而不是同一个输入框)。 */
+  const [showSearchPanel, setShowSearchPanel] = useState(false);
   const newItemInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   // Show toast notification
-  const showToast = useCallback((message: string, type: 'success' | 'error') => {
+  const showToast = useCallback((message: string, type: ToastMessage['type']) => {
     setToast({ message, type });
   }, []);
 
   // Auto-hide toast
   useEffect(() => {
     if (toast) {
-      const timer = setTimeout(() => setToast(null), 3000);
+      // warning 里带着目录名,3 秒读不完 —— 给它更长的停留时间。
+      const timer = setTimeout(() => setToast(null), toast.type === 'warning' ? 8000 : 3000);
       return () => clearTimeout(timer);
     }
   }, [toast]);
@@ -193,6 +219,110 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
    * it — and still preventDefault, or the browser navigates away to the
    * dropped file.
    */
+  const toggleSelect = useCallback((item: FileTreeNode) => {
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(item.path)) next.delete(item.path);
+      else next.add(item.path);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedPaths(new Set());
+    setSelectionMode(false);
+  }, []);
+
+  /** 批量下载:逐个走单文件下载(目录走 ZIP),失败逐条提示但不中断其余。 */
+  const downloadSelected = useCallback(async () => {
+    const targets = collectByPaths(filteredFiles, selectedPaths);
+    let failed = 0;
+    for (const item of targets) {
+      try {
+        await operations.handleDownload(item);
+      } catch {
+        failed += 1;
+      }
+    }
+    if (failed > 0) {
+      showToast(t('fileTree.batchDownloadPartial', { failed, defaultValue: `有 ${failed} 项下载失败` }), 'warning');
+    }
+    clearSelection();
+  }, [filteredFiles, selectedPaths, operations, showToast, t, clearSelection]);
+
+  /**
+   * 批量删除:确认一次,然后逐个删。
+   *
+   * 删除是不可逆的,所以确认里写清有几项 —— "确定删除?"配上一个看不见数量的
+   * 选择集合,是最容易造成事故的组合。
+   */
+  const deleteSelected = useCallback(async () => {
+    const targets = collectByPaths(filteredFiles, selectedPaths);
+    if (targets.length === 0) return;
+    if (!window.confirm(t('fileTree.batchDeleteConfirm', {
+      count: targets.length,
+      defaultValue: `删除选中的 ${targets.length} 项?此操作不可撤销。`,
+    }))) {
+      return;
+    }
+
+    let failed = 0;
+    for (const item of targets) {
+      try {
+        await operations.deleteItemDirectly(item);
+      } catch {
+        failed += 1;
+      }
+    }
+    clearSelection();
+    refreshFiles();
+    if (failed > 0) {
+      showToast(t('fileTree.batchDeletePartial', { failed, defaultValue: `有 ${failed} 项删除失败` }), 'warning');
+    }
+  }, [filteredFiles, selectedPaths, operations, refreshFiles, showToast, t, clearSelection]);
+
+  /**
+   * F9:Cmd+N / Cmd+Shift+N 做实。
+   *
+   * 这两个组合原来只写在按钮的 tooltip 里 —— 按下去什么都不会发生,是个纯粹的
+   * 谎言。现在真的接上,并且只在文件页有焦点、且没在输入框里打字时生效
+   * (否则会把编辑器里的 Cmd+N 抢走)。
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'n') return;
+      if (!isInProject) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      // 树没在屏上(切到别的标签页)就不抢 —— 这个监听挂在 document 上。
+      if (!upload.treeRef.current?.isConnected) return;
+
+      event.preventDefault();
+      operations.handleStartCreate('', event.shiftKey ? 'directory' : 'file');
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [isInProject, operations, upload.treeRef]);
+
+  /**
+   * F10:Ctrl/Cmd+Shift+F 打开全局搜索。
+   *
+   * 与聊天里的 Ctrl+F(会话内查找)错开一个 Shift —— 两者是不同的东西,
+   * 共用一个键会让人永远猜不准打开的是哪个。
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLowerCase() !== 'f') return;
+      if (!isInProject || !selectedProject) return;
+      if (!upload.treeRef.current?.isConnected) return;
+      event.preventDefault();
+      setShowSearchPanel(true);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [isInProject, selectedProject, upload.treeRef]);
+
   const handleTreeDrop = useCallback(
     (event: DragEvent) => {
       if (!isInProject) {
@@ -247,6 +377,15 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
         onNewFolder={() => operations.handleStartCreate('', 'directory')}
         onRefresh={refreshFiles}
         onCollapseAll={collapseAll}
+        onToggleSearch={() => setShowSearchPanel((current) => !current)}
+        searchPanelOpen={showSearchPanel}
+        onToggleSelectionMode={() => {
+          setSelectionMode((current) => {
+            if (current) setSelectedPaths(new Set());
+            return !current;
+          });
+        }}
+        selectionMode={selectionMode}
         currentPath={location.root}
         parentPath={location.parent}
         isInProject={isInProject}
@@ -259,7 +398,54 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
         uploadProgress={upload.uploadProgress?.progress ?? null}
       />
 
+      {showSearchPanel && selectedProject && (
+        <div className="h-1/2 min-h-[200px] flex-shrink-0">
+          <ProjectSearchPanel
+            projectId={selectedProject.projectId}
+            onOpenMatch={(relativePath) => {
+              // 命中项打开的是文件本身。搜索返回的是相对项目根的路径(绝对路径
+              // 既没用又泄漏服务器目录结构),这里拼回去交给编辑器。
+              const absolute = location.root ? `${location.root}/${relativePath}` : relativePath;
+              onFileOpen?.(absolute);
+            }}
+            onClose={() => setShowSearchPanel(false)}
+          />
+        </div>
+      )}
+
       <FileTreeUploadProgress upload={upload.uploadProgress} />
+
+      {/* F9:多选工具条。只在选择模式或已有选中项时出现,平时不占位置。 */}
+      {(selectionMode || selectedPaths.size > 0) && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5">
+          <span className="text-[11px] text-muted-foreground">
+            {t('fileTree.selectedCount', { count: selectedPaths.size, defaultValue: `已选 ${selectedPaths.size} 项` })}
+          </span>
+          <button
+            type="button"
+            onClick={() => void downloadSelected()}
+            disabled={selectedPaths.size === 0 || operationLoading}
+            className="rounded-md border border-border px-2 py-0.5 text-[11px] transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            {t('fileTree.batchDownload', '批量下载')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void deleteSelected()}
+            disabled={selectedPaths.size === 0 || operationLoading}
+            className="rounded-md border border-border px-2 py-0.5 text-[11px] transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            {t('fileTree.batchDelete', '批量删除')}
+          </button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="ml-auto text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            {t('fileTree.exitSelection', '退出多选')}
+          </button>
+        </div>
+      )}
 
       {viewMode === 'detailed' && filteredFiles.length > 0 && <FileTreeDetailedColumns />}
 
@@ -330,6 +516,14 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           handleCancelRename={operations.handleCancelRename}
           renameInputRef={renameInputRef}
           operationLoading={operationLoading}
+          // F9:拖到具体目录上就落在那个目录(此前这两个回调写好了却从没接线,
+          // 拖进来的文件永远落在项目根)。
+          onItemDragOver={upload.handleItemDragOver}
+          onItemDrop={upload.handleItemDrop}
+          dropTarget={upload.dropTarget}
+          selectedPaths={selectedPaths}
+          onToggleSelect={toggleSelect}
+          selectionMode={selectionMode}
         />
       </ScrollArea>
 
@@ -397,6 +591,9 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
         >
           {toast.type === 'success' ? (
             <Check className="h-4 w-4" />
+          ) : toast.type === 'warning' ? (
+            // 「做完了但不完整」—— 与失败区分开,否则用户会以为下载压根没成
+            <AlertTriangle className="h-4 w-4 text-amber-500" />
           ) : (
             <X className="h-4 w-4" />
           )}

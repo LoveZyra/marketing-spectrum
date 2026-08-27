@@ -44,7 +44,6 @@
       "toolDisplay": "工具显示",
       "inputSettings": "输入设置"
     },
-    "darkMode": "深色模式",
     "showRawParameters": "显示原始参数",
     "showThinking": "显示思考过程",
     "sendByCtrlEnter": "使用 Ctrl+Enter 发送",
@@ -393,7 +392,32 @@
     "jupyterIdle": "未启动(首次打开 Notebook 标签页时拉起)",
     "gateway": "模型网关",
     "gatewayDown": "不可达",
-    "gatewayUnset": "未配置 BASE_URL"
+    "gatewayUnset": "未配置 BASE_URL",
+    "runtimeTitle": "进程内资源",
+    "runtimePool": "常驻会话",
+    "runtimeBusy": "在跑 {{busy}}",
+    "overflow": "溢出",
+    "runsRunning": "在飞回合",
+    "oldestRun": "最早",
+    "ptyTitle": "终端",
+    "ptyDetached": "断开待回收",
+    "historyCache": "历史缓存",
+    "cacheEntries": "条",
+    "pendingApprovals": "待审批",
+    "runtimeByOwner": "常驻会话按账号",
+    "ptyByOwner": "终端按账号",
+    "busyShort": "在跑",
+    "anonymousOwner": "未登录",
+    "quotaTitle": "附件配额",
+    "quotaDefault": "全局默认",
+    "quotaHint": "留空即跟随全局默认(PRISM_ATTACHMENT_QUOTA_MB)。单位 MB。",
+    "quotaUser": "账号",
+    "quotaUsed": "已用",
+    "quotaLimit": "上限",
+    "quotaOverride": "覆盖(MB)",
+    "quotaFollowDefault": "默认",
+    "quotaSave": "保存",
+    "quotaCancel": "取消"
   },
   "skills": {
     "title": "技能",
@@ -430,6 +454,14 @@
     "emptyHint": "在上方添加全局技能,或在工作区里创建项目级技能文件夹。",
     "noMatchTitle": "没有匹配的技能",
     "noMatchHint": "换个命令、名称、范围、项目或来源路径试试。",
-    "source": "来源"
+    "source": "来源",
+    "remove": "卸载",
+    "removeTitle": "卸载这个技能?",
+    "removeBody": "将删除「{{name}}」的整个技能目录,不可撤销。",
+    "removeCancel": "取消",
+    "removeConfirm": "卸载",
+    "removing": "卸载中…",
+    "removeDone": "已卸载「{{name}}」",
+    "removeFailed": "卸载失败,请重试。"
   }
 }

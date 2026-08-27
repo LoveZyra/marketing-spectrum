@@ -42,7 +42,7 @@
     "openCommandPalette": "Open command palette",
     "attentionRequiredIndicator": "Session needs attention",
     "approvalPendingIndicator": "Waiting for you to approve a tool",
-    "exportSession": "Export session (Markdown)",
+    "exportSession": "Export session",
     "processingSessionIndicator": "Session running",
     "exportSessionFailed": "Failed to export session. Please retry."
   },
@@ -68,7 +68,10 @@
     "restoreProjectFailed": "Failed to restore project. Please try again.",
     "restoreProjectError": "Error restoring project. Please try again.",
     "restoreSessionFailed": "Failed to restore session. Please try again.",
-    "restoreSessionError": "Error restoring session. Please try again."
+    "restoreSessionError": "Error restoring session. Please try again.",
+    "bulkDeleteConfirm": "Permanently delete the {{count}} selected archived sessions? This cannot be undone.",
+    "emptyTrashConfirm": "Emptying the trash permanently deletes {{count}} archived sessions. This cannot be undone. Continue?",
+    "bulkActionFailed": "Bulk action failed, please try again."
   },
   "search": {
     "modeProjects": "Projects",
@@ -104,5 +107,15 @@
     "sharedHint": "Shared with you by someone else",
     "sharedOutHint": "Shared with {{count}} people",
     "sharedOutRootOnlyHint": "Shared with {{count}} user(s) — otherwise visible to root only"
+  },
+  "archived": {
+    "loadMore": "Load more ({{total}} total)",
+    "loadingMore": "Loading…",
+    "select": "Select",
+    "emptyTrash": "Empty trash",
+    "selectedCount": "{{count}} selected",
+    "bulkRestore": "Restore selected",
+    "bulkDelete": "Delete selected",
+    "clearSelection": "Clear"
   }
 }

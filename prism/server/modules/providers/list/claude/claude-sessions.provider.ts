@@ -318,13 +318,13 @@ const historyCache = new FetchHistoryCache({
 });
 
 /**
- * Drops every cached history entry.
+ * 历史缓存快照(F6 管理面)。**只读**,不碰缓存。
  *
- * The cache invalidates itself on transcript identity, so this exists for tests
- * that need a cold read rather than for production correctness.
+ * 这份缓存是进程里最大的一块可变内存(默认 32 MB 预算),而它对外一直是个
+ * 黑盒 —— 面板上给出条目数与字节数,root 才判断得了"内存涨上去了"是不是它。
  */
-export function clearHistoryCache(): void {
-  historyCache.clear();
+export function getHistoryCacheStats(): { entries: number; bytes: number } {
+  return { entries: historyCache.size, bytes: historyCache.bytes };
 }
 
 /**

@@ -21,6 +21,8 @@ export type ProviderSkill = {
   pluginId?: string;
   projectDisplayName?: string;
   projectPath?: string;
+  /** F13:能卸载的技能才有(用户级、受管根目录下一层)。缺失 = 不可卸载。 */
+  directoryName?: string;
 };
 
 export type ProviderSkillCreateEntryPayload = {

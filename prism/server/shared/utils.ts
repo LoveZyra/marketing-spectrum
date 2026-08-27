@@ -29,7 +29,6 @@ import type {
   ProviderCurrentActiveModel,
   ProviderModelsDefinition,
   ProviderSessionActiveModelChange,
-  ProviderSkillSource,
   WorkspacePathValidationResult,
 } from '@/shared/types.js';
 
@@ -844,28 +843,6 @@ export const writeJsonConfig = async (filePath: string, data: Record<string, unk
 
 // ---------------------------
 //----------------- PROVIDER SKILL FILE UTILITIES ------------
-/**
- * Adds one provider skill source after normalizing and de-duplicating its root.
- *
- * Provider skill lookup rules often point at overlapping folders (for example a
- * workspace folder can also be the git root). Use this helper while building a
- * provider's `ProviderSkillSource[]` so the shared skills scanner reads each
- * physical root once and still preserves provider-specific scope/command data.
- */
-export function addUniqueProviderSkillSource(
-  sources: ProviderSkillSource[],
-  seenRootDirs: Set<string>,
-  source: ProviderSkillSource,
-): void {
-  const normalizedRootDir = path.resolve(source.rootDir);
-  if (seenRootDirs.has(normalizedRootDir)) {
-    return;
-  }
-
-  seenRootDirs.add(normalizedRootDir);
-  sources.push({ ...source, rootDir: normalizedRootDir });
-}
-
 // ---------------------------
 //----------------- PROVIDER SKILL MARKDOWN UTILITIES ------------
 /**
@@ -1025,53 +1002,8 @@ export function normalizeProviderTimestamp(value: unknown): string {
   return new Date().toISOString();
 }
 
-/**
- * Parses a JSON string or narrows an existing object into a plain record.
- *
- * Use this when provider databases store structured JSON inside text columns.
- * Invalid JSON, arrays, and primitive values return `null` so callers can skip
- * malformed optional metadata without hiding the rest of a session transcript.
- */
-export function readJsonRecord(value: unknown): AnyRecord | null {
-  if (typeof value !== 'string') {
-    return readObjectRecord(value);
-  }
-
-  try {
-    return readObjectRecord(JSON.parse(value));
-  } catch {
-    return null;
-  }
-}
-
 // ---------------------------
 //----------------- SAFE DIRECTORY NAME UTILITIES ------------
-/**
- * Validates that a user or provider supplied identifier can safely be treated
- * as one leaf directory name under an existing root folder.
- *
- * Use this before composing paths like `<root>/<session-id>/file.db>` to block
- * path traversal and accidental nested paths. The returned string is trimmed but
- * otherwise unchanged so callers can still match the provider's on-disk naming.
- */
-export function sanitizeLeafDirectoryName(inputName: string, label = 'directory name'): string {
-  const normalized = inputName.trim();
-  if (!normalized) {
-    throw new Error(`${label} is required.`);
-  }
-
-  if (
-    normalized.includes('..')
-    || normalized.includes(path.posix.sep)
-    || normalized.includes(path.win32.sep)
-    || normalized !== path.basename(normalized)
-  ) {
-    throw new Error(`Invalid ${label} "${inputName}".`);
-  }
-
-  return normalized;
-}
-
 // ---------------------------
 //----------------- SESSION SYNCHRONIZER FILESYSTEM HELPERS ------------
 /**

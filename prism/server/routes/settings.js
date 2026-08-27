@@ -5,6 +5,7 @@ import {
   auditLogDb,
   credentialsDb,
   notificationPreferencesDb,
+  uiSettingsDb,
 } from '../modules/database/index.js';
 import { clientIp } from '../middleware/rate-limit.js';
 
@@ -235,6 +236,50 @@ router.put('/notification-preferences', async (req, res) => {
   } catch (error) {
     console.error('Error saving notification preferences:', error);
     res.status(500).json({ error: 'Failed to save notification preferences' });
+  }
+});
+
+// ===============================
+// F11 · 账号级界面偏好
+// ===============================
+
+/**
+ * 权限清单、项目排序、编辑器偏好此前全在 localStorage —— 换台电脑就归零。
+ *
+ * 服务端在这里只做**存取**,不解释内容:偏好的形状归前端管,服务端一旦开始
+ * 校验字段,加一项偏好就要改两处。只做两件事 —— 限大小(防止有人把它当网盘),
+ * 以及要求是个对象(数组/字符串存进去只会让前端读的时候更难受)。
+ */
+const MAX_UI_SETTINGS_BYTES = 64 * 1024;
+
+router.get('/ui', async (req, res) => {
+  try {
+    const record = uiSettingsDb.get(req.user.id);
+    res.json({ success: true, settings: record?.settings ?? null, clientUpdatedAt: record?.clientUpdatedAt ?? null });
+  } catch (error) {
+    console.error('Error fetching UI settings:', error);
+    res.status(500).json({ error: 'Failed to fetch UI settings' });
+  }
+});
+
+router.put('/ui', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const settings = body.settings;
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      return res.status(400).json({ error: 'settings must be an object' });
+    }
+    const serialized = JSON.stringify(settings);
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_UI_SETTINGS_BYTES) {
+      return res.status(413).json({ error: '界面偏好过大(上限 64KB)' });
+    }
+
+    const clientUpdatedAt = typeof body.clientUpdatedAt === 'string' ? body.clientUpdatedAt : null;
+    const record = uiSettingsDb.put(req.user.id, settings, clientUpdatedAt);
+    res.json({ success: true, settings: record.settings, clientUpdatedAt: record.clientUpdatedAt });
+  } catch (error) {
+    console.error('Error saving UI settings:', error);
+    res.status(500).json({ error: 'Failed to save UI settings' });
   }
 });
 

@@ -19,9 +19,6 @@
   "tools": {
     "settings": "工具设置"
   },
-  "search": {
-    "in": "在："
-  },
   "interactive": {
     "title": "交互式提示",
     "waiting": "等待您在 CLI 中响应",
@@ -59,11 +56,12 @@
       "label": "已排队",
       "willSend": "当前回合结束后自动发送",
       "edit": "编辑排队消息",
-      "delete": "删除排队消息"
+      "delete": "删除排队消息",
+      "serverLabel": "服务端已收下",
+      "serverHint": "本轮结束后自动发送 · 关掉页面也有效"
     },
     "attachmentPath": "路径",
     "modelHint": "当前模型：{{model}} · 点击切换",
-    "queueShort": "加入队列",
     "attachDocuments": "附加文档（PDF、Word、Excel、PPT…）",
     "attachUrl": "抓取网页作为上下文",
     "attachUrlPrompt": "输入要抓取正文的网址：",

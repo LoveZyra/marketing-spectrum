@@ -32,5 +32,10 @@
     "types": ["node"]
   },
   "include": ["./**/*.js", "./**/*.ts", "./**/*.d.ts", "../shared/**/*.js", "../shared/**/*.ts"],
-  "exclude": ["../dist", "../dist-server", "../node_modules", "../src"]
+  "exclude": [
+    "../dist", "../dist-server", "../node_modules", "../src",
+    // cp:测试不该进产物 —— 之前 dist-server 里躺着 71 个 *.test.js
+    // 和一堆 sourcemap,既没用又把 vitest/内部断言的代码发到了生产。
+    "**/*.test.ts", "**/*.test.js", "**/tests/**"
+  ]
 }

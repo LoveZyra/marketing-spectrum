@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDownIcon } from 'lucide-react';
 
@@ -18,7 +18,12 @@ import ChatComposer from './subcomponents/ChatComposer';
 import ChangedFilesCard from './subcomponents/ChangedFilesCard';
 import type { ChangedFilesState, ChangedFileEntry } from './subcomponents/ChangedFilesCard';
 import CheckpointHistoryPanel from './subcomponents/CheckpointHistoryPanel';
-import CommandResultModal from './subcomponents/CommandResultModal';
+/**
+ * G3:斜杠命令的结果弹窗(/models、/cost 这类)带着模型卡片、实测按钮、一整套
+ * 表格渲染,而它只在用户真的敲了斜杠命令时才出现 —— 打包进聊天主块等于让每个人
+ * 在首屏为一个多数会话里根本不会打开的弹窗付费。
+ */
+const CommandResultModal = lazy(() => import('./subcomponents/CommandResultModal'));
 
 function ChatInterface({
   selectedProject,
@@ -289,6 +294,27 @@ function ChatInterface({
     });
   }, [selectedSession?.id, currentSessionId]);
 
+  /**
+   * F7:服务端排队中的那条消息(每会话至多一条)。
+   *
+   * 与 composer 自己那份浏览器内排队是两回事:这一份存在服务端,刷新页面、
+   * 换设备、关掉标签页之后都还在,所以只能由服务端的帧驱动,不能靠本地推断。
+   */
+  const [serverQueued, setServerQueued] = useState<{ sessionId: string; preview: string; enqueuedAt: string } | null>(null);
+
+  const handleServerQueueChange = useCallback(
+    (sessionId: string, queued: { preview: string; enqueuedAt: string } | null) => {
+      setServerQueued(queued ? { sessionId, ...queued } : (current) => (current?.sessionId === sessionId ? null : current));
+    },
+    [],
+  );
+
+  const handleCancelServerQueued = useCallback(() => {
+    const target = serverQueued?.sessionId;
+    if (!target) return;
+    sendMessage({ type: 'chat.cancel-queued', sessionId: target });
+  }, [serverQueued?.sessionId, sendMessage]);
+
   useChatRealtimeHandlers({
     subscribe,
     provider,
@@ -306,6 +332,7 @@ function ChatInterface({
     onWebSocketReconnect: handleWebSocketReconnect,
     sessionStore,
     onChangedFiles: handleChangedFiles,
+    onServerQueueChange: handleServerQueueChange,
   });
 
   useEffect(() => {
@@ -504,6 +531,8 @@ function ChatInterface({
           )}
 
           <ChatComposer
+          serverQueued={serverQueued && serverQueued.sessionId === (selectedSession?.id ?? currentSessionId) ? serverQueued : null}
+          onCancelServerQueued={handleCancelServerQueued}
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
@@ -587,6 +616,9 @@ function ChatInterface({
 
       <QuickSettingsPanel />
 
+      {/* payload 为空时连模块都不拉 —— 懒加载的意义就在这一行。 */}
+      {commandModalPayload && (
+      <Suspense fallback={null}>
       <CommandResultModal
         payload={commandModalPayload}
         onClose={() => {
@@ -602,6 +634,8 @@ function ChatInterface({
         currentSessionId={currentSessionId || selectedSession?.id || null}
         onSelectProviderModel={selectProviderModel}
       />
+      </Suspense>
+      )}
     </PermissionContext.Provider>
   );
 }

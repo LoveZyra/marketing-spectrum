@@ -416,7 +416,14 @@ function pruneRealtimeSupersededByServer(
   });
 }
 
-function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
+/**
+ * 服务端历史 + 实时消息 → 屏幕上那一串。
+ *
+ * 导出是为了测试(G1):这段是聊天里最容易出"重影"和"顺序错乱"的地方,而它是
+ * 纯函数 —— 直接钉行为比通过整个 store 间接验证便宜得多,也读得懂得多。
+ * `planSlotEviction` 同理,已是同样的处理。
+ */
+export function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   if (realtime.length === 0) {
     return dedupeAdjacentAssistantEchoes(server);
   }

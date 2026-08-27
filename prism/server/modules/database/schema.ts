@@ -79,6 +79,29 @@ CREATE TABLE IF NOT EXISTS user_notification_preferences (
 );
 `;
 
+/**
+ * F11:账号级界面偏好。
+ *
+ * 权限清单、项目排序、编辑器偏好此前**全在 localStorage** —— 换台电脑、换个浏览器
+ * 或者清一次缓存,全部归零,而这些设置是用户一条条调出来的。这里给它们一个跟着
+ * 账号走的家。
+ *
+ * 存成一个 JSON blob 而不是一行一个键:这些偏好只有"整份读、整份写"一种用法,
+ * 拆成键值表除了让读写各多一次 JOIN 之外没有任何好处;而未来加一项偏好时,
+ * blob 不需要迁移。
+ */
+export const USER_UI_SETTINGS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS user_ui_settings (
+    user_id INTEGER PRIMARY KEY,
+    settings_json TEXT NOT NULL,
+    -- 客户端声明的最后修改时间(ISO)。同步时用它比新旧:离线改过的一侧不该被
+    -- 另一侧的旧值覆盖。
+    client_updated_at TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+`;
+
 export const PROJECTS_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS projects (
     project_id TEXT PRIMARY KEY NOT NULL,
@@ -278,6 +301,8 @@ CREATE INDEX IF NOT EXISTS idx_user_credentials_active ON user_credentials(is_ac
 
 ${USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL}
 CREATE INDEX IF NOT EXISTS idx_user_notification_preferences_user_id ON user_notification_preferences(user_id);
+
+${USER_UI_SETTINGS_TABLE_SCHEMA_SQL}
 
 ${PROJECTS_TABLE_SCHEMA_SQL}
 -- NOTE: These indexes are created in migrations after legacy table-shape repairs.

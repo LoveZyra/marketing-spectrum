@@ -1,4 +1,3 @@
-import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { getGlobalImageAssetsDir, toPosixPath } from '@/shared/image-attachments.js';
@@ -102,13 +101,6 @@ export function buildAttachmentFilename(originalName: string, mimeType: string):
   const stem = (base.includes('.') ? base.slice(0, base.lastIndexOf('.')) : base).slice(0, 60) || 'attachment';
   const suffix = Math.random().toString(36).slice(2, 8);
   return `${stem}-${suffix}${canonicalExtensionForMimeType(mimeType)}`;
-}
-
-/** Creates the global `~/.prism/assets` folder if needed and returns it. */
-export async function ensureImageAssetsDir(): Promise<string> {
-  const assetsDir = getGlobalImageAssetsDir();
-  await fs.mkdir(assetsDir, { recursive: true });
-  return assetsDir;
 }
 
 /**

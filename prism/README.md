@@ -4,7 +4,15 @@ Prism 是一个 Claude Code 的 Web UI，基于 [claudecodeui (CloudCLI)](https:
 
 只支持 Claude Code CLI，只支持浏览器访问。上游自带的 Cursor / Codex / OpenCode 多 provider、PWA / 移动端推送、Electron 桌面端均已从本分支移除，代码与依赖一并删除，不是隐藏开关。
 
-基座能力（继承自 claudecodeui）：WebSocket 可靠流（断线重放）、工具执行可视化、权限审批、Plan 模式、MCP 管理、Git 面板、Slash 命令、`@` 文件引用、语音输入/朗读、10 种语言、插件系统。上游完整文档见 [README.upstream.md](README.upstream.md)（其中涉及其他 provider 与桌面端的章节对本分支不再适用）。
+基座能力（继承自 claudecodeui）：WebSocket 可靠流（断线重放）、工具执行可视化、权限审批、Plan 模式、MCP 管理、Slash 命令、`@` 文件引用、10 种语言。上游完整文档见 [README.upstream.md](README.upstream.md)（其中涉及其他 provider 与桌面端的章节对本分支不再适用）。
+
+> 上游有、**本分支已移除**：Git 面板、语音输入/朗读、插件系统 —— 代码与依赖一并删除，不是隐藏开关。
+
+本分支自建的能力（上游没有）：多用户与项目权限（个人/公共/指定用户 + 注册审批）、
+定时任务（服务端调度，到点把指令发给 Claude，结果写进指定会话）、
+内置 JupyterLab（notebook 标签页）、外部 API（API Key + 会话号闭环）、
+附件与文档解析（PDF/Word/PPT/Excel）、会话内查找、子代理过程可视化、
+Mermaid 渲染、费用展示、界面主题三选。
 
 ## 移植自 claude-web 的增强能力
 

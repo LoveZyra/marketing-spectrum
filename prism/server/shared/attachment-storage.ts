@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { attachmentsDb, type AttachmentKind } from '@/modules/database/index.js';
+import { attachmentsDb, userDb, type AttachmentKind } from '@/modules/database/index.js';
 import { getGlobalImageAssetsDir } from '@/shared/image-attachments.js';
 
 /**
@@ -32,9 +32,29 @@ export function getAttachmentTtlDays(): number {
   return readPositiveEnvNumber('PRISM_ATTACHMENT_TTL_DAYS', DEFAULT_TTL_DAYS);
 }
 
-/** 每个用户的附件总量上限(字节)。`PRISM_ATTACHMENT_QUOTA_MB` 可覆盖。 */
-export function getAttachmentQuotaBytes(): number {
-  return readPositiveEnvNumber('PRISM_ATTACHMENT_QUOTA_MB', DEFAULT_QUOTA_MB) * 1024 * 1024;
+/**
+ * 附件总量上限(字节)。
+ *
+ * 优先级:**这个账号的覆盖值**(F6,root 在管理面里逐人设)> 全局默认
+ * (`PRISM_ATTACHMENT_QUOTA_MB`)> 内置 10 GB。
+ *
+ * 覆盖是逐人的,因为需求本来就是逐人的:多数账号用不到 1 GB,个别人要传一堆
+ * 设计稿。把全局值抬到最吵那个人的量级,等于给所有人都开了那么大的口子。
+ *
+ * 不传 userId 时(匿名/内部调用)只看全局值。
+ */
+export function getAttachmentQuotaBytes(userId?: number | null): number {
+  const globalMb = readPositiveEnvNumber('PRISM_ATTACHMENT_QUOTA_MB', DEFAULT_QUOTA_MB);
+  if (userId == null) return globalMb * 1024 * 1024;
+
+  let overrideMb: number | null = null;
+  try {
+    overrideMb = userDb.getAttachmentQuotaMb(userId);
+  } catch {
+    // 库读不到就按全局值走 —— 配额是限制,读失败时不该把上传全堵死。
+    overrideMb = null;
+  }
+  return (overrideMb ?? globalMb) * 1024 * 1024;
 }
 
 /**
@@ -88,7 +108,7 @@ export type QuotaVerdict = {
  * 宁可漏拦也不能因为拿不到用户就把上传堵死。
  */
 export function checkQuota(userId: number | null | undefined, incomingBytes: number): QuotaVerdict {
-  const quotaBytes = getAttachmentQuotaBytes();
+  const quotaBytes = getAttachmentQuotaBytes(userId);
   const usedBytes = attachmentsDb.totalBytesForUser(userId);
   const incoming = Math.max(0, Math.trunc(incomingBytes) || 0);
   const ok = userId == null || usedBytes + incoming <= quotaBytes;
@@ -108,25 +128,6 @@ export function formatBytes(bytes: number): string {
 export function quotaExceededMessage(verdict: { usedBytes: number; quotaBytes: number }): string {
   return `附件空间不够了:已用 ${formatBytes(verdict.usedBytes)} / 上限 ${formatBytes(verdict.quotaBytes)}。`
     + `请先在设置里清理一些附件,或让管理员调高上限。`;
-}
-
-/** 记一笔台账。配额和过期清理都只认台账,不认目录扫描。 */
-export function recordAttachment(params: {
-  userId: number | null | undefined;
-  sessionId?: string | null;
-  projectPath: string | null;
-  kind: AttachmentKind;
-  absPath: string;
-  bytes: number;
-}): void {
-  attachmentsDb.record({
-    userId: params.userId ?? null,
-    sessionId: params.sessionId ?? null,
-    projectPath: params.projectPath,
-    kind: params.kind,
-    absPath: params.absPath,
-    bytes: params.bytes,
-  });
 }
 
 export type CommitVerdict = { ok: boolean; reason?: 'quota' | 'error'; usedBytes: number; quotaBytes: number };
@@ -154,7 +155,7 @@ export function commitAttachmentWithinQuota(params: {
   absPath: string;
   bytes: number;
 }): CommitVerdict {
-  const quotaBytes = getAttachmentQuotaBytes();
+  const quotaBytes = getAttachmentQuotaBytes(params.userId);
   const bytes = Math.max(0, Math.trunc(params.bytes) || 0);
   const usedBytes = attachmentsDb.totalBytesForUser(params.userId);
   if (params.userId != null && usedBytes + bytes > quotaBytes) {

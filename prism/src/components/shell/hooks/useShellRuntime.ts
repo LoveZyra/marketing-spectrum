@@ -17,6 +17,7 @@ export function useShellRuntime({
   isRestarting,
   onProcessComplete,
   onOutputRef,
+  terminalId = null,
 }: UseShellRuntimeOptions): UseShellRuntimeResult {
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -35,6 +36,8 @@ export function useShellRuntime({
    * 是长期存活的闭包,读 state 会读到建立连接那一刻的旧值。
    */
   const takeoverRef = useRef(false);
+  /** F10:多标签时每个终端一个 id,服务端据此各给一个 PTY。 */
+  const terminalIdRef = useRef<string | null>(terminalId);
   const [isTakenOver, setIsTakenOver] = useState(false);
 
   // Keep mutable values in refs so websocket handlers always read current data.
@@ -76,6 +79,7 @@ export function useShellRuntime({
   const { isConnected, isConnecting, connectToShell, disconnectFromShell } = useShellConnection({
     wsRef,
     takeoverRef,
+    terminalIdRef,
     terminalRef,
     fitAddonRef,
     selectedProjectRef,

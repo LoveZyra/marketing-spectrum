@@ -6,6 +6,9 @@ import type { Project } from '../../../types/app';
 import type { CodeEditorDiffInfo, CodeEditorFile } from '../types/types';
 import { confirmDiscardEditorChanges } from '../utils/editorDirtyState';
 
+/** 同时开着的编辑器标签上限。再多标签条自己就不可读了。 */
+const MAX_OPEN_EDITOR_TABS = 12;
+
 type UseEditorSidebarOptions = {
   selectedProject: Project | null;
   isMobile: boolean;
@@ -18,7 +21,20 @@ export const useEditorSidebar = ({
   initialWidth = 600,
 }: UseEditorSidebarOptions) => {
   const { t } = useTranslation('codeEditor');
-  const [editingFile, setEditingFile] = useState<CodeEditorFile | null>(null);
+  /**
+   * F10:编辑器多标签。
+   *
+   * 之前一次只能开一个文件 —— 对着一份代码改另一份(照着接口写实现、比对两处
+   * 配置)时,每看一眼就要把当前文件关掉,回来还要重新找。
+   *
+   * 打开的文件按**打开顺序**排,活动的那个由 `activeEditorPath` 指;这样"关掉
+   * 当前这个"之后落到哪一个是可预测的(左边那个),而不是跳到一个随机的。
+   *
+   * 上限 12 个:再多的标签条自己就不可读了,而"开了三十个文件"通常意味着人想要
+   * 的其实是搜索(F10 的另一半),不是标签。
+   */
+  const [openFiles, setOpenFiles] = useState<CodeEditorFile[]>([]);
+  const [activeEditorPath, setActiveEditorPath] = useState<string | null>(null);
   const [editorWidth, setEditorWidth] = useState(initialWidth);
   const [editorExpanded, setEditorExpanded] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -39,30 +55,77 @@ export const useEditorSidebar = ({
 
   const handleFileOpen = useCallback(
     (filePath: string, diffInfo: CodeEditorDiffInfo | null = null) => {
+      // 切走当前这个标签会卸载它的 CodeEditor —— 未保存的改动随之蒸发,所以先问。
       if (!confirmDiscard()) {
         return;
       }
 
       const normalizedPath = filePath.replace(/\\/g, '/');
       const fileName = normalizedPath.split('/').pop() || filePath;
-
-      setEditingFile({
+      const nextFile: CodeEditorFile = {
         name: fileName,
         path: filePath,
         // DB projectId is forwarded to the editor so it can read/save files
         // via `/api/projects/:projectId/file` endpoints.
         projectId: selectedProject?.projectId,
         diffInfo,
+      };
+
+      setOpenFiles((current) => {
+        const existing = current.findIndex((file) => file.path === filePath);
+        if (existing >= 0) {
+          // 已经开着就复用那个标签,但用新的 diffInfo 覆盖 —— 从聊天里点同一个
+          // 文件的 diff 卡时,要看的是**这次**的 diff。
+          const next = [...current];
+          next[existing] = nextFile;
+          return next;
+        }
+        const appended = [...current, nextFile];
+        // 超过上限就挤掉最早打开的那个(不是当前这个)。
+        return appended.length > MAX_OPEN_EDITOR_TABS ? appended.slice(appended.length - MAX_OPEN_EDITOR_TABS) : appended;
       });
+      setActiveEditorPath(filePath);
     },
     [confirmDiscard, selectedProject?.projectId],
   );
 
+  /** 关掉某一个标签。不传就是关当前这个。 */
+  const handleCloseFile = useCallback((filePath?: string) => {
+    const target = filePath ?? activeEditorPath;
+    if (!target) return;
+    // 只有关**当前**这个才可能丢改动 —— 后台标签根本没挂载编辑器。
+    if (target === activeEditorPath && !confirmDiscard()) {
+      return;
+    }
+
+    setOpenFiles((current) => {
+      const index = current.findIndex((file) => file.path === target);
+      if (index < 0) return current;
+      const next = current.filter((file) => file.path !== target);
+
+      if (target === activeEditorPath) {
+        // 落到左边那个;没有左边就落到右边;都没有就是关光了。
+        const fallback = next[index - 1] ?? next[index] ?? null;
+        setActiveEditorPath(fallback?.path ?? null);
+        if (!fallback) setEditorExpanded(false);
+      }
+      return next;
+    });
+  }, [activeEditorPath, confirmDiscard]);
+
+  const handleSelectFile = useCallback((filePath: string) => {
+    if (filePath === activeEditorPath) return;
+    if (!confirmDiscard()) return;
+    setActiveEditorPath(filePath);
+  }, [activeEditorPath, confirmDiscard]);
+
+  /** 关掉全部标签(标签条上的"关闭全部")。 */
   const handleCloseEditor = useCallback(() => {
     if (!confirmDiscard()) {
       return;
     }
-    setEditingFile(null);
+    setOpenFiles([]);
+    setActiveEditorPath(null);
     setEditorExpanded(false);
   }, [confirmDiscard]);
 
@@ -128,8 +191,14 @@ export const useEditorSidebar = ({
     };
   }, [isResizing]);
 
+  const editingFile = openFiles.find((file) => file.path === activeEditorPath) ?? null;
+
   return {
     editingFile,
+    openFiles,
+    activeEditorPath,
+    handleCloseFile,
+    handleSelectFile,
     editorWidth,
     editorExpanded,
     hasManualWidth,

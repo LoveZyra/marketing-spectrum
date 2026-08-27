@@ -83,6 +83,13 @@ interface ChatComposerProps {
   onSubmit: (event: FormEvent<HTMLFormElement> | MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>) => void;
   isDragActive: boolean;
   queuedDraft: QueuedDraft | null;
+  /**
+   * F7:**服务端**排队中的那条(chat.send 撞上在跑的回合时被收下的)。
+   * 与上面那份浏览器内的排队并存 —— 一份是"我主动排的",一份是"服务端替我
+   * 兜住的",来源不同,能做的操作也不同(服务端那条只能撤销,不能编辑)。
+   */
+  serverQueued?: { preview: string; enqueuedAt: string } | null;
+  onCancelServerQueued?: () => void;
   onEditQueuedDraft: () => void;
   onDeleteQueuedDraft: () => void;
   attachedImages: File[];
@@ -164,6 +171,8 @@ function ChatComposer({
   onSubmit,
   isDragActive,
   queuedDraft,
+  serverQueued,
+  onCancelServerQueued,
   onEditQueuedDraft,
   onDeleteQueuedDraft,
   attachedImages,
@@ -410,6 +419,15 @@ function ChatComposer({
           imageCount={queuedDraft.images.length}
           onEdit={onEditQueuedDraft}
           onDelete={onDeleteQueuedDraft}
+        />
+      )}
+
+      {serverQueued && (
+        <QueuedMessageCard
+          content={serverQueued.preview}
+          label={t('input.queue.serverLabel', { defaultValue: '服务端已收下' })}
+          hint={t('input.queue.serverHint', { defaultValue: '本轮结束后自动发送 · 关掉页面也有效' })}
+          onDelete={onCancelServerQueued ?? (() => {})}
         />
       )}
 

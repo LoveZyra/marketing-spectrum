@@ -19,9 +19,6 @@
   "tools": {
     "settings": "工具設定"
   },
-  "search": {
-    "in": "在："
-  },
   "interactive": {
     "title": "互動式提示",
     "waiting": "等待您在 CLI 中回應",
@@ -52,8 +49,7 @@
     "clearInput": "清空輸入",
     "scrollToBottom": "捲動到底部",
     "attachmentPath": "路徑",
-    "modelHint": "目前模型：{{model}} · 點擊切換",
-    "queueShort": "加入佇列"
+    "modelHint": "目前模型：{{model}} · 點擊切換"
   },
   "thinkingMode": {
     "selector": {

@@ -69,9 +69,11 @@ export default function AppRail({
       aria-label="棱镜"
       className="hidden h-full w-14 flex-shrink-0 flex-col items-center gap-1.5 border-r border-border bg-background py-3 md:flex"
     >
-      {/* 轨宽 56px,logo 给到 40 = 左右各留 8px 的余量。
-          这是不贴边的前提下能给的最大尺寸,再大就顶到边框了。 */}
-      <PrismLogo size={40} tile={false} />
+      {/* 轨宽 56px **含 1px 右边框**,内容区实为 55px —— 给满 56 会被挤成 55
+          (亚像素缩放,水彩细节更糊),所以给 54,左右各留半像素。
+          图本身自带约 2% 透明边、彩虹尾端渐隐,这个尺寸看着满而不顶边。
+          再往下到 40px,水彩笔触会糊成一团色。 */}
+      <PrismLogo size={54} tile={false} />
 
       <div className="my-2 h-px w-6 flex-shrink-0 bg-border" />
 

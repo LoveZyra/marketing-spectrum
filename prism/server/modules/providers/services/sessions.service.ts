@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { canViewerSeeSession, projectsDb, sessionMessagesDb, sessionsDb } from '@/modules/database/index.js';
+import { NO_SUCH_USER_ID, canViewerSeeSession, projectsDb, sessionMessagesDb, sessionsDb, type VisibilityScope } from '@/modules/database/index.js';
+import { isRootUser } from '@/shared/root-users.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import type {
@@ -32,6 +33,23 @@ type ArchivedSessionListItem = {
   lastActivity: string | null;
   isProjectArchived: boolean;
 };
+
+/** 归档会话列表的默认/最大页大小(E10:原来是一次性全量返回)。 */
+const DEFAULT_ARCHIVED_PAGE_SIZE = 200;
+const MAX_ARCHIVED_PAGE_SIZE = 500;
+
+/**
+ * Viewer → SQL 可见范围。
+ *
+ * root 不过滤(与项目列表 `visibilityScopeFor` 同口径);拿不到数字 id 的访问者
+ * 落到 `NO_SUCH_USER_ID`,判定结果与 JS 侧对 `viewerUserId: null` 完全一致
+ * (只看得到显式 public 与公共目录下的无主项目)。
+ */
+function visibilityScopeOf(viewer: Viewer): VisibilityScope {
+  if (isRootUser(viewer.username ?? undefined)) return { kind: 'all' };
+  const userId = Number(viewer.userId);
+  return { kind: 'user', userId: Number.isFinite(userId) ? userId : NO_SUCH_USER_ID };
+}
 
 /**
  * Removes one file if it exists.
@@ -121,9 +139,12 @@ export const sessionsService = {
     startedAt: number;
     lastSeq: number;
   }> {
-    return chatRunRegistry
-      .listRunningRuns()
-      .filter((run) => this.canViewerSeeSession(run.sessionId, viewer));
+    // 在飞的回合数被 MAX_RUNTIMES 封顶,不分页 —— 前端拿这份去同步"哪些会话正在
+    // 跑",少一条就是一个转不动的加载圈。可见性仍逐条判定,但先按 root 短路,
+    // 免掉 root 那边每条三次查询。
+    const runs = chatRunRegistry.listRunningRuns();
+    if (isRootUser(viewer.username ?? undefined)) return runs;
+    return runs.filter((run) => this.canViewerSeeSession(run.sessionId, viewer));
   },
 
   /**
@@ -250,13 +271,21 @@ export const sessionsService = {
    * Returns archived sessions with enough project metadata for the sidebar to
    * group, filter, open, and restore them without a per-row follow-up query.
    */
-  listArchivedSessions(viewer: Viewer): ArchivedSessionListItem[] {
-    const archivedSessions = sessionsDb
-      .getArchivedSessions()
-      .filter((session) => this.canViewerSeeSession(session.session_id, viewer));
+  listArchivedSessions(
+    viewer: Viewer,
+    options: { limit?: number; offset?: number } = {},
+  ): { sessions: ArchivedSessionListItem[]; total: number; hasMore: boolean; limit: number; offset: number } {
+    const limit = Math.min(
+      Math.max(1, Number.isFinite(options.limit) ? Math.floor(Number(options.limit)) : DEFAULT_ARCHIVED_PAGE_SIZE),
+      MAX_ARCHIVED_PAGE_SIZE,
+    );
+    const offset = Math.max(0, Number.isFinite(options.offset) ? Math.floor(Number(options.offset)) : 0);
+
+    const page = sessionsDb.getArchivedSessionsPage(visibilityScopeOf(viewer), limit, offset);
+    const archivedSessions = page.rows;
     const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectPath>>();
 
-    return archivedSessions.map((session) => {
+    const sessions = archivedSessions.map((session) => {
       const projectPath = session.project_path?.trim() ? session.project_path : null;
       let project = null;
 
@@ -280,6 +309,14 @@ export const sessionsService = {
         isProjectArchived: Boolean(project?.isArchived),
       };
     });
+
+    return {
+      sessions,
+      total: page.total,
+      hasMore: offset + sessions.length < page.total,
+      limit,
+      offset,
+    };
   },
 
   /**
@@ -347,6 +384,96 @@ export const sessionsService = {
 
     sessionsDb.updateSessionIsArchived(sessionId, false);
     return { sessionId, isArchived: false };
+  },
+
+  /**
+   * F8:批量归档 / 恢复 / 删除会话。
+   *
+   * 回收站里攒了几百条时,一条条点是纯粹的体力活;而"全选删除"如果做成一个不
+   * 逐条鉴权的接口,就等于给了一把能扫掉别人会话的扫帚。所以这里**逐条**过
+   * `canViewerSeeSession`,看不见的既不动也不报错(报错等于告诉调用方那个 id
+   * 存在),只在结果里计数。
+   *
+   * 一条失败不中断其余:批量操作里最糟的结果是"删了一半然后抛异常",调用方
+   * 既不知道删了哪些,也不知道该不该重试。逐条 catch,最后给一份账。
+   */
+  async bulkSessionAction(
+    sessionIds: string[],
+    action: 'archive' | 'restore' | 'delete',
+    viewer: Viewer,
+    options: { deletedFromDisk?: boolean } = {},
+  ): Promise<{ requested: number; succeeded: string[]; skipped: string[]; failed: string[] }> {
+    const succeeded: string[] = [];
+    const skipped: string[] = [];
+    const failed: string[] = [];
+
+    for (const sessionId of [...new Set(sessionIds)]) {
+      if (!this.canViewerSeeSession(sessionId, viewer)) {
+        skipped.push(sessionId);
+        continue;
+      }
+      try {
+        if (action === 'restore') {
+          this.restoreSessionById(sessionId);
+        } else {
+          await this.deleteOrArchiveSessionById(sessionId, {
+            force: action === 'delete',
+            deletedFromDisk: action === 'delete' ? options.deletedFromDisk ?? true : false,
+          });
+        }
+        succeeded.push(sessionId);
+      } catch {
+        failed.push(sessionId);
+      }
+    }
+
+    return { requested: sessionIds.length, succeeded, skipped, failed };
+  },
+
+  /**
+   * F8:清空回收站 —— 永久删除**当前访问者看得见的**所有归档会话。
+   *
+   * `olderThanDays` 可选:只清超过这个天数的,给"保留最近一周"这种用法。
+   * 分页取完再删(而不是一次全捞),归档几千条时不会把整张表读进内存。
+   */
+  async emptyArchivedSessions(
+    viewer: Viewer,
+    options: { olderThanDays?: number; deletedFromDisk?: boolean } = {},
+  ): Promise<{ deleted: number; failed: number }> {
+    const cutoff = typeof options.olderThanDays === 'number' && options.olderThanDays > 0
+      ? Date.now() - options.olderThanDays * 24 * 60 * 60 * 1000
+      : null;
+
+    let deleted = 0;
+    let failed = 0;
+    // 每轮都从 offset 0 取:删掉一批之后后面的会往前挪,固定翻页反而会跳过条目。
+    for (;;) {
+      const page = sessionsDb.getArchivedSessionsPage(visibilityScopeOf(viewer), MAX_ARCHIVED_PAGE_SIZE, 0);
+      const targets = page.rows.filter((row) => {
+        if (cutoff === null) return true;
+        const stamp = Date.parse(row.updated_at ?? row.created_at ?? '');
+        return Number.isFinite(stamp) && stamp < cutoff;
+      });
+      if (targets.length === 0) break;
+
+      let progressed = false;
+      for (const row of targets) {
+        try {
+          await this.deleteOrArchiveSessionById(row.session_id, {
+            force: true,
+            deletedFromDisk: options.deletedFromDisk ?? true,
+          });
+          deleted += 1;
+          progressed = true;
+        } catch {
+          failed += 1;
+        }
+      }
+      // 一整页全失败就停,别转圈:再来一次拿到的还是同一批。
+      if (!progressed) break;
+    }
+
+    return { deleted, failed };
   },
 
   /**

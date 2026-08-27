@@ -198,6 +198,7 @@ export default tseslint.config(
             "server/shared/ticket-store.js", // 一次性/可重用票据的通用实现,ws 与预览票据共用
             "server/shared/attachment-storage.ts", // 聊天附件落盘目录、配额与过期清理
             "server/shared/sse-tickets.js", // HTTP SSE 的短命票据(搜索 SSE 用,替代 URL 里的 JWT)
+            "server/shared/ripgrep-path.ts", // 找到真实存在的 rg(自带二进制可能没下载下来)
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },

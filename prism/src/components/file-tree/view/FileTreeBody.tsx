@@ -32,6 +32,13 @@ type FileTreeBodyProps = {
   handleCancelRename?: () => void;
   renameInputRef?: RefObject<HTMLInputElement>;
   operationLoading?: boolean;
+  /** F9:拖放到指定文件夹 + 多选。见 FileTreeNode 里的说明。 */
+  onItemDragOver?: (event: React.DragEvent, itemPath: string) => void;
+  onItemDrop?: (event: React.DragEvent, itemPath: string) => void;
+  dropTarget?: string | null;
+  selectedPaths?: ReadonlySet<string>;
+  onToggleSelect?: (item: FileTreeNode, event: React.MouseEvent) => void;
+  selectionMode?: boolean;
 };
 
 export default function FileTreeBody({
@@ -58,6 +65,12 @@ export default function FileTreeBody({
   handleCancelRename,
   renameInputRef,
   operationLoading,
+  onItemDragOver,
+  onItemDrop,
+  dropTarget,
+  selectedPaths,
+  onToggleSelect,
+  selectionMode,
 }: FileTreeBodyProps) {
   const { t } = useTranslation();
 
@@ -98,6 +111,12 @@ export default function FileTreeBody({
           handleCancelRename={handleCancelRename}
           renameInputRef={renameInputRef}
           operationLoading={operationLoading}
+          onItemDragOver={onItemDragOver}
+          onItemDrop={onItemDrop}
+          dropTarget={dropTarget}
+          selectedPaths={selectedPaths}
+          onToggleSelect={onToggleSelect}
+          selectionMode={selectionMode}
         />
       )}
     </>

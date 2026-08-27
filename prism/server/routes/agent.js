@@ -81,10 +81,25 @@ const validateExternalApiKey = (req, res, next) => {
     }
   }
 
-  // Self-hosted mode: Validate API key from header or query parameter
-  const apiKey = req.headers['x-api-key'] || req.query.apiKey;
+  /*
+   * Self-hosted mode: API key **只从请求头取**(cp 轮收口,G4)。
+   *
+   * 原来还认 `?apiKey=`。query 会落进访问日志、Referer、浏览器历史和各级
+   * 反代日志 —— 和 bo 轮把 JWT 赶出 URL 是同一类问题,只是这次泄漏的是长期
+   * 有效的 API 密钥,危害更大。前端与文档都没用过这个 query 形式(全仓检索
+   * 零命中),所以直接去掉,而不是留个过渡期。
+   *
+   * 若仍有老脚本按 query 调:这里给一句明确提示,让人知道改哪儿,而不是
+   * 收到一个含糊的 401。
+   */
+  const apiKey = req.headers['x-api-key'];
 
   if (!apiKey) {
+    if (req.query?.apiKey) {
+      return res.status(401).json({
+        error: 'API key 不再接受 ?apiKey= 查询参数(会落进访问日志),请改用请求头 X-API-Key',
+      });
+    }
     return res.status(401).json({ error: 'API key required' });
   }
 

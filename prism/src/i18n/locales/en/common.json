@@ -78,9 +78,32 @@
     "uploadInProjectOnly": "Uploads go to the project folder — go back to it to upload",
     "toast": {
       "pathCopied": "Path copied to clipboard",
-      "copyFailed": "Failed to copy path"
+      "copyFailed": "Failed to copy path",
+      "folderDownloadedPartial": "Downloaded, but {{skipped}} subfolder(s) were left out (too deep to have loaded): {{preview}}. Open the subfolder and download it separately for the full contents."
     },
-    "truncatedNotice": "This directory has too many entries; only part of it is shown. Open a subfolder to see more."
+    "truncatedNotice": "This directory has too many entries; only part of it is shown. Open a subfolder to see more.",
+    "selectionMode": "Select multiple",
+    "selectedCount": "{{count}} selected",
+    "batchDownload": "Download selected",
+    "batchDelete": "Delete selected",
+    "exitSelection": "Exit selection",
+    "batchDeleteConfirm": "Delete the {{count}} selected items? This cannot be undone.",
+    "batchDeletePartial": "{{failed}} items failed to delete",
+    "batchDownloadPartial": "{{failed}} items failed to download",
+    "search": {
+      "toggle": "Search in project (Ctrl+Shift+F)",
+      "placeholder": "Search file contents…",
+      "close": "Close search",
+      "caseSensitive": "Match case",
+      "regex": "Regex",
+      "glob": "Filter, e.g. *.ts",
+      "run": "Search",
+      "searching": "Searching…",
+      "noMatches": "No matches found",
+      "tooShort": "Enter at least 2 characters",
+      "summary": "{{matches}} matches in {{files}} files",
+      "truncated": "limit reached, results truncated"
+    }
   },
   "projectWizard": {
     "title": "Create New Project",
@@ -306,5 +329,19 @@
     "newTaskHint": "Choose how to create it: let Claude ask for the details, or fill in the form",
     "createWithClaudeHint": "Describe it in a sentence; Claude asks for the rest",
     "setupManuallyHint": "Set name, frequency and target session yourself"
+  },
+  "export": {
+    "md": "Markdown",
+    "mdHint": "For reading and pasting into docs",
+    "html": "HTML",
+    "htmlHint": "Standalone page, opens in a browser",
+    "json": "JSON",
+    "jsonHint": "For programs and further processing",
+    "includeTools": "Include tool activity"
+  },
+  "shellTabs": {
+    "add": "New terminal",
+    "close": "Close {{name}}",
+    "label": "Terminal {{index}}"
   }
 }

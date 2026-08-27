@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { pushAccountSettings } from '../../../utils/accountSettings';
 import { authenticatedFetch } from '../../../utils/api';
 import { setNotificationSoundEnabled } from '../../../utils/notificationSound';
 import { useProviderAuthStatus } from '../../provider-auth/hooks/useProviderAuthStatus';
@@ -229,6 +230,8 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         projectSortOrder,
         lastUpdated: now,
       }));
+      // F11:权限清单与项目排序跟着账号走 —— 换台电脑不该从头调一遍。
+      void pushAccountSettings();
 
       const notificationResponse = await authenticatedFetch('/api/settings/notification-preferences', {
         method: 'PUT',

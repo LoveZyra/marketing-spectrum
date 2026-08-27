@@ -19,9 +19,6 @@
   "tools": {
     "settings": "도구 설정"
   },
-  "search": {
-    "in": "위치:"
-  },
   "interactive": {
     "title": "대화형 프롬프트",
     "waiting": "CLI에서 응답을 기다리는 중",

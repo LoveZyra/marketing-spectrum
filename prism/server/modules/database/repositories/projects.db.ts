@@ -2,33 +2,9 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { getConnection } from '@/modules/database/connection.js';
+import { buildProjectVisibilityClause } from '@/modules/database/visibility-sql.js';
 import type { CreateProjectPathResult, ProjectRepositoryRow } from '@/shared/types.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
-
-/**
- * SQL 片段:一个无主项目的 `project_path` 算不算"公共目录下"。
- *
- * 必须和 JS 侧 `isPublicWorkspacePath` 逐字同义 —— 词法前缀判定:等于公共根,
- * 或以「根 + 分隔符」开头。公共目录未配置时返回恒假(`0`),于是无主项目对
- * 非 root 一个都不出现。用 resolve 归一化,和 JS 侧一致(DB 里的路径建项目时
- * 已 resolve,这里再归一一次以防万一)。
- *
- * LIKE 的通配符(% _)要转义:公共根路径里若含这些字符,不转义会变成通配。
- * 用 `\` 作转义符并在 SQL 里声明 `ESCAPE '\'`。
- */
-function buildPublicPathClause(): { sql: string; params: string[] } {
-    const configured = process.env.PRISM_PUBLIC_WORKSPACE;
-    if (!configured || !configured.trim()) {
-        return { sql: '0', params: [] };
-    }
-    const root = path.resolve(configured.trim());
-    const escaped = root.replace(/[\\%_]/g, (ch) => `\\${ch}`);
-    // project_path = 根  或  project_path LIKE 根 + 分隔符 + '%'
-    return {
-        sql: `(project_path = ? OR project_path LIKE ? ESCAPE '\\')`,
-        params: [root, `${escaped}${path.sep}%`],
-    };
-}
 
 function normalizeProjectDisplayName(projectPath: string, customProjectName: string | null): string {
     const trimmedCustomName = typeof customProjectName === 'string' ? customProjectName.trim() : '';
@@ -150,17 +126,12 @@ export const projectsDb = {
 
         // 与 JS 侧 canViewerSeeProject 逐字同义(parity 测试盯着):
         // 本人的 OR 显式公共 OR 被指定授权 OR (无主且在公共目录下)。
-        const publicClause = buildPublicPathClause();
+        const visibility = buildProjectVisibilityClause({ userId: visibleTo });
         return db.prepare(`
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived, owner_user_id, visibility
             FROM projects
-            WHERE isArchived = 0 AND (
-                owner_user_id = ?
-                OR visibility = 'public'
-                OR project_id IN (SELECT project_id FROM project_shares WHERE user_id = ?)
-                OR (owner_user_id IS NULL AND ${publicClause.sql})
-            )
-        `).all(visibleTo, visibleTo, ...publicClause.params) as ProjectRepositoryRow[];
+            WHERE isArchived = 0 AND ${visibility.sql}
+        `).all(...visibility.params) as ProjectRepositoryRow[];
     },
 
     /**
@@ -178,20 +149,32 @@ export const projectsDb = {
             `).all() as ProjectRepositoryRow[];
         }
 
-        const publicClause = buildPublicPathClause();
+        const visibility = buildProjectVisibilityClause({ userId: visibleTo });
         return db.prepare(`
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived, owner_user_id, visibility
             FROM projects
-            WHERE isArchived = 1 AND (
-                owner_user_id = ?
-                OR visibility = 'public'
-                OR project_id IN (SELECT project_id FROM project_shares WHERE user_id = ?)
-                OR (owner_user_id IS NULL AND ${publicClause.sql})
-            )
-        `).all(visibleTo, visibleTo, ...publicClause.params) as ProjectRepositoryRow[];
+            WHERE isArchived = 1 AND ${visibility.sql}
+        `).all(...visibility.params) as ProjectRepositoryRow[];
     },
 
     /** 被指定授权可见这个项目的用户 id 列表(project_shares)。 */
+    /** 批量版(E7):一次 IN 查询顶掉 N 次单项目授权查询。 */
+    getSharedUserIdsForProjects(projectIds: string[]): Map<string, number[]> {
+        const out = new Map<string, number[]>();
+        if (projectIds.length === 0) return out;
+        const db = getConnection();
+        const placeholders = projectIds.map(() => '?').join(',');
+        const rows = db.prepare(`
+            SELECT project_id, user_id FROM project_shares WHERE project_id IN (${placeholders})
+        `).all(...projectIds) as Array<{ project_id: string; user_id: number }>;
+        for (const row of rows) {
+            const bucket = out.get(row.project_id);
+            if (bucket) bucket.push(row.user_id);
+            else out.set(row.project_id, [row.user_id]);
+        }
+        return out;
+    },
+
     getProjectSharedUserIds(projectId: string): number[] {
         const db = getConnection();
         const rows = db.prepare(`

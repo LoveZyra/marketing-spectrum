@@ -105,6 +105,9 @@ const normalizeSkill = (
     sourcePath: String(skill.sourcePath ?? ''),
     pluginName: typeof skill.pluginName === 'string' ? skill.pluginName : undefined,
     pluginId: typeof skill.pluginId === 'string' ? skill.pluginId : undefined,
+    // F13:服务端只给"能卸载的那些"带这个字段(用户级、直接躺在受管根目录下
+    // 一层)。字段不在 = 不可卸载,界面据此不画按钮。
+    directoryName: typeof skill.directoryName === 'string' ? skill.directoryName : undefined,
     projectDisplayName: shouldAttachProject
       ? project?.displayName ?? skill.projectDisplayName
       : skill.projectDisplayName,
@@ -189,6 +192,29 @@ const saveProviderSkills = async (
   }
 
   return (data.data.skills || []).map((skill) => normalizeSkill(provider, skill));
+};
+
+/**
+ * 卸载一个用户级技能(F13)。
+ *
+ * 服务端的 DELETE 一直都在,只是**界面上从来没有入口** —— 装错一个技能,唯一的
+ * 办法是登上服务器去删目录。对一个多人用的 Web IDE 来说这不合理。
+ *
+ * 只支持 `user` 作用域:project 作用域的技能住在项目目录里(用文件树删),
+ * plugin 作用域的属于插件包(删单个技能会让插件处于半装状态)。
+ */
+const deleteProviderSkill = async (
+  provider: SkillsProvider,
+  directoryName: string,
+): Promise<void> => {
+  const response = await authenticatedFetch(
+    `/api/providers/${provider}/skills/${encodeURIComponent(directoryName)}`,
+    { method: 'DELETE' },
+  );
+  const data = await toResponseJson<ApiResponse<{ removed?: boolean }>>(response);
+  if (!response.ok || !data.success) {
+    throw new Error(getApiErrorMessage(data, 'Failed to remove skill'));
+  }
 };
 
 const getCacheKey = (provider: SkillsProvider, projects: ProjectTarget[]): string => {
@@ -313,6 +339,12 @@ export function useProviderSkills({ selectedProvider, currentProjects }: UseProv
     }
   }, [refreshSkills, selectedProvider]);
 
+  const removeSkill = useCallback(async (directoryName: string) => {
+    await deleteProviderSkill(selectedProvider, directoryName);
+    clearProviderSkillCache(selectedProvider);
+    await refreshSkills({ force: true });
+  }, [refreshSkills, selectedProvider]);
+
   useEffect(() => {
     void refreshSkills();
   }, [refreshSkills]);
@@ -337,6 +369,7 @@ export function useProviderSkills({ selectedProvider, currentProjects }: UseProv
     loadError,
     saveStatus,
     addSkills,
+    removeSkill,
     refreshSkills,
   };
 }

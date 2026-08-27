@@ -26,6 +26,8 @@ type ShellIncomingMessage = {
   initialCommand?: string;
   isPlainShell?: boolean;
   forceRestart?: boolean;
+  /** F10:多标签时每个终端一个 id;不传则与改动前行为逐字一致。 */
+  terminalId?: string;
 };
 
 type PtySessionEntry = {
@@ -250,6 +252,47 @@ function prioritizeUserNpmGlobalBin(env: NodeJS.ProcessEnv): { key: string; valu
 /**
  * Handles websocket connections used by the standalone shell terminal UI.
  */
+/**
+ * PTY 池快照(F6 管理面)。**只读**,不碰任何状态。
+ *
+ * PTY 是最容易悄悄堆起来的一类资源:每个都是一个 shell 子进程,断开后还留
+ * 30 分钟等重连,回放缓冲各自最多 2 MiB。面板要能一眼看出"有没有堆着"、
+ * "缓冲吃了多少内存",以及**挂在谁头上** —— 键的前缀 `u<userId>_` 就是账号。
+ */
+export function getPtyPoolStats(): {
+  count: number;
+  attached: number;
+  detached: number;
+  takeover: number;
+  bufferedBytes: number;
+  byOwner: Array<{ userId: number | null; count: number }>;
+} {
+  const byOwner = new Map<number | null, number>();
+  let attached = 0;
+  let takeover = 0;
+  let bufferedBytes = 0;
+
+  for (const [key, session] of ptySessionsMap.entries()) {
+    if (session.ws) attached += 1;
+    if (session.isTakeover) takeover += 1;
+    bufferedBytes += session.bufferedBytes;
+    const match = /^u(\d+|anon)_/.exec(key);
+    const owner = match && match[1] !== 'anon' ? Number(match[1]) : null;
+    byOwner.set(owner, (byOwner.get(owner) ?? 0) + 1);
+  }
+
+  return {
+    count: ptySessionsMap.size,
+    attached,
+    detached: ptySessionsMap.size - attached,
+    takeover,
+    bufferedBytes,
+    byOwner: [...byOwner.entries()]
+      .map(([userId, count]) => ({ userId, count }))
+      .sort((left, right) => right.count - left.count),
+  };
+}
+
 export function handleShellConnection(
   ws: WebSocket,
   request: AuthenticatedWebSocketRequest,
@@ -282,6 +325,17 @@ export function handleShellConnection(
         const provider = readString(data.provider, 'claude');
         const initialCommand = readString(data.initialCommand);
         const forceRestart = readBoolean(data.forceRestart);
+        /**
+         * F10:终端多标签。
+         *
+         * PTY 的复用键此前是 `u<用户>_<项目路径>_<会话|default>`,于是同一个项目
+         * 下开第二个终端会**连到第一个的 PTY 上** —— 两个标签共享一个 shell,
+         * 输出互相串,关一个另一个也跟着哑。客户端给每个标签一个 id,键里带上它,
+         * 各自一个 PTY;不带 id 的老客户端落到空后缀,行为与改动前逐字一致。
+         *
+         * 只取字母数字和连字符:这个值直接进键,不能让它带进分隔符或路径片段。
+         */
+        const terminalId = readString(data.terminalId).replace(/[^a-zA-Z0-9-]/g, '').slice(0, 32);
         const isPlainShell =
           readBoolean(data.isPlainShell) ||
           (!!initialCommand && !hasSession) ||
@@ -310,7 +364,7 @@ export function handleShellConnection(
         const ptyOwnerKey = connectionViewer.userId === null || connectionViewer.userId === undefined
           ? 'anon'
           : String(connectionViewer.userId);
-        ptySessionKey = `u${ptyOwnerKey}_${projectPath}_${sessionId ?? 'default'}${commandSuffix}`;
+        ptySessionKey = `u${ptyOwnerKey}_${projectPath}_${sessionId ?? 'default'}${commandSuffix}${terminalId ? `_t${terminalId}` : ''}`;
 
         // 模式变了就得重开:普通终端里跑着一个交互 bash,接管要的是
         // `claude --resume <id>`,复用前者等于点了接管什么也没发生。

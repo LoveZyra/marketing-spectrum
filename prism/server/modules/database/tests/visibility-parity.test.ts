@@ -5,7 +5,8 @@ import path from 'node:path';
 
 import { afterEach, describe, test } from 'vitest';
 
-import { closeConnection, initializeDatabase, projectsDb, userDb } from '@/modules/database/index.js';
+import { canViewerSeeSession, closeConnection, initializeDatabase, projectsDb, sessionsDb, userDb } from '@/modules/database/index.js';
+import { NO_SUCH_USER_ID } from '@/modules/database/visibility-sql.js';
 import { canViewerSeeProject } from '@/shared/project-visibility.js';
 
 /**
@@ -164,5 +165,124 @@ describe('SQL 列表口径与 JS 逐路由口径一致', () => {
 
     assert.ok(listed.includes(path.join(publicRoot, 'a')));
     assert.ok(!listed.includes('/workspace/pubX100Y/a'), '通配符转义失效,相邻目录被误判为公共');
+  });
+});
+
+/**
+ * E10 把归档会话列表的可见性也下推进了 SQL(`getArchivedSessionsPage`)。会话
+ * 没有自己的 owner —— 它挂在项目上,所以这条 SQL 是 sessions LEFT JOIN projects
+ * 再套同一段判定。它必须与 JS 侧 `canViewerSeeSession` 逐条一致,否则就是
+ * "归档面板里列得出来、点进去 404",或者反过来 —— 越权。
+ *
+ * 三种项目行都要覆盖:有主 / 显式 public / 被指定授权 / 无主(公共目录内外),
+ * 外加**项目行根本不存在**的会话(watcher 先索引了 transcript,项目还没落行)。
+ */
+describe('归档会话列表的 SQL 口径与 canViewerSeeSession 一致', () => {
+  const listedFor = (userId: number): string[] =>
+    sessionsDb
+      .getArchivedSessionsPage({ kind: 'user', userId }, 500, 0)
+      .rows.map((row) => row.session_id);
+
+  test('五种项目形态 + 无项目行的会话,SQL 与 JS 逐条同答案', async () => {
+    const publicRoot = path.resolve('/workspace/public');
+    process.env.PRISM_PUBLIC_WORKSPACE = publicRoot;
+    delete process.env.PRISM_ROOT_USERS;
+    await freshDb();
+
+    const alice = { id: Number(userDb.createUser('alice', 'h').id), username: 'alice' };
+    const bob = { id: Number(userDb.createUser('bob', 'h').id), username: 'bob' };
+    const carol = { id: Number(userDb.createUser('carol', 'h').id), username: 'carol' };
+
+    projectsDb.createProjectPath('/workspace/alice/app', null, alice.id);
+    projectsDb.createProjectPath('/workspace/bob/open', null, bob.id, 'public');
+    const shared = projectsDb.createProjectPath('/workspace/bob/duo', null, bob.id);
+    projectsDb.setProjectShares(shared.project!.project_id, [alice.id], bob.id);
+    projectsDb.createProjectPath('/workspace/bob/solo', null, bob.id);
+    projectsDb.createProjectPath(path.join(publicRoot, 'shared'), null, null);
+    projectsDb.createProjectPath('/workspace/orphan/x', null, null);
+
+    const sessionPaths: Array<[string, string]> = [
+      ['s-alice', '/workspace/alice/app'],
+      ['s-open', '/workspace/bob/open'],
+      ['s-duo', '/workspace/bob/duo'],
+      ['s-solo', '/workspace/bob/solo'],
+      ['s-pub-unowned', path.join(publicRoot, 'shared')],
+      ['s-orphan', '/workspace/orphan/x'],
+      // 项目行不存在的两条:一条在公共目录下(应可见),一条不在(仅 root)。
+      ['s-noproject-public', path.join(publicRoot, 'never-registered')],
+      ['s-noproject-private', '/workspace/never-registered'],
+    ];
+    for (const [sessionId, projectPath] of sessionPaths) {
+      sessionsDb.createSession(sessionId, 'claude', projectPath, sessionId);
+      sessionsDb.updateSessionIsArchived(sessionId, true);
+    }
+    // 一条没有项目路径的会话:两侧都只有 root 看得到。
+    sessionsDb.createSession('s-nopath', 'claude', '', 's-nopath');
+    sessionsDb.updateSessionIsArchived('s-nopath', true);
+
+    const everySessionId = [...sessionPaths.map(([id]) => id), 's-nopath'];
+
+    for (const viewer of [alice, bob, carol]) {
+      const listed = listedFor(viewer.id);
+      for (const sessionId of everySessionId) {
+        const jsSays = canViewerSeeSession(sessionId, { userId: viewer.id, username: viewer.username });
+        assert.equal(
+          listed.includes(sessionId),
+          jsSays,
+          `不一致:viewer=${viewer.username} session=${sessionId} SQL=${listed.includes(sessionId)} JS=${jsSays}`,
+        );
+      }
+    }
+
+    // 具体断言,免得两边同时错还"一致"。
+    assert.deepEqual(listedFor(alice.id).sort(), [
+      's-alice', 's-duo', 's-noproject-public', 's-open', 's-pub-unowned',
+    ]);
+    assert.deepEqual(listedFor(carol.id).sort(), [
+      's-noproject-public', 's-open', 's-pub-unowned',
+    ]);
+
+    // root(scope=all)看全部,且总数与页内条数对得上。
+    const rootPage = sessionsDb.getArchivedSessionsPage({ kind: 'all' }, 500, 0);
+    assert.equal(rootPage.total, everySessionId.length);
+    assert.deepEqual(rootPage.rows.map((row) => row.session_id).sort(), [...everySessionId].sort());
+
+    // 匿名访问者(拿不到数字 id)= NO_SUCH_USER_ID:只剩显式 public 与公共目录下的无主项目。
+    assert.deepEqual(listedFor(NO_SUCH_USER_ID).sort(), [
+      's-noproject-public', 's-open', 's-pub-unowned',
+    ]);
+  });
+
+  test('分页:total 是过滤后的总数,limit/offset 切的是同一份可见集合', async () => {
+    delete process.env.PRISM_PUBLIC_WORKSPACE;
+    delete process.env.PRISM_ROOT_USERS;
+    await freshDb();
+
+    const alice = { id: Number(userDb.createUser('alice', 'h').id), username: 'alice' };
+    const bob = { id: Number(userDb.createUser('bob', 'h').id), username: 'bob' };
+    projectsDb.createProjectPath('/workspace/alice/app', null, alice.id);
+    projectsDb.createProjectPath('/workspace/bob/solo', null, bob.id);
+
+    for (let index = 0; index < 5; index += 1) {
+      sessionsDb.createSession(`a-${index}`, 'claude', '/workspace/alice/app', `a-${index}`);
+      sessionsDb.updateSessionIsArchived(`a-${index}`, true);
+      sessionsDb.createSession(`b-${index}`, 'claude', '/workspace/bob/solo', `b-${index}`);
+      sessionsDb.updateSessionIsArchived(`b-${index}`, true);
+    }
+
+    const first = sessionsDb.getArchivedSessionsPage({ kind: 'user', userId: alice.id }, 2, 0);
+    const second = sessionsDb.getArchivedSessionsPage({ kind: 'user', userId: alice.id }, 2, 2);
+
+    assert.equal(first.total, 5, 'total 必须是过滤后的数,不是全表数');
+    assert.equal(second.total, 5);
+    assert.equal(first.rows.length, 2);
+    assert.equal(second.rows.length, 2);
+    assert.ok(first.rows.every((row) => row.session_id.startsWith('a-')), '翻页不能漏出别人的会话');
+    assert.ok(second.rows.every((row) => row.session_id.startsWith('a-')));
+    assert.equal(
+      new Set([...first.rows, ...second.rows].map((row) => row.session_id)).size,
+      4,
+      '两页不能重叠',
+    );
   });
 });

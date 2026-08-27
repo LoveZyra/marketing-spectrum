@@ -119,6 +119,18 @@ type SidebarContentProps = {
   archivedProjects: ArchivedProjectListItem[];
   archivedSessions: ArchivedSessionListItem[];
   archivedSessionsCount: number;
+  /** E10:服务端分页后的归档会话总数 —— 与本地已加载条数不同才有得说。 */
+  archivedSessionsTotal: number;
+  archivedSessionsHasMore: boolean;
+  isLoadingMoreArchivedSessions: boolean;
+  onLoadMoreArchivedSessions: () => void;
+  /** F8:回收站批量操作。选中集合由控制器持有(跨渲染保持)。 */
+  selectedArchivedIds: ReadonlySet<string>;
+  onToggleArchivedSelection: (sessionId: string) => void;
+  onClearArchivedSelection: () => void;
+  onBulkArchivedAction: (action: 'restore' | 'delete') => void;
+  onEmptyArchive: () => void;
+  isBulkArchiving: boolean;
   isArchivedSessionsLoading: boolean;
   searchFilter: string;
   onSearchFilterChange: (value: string) => void;
@@ -153,6 +165,16 @@ export default function SidebarContent({
   archivedProjects,
   archivedSessions,
   archivedSessionsCount,
+  archivedSessionsTotal,
+  archivedSessionsHasMore,
+  isLoadingMoreArchivedSessions,
+  onLoadMoreArchivedSessions,
+  selectedArchivedIds,
+  onToggleArchivedSelection,
+  onClearArchivedSelection,
+  onBulkArchivedAction,
+  onEmptyArchive,
+  isBulkArchiving,
   isArchivedSessionsLoading,
   searchFilter,
   onSearchFilterChange,
@@ -364,14 +386,55 @@ export default function SidebarContent({
             </div>
           ) : (
             <div className="space-y-3 px-2">
-              <div className="flex items-center justify-between px-1">
+              <div className="flex items-center justify-between gap-2 px-1">
                 <p className="text-xs text-muted-foreground">
                   {`${archivedSessionsCount} ${t(
                     archivedSessionsCount === 1 ? 'archived.sessionCountOne' : 'archived.sessionCountOther',
                     archivedSessionsCount === 1 ? 'archived item' : 'archived items',
                   )}`}
                 </p>
+                {/* F8:清空回收站。放在这里而不是每行旁边 —— 它是"一次性清账"的
+                    动作,和逐条删除是两种意图。确认交给调用方(不可逆)。 */}
+                <button
+                  type="button"
+                  onClick={onEmptyArchive}
+                  disabled={isBulkArchiving || archivedSessionsCount === 0}
+                  className="rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground disabled:opacity-50"
+                >
+                  {t('archived.emptyTrash', '清空回收站')}
+                </button>
               </div>
+
+              {selectedArchivedIds.size > 0 && (
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-border px-2.5 py-1.5">
+                  <span className="text-[11px] text-muted-foreground">
+                    {t('archived.selectedCount', { count: selectedArchivedIds.size, defaultValue: `已选 ${selectedArchivedIds.size} 条` })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onBulkArchivedAction('restore')}
+                    disabled={isBulkArchiving}
+                    className="rounded-md border border-border px-2 py-0.5 text-[11px] transition-colors hover:bg-accent disabled:opacity-50"
+                  >
+                    {t('archived.bulkRestore', '批量恢复')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onBulkArchivedAction('delete')}
+                    disabled={isBulkArchiving}
+                    className="rounded-md border border-border px-2 py-0.5 text-[11px] transition-colors hover:bg-accent disabled:opacity-50"
+                  >
+                    {t('archived.bulkDelete', '批量永久删除')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onClearArchivedSelection}
+                    className="ml-auto text-[11px] text-muted-foreground hover:text-foreground"
+                  >
+                    {t('archived.clearSelection', '取消选择')}
+                  </button>
+                </div>
+              )}
               {archivedProjects.map((project) => {
                 const projectSessions = getAllSessions(project);
 
@@ -492,6 +555,14 @@ export default function SidebarContent({
                   <div className="divide-y divide-border">
                     {group.sessions.map((session) => (
                       <div key={session.sessionId} className="flex items-center gap-2 px-3 py-2.5">
+                        {/* F8:多选。回收站里攒到几百条时,一条条点纯粹是体力活。 */}
+                        <input
+                          type="checkbox"
+                          checked={selectedArchivedIds.has(session.sessionId)}
+                          onChange={() => onToggleArchivedSelection(session.sessionId)}
+                          aria-label={t('archived.select', '选中')}
+                          className="h-3.5 w-3.5 flex-shrink-0"
+                        />
                         <button
                           className="flex min-w-0 flex-1 items-center gap-2 text-left transition-colors hover:text-foreground"
                           onClick={() => onArchivedSessionClick(session)}
@@ -532,6 +603,26 @@ export default function SidebarContent({
                   </div>
                 </div>
               ))}
+
+              {/*
+                E10:归档会话改成服务端分页。少列出来的那些必须**说出来**并且给得出
+                下一页 —— 静默截断会让人以为会话丢了。
+              */}
+              {archivedSessionsHasMore && (
+                <button
+                  type="button"
+                  className="w-full rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60"
+                  onClick={onLoadMoreArchivedSessions}
+                  disabled={isLoadingMoreArchivedSessions}
+                >
+                  {isLoadingMoreArchivedSessions
+                    ? t('archived.loadingMore', '正在加载…')
+                    : t('archived.loadMore', {
+                      defaultValue: '加载更多(共 {{total}} 条)',
+                      total: archivedSessionsTotal,
+                    })}
+                </button>
+              )}
             </div>
           )
         ) : (

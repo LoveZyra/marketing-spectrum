@@ -2,6 +2,10 @@ export { sessionSynchronizerService } from './services/session-synchronizer.serv
 export { providerSkillsService } from './services/skills.service.js';
 export { providerMcpService } from './services/mcp.service.js';
 export { seedDisplayLogFromTranscript } from './services/display-log-seed.service.js';
+export { sessionsService } from './services/sessions.service.js';
+export { markInterruptedTurnsOnStartup, findInterruptedSessions, INTERRUPTED_TURN_NOTICE } from './services/interrupted-turn-marker.service.js';
+export { startArchiveRetentionSweeper, sweepExpiredArchives, findExpiredArchivedSessions, getArchiveRetentionDays } from './services/archive-retention.service.js';
+export { getHistoryCacheStats } from './list/claude/claude-sessions.provider.js';
 
 export { initializeSessionsWatcher } from './services/sessions-watcher.service.js';
 export { closeSessionsWatcher } from './services/sessions-watcher.service.js';

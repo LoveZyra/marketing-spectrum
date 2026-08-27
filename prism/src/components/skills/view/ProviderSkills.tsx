@@ -9,6 +9,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Trash2,
   Upload,
   X,
 } from 'lucide-react';
@@ -23,6 +24,7 @@ import {
   DialogTitle,
   Input,
   Shimmer,
+  useToast,
 } from '../../../shared/view/ui';
 import { useProviderSkills } from '../hooks/useProviderSkills';
 import type {
@@ -197,8 +199,37 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
     loadError,
     saveStatus,
     addSkills,
+    removeSkill,
     refreshSkills,
   } = useProviderSkills({ selectedProvider, currentProjects });
+  const { toast } = useToast();
+  /**
+   * F13:卸载确认。装错一个技能之前只能登服务器删目录 —— 现在界面上有入口了,
+   * 但删目录是不可逆的,所以要**二次确认**,而且确认里写清删的是哪个目录。
+   */
+  const [pendingRemoval, setPendingRemoval] = useState<ProviderSkill | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
+
+  const confirmRemoval = useCallback(async () => {
+    const target = pendingRemoval;
+    if (!target?.directoryName || isRemoving) return;
+    setIsRemoving(true);
+    try {
+      await removeSkill(target.directoryName);
+      toast({
+        message: t('skills.removeDone', { name: target.name, defaultValue: `已卸载「${target.name}」` }),
+        variant: 'success',
+      });
+      setPendingRemoval(null);
+    } catch (error) {
+      toast({
+        message: error instanceof Error ? error.message : t('skills.removeFailed', { defaultValue: '卸载失败,请重试。' }),
+        variant: 'error',
+      });
+    } finally {
+      setIsRemoving(false);
+    }
+  }, [pendingRemoval, isRemoving, removeSkill, toast, t]);
   const [queuedFiles, setQueuedFiles] = useState<QueuedSkillFile[]>([]);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -740,12 +771,58 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
                     <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{t('skills.source')}</div>
                     <code className="mt-1 block whitespace-normal break-all text-xs text-foreground">{skill.sourcePath}</code>
                   </div>
+
+                  {/* F13:卸载入口。只有服务端标了 directoryName 的(用户级、受管
+                      目录下一层)才画 —— 项目级用文件树删,插件级属于插件包。 */}
+                  {skill.directoryName && (
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setPendingRemoval(skill)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        {t('skills.remove', { defaultValue: '卸载' })}
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           </section>
         ))}
       </div>
+
+      {/* 删目录不可逆,所以要二次确认,并且把要删的目录写在确认里。 */}
+      <Dialog open={Boolean(pendingRemoval)} onOpenChange={(open) => { if (!open) setPendingRemoval(null); }}>
+        {/*
+          这个确认框开在**设置弹窗之上**,而设置弹窗自己是 z-[9999]。Dialog 默认
+          外壳是 z-50,不抬高的话确认框会整个躺在设置弹窗底下 —— 界面上什么都看
+          不见,点也点不到(探针第一次就是这么发现的)。
+        */}
+        <DialogContent className="max-w-md" wrapperClassName="z-[10000]">
+          <DialogTitle>{t('skills.removeTitle', { defaultValue: '卸载这个技能?' })}</DialogTitle>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {t('skills.removeBody', {
+              name: pendingRemoval?.name ?? '',
+              defaultValue: `将删除「${pendingRemoval?.name ?? ''}」的整个技能目录,不可撤销。`,
+            })}
+          </p>
+          <code className="mt-3 block whitespace-normal break-all rounded-md border border-border bg-card px-3 py-2 text-xs text-foreground">
+            {pendingRemoval?.sourcePath}
+          </code>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setPendingRemoval(null)} disabled={isRemoving}>
+              {t('skills.removeCancel', { defaultValue: '取消' })}
+            </Button>
+            <Button onClick={() => void confirmRemoval()} disabled={isRemoving}>
+              {isRemoving
+                ? t('skills.removing', { defaultValue: '卸载中…' })
+                : t('skills.removeConfirm', { defaultValue: '卸载' })}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

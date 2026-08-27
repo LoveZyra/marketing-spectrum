@@ -428,6 +428,15 @@ export type ProviderSkill = {
   sourcePath: string;
   pluginName?: string;
   pluginId?: string;
+  /**
+   * F13:这个技能的目录名 —— **只有能被卸载的那些才有**(用户级、直接躺在受管
+   * 技能根目录下的那一层)。
+   *
+   * 由服务端给,而不是让前端从 sourcePath 里猜:哪些路径算"受管根目录之下"
+   * 是服务端的知识,猜错的后果是界面给出一个点了会失败(或更糟,删错东西)的
+   * 卸载按钮。字段不在 = 不可卸载,界面据此不画按钮。
+   */
+  directoryName?: string;
 };
 
 /**

@@ -144,7 +144,17 @@ function resolveSessionName(event) {
 }
 
 function buildNotificationPayload(event) {
-  const normalizedEvent = normalizeNotificationSession(event);
+  return buildPayloadFromNormalized(normalizeNotificationSession(event));
+}
+
+/**
+ * 已归一化事件 → 推送 payload。
+ *
+ * 与 `buildNotificationPayload` 分开是因为归一化要查库(app session id ↔
+ * provider session id),而 `notifyUserIfEnabled` 一开头已经归一过一次 ——
+ * 再归一一次就是白白多两次查询。
+ */
+function buildPayloadFromNormalized(normalizedEvent) {
   const CODE_MAP = {
     'permission.required': normalizedEvent.meta?.toolName
       ? `Action Required: Tool "${normalizedEvent.meta.toolName}" needs approval`
@@ -179,8 +189,24 @@ function buildNotificationPayload(event) {
 // plug back in without touching the call sites.
 const notificationChannels = [];
 
+/**
+ * E11 —— 零通道时整条编排都是白算。
+ *
+ * 每个 permission_request / run.stopped / run.failed 都会走进来,而走一趟要:
+ * 归一化会话 id(最多两次查询)、读用户偏好(一次)、算 payload(里面再解析一次
+ * 会话名,又一次查询),然后交给一个**空数组**去投递。权限请求在一轮里能出现
+ * 几十次,这就是几十次纯白扔掉的查询。
+ *
+ * 这里在最前面按通道数早退。整条管道(偏好闸、去重窗口、payload 构造)原样留着
+ * —— 哪天真接上一个通道(F6 管理面那批),把它 push 进 `notificationChannels`
+ * 就全都活过来,调用点一个字都不用改。
+ */
+function hasDeliveryChannels() {
+  return notificationChannels.length > 0;
+}
+
 function notifyUserIfEnabled({ userId, event }) {
-  if (!userId || !event) {
+  if (!userId || !event || !hasDeliveryChannels()) {
     return;
   }
 
@@ -193,7 +219,7 @@ function notifyUserIfEnabled({ userId, event }) {
     return;
   }
 
-  const payload = buildNotificationPayload(normalizedEvent);
+  const payload = buildPayloadFromNormalized(normalizedEvent);
   for (const channel of notificationChannels) {
     if (!channel.isEnabled(preferences)) {
       continue;

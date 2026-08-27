@@ -38,6 +38,8 @@ export type UserAdminRow = {
   approved_at: string | null;
   reviewed_by: number | null;
   reviewed_by_username: string | null;
+  /** F6:附件配额的每用户覆盖(MB)。null = 跟随全局默认。 */
+  attachment_quota_mb: number | null;
 };
 
 type UserPublicRow = Pick<
@@ -150,6 +152,7 @@ export const userDb = {
       .prepare(
         `SELECT u.id, u.username, u.created_at, u.last_login, u.is_active,
                 u.approval_status, u.approved_at, u.reviewed_by,
+                u.attachment_quota_mb,
                 r.username AS reviewed_by_username
          FROM users u
          LEFT JOIN users r ON r.id = u.reviewed_by
@@ -158,6 +161,41 @@ export const userDb = {
            u.created_at DESC`
       )
       .all() as UserAdminRow[];
+  },
+
+  /**
+   * F6:读一个账号的附件配额覆盖(MB)。null = 没设过,跟随全局默认。
+   *
+   * 单独一条查询而不是塞进 listUsersForAdmin —— 这条在**每次附件提交**的热路径上
+   * 被调用(见 attachment-storage.ts),不能顺带把全表用户捞回来。
+   */
+  getAttachmentQuotaMb(userId: number): number | null {
+    const db = getConnection();
+    const row = db
+      .prepare('SELECT attachment_quota_mb FROM users WHERE id = ?')
+      .get(userId) as { attachment_quota_mb: number | null } | undefined;
+    const value = row?.attachment_quota_mb ?? null;
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+  },
+
+  /**
+   * F6:设置/清除某账号的附件配额覆盖。传 null 即回到全局默认。
+   *
+   * **0 和负数一律当成"清除覆盖"**,不是"覆盖成 0"。把某人的配额设成 0 意味着
+   * 他一个字节都传不了,那应该是另一个开关(停用附件),不该是配额输入框手滑
+   * 的后果。路由那层已经把 <1 挡成 400,这里是第二道。
+   *
+   * 返回 false 表示 id 不存在 —— 路由据此答 404,而不是对着打错的 id 报成功。
+   */
+  setAttachmentQuotaMb(userId: number, quotaMb: number | null): boolean {
+    const db = getConnection();
+    const normalized = quotaMb === null || !Number.isFinite(quotaMb) || quotaMb < 1
+      ? null
+      : Math.floor(quotaMb);
+    const result = db
+      .prepare('UPDATE users SET attachment_quota_mb = ? WHERE id = ?')
+      .run(normalized, userId);
+    return result.changes > 0;
   },
 
   /**

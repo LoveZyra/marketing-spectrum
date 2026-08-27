@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { pushAccountSettings } from '../../../utils/accountSettings';
 import {
   FILE_TREE_DEFAULT_VIEW_MODE,
   FILE_TREE_VIEW_MODES,
@@ -31,6 +32,8 @@ export function useFileTreeViewMode(): UseFileTreeViewModeResult {
 
     try {
       localStorage.setItem(FILE_TREE_VIEW_MODE_STORAGE_KEY, mode);
+      // F11:视图模式跟着账号走。
+      void pushAccountSettings();
     } catch {
       // Keep runtime state even when persistence fails.
     }

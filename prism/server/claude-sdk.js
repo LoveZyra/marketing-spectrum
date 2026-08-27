@@ -1863,12 +1863,69 @@ async function abortClaudeSDKRun(runId) {
   return true;
 }
 
-async function enforceRuntimeLimit(exceptKey) {
-  const idle = [...claudeRuntimes.values()]
+/**
+ * 名额满时该淘汰谁(F6:**按人公平**,而不是一律全局 LRU)。
+ *
+ * 全局 LRU 的问题不是不合理,是不公平:一个人开二十个会话就能把池子占满,
+ * 之后每个新会话都去挤**别人**那条最久没用的 —— 别人每轮都在重建 runtime
+ * (等于每轮多花一次冷启动),而占了十九个的那位一点代价都没有。
+ *
+ * 这里改成:先看谁**总共**占得最多(在跑的也算,它们同样占着名额),从这个人的
+ * 空闲 runtime 里挑最久没用的那个下手;打平了再比谁的那条更久没用。于是代价
+ * 落在造成拥挤的人身上,而不是随机落在最安静的人身上。
+ *
+ * 纯函数,单测钉排序;不改任何状态。
+ *
+ * @param {Array<{key: string, turn: unknown, lastUsed: number, ownerUserId: number|null}>} runtimes
+ * @param {string} exceptKey 本次要用的 key,不能被自己挤掉
+ * @returns {Array} 空闲 runtime,按"最该被淘汰"排在最前
+ */
+export function orderRuntimesForEviction(runtimes, exceptKey) {
+  const heldByOwner = new Map();
+  for (const runtime of runtimes) {
+    const owner = runtime.ownerUserId ?? null;
+    heldByOwner.set(owner, (heldByOwner.get(owner) ?? 0) + 1);
+  }
+  return runtimes
     .filter((runtime) => runtime.key !== exceptKey && !runtime.turn)
-    .sort((left, right) => left.lastUsed - right.lastUsed);
+    .sort((left, right) => {
+      const leftHeld = heldByOwner.get(left.ownerUserId ?? null) ?? 0;
+      const rightHeld = heldByOwner.get(right.ownerUserId ?? null) ?? 0;
+      if (leftHeld !== rightHeld) return rightHeld - leftHeld; // 占得多的先掉
+      return left.lastUsed - right.lastUsed;                   // 同样多则最久没用的先掉
+    });
+}
+
+/**
+ * 常驻进程被挤掉时通知谁(F14)。由组合根注入 —— claude-sdk 不认识 websocket 层。
+ *
+ * 为什么要通知:被挤掉是**静默**的,那段对话下一条消息会莫名慢几秒(要重建进程
+ * 并 resume)。用户只看到"今天特别卡",而这其实是可解释、且完全正常的行为。
+ * 说一句,比让人猜强。
+ */
+let runtimeEvictionNotifier = null;
+
+export function setRuntimeEvictionNotifier(notifier) {
+  runtimeEvictionNotifier = typeof notifier === 'function' ? notifier : null;
+}
+
+function notifyRuntimeEvicted(runtime) {
+  if (!runtimeEvictionNotifier) return;
+  const sessionId = runtime?.appSessionId || runtime?.sessionId || null;
+  if (!sessionId) return;
+  try {
+    runtimeEvictionNotifier({ sessionId, reason: 'runtime_limit' });
+  } catch {
+    // 通知失败不该影响回收本身
+  }
+}
+
+async function enforceRuntimeLimit(exceptKey) {
+  const idle = orderRuntimesForEviction([...claudeRuntimes.values()], exceptKey);
   while (claudeRuntimes.size >= MAX_RUNTIMES && idle.length) {
-    await disposePersistentRuntime(idle.shift());
+    const victim = idle.shift();
+    await disposePersistentRuntime(victim);
+    notifyRuntimeEvicted(victim);
   }
   if (claudeRuntimes.size >= MAX_RUNTIMES && !claudeRuntimes.has(exceptKey)) {
     const error = new Error(`Claude runtime limit reached (${MAX_RUNTIMES}); close an active conversation and retry`);
@@ -1904,6 +1961,9 @@ async function createPersistentRuntime(key, options, settings) {
     // 网关侧的 app 会话 id。provider 原生 id 要等流里第一条消息才知道,而补发
     // 待批审批需要一个**从第一轮开始就存在**的键。
     appSessionId: typeof options.runId === 'string' ? options.runId : null,
+    // F6:这个常驻进程算在谁头上 —— 名额满了要按人**公平**淘汰,而不是一律
+    // 全局 LRU(全局 LRU 下一个人开二十个会话就能把池子占满,其余人每轮重建)。
+    ownerUserId: typeof options.ownerUserId === 'number' ? options.ownerUserId : null,
   };
 
   const sdkOptions = buildPersistentSdkOptions(options, runtime);
@@ -1980,6 +2040,9 @@ async function runtimeForSend(options) {
       // 若走的是没有 runId 的内部路径(prewarm、agent loop),这里是补上的机会。
       if (typeof options.runId === 'string' && options.runId) {
         runtime.appSessionId = options.runId;
+      }
+      if (typeof options.ownerUserId === 'number') {
+        runtime.ownerUserId = options.ownerUserId;
       }
 
       if (runtime.currentPermissionMode !== settings.permissionMode) {
@@ -2187,7 +2250,8 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
   const model = resolvedModel || options.model;
   const resolvedEffort = resolveClaudeEffort(model, options.effort, effortModels);
 
-  const runtimeOptions = { ...options, model, resolvedEffort };
+  // F6:runtime 记在谁头上(名额满了按人公平淘汰)。
+  const runtimeOptions = { ...options, model, resolvedEffort, ownerUserId: ws?.userId ?? null };
   let runtime = await runtimeForSend(runtimeOptions);
   if (runEntry) runEntry.runtime = runtime;
 
@@ -2327,7 +2391,8 @@ async function runAgentLoop(loopSpec, options = {}, ws, runEntry = null) {
   } catch { /* static fallback */ }
   const model = resolvedModel || options.model;
   const resolvedEffort = resolveClaudeEffort(model, options.effort, effortModels);
-  const runtimeOptions = { ...options, model, resolvedEffort };
+  // F6:runtime 记在谁头上(名额满了按人公平淘汰)。
+  const runtimeOptions = { ...options, model, resolvedEffort, ownerUserId: ws?.userId ?? null };
 
   const testCommand = loopSpec.testCommand || await detectTestCommand(options.cwd);
   const totalRounds = loopSpec.rounds;
@@ -2858,6 +2923,37 @@ async function prewarmClaudeSession(options = {}) {
   }
 }
 
+/**
+ * 常驻池快照(F6 管理面)。**只读**,不碰任何状态。
+ *
+ * 面板要回答的是"名额是不是被谁占满了" —— 所以除了总数,还按账号切一份:
+ * 谁占了几个、其中几个正在跑。没有这一层,root 看到的只是"20/20 满了",
+ * 既不知道该找谁,也不知道公平淘汰有没有在起作用。
+ */
+function getRuntimePoolStats() {
+  const byOwner = new Map();
+  let busy = 0;
+  for (const runtime of claudeRuntimes.values()) {
+    const owner = runtime.ownerUserId ?? null;
+    const bucket = byOwner.get(owner) ?? { userId: owner, total: 0, busy: 0 };
+    bucket.total += 1;
+    if (runtime.turn) {
+      bucket.busy += 1;
+      busy += 1;
+    }
+    byOwner.set(owner, bucket);
+  }
+  return {
+    max: MAX_RUNTIMES,
+    size: claudeRuntimes.size,
+    busy,
+    idle: claudeRuntimes.size - busy,
+    idleReapMs: IDLE_RUNTIME_MS,
+    oneShotOverflow: { active: activeOneShotFallbacks, max: MAX_ONESHOT_OVERFLOW },
+    byOwner: [...byOwner.values()].sort((left, right) => right.total - left.total),
+  };
+}
+
 export {
   toSdkModel,
   mapCliOptionsToSDK,
@@ -2880,5 +2976,6 @@ export {
   getPendingApprovalsForSession,
   getClaudeContextUsage,
   getClaudeSlashCommands,
-  getPersistentRuntime
+  getPersistentRuntime,
+  getRuntimePoolStats
 };

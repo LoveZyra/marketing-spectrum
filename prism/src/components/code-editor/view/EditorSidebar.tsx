@@ -4,6 +4,8 @@ import type { MouseEvent, MutableRefObject } from 'react';
 import type { CodeEditorFile } from '../types/types';
 import { PanelLoadingFallback } from '../../../shared/view/LazyPanel';
 
+import EditorTabs from './EditorTabs';
+
 // CodeMirror and its six language modes are ~660 kB — the single largest thing
 // in the bundle — and this component returns null until a file is actually
 // opened. Deferring the import means users who never open the editor never pay
@@ -13,6 +15,10 @@ const CodeEditor = lazy(() => import('./CodeEditor'));
 
 type EditorSidebarProps = {
   editingFile: CodeEditorFile | null;
+  /** F10:同时开着的文件(标签条)。少于两个时不画标签条。 */
+  openFiles?: CodeEditorFile[];
+  onSelectFile?: (path: string) => void;
+  onCloseFile?: (path: string) => void;
   isMobile: boolean;
   editorExpanded: boolean;
   editorWidth: number;
@@ -32,6 +38,9 @@ const MIN_EDITOR_WIDTH = 280;
 
 export default function EditorSidebar({
   editingFile,
+  openFiles,
+  onSelectFile,
+  onCloseFile,
   isMobile,
   editorExpanded,
   editorWidth,
@@ -102,16 +111,30 @@ export default function EditorSidebar({
     return null;
   }
 
+  const tabs = openFiles && onSelectFile && onCloseFile ? (
+    <EditorTabs
+      files={openFiles}
+      activePath={editingFile.path}
+      onSelect={onSelectFile}
+      onClose={onCloseFile}
+    />
+  ) : null;
+
   if (isMobile || poppedOut) {
     return (
-      <Suspense fallback={<PanelLoadingFallback />}>
-        <CodeEditor
-          file={editingFile}
-          onClose={onCloseEditor}
-          projectPath={projectPath}
-          isSidebar={false}
-        />
-      </Suspense>
+      <div className="flex h-full min-h-0 flex-col">
+        {tabs}
+        <div className="min-h-0 flex-1">
+          <Suspense fallback={<PanelLoadingFallback />}>
+            <CodeEditor
+              file={editingFile}
+              onClose={onCloseEditor}
+              projectPath={projectPath}
+              isSidebar={false}
+            />
+          </Suspense>
+        </div>
+      </div>
     );
   }
 
@@ -139,17 +162,25 @@ export default function EditorSidebar({
         className={`h-full overflow-hidden border-l border-border ${useFlexLayout ? 'min-w-0 flex-1' : 'flex-shrink-0'}`}
         style={useFlexLayout ? undefined : { width: `${effectiveWidth}px`, minWidth: `${MIN_EDITOR_WIDTH}px` }}
       >
-        <Suspense fallback={<PanelLoadingFallback />}>
-          <CodeEditor
-            file={editingFile}
-            onClose={onCloseEditor}
-            projectPath={projectPath}
-            isSidebar
-            isExpanded={editorExpanded}
-            onToggleExpand={onToggleEditorExpand}
-            onPopOut={() => setPoppedOut(true)}
-          />
-        </Suspense>
+        <div className="flex h-full min-h-0 flex-col">
+          {tabs}
+          <div className="min-h-0 flex-1">
+            <Suspense fallback={<PanelLoadingFallback />}>
+              <CodeEditor
+                // key 带上路径:换标签必须换一个 CodeEditor 实例,否则
+                // CodeMirror 会把上一份文档的撤销历史带过来。
+                key={editingFile.path}
+                file={editingFile}
+                onClose={onCloseEditor}
+                projectPath={projectPath}
+                isSidebar
+                isExpanded={editorExpanded}
+                onToggleExpand={onToggleEditorExpand}
+                onPopOut={() => setPoppedOut(true)}
+              />
+            </Suspense>
+          </div>
+        </div>
       </div>
     </div>
   );
