@@ -1,6 +1,83 @@
 #!/usr/bin/env bash
 # 营销诊断 API 服务安装脚本。先备份、再覆盖、最后自检。
 # 累积包:装这一个就够了,不用再装之前的 fix / fix2 / … / fix9 / fix10。
+# fix25(2026-08-17):报告链接一单一份 —— 不再互相覆盖。
+#   现象:同一活动复诊,新报告把上一单原地盖掉。发布文件名一直是
+#         diagnosis-report-{activity_id}.html,先前发出去的链接全部改指最新内容
+#         (最坏是指到一份带降级横幅的半成品),历史版本再也找不回来。
+#   ⓐ 发布文件名改为 diagnosis-report-{activity_id}-{job_id}.html。带 activity_id
+#      是给运维看的,job_id 才是唯一性来源。report_url 返回的就是这个唯一链接。
+#   ⓑ job_id 从 rundir(<jobs>/<job_id>/run)推,方案 B/C 的 runner 也显式传一份;
+#      命令行自测那种非标准 rundir 兜底造「时间戳_6位随机」,同秒并发也不撞。
+#   ⓒ 不留 latest 别名:老的 diagnosis-report-{activity_id}.html 不再写入,已经在
+#      盘上的照样打得开,只是从此没有任何东西会覆盖它。
+#   ⓓ 新增 MA_REPORT_KEEP(默认 20,0=不清理):发布时顺手清掉同一活动的旧报告,
+#      只留最近 N 份。只动「本活动 + 文件名尾巴形状对得上」的文件 —— activity_id
+#      允许连字符(ACT9 与 ACT9-B 并存),裸 startswith 会误删别人的报告。
+#      清理失败只告警,不让整单变红。
+#   ⚠ 调用方必读:report_url 不再是可以按 activity_id 拼出来的固定地址,
+#      **必须**从 /result 出参里取。拼死链的老代码要改。
+# fix24(2026-08-17):target_audiences 收进管控 —— 报告附录里模型人群挂出死链的修复。
+#   现象:三个模型分析人群在「可落地人群包」表里同时挂上「↑ #2 回到核心发现」,
+#         而核心发现 #2 根本不产出这些人群。
+#   根因:回链按人群名去撞 action_plan.priority_actions[].target_audiences,而这一栏
+#         不在 SEG_ANCHORS 里、提示词也没提,是 Agent 的自由发挥区。模型 finding 在
+#         draft_builder._segment_from_finding 直接 return None,所以它那条行动的草稿
+#         写的是 ["全量"];Agent 润色时把这个占位「写实」成了它在 audience_segments
+#         里看到的三个模型人群名。
+#   ⓐ 新增 restore_action_audiences():target_audiences 按草稿回填(先按 problem_rank
+#      配对,配不上按位置;两边条数对不上就整个跳过,不猜)。它是「这条行动打哪批人」
+#      的结构指针,不是文案 —— 行动的标题/描述照旧随 Agent 改。
+#   ⓑ 回填走独立 warning,**不计入 fixed_anchors** —— 圈人锚点的账不能被稀释。
+#   ⓒ 提示词硬约束补一条:不许改 target_audiences,草稿写「全量」就保持「全量」。
+#   ⚠ 配套 ma-skill-fix32:回链改为结构匹配(人群 finding_id ∈ 核心发现
+#      evidence_finding_ids),Agent 怎么写 target_audiences 都挂不上错链。两层各自
+#      独立生效:只装 ma 侧,回链口径没变但源头不再被写歪;只装 skill 侧,回链正确
+#      但 target_audiences 仍会飘。建议同批装。
+# fix23(2026-08-14):suggestion 前置分档标注 ——
+#   【建议推送】模型分析产出的推送人群(= direction create)
+#   【建议优化】规则库产出的推送人群
+#   【建议排除】非推送人群(内部 exclude)
+#   ⓐ 出参 direction 只有 create/alter 两值,而 alter 里混着「规则产出要推的」和
+#      「诊断明说别推的」—— 展示时分不出。前缀补上这层,且是机器生成的固定 token,
+#      UI 可直接切出来做标签/配色,不依赖润色文案的措辞。
+#   ⓑ 幂等且自纠正:已带任一前缀先剥再按当前口径重加,重复投影不会叠成
+#      「【建议推送】【建议推送】…」,上游带错前缀也会被纠正。
+#   ⓒ 读的是**归一化之后**的 direction:促付人群(direction_raw=促付)已在
+#      pick_push_rules 里救回 push,所以是【建议优化】而不是【建议排除】——
+#      这是 2026-07-29 那个线上问题的回归点,契约回归有专项断言(64 项)。
+#   ⓓ 文案为空时只给前缀,不凭空编业务话术。
+#   ⚠ 配套 ma-skill-fix31:模型人群的建议动作从写死的套话改成按主导维度写实
+#      (原来三条模型人群三句一模一样「下一周期对该群体做优先级投放或预算倾斜」)。
+#      不装 skill 包的话前缀照常有,只是模型人群那句仍是套话。
+# fix22(2026-08-14):/result 的 direction 改为**人群包操作类型**(create / alter)——
+#   create = 模型分析产出的推送人群(下游新建人群包);
+#   alter  = 其余一律(规则库产出的推送人群 + 所有非推送人群,下游改已有人群包)。
+#   判定依据 finding_id 前缀:fnd_model_* → create,其余(fnd_r*/fnd_pos_*/未来新前缀)→ alter。
+#   ⓐ 只在出参投影层(ma_core.crowd_operation)做映射,**流水线内部仍用 push/exclude** ——
+#      push_sql / size.push 的红线过滤、促付救回、notes、报告全依赖 direction=="push",
+#      改内部值要牵动十几处还得重写红线断言。映射放投影层,出参怎么变推送口径都不受影响
+#      (fix22 的回归里专门复核了这条)。
+#   ⓑ 原始 push/exclude 仍在 meta.json 的 crowd_spec.rules[].direction 里,排查照用。
+#   ⚠ 调用方必读:exclude 人群现在也标 alter,**alter 里混着"要推的"和"明确别推的"**。
+#      不要遍历 rules[] 逐条去推 —— 推送人群以服务端给的 push_sql / size.push 为准
+#      (它只含 push)。若必须自己拼,请读 meta.json 的原始 direction。
+# fix21(2026-08-14):/result 的 rules[] 改为**带全部 direction**(调用方按方向自行分流)——
+#   ⓐ ma_pipeline.pick_push_rules:不再只放行 push,两个方向都进 picked / 出参 rules[]。
+#      direction 归一化结果写回字段(促付→push 等),原值留 direction_raw / direction_from_skill。
+#   ⓑ ★红线★ 推送口径与出参口径**必须分开算**:push_sql 与 size.push 只用
+#      direction=push 的那批(run_pipeline 里的 push_only / _push_only)。exclude 一旦
+#      混进去就是 2026-07-28 的原样事故 —— 那单 6 条 audience_segment 里 3 条 exclude,
+#      「跨渠道高频疲劳人群」一条覆盖 49477/50000 人,OR 进 push_sql 后出参 49735 人里
+#      九成恰恰是诊断说"别推"的。regress_direction 加了 4 条专项断言守这条,含一条
+#      反向用例(故意把 exclude 并进去必须被抓到,防哨兵恒真)。
+#   ⓒ 不另给 excluded_rules 顶层数组:同一批人出现在两处,调用方并起来会重复计数。
+#      crowd_spec.excluded_rules 仍在 meta.json 里,供 notes / 排查用。
+#   ⓓ rules[] 六字段结构一字未动(name/finding_id/sql_filter/filter_zh/direction/suggestion),
+#      只是条数变多、direction 第一次出现 exclude 值。
+#   ⚠ 调用方必读:**不要把 rules[] 整个 OR 起来去推**。要么直接用服务端给的 push_sql
+#      (已只含 push),要么自己拼时先按 direction 过滤。老调用方若是"拿到 rules 就全推",
+#      升级前必须先改 —— 这是本次唯一的破坏性变更。
 # fix20(2026-08-14):crowd_push 去 Spark,改本地 data.parquet 校验(修 8/14 并发炸单)——
 #   背景:job_20260814_143039 / 144153 两单 crowd_push 并发下炸(SPARK-2243 抢构造 /
 #   setCallSite NoneType 被兄弟单 stop 误杀)。根因是进程内共享 SparkContext 的生命周期,
@@ -196,6 +273,30 @@ if [ "$FAIL" -ne 0 ]; then
 fi
 
 echo "=== 装完了,回归全过。 ==="
+echo
+echo "fix23:suggestion 前置分档标注 ——"
+echo "  - 【建议推送】模型产出推送人群 / 【建议优化】规则产出推送人群 / 【建议排除】非推送人群。"
+echo "  - alter 里的两类人靠它区分;前缀是固定 token,UI 可直接切出来做标签。"
+echo "  - 幂等自纠正:重复投影不叠加,上游错前缀会被纠正。"
+echo "  - ⚠ 配套装 ma-skill-fix31,否则模型人群的建议动作仍是那句通用套话。"
+echo
+echo "fix22:/result 的 direction 改为人群包操作类型 ——"
+echo "  - create = 模型分析产出的推送人群(新建人群包);alter = 其余一律(改已有人群包)。"
+echo "  - 判定用 finding_id 前缀:fnd_model_* → create,其余 → alter。"
+echo "  - 内部仍是 push/exclude,只在出参投影层映射;push_sql / size.push 口径完全不受影响。"
+echo "  - ⚠ exclude 人群也标 alter —— alter 里混着「要推的」和「明确别推的」。"
+echo "    推送以服务端 push_sql / size.push 为准;自己拼 SQL 请读 meta.json 的原始 direction。"
+echo "  - 抽查:取一单 /result,direction 应只出现 create / alter 两个值;"
+echo "    create 条数应等于 fnd_model_* 且内部 direction=push 的人群数。"
+echo
+echo "fix21:/result 的 rules[] 改为带全部 direction ——"
+echo "  - rules[] 现在同时含 push 与 exclude,由每条的 direction 区分;六字段结构未变。"
+echo "  - ★ push_sql / size.push 仍只含 push 那批,服务端已算好,可直接用。"
+echo "  - ⚠ 破坏性变更:调用方**不要把 rules[] 整个 OR 起来推**。自己拼 SQL 的话"
+echo "    必须先按 direction 过滤 —— exclude 是诊断明说「本活动别推」的人群,"
+echo "    7/28 那单里一条 exclude 就覆盖 49477/50000 人。"
+echo "  - 抽查:取一单 /result,rules[] 里应能看到 direction=exclude 的条目;"
+echo "    再核对 crowd_spec.push_sql 的谓词数 == direction=push 的规则条数。"
 echo
 echo "fix20:crowd_push 去 Spark,改本地 data.parquet 校验 ——"
 echo "  - 8/14 两单并发炸(SPARK-2243 / setCallSite)从根上消失:进程内不再有 Spark。"

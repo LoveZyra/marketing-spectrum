@@ -96,6 +96,20 @@ export type SessionStatus = 'idle' | 'loading' | 'streaming' | 'error';
 export interface SessionSlot {
   serverMessages: NormalizedMessage[];
   realtimeMessages: NormalizedMessage[];
+  /**
+   * 正在打字的那段助手正文。
+   *
+   * **它不在 `realtimeMessages` 里,也不参与合并排序。**以前它是列表里的一条
+   * 普通消息,每 100ms 一次 flush 都要:重建数组 → Set → filter → concat →
+   * **全量 sort** → dedupe → 重建全部 React element,整份 transcript 每秒十次;
+   * 而且它的时间戳每次都被重锚到"现在",而排序键正是时间戳 —— 同期到达的
+   * 工具行会在它上下来回换位,那就是肉眼看到的"抖"。
+   *
+   * 时序上它天然可以独立:`stream_end` 在下一批工具行之前就到并提交,所以
+   * 任意时刻最多只有一个活跃流式块,而且它一定在末尾 —— 那就没必要参与排序。
+   */
+  streamingText: string | null;
+  streamingProvider: LLMProvider | null;
   merged: NormalizedMessage[];
   /** @internal Cache-invalidation refs for computeMerged */
   _lastServerRef: NormalizedMessage[];
@@ -129,6 +143,8 @@ function createEmptySlot(): SessionSlot {
   return {
     serverMessages: EMPTY,
     realtimeMessages: EMPTY,
+    streamingText: null,
+    streamingProvider: null,
     merged: EMPTY,
     _lastServerRef: EMPTY,
     _lastRealtimeRef: EMPTY,
@@ -481,6 +497,11 @@ const STALE_THRESHOLD_MS = 30_000;
 
 const MAX_REALTIME_MESSAGES = 500;
 
+/** realtime 行的上限。提交流式正文和逐条追加共用同一个口径。 */
+function capRealtime(rows: NormalizedMessage[]): NormalizedMessage[] {
+  return rows.length > MAX_REALTIME_MESSAGES ? rows.slice(-MAX_REALTIME_MESSAGES) : rows;
+}
+
 /**
  * 槽位 LRU 上限与保护窗。
  *
@@ -681,7 +702,11 @@ export function useSessionStore() {
       return slot;
     } catch (error) {
       console.error(`[SessionStore] fetchMore failed for ${sessionId}:`, error);
-      return slot;
+      // 失败必须**能被调用方区分**。原来是原样返回 slot,而调用方判成功看的是
+      // `serverMessages.length === 0`(那是累计条数,不是"这次新增几条")——
+      // 于是断网/500 被当成加载成功:pendingScrollRestore 被挂上却永远清不掉,
+      // 这条会话从此不再自动跟底;自动补页还会连打 30 次请求且一声不吭。
+      return null;
     }
   }, [getSlot, notify]);
 
@@ -799,25 +824,19 @@ export function useSessionStore() {
    * Update or create a streaming message (accumulated text so far).
    * Uses a well-known ID so subsequent calls replace the same message.
    */
+  /**
+   * 流式正文更新。**只动 `streamingText`,不碰列表、不重排。**
+   *
+   * 关键在于 `slot.merged` 的引用保持不变 —— 下游 `normalizedToChatMessages`、
+   * 分组、key 表全是挂在它上面的 useMemo,引用不变它们就整体跳过。
+   * 一次 flush 从"重排整份 transcript + 重建全部 React element"降到
+   * "只重渲染那一个气泡"。
+   */
   const updateStreaming = useCallback((sessionId: string, accumulatedText: string, msgProvider: LLMProvider) => {
     const slot = getSlot(sessionId);
-    const streamId = `__streaming_${sessionId}`;
-    const msg: NormalizedMessage = {
-      id: streamId,
-      sessionId,
-      timestamp: new Date().toISOString(),
-      provider: msgProvider,
-      kind: 'stream_delta',
-      content: accumulatedText,
-    };
-    const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
-    if (idx >= 0) {
-      slot.realtimeMessages = [...slot.realtimeMessages];
-      slot.realtimeMessages[idx] = msg;
-    } else {
-      slot.realtimeMessages = [...slot.realtimeMessages, msg];
-    }
-    recomputeMergedIfNeeded(slot);
+    if (slot.streamingText === accumulatedText && slot.streamingProvider === msgProvider) return;
+    slot.streamingText = accumulatedText;
+    slot.streamingProvider = msgProvider;
     notify(sessionId);
   }, [getSlot, notify]);
 
@@ -825,23 +844,35 @@ export function useSessionStore() {
    * Finalize streaming: convert the streaming message to a regular text message.
    * The well-known streaming ID is replaced with a unique text message ID.
    */
+  /**
+   * 流式结束:把这段正文**一次性**提交进列表。
+   *
+   * id 在这一刻铸定,此后再也不变 —— 以前是"流式期间用 `__streaming_<sid>`、
+   * 收尾换成随机新 id",key 一变 React 就卸载重建整条最终回答:markdown 全量
+   * 重解析、代码块重走 Suspense、mermaid 重新 import、KaTeX 重排,高度先塌后涨。
+   * 那就是每轮"答完猛跳一次"的来源。
+   */
   const finalizeStreaming = useCallback((sessionId: string) => {
     const slot = storeRef.current.get(sessionId);
     if (!slot) return;
-    const streamId = `__streaming_${sessionId}`;
-    const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
-    if (idx >= 0) {
-      const stream = slot.realtimeMessages[idx];
-      slot.realtimeMessages = [...slot.realtimeMessages];
-      slot.realtimeMessages[idx] = {
-        ...stream,
-        id: `text_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        kind: 'text',
-        role: 'assistant',
-      };
-      recomputeMergedIfNeeded(slot);
+    const text = slot.streamingText;
+    slot.streamingText = null;
+    if (!text) {
       notify(sessionId);
+      return;
     }
+    const committed: NormalizedMessage = {
+      id: `text_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      sessionId,
+      timestamp: new Date().toISOString(),
+      provider: slot.streamingProvider ?? 'claude',
+      kind: 'text',
+      role: 'assistant',
+      content: text,
+    };
+    slot.realtimeMessages = capRealtime([...slot.realtimeMessages, committed]);
+    recomputeMergedIfNeeded(slot);
+    notify(sessionId);
   }, [notify]);
 
   /**
@@ -851,6 +882,7 @@ export function useSessionStore() {
     const slot = storeRef.current.get(sessionId);
     if (slot) {
       slot.realtimeMessages = [];
+      slot.streamingText = null;
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
     }
@@ -870,9 +902,15 @@ export function useSessionStore() {
     return storeRef.current.get(sessionId);
   }, []);
 
+  /** 当前正在打字的正文(没有就是 null)。渲染在列表尾部,不进列表。 */
+  const getStreamingText = useCallback((sessionId: string | null): string | null => (
+    sessionId ? storeRef.current.get(sessionId)?.streamingText ?? null : null
+  ), []);
+
   return useMemo(() => ({
     getSlot,
     has,
+    getStreamingText,
     fetchFromServer,
     fetchMore,
     appendRealtime,
@@ -887,7 +925,7 @@ export function useSessionStore() {
     getMessages,
     getSessionSlot,
   }), [
-    getSlot, has, fetchFromServer, fetchMore,
+    getSlot, has, getStreamingText, fetchFromServer, fetchMore,
     appendRealtime, appendRealtimeBatch, refreshFromServer,
     setActiveSession, setStatus, isStale, updateStreaming, finalizeStreaming,
     clearRealtime, getMessages, getSessionSlot,

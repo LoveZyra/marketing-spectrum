@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { projectVisibilityInput, projectsDb, sessionsDb } from '@/modules/database/index.js';
@@ -29,6 +30,16 @@ type ChatRunStatus = 'running' | 'completed';
  */
 type ChatRun = {
   appSessionId: string;
+  /**
+   * 这一轮的唯一标识。**补发的正确性靠它**。
+   *
+   * `lastSeq` 是每轮从 0 重新开始的,而客户端的游标按会话保存。没有 runId 时,
+   * 第 1 轮跑到 seq=40、第 2 轮在 seq=20 断线重连,客户端带着 40 来要补发,
+   * `seq > 40` 一条都匹配不上 —— 第 2 轮已经发生的内容全部丢失,而且整轮游标
+   * 都不会推进,此后每次重连都命中同一个空洞。
+   * 有了 runId,客户端带的游标属于哪一轮就是明确的:不是这一轮就从头补。
+   */
+  runId: string;
   provider: LLMProvider;
   providerSessionId: string | null;
   status: ChatRunStatus;
@@ -173,6 +184,7 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
     ...message,
     sessionId: run.appSessionId,
     seq: run.lastSeq,
+    runId: run.runId,
   };
 
   if (message.kind === 'complete') {
@@ -184,8 +196,17 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
     evictRunLater(run.appSessionId);
   }
 
-  run.events.push(outbound);
-  run.bufferedBytes += approximateEventBytes(outbound);
+  // 审批帧**不进重放缓冲**。
+  //
+  // 待批审批的权威来源是 `chat_subscribed.pendingPermissions`(前端是整体替换)。
+  // 若审批帧也躺在缓冲里,订阅时的顺序就是"先给权威列表、紧接着重放又逐条推回去" ——
+  // 已经点过"允许"的框会重新弹出来,而它们对应的 resolver 早就没了,点也点不掉。
+  // 回合中途刷新页面(游标清零)必然触发这一幕。
+  const isPermissionFrame = message.kind === 'permission_request' || message.kind === 'permission_cancelled';
+  if (!isPermissionFrame) {
+    run.events.push(outbound);
+    run.bufferedBytes += approximateEventBytes(outbound);
+  }
 
   // 条数和字节两个上限,谁先到按谁裁。一次裁一批而不是逐条 shift:
   // `splice(0, 1)` 在 5000 元素的数组上是一次 O(n) 的内存搬移。
@@ -271,6 +292,7 @@ export const chatRunRegistry = {
 
     const run: ChatRun = {
       appSessionId: input.appSessionId,
+      runId: `run_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`,
       provider: input.provider,
       providerSessionId: input.providerSessionId,
       status: 'running',
@@ -394,13 +416,23 @@ export const chatRunRegistry = {
    * An empty array with `run.lastSeq > afterSeq` not covered by the buffer
    * means the buffer was truncated; the client should refresh over REST.
    */
-  replayEvents(appSessionId: string, afterSeq: number): NormalizedMessage[] {
-    const run = runs.get(appSessionId);
-    if (!run) {
-      return [];
-    }
+  /** 当前(或刚结束)那一轮的 id;没有 run 时为 null。 */
+  currentRunId(appSessionId: string): string | null {
+    return runs.get(appSessionId)?.runId ?? null;
+  },
 
-    return run.events.filter((event) => typeof event.seq === 'number' && event.seq > afterSeq);
+  replayEvents(appSessionId: string, afterSeq: number, clientRunId?: string | null): NormalizedMessage[] {
+    const run = runs.get(appSessionId);
+    if (!run) return [];
+    // 客户端**明确说了**它的游标属于另一轮 → 从头补。
+    // seq 每轮从 0 重来,拿上一轮的游标去过滤这一轮,只会把这一轮整段滤掉。
+    //
+    // 没说 runId 的按老行为(只按 seq 过滤):那是旧版客户端,或者它本来就还没有
+    // 游标(此时 afterSeq 也是 0,从哪算都一样)。这里**不能**一律从头补 ——
+    // 旧客户端带着有效游标来,从头补等于把它已经收过的 stream_delta 再灌一遍。
+    const differentRun = typeof clientRunId === 'string' && clientRunId !== '' && clientRunId !== run.runId;
+    const from = differentRun ? 0 : afterSeq;
+    return run.events.filter((event) => typeof event.seq === 'number' && event.seq > from);
   },
 
   /**

@@ -14,7 +14,7 @@
   "messageTypes": {
     "error": "錯誤",
     "tool": "工具",
-    "claude": "Claude"
+    "claude": "AI"
   },
   "tools": {
     "settings": "工具設定"
@@ -22,7 +22,7 @@
   "interactive": {
     "title": "互動式提示",
     "waiting": "等待您在 CLI 中回應",
-    "instruction": "請在 Claude 執行的終端機中選擇一個選項。"
+    "instruction": "請在 AI 執行的終端機中選擇一個選項。"
   },
   "json": {
     "response": "JSON 回應"
@@ -105,8 +105,12 @@
       "showingLast": "顯示最近 {{count}} 則訊息（共 {{total}} 則）",
       "loadEarlier": "載入較早的訊息",
       "loadAll": "載入全部訊息",
+      "expandAll": "全部展開",
       "loadingAll": "正在載入全部訊息...",
       "allLoaded": "全部訊息已載入"
+    },
+    "tokens": {
+      "compacting": "壓縮中"
     }
   },
   "shell": {
@@ -132,7 +136,7 @@
     },
     "loading": "正在載入終端機...",
     "connecting": "正在連線到 Shell...",
-    "startSession": "啟動新的 Claude 工作階段",
+    "startSession": "啟動新的 AI 工作階段",
     "resumeSession": "恢復工作階段：{{displayName}}...",
     "runCommand": "在 {{projectName}} 中執行 {{command}}",
     "startCli": "在 {{projectName}} 中啟動 Claude CLI",
@@ -151,7 +155,18 @@
       "seconds": "{{count}} 秒",
       "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒"
     },
-    "compacting": "正在壓縮上下文"
+    "compacting": "正在壓縮上下文",
+    "compaction": {
+      "blocking": "上下文已滿,正在壓縮後繼續這一輪",
+      "slow": "正在壓縮上下文 —— 比平常久",
+      "stalled": "正在壓縮上下文 —— CLI 已經一段時間沒有回應",
+      "done": "上下文已壓縮",
+      "doneWithNumbers": "已壓縮 {{before}} → {{after}},釋放 {{percent}}%",
+      "failed": "壓縮失敗,下一輪將帶著未壓縮的上下文繼續",
+      "elapsedWithLast": "{{elapsed}} · 上次 {{last}}",
+      "tooShort": "上下文還很短,暫時不用壓縮",
+      "aborted": "壓縮已取消"
+    }
   },
   "projectSelection": {
     "startChatWithProvider": "選擇一個專案以開始與 {{provider}} 聊天"

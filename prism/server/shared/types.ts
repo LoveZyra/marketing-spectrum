@@ -249,6 +249,8 @@ export type NormalizedMessage = {
    * the live events they missed across websocket reconnects.
    */
   seq?: number;
+  /** 这条事件属于哪一轮。客户端据此判断补发游标还作不作数。 */
+  runId?: string;
   role?: 'user' | 'assistant';
   /**
    * 这一轮实际服务的模型(assistant 文本消息携带;取自响应元数据的 message.model)。
@@ -288,6 +290,30 @@ export type NormalizedMessage = {
   /** 状态的类别。目前只有 'compacting' —— 让前端能本地化并单独造型,
       而不是把英文状态原文摆到界面上。 */
   statusKind?: 'compacting';
+  /**
+   * 一次压缩的实况。压缩是**一次模型调用**,没有完成度可言 —— 这里带的是能诚实
+   * 给出的三件事:阶段(running/done/failed)、心跳(beat,只在 CLI 真的吐东西时
+   * 递增)、以及结束后的硬数据(pre/post token 与耗时,来自 compact_metadata)。
+   * `blocking` 说明这次压缩占不占用户的等待时间;`lastDurationMs` 是本会话上次
+   * 压缩用时 —— 界面上唯一诚实的"还要多久"参照。
+   */
+  compaction?: {
+    phase: 'running' | 'done' | 'failed' | 'skipped';
+    /** phase='skipped' 时为什么没压:对话太短,或用户中止。都不是失败。 */
+    skipReason?: 'too-short' | 'aborted';
+    trigger: 'manual' | 'auto' | 'maintenance' | 'presend';
+    blocking: boolean;
+    beat?: number;
+    /** 服务端算的已用时长 —— 断线重连后客户端不必从 0 重新起算。 */
+    elapsedMs?: number;
+    /** 心跳断多久算「没有响应」。跟着这一回合的静默看门狗走,不写死。 */
+    stallAfterMs?: number;
+    preTokens?: number | null;
+    postTokens?: number | null;
+    durationMs?: number | null;
+    lastDurationMs?: number | null;
+    error?: string | null;
+  };
   requestId?: string;
   input?: unknown;
   context?: unknown;

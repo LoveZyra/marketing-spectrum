@@ -87,7 +87,7 @@
     "step3": {
       "reviewConfig": "Rivedi la tua configurazione",
       "path": "Percorso:",
-      "newEmpty": "L'area di lavoro verrà aggiunta alla lista dei progetti e sarà disponibile per le sessioni Claude."
+      "newEmpty": "L'area di lavoro verrà aggiunta alla lista dei progetti e sarà disponibile per le sessioni AI."
     },
     "buttons": {
       "cancel": "Annulla",

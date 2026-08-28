@@ -5,6 +5,7 @@ import type { ServerEvent } from '../../../contexts/WebSocketContext';
 import { showCompletionTitleIndicator } from '../../../utils/pageTitleNotification';
 import { playChatCompletionSound, playNotificationSound } from '../../../utils/notificationSound';
 import type { MarkSessionIdle, MarkSessionProcessing } from '../../../hooks/useSessionProtection';
+import { isCompactionActivity } from '../utils/compactionProgress';
 import type { PendingPermissionRequest } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
@@ -47,7 +48,8 @@ interface UseChatRealtimeHandlersArgs {
    * the events this client actually missed. Written here on every sequenced
    * frame; read wherever a `chat.subscribe` is sent (session open, reconnect).
    */
-  lastSeqRef: MutableRefObject<Map<string, number>>;
+  /** 每条会话的补发游标:记住它属于哪一轮,轮次一换就从头算。 */
+  lastSeqRef: MutableRefObject<Map<string, { runId: string | null; seq: number }>>;
   /** When each session's `chat.subscribe` was last sent; guards stale idle acks. */
   statusCheckSentAtRef: MutableRefObject<Map<string, number>>;
   onSessionProcessing?: MarkSessionProcessing;
@@ -66,6 +68,8 @@ interface UseChatRealtimeHandlersArgs {
    * 驱动显示,不能靠本地状态推断。
    */
   onServerQueueChange?: (sessionId: string, queued: { preview: string; enqueuedAt: string } | null) => void;
+  /** 排队被中止带走时把正文退回输入框;回填成功返回 true(输入框非空时不覆盖)。 */
+  onServerQueueReturned?: (sessionId: string, content: string) => boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -100,6 +104,7 @@ export function useChatRealtimeHandlers({
   onCheckpointCreated,
   onChangedFiles,
   onServerQueueChange,
+  onServerQueueReturned,
 }: UseChatRealtimeHandlersArgs) {
   // Session switches can send `chat.subscribe` before this effect has a chance
   // to rebind the websocket listener. Read the visible session id from a ref
@@ -126,11 +131,16 @@ export function useChatRealtimeHandlers({
       const activeViewSessionId = activeViewSessionIdRef.current;
       const sid = (typeof msg.sessionId === 'string' && msg.sessionId) || activeViewSessionId;
 
-      // Record replay progress for every sequenced live event we actually keep.
+      // 补发游标。**必须连 runId 一起记** —— seq 是每轮从 0 重新开始的,
+      // 只记 seq 的话:第 1 轮跑到 40,第 2 轮在 20 处断线重连,带着 40 去要补发,
+      // `seq > 40` 一条都匹配不上,第 2 轮已发生的内容全部丢失,而且整轮游标都
+      // 不会推进 —— 此后每次重连都命中同一个空洞。轮次一换,游标从头算。
       if (sid && typeof msg.seq === 'number' && advancesReplayCursor(msg.kind)) {
-        const known = lastSeqRef.current.get(sid) ?? 0;
-        if (msg.seq > known) {
-          lastSeqRef.current.set(sid, msg.seq);
+        const runId = typeof msg.runId === 'string' ? msg.runId : null;
+        const known = lastSeqRef.current.get(sid);
+        const sameRun = known && known.runId === runId;
+        if (!sameRun || msg.seq > known.seq) {
+          lastSeqRef.current.set(sid, { runId, seq: msg.seq });
         }
       }
 
@@ -180,9 +190,16 @@ export function useChatRealtimeHandlers({
         case 'protocol_error': {
           console.error('[Chat] Protocol error:', msg.code, msg.error);
           if (sid) {
-            // Surface the failure in the conversation and stop the spinner —
-            // the run never started (or was rejected), so no `complete` follows.
-            onSessionIdle?.(sid);
+            // 多数 protocol_error 意味着这一轮压根没开起来(也就不会有 complete),
+            // 所以要顺手把转圈停掉。**但有两个 code 恰恰相反**:
+            //   QUEUE_FULL —— 是在 startRun 返回 null(回合正跑着)且已有排队时发的;
+            //   SESSION_HELD_BY_SHELL —— 终端正接管着这段对话,回合也在跑。
+            // 这两种情况下标成空闲,会让转圈消失、停止按钮跟着失效,而回合还在跑
+            // (和 da 修掉的是同一类"界面进入了没有出口的状态")。
+            const runStillAlive = msg.code === 'QUEUE_FULL' || msg.code === 'SESSION_HELD_BY_SHELL';
+            if (!runStillAlive) {
+              onSessionIdle?.(sid);
+            }
             sessionStore.appendRealtime(sid, {
               id: `protocol_error_${Date.now()}`,
               sessionId: sid,
@@ -210,6 +227,17 @@ export function useChatRealtimeHandlers({
           if (!sid) return;
           onServerQueueChange?.(sid, null);
           // 被中止带走 / 过期作废的那条要说一声 —— 否则用户只会看到消息凭空消失。
+          // 被中止带走的那条:正文退回输入框(见 dropPendingSend)。
+          // 回填成功就不用再写那条"已取消"的提示了 —— 东西还在用户手上。
+          if (
+            msg.kind === 'chat_queue_cancelled'
+            && msg.reason === 'aborted'
+            && typeof msg.content === 'string'
+            && msg.content
+            && onServerQueueReturned?.(sid, msg.content)
+          ) {
+            return;
+          }
           if (msg.kind === 'chat_queue_cancelled' && msg.reason !== 'cancelled') {
             sessionStore.appendRealtime(sid, {
               id: `queue_${msg.reason}_${Date.now()}`,
@@ -411,6 +439,9 @@ export function useChatRealtimeHandlers({
             onSessionProcessing?.(sid, {
               statusText: msg.text as string,
               statusKind: (msg.statusKind as 'compacting' | undefined) ?? null,
+              // 压缩实况(阶段 / 心跳 / pre-post token / 耗时)。缺席时显式置 null,
+              // 否则压缩结束后的普通状态帧会让上一条压缩状态一直挂着。
+              compaction: isCompactionActivity(msg.compaction) ? msg.compaction : null,
               canInterrupt: msg.canInterrupt !== false,
             });
           }
@@ -444,5 +475,6 @@ export function useChatRealtimeHandlers({
     onCheckpointCreated,
     onChangedFiles,
     onServerQueueChange,
+    onServerQueueReturned,
   ]);
 }

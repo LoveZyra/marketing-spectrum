@@ -239,6 +239,17 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
       }
 
       if (event.key === 'Tab' || event.key === 'Enter') {
+        // 没高亮任何一项时**不抢回车**。
+        //
+        // 这个下拉的开启条件极宽:光标前有 `@` 且其后无空格就开,**空查询也开**
+        // (空串对所有文件都成立)。原来回车会无条件退而取首项,于是
+        // 「帮我回复 @」+ 回车 = 不发送,而是把文件列表第一项的路径插进输入框,
+        // 得再按一次回车才发得出去。中文里 `@` 出现得并不少,这个很烦人。
+        //
+        // Tab 不在此列 —— 补全键补成第一个匹配项是它该有的行为。
+        if (event.key === 'Enter' && selectedFileIndex < 0) {
+          return false;
+        }
         event.preventDefault();
         if (selectedFileIndex >= 0) {
           selectFile(filteredFiles[selectedFileIndex]);

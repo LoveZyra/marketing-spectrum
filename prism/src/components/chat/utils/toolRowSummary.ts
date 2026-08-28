@@ -9,7 +9,7 @@ import type { ChatMessage } from '../types/types';
  * - 耗时:tool_result 的时间戳减去 tool_use 的时间戳
  */
 
-export type ToolRowStatus = 'running' | 'done' | 'error';
+export type ToolRowStatus = 'running' | 'done' | 'error' | 'interrupted';
 
 export type ToolRowSummary = {
   status: ToolRowStatus;
@@ -245,14 +245,23 @@ export function toolRowLabel(toolName: string, toolInput: unknown): ActivityLabe
   };
 }
 
-export function summarizeToolRow(message: ChatMessage): ToolRowSummary {
+/**
+ * @param sessionIsProcessing 这个会话此刻还在跑吗。
+ *
+ * 没有结果的工具行以前一律算 'running' —— 于是回合被中止/超时收掉时,那条
+ * tool_result 永远不会到,卡片就永远转下去。会话都已经不在跑了还显示"运行中",
+ * 是在骗人。会话闲下来时仍然没结果的行,按**已中断**渲染。
+ */
+export function summarizeToolRow(message: ChatMessage, sessionIsProcessing = true): ToolRowSummary {
   const toolName = message.toolName || 'Tool';
   const hasResult = Boolean(message.toolResult);
   const isError = Boolean(message.toolResult && (message.toolResult as Record<string, unknown>).isError);
   const metric = toolMetric(toolName, message.toolInput, message.toolResult);
 
   return {
-    status: !hasResult ? 'running' : isError ? 'error' : 'done',
+    status: hasResult
+      ? (isError ? 'error' : 'done')
+      : (sessionIsProcessing ? 'running' : 'interrupted'),
     icon: activityIconKey(toolName),
     label: toolRowLabel(toolName, message.toolInput),
     name: toolName,
@@ -323,14 +332,20 @@ export type ActivityFoldPlan = {
 /**
  * 一轮活动收起时露出多少行。
  *
- * - **还在跑**:留最新 `ACTIVITY_TAIL_ROWS` 步 —— 用户盯的是"现在在干什么"。
+ * - **回合还没结束**:留最新 `ACTIVITY_TAIL_ROWS` 步 —— 用户盯的是"现在在干什么"。
  *   不足这个步数就全摊着,没什么可折的。
- * - **已跑完**:**无论几步都整段收成抬头一行**。做完的活儿不该继续占着屏幕,
+ * - **回合结束之后**:**无论几步都整段收成抬头一行**。做完的活儿不该继续占着屏幕,
  *   哪怕只有一两步 —— 一屏里躺着七八段各留两行的"残骸",比一段长的还碎。
- *   「摊开最新三步」是**进行中**那一段的特权。
+ *
+ * 判据是**回合有没有结束**,不是"这一段里还有没有工具在跑"。后者会在最后一个
+ * 工具刚返回、正式回答**还没开始写**的那一刻,把整段从 N 行塌成一行 ——
+ * 既让人以为这一轮完了,又在正文即将出现的位置制造一次大幅高度突变。
+ * 现在保持摊开,等回合真的收尾再一起折。
+ *
+ * @param keepTail 回合仍在进行(或这一段里还有工具在跑)
  */
-export function planActivityFold(total: number, hasRunning: boolean): ActivityFoldPlan {
-  const visibleCount = hasRunning ? Math.min(total, ACTIVITY_TAIL_ROWS) : 0;
+export function planActivityFold(total: number, keepTail: boolean): ActivityFoldPlan {
+  const visibleCount = keepTail ? Math.min(total, ACTIVITY_TAIL_ROWS) : 0;
   const foldedCount = total - visibleCount;
   return {
     visibleCount,

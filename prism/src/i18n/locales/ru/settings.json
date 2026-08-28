@@ -237,7 +237,7 @@
   "mcpServers": {
     "title": "MCP серверы",
     "description": {
-      "claude": "Серверы Model Context Protocol предоставляют дополнительные инструменты и источники данных для Claude"
+      "claude": "Серверы Model Context Protocol предоставляют дополнительные инструменты и источники данных для AI"
     },
     "empty": "MCP серверы не настроены",
     "config": {

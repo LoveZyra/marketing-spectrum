@@ -35,6 +35,26 @@ _RULES_PATH = Path(__file__).resolve().parent.parent / "feature_schema" / "diagn
 _MISSING_THRESHOLD_SENTINEL = float("inf")
 
 
+def _tidy_num(v) -> str:
+    """数值 → 4 位有效数字的定点写法(不出科学计数法)。转不动就原样。
+
+    与 crowd_translator 共用同一道 _sci_to_plain —— 报告正文、规则提示、圈人条件
+    三处对"数字长什么样"必须是同一个口径。
+    """
+    try:
+        s = "{:.4g}".format(float(v))
+    except (TypeError, ValueError):
+        return str(v)
+    try:
+        try:
+            from .crowd_translator import _sci_to_plain
+        except ImportError:
+            from crowd_translator import _sci_to_plain
+        return _sci_to_plain(s)
+    except Exception:                  # noqa: BLE001
+        return s
+
+
 def _load_rules(path: Path | None = None) -> list[dict]:
     p = path or _RULES_PATH
     if not _YAML_OK:
@@ -493,7 +513,8 @@ class DiagnosticEngine:
             if tf and tf in self._thresholds:
                 tv = self._thresholds[tf].get("optimal")
                 if _ok(tv):
-                    thresh_hint = f"（阈值 {tf}={float(tv):.4g}）"
+                    # .4g 对极小阈值会吐科学计数法(3e-05),转成定点写法
+                    thresh_hint = "（阈值 {}={}）".format(tf, _tidy_num(tv))
 
             # 展示口径名（与 cvr_col 一致，默认成单率）
             basis = "成单率" if self._cvr_col == "is_paid" else "创单率"

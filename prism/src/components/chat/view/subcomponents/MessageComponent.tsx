@@ -2,7 +2,6 @@ import { memo, useMemo, useRef, useState } from 'react';
 import { Archive, ChevronRight, Wrench } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import ClaudeLogo from '../../../llm-logo-provider/ClaudeLogo';
 import type {
   ChatMessage,
   ClaudePermissionSuggestion,
@@ -199,27 +198,26 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
       ) : (
         /* Claude/Error/Tool messages on the left */
         <div className="w-full">
-          {!isGrouped && (
+          {/* 助手回复不再挂署名头部。
+              原来这里给"另起一组"的第一条渲染一个头像+名字,助手那档写死是
+              Anthropic 的星芒 + "Claude" —— 与实际回答的模型无关。这台上面跑的是
+              glm / deepseek 这些,署名 "Claude" 是**事实错误**;而且它只在
+              `!isGrouped` 时出现(上一条是用户消息才另起一组),所以表现成
+              "有时冒出来一下",更像故障。
+              错误和工具这两档保留:它们说明的是"这一块是什么",是真信息。 */}
+          {!isGrouped && (message.type === 'error' || message.type === 'tool') && (
             <div className="mb-2 flex items-center space-x-3">
               {message.type === 'error' ? (
                 <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-border bg-muted text-sm text-foreground">
                   !
                 </div>
-              ) : message.type === 'tool' ? (
+              ) : (
                 <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
                   <Wrench className="h-4 w-4" aria-hidden />
                 </div>
-              ) : (
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full p-1 text-sm text-foreground">
-                  <ClaudeLogo className="h-full w-full" />
-                </div>
               )}
               <div className="text-sm font-medium text-foreground">
-                {message.type === 'error'
-                  ? t('messageTypes.error')
-                  : message.type === 'tool'
-                    ? t('messageTypes.tool')
-                    : t('messageTypes.claude')}
+                {message.type === 'error' ? t('messageTypes.error') : t('messageTypes.tool')}
               </div>
             </div>
           )}

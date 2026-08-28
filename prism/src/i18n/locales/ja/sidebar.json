@@ -5,7 +5,7 @@
     "searchPlaceholder": "プロジェクトを検索...",
     "projectNamePlaceholder": "プロジェクト名",
     "newSession": "新しいセッション",
-    "fetchingProjects": "Claudeのプロジェクトとセッションを取得しています",
+    "fetchingProjects": "AIのプロジェクトとセッションを取得しています",
     "projects": "プロジェクト",
     "noMatchingProjects": "一致するプロジェクトがありません",
     "tryDifferentSearch": "検索語を変えてお試しください",

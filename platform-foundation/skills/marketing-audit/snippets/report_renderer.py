@@ -719,7 +719,9 @@ class ReportRenderer:
                 tv = thresholds[thresh_field].get("optimal")
                 if _fin(tv):
                     fz = self._FIELD_ZH.get(thresh_field, thresh_field)
-                    thresh_parts.append(f"阈值:{fz}={float(tv):.4g}")
+                    # 2026-08-17:`.4g` 对极小阈值会吐科学计数法(3e-05),违背"全链路不出科学
+                    # 计数法"的约定 —— 过一道 _sci_to_plain 转成定点写法。
+                    thresh_parts.append("阈值:{}={}".format(fz, _tidy_num(tv)))
             thresh_hint = "，".join(thresh_parts)
 
             label_map[rid] = {
@@ -1007,27 +1009,61 @@ _SCROLLSPY = """
 """
 
 
-def _build_segment_backlinks(problems, actions) -> dict:
+def _build_segment_backlinks(problems, actions, segments=None) -> dict:
     """人群名 → (核心发现序号, 标题)。对不上的人群不进这张表，附录里就不加链接。
 
     序号口径必须与 `_chapter1` 的 `problem-{i+1}` 完全一致 —— 那边用的是
     problems 列表下标，这里也用同一个列表算，避免两处编号漂移。
+
+    2026-08-17 起改为**结构匹配**:人群的 `finding_id` 出现在某个核心发现的
+    `evidence_finding_ids` 里，才算这条发现产出的人群。
+
+    此前是按人群名去撞 `action_plan.priority_actions[].target_audiences`。
+    那一栏是 Agent 润色时可以自由改写的(不在圈人锚点清单里),模型 finding 的
+    行动草稿写的是「全量」,Agent 把占位"写实"成了它看到的模型人群名 ——
+    附录里就凭空多出几个「↑ #N」,指向一条根本不产出这些人群的发现。
+    结构匹配之后，Agent 怎么写 target_audiences 都挂不上错链。
+
+    名字匹配保留为**兜底**,只在人群自己没有 finding_id 时启用(历史 job /
+    手写 state / 老示例数据)——有 finding_id 就一律以结构为准。
     """
     try:
-        rank_to = {}
+        rank_to: dict = {}          # problem_rank → hit（名字兜底用）
+        fid_to: dict = {}           # finding_id   → hit（结构匹配用）
         for i, p in enumerate(problems or []):
+            if not isinstance(p, dict):
+                continue
+            hit = (i + 1, p.get("title") or "")
             pr = p.get("problem_rank")
             if pr is not None and pr not in rank_to:
-                rank_to[pr] = (i + 1, p.get("title") or "")
-        out: dict = {}
+                rank_to[pr] = hit
+            for fid in (p.get("evidence_finding_ids") or []):
+                if fid and fid not in fid_to:
+                    fid_to[fid] = hit
+        by_name: dict = {}
         for a in (actions or []):
+            if not isinstance(a, dict):
+                continue
             hit = rank_to.get(a.get("problem_rank"))
             if not hit:
                 continue
             for aud in (a.get("target_audiences") or []):
                 name = aud.get("name") if isinstance(aud, dict) else str(aud)
-                if name and name not in out:
-                    out[name] = hit
+                if name and name not in by_name:
+                    by_name[name] = hit
+        if segments is None:        # 老调用签名（只有两参）：退回纯名字口径
+            return by_name
+        out: dict = {}
+        for s in (segments or []):
+            if not isinstance(s, dict):
+                continue
+            name = s.get("name")
+            if not name or name in out:
+                continue
+            fid = s.get("finding_id")
+            hit = fid_to.get(fid) if fid else by_name.get(name)
+            if hit:
+                out[name] = hit
         return out
     except Exception:            # noqa: BLE001 —— 附录少几个链接，好过报告渲不出来
         return {}
@@ -1191,7 +1227,7 @@ def render_fp(rr) -> str:
         + _chapter2(rr, problems, actions, segments, lmap,
                     {d["p"].get("problem_rank"): d["tr"] for d in pdata})
         + _chapter3(rr)
-        + _appendix(rr, segments, _build_segment_backlinks(problems, actions))
+        + _appendix(rr, segments, _build_segment_backlinks(problems, actions, segments))
         + _footer(title, cid, date)
         + '</div>'
     )
@@ -1729,6 +1765,50 @@ def _chapter3(rr) -> str:
 
 
 # ── 附录 ──────────────────────────────────────────────────────────────
+def _tidy_num(v) -> str:
+    """数值 → 4 位有效数字的定点写法(不出科学计数法)。转不动就原样。
+
+    与 crowd_translator 共用同一道 _sci_to_plain —— 报告正文、规则提示、圈人条件
+    三处对"数字长什么样"必须是同一个口径。
+    """
+    try:
+        s = "{:.4g}".format(float(v))
+    except (TypeError, ValueError):
+        return str(v)
+    try:
+        try:
+            from .crowd_translator import _sci_to_plain
+        except ImportError:
+            from crowd_translator import _sci_to_plain
+        return _sci_to_plain(s)
+    except Exception:                  # noqa: BLE001
+        return s
+
+
+def _tidy_cond(cond: str) -> str:
+    """展示层阈值规整:极小阈值连算符归零 + 浮点噪声抹平 + 数字收到最多 4 位。
+
+    ⚠ 折叠里的「原条件」也走这一道,所以它是**展示口径**,不是逐位精确的执行件。
+    有一类阈值是抹不动的(XGB 的 float32 阈值 598.19793701171875,四舍五入会真的
+    挪动边界),执行必须以 `/result` 的 `sql_filter` 为准 —— 那一份保持逐位保真。
+
+    与 crowd_translator.build_crowd_rules 用的是同两个函数,所以报告里看到的条件
+    与 API 出参 sql_filter / filter_zh 是同一句话 —— 这正是 fix29/fix30 的目标。
+    """
+    if not cond:
+        return cond
+    try:
+        try:
+            from .crowd_translator import (_round_display_nums, _trim_float_noise,
+                                           collapse_tiny_thresholds)
+        except ImportError:
+            from crowd_translator import (_round_display_nums, _trim_float_noise,
+                                          collapse_tiny_thresholds)
+        return _round_display_nums(_trim_float_noise(collapse_tiny_thresholds(cond)))
+    except Exception:                  # noqa: BLE001 —— 展示层永不崩
+        return cond
+
+
 def _appendix(rr, segments, seg_back=None) -> str:
     R = rr.r
     findings = [f for f in (R.get("findings") or []) if f.get("signal")]
@@ -1771,8 +1851,13 @@ def _appendix(rr, segments, seg_back=None) -> str:
         # 「原条件」给 SQL 形态:这一栏是拿去审计与下游圈人的,业务方要能直接执行。
         # pandas 形态带着 __NA__ 双表示守卫等内部机制,是链路内部的东西,不外露。
         # 没有 SQL(纯规则库 seg 早期数据)才退回 pandas 原文。
-        _pd_cond = s.get("filter_conditions", "")
-        _sqlc = (s.get("filter_conditions_sql") or "").strip()
+        # 2026-08-17:展示前过一道阈值规整 —— 极小阈值(树内部零哨兵)连算符一起归零、
+        # 浮点噪声收到 4 位。API 出参那条路在 crowd_translator.build_crowd_rules 里做,
+        # 报告读的是 state 原文,是**另一条路**,不在这里做就还会显示
+        # `> -0.000…00010000000180025095` 这种串(线上出过)。
+        # 纯展示层投影:state 一个字不改,下游圈人仍以 state / crowd_rules.json 为准。
+        _pd_cond = _tidy_cond(s.get("filter_conditions", ""))
+        _sqlc = _tidy_cond((s.get("filter_conditions_sql") or "").strip())
         _raw_cond = _sqlc or _pd_cond
         _code = (f'<code style="font-family:var(--mono);font-size:11px;background:var(--chipbg);'
                  f'padding:1px 5px;border-radius:2px;color:var(--chiptx);word-break:break-all">'

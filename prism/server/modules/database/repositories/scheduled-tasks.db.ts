@@ -36,6 +36,28 @@ export interface ScheduledTaskRow {
   running: number;
 }
 
+export interface ScheduledTaskRunRow {
+  id: number;
+  task_id: string;
+  trigger_kind: 'schedule' | 'manual';
+  status: 'completed' | 'failed';
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  detail: string | null;
+  session_id: string | null;
+}
+
+/**
+ * 每个任务保留多少条运行记录。留一个上限是必须的 —— 每小时跑一次的任务
+ * 一年就是 8760 行,而详情页永远只看最近几条。0 或负数视为"不清理"。
+ */
+export function taskRunHistoryLimit(env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Number.parseInt(env.PRISM_TASK_RUN_HISTORY ?? '', 10);
+  if (!Number.isFinite(parsed)) return 50;
+  return parsed;
+}
+
 export type ScheduledTaskInsert = Omit<ScheduledTaskRow,
   'created_at' | 'last_run_at' | 'last_run_status' | 'last_run_detail' | 'last_run_duration_ms' | 'running'>;
 
@@ -70,7 +92,13 @@ export const scheduledTasksDb = {
   },
 
   delete(id: string): boolean {
-    return getConnection().prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id).changes > 0;
+    const db = getConnection();
+    // 运行记录跟着任务走。没开外键约束,所以显式删 —— 否则任务没了,
+    // 它的运行记录还占着表,而且再也没有入口能看到。
+    return db.transaction(() => {
+      db.prepare('DELETE FROM scheduled_task_runs WHERE task_id = ?').run(id);
+      return db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id).changes > 0;
+    })();
   },
 
   getById(id: string): ScheduledTaskRow | undefined {
@@ -98,13 +126,67 @@ export const scheduledTasksDb = {
     return getConnection().prepare('UPDATE scheduled_tasks SET running = 1 WHERE id = ? AND running = 0').run(id).changes > 0;
   },
 
-  finishRun(id: string, result: { status: string; detail: string | null; durationMs: number; nextRunAt: string | null }): void {
-    getConnection().prepare(`
-      UPDATE scheduled_tasks
-      SET running = 0, last_run_at = datetime('now'), last_run_status = ?,
-          last_run_detail = ?, last_run_duration_ms = ?, next_run_at = ?
-      WHERE id = ?
-    `).run(result.status, result.detail, result.durationMs, result.nextRunAt, id);
+  /**
+   * 收尾:更新任务上的 last_run_* 摘要,并**追加一条运行记录**。
+   *
+   * 两件事放在一个事务里 —— 摘要和明细对不上的话,详情页顶部说成功、
+   * 列表里最新一条说失败,没人知道该信哪个。
+   */
+  finishRun(id: string, result: {
+    status: 'completed' | 'failed';
+    detail: string | null;
+    durationMs: number;
+    nextRunAt: string | null;
+    startedAt?: string | null;
+    sessionId?: string | null;
+    trigger?: 'schedule' | 'manual';
+  }): void {
+    const db = getConnection();
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE scheduled_tasks
+        SET running = 0, last_run_at = datetime('now'), last_run_status = ?,
+            last_run_detail = ?, last_run_duration_ms = ?, next_run_at = ?
+        WHERE id = ?
+      `).run(result.status, result.detail, result.durationMs, result.nextRunAt, id);
+
+      db.prepare(`
+        INSERT INTO scheduled_task_runs
+          (task_id, trigger_kind, status, started_at, finished_at, duration_ms, detail, session_id)
+        VALUES (?, ?, ?, COALESCE(?, datetime('now')), datetime('now'), ?, ?, ?)
+      `).run(
+        id,
+        result.trigger ?? 'schedule',
+        result.status,
+        result.startedAt ?? null,
+        result.durationMs,
+        result.detail,
+        result.sessionId ?? null
+      );
+
+      // 就地裁剪:按 id 倒序留最近 N 条。写入时顺手做,省一个后台清理器。
+      const limit = taskRunHistoryLimit();
+      if (limit > 0) {
+        db.prepare(`
+          DELETE FROM scheduled_task_runs
+          WHERE task_id = ? AND id NOT IN (
+            SELECT id FROM scheduled_task_runs WHERE task_id = ? ORDER BY id DESC LIMIT ?
+          )
+        `).run(id, id, limit);
+      }
+    })();
+  },
+
+  /** 某个任务的运行记录,最近的在前。 */
+  listRuns(taskId: string, limit = 20, offset = 0): { rows: ScheduledTaskRunRow[]; total: number } {
+    const db = getConnection();
+    const total = (db.prepare('SELECT COUNT(*) AS c FROM scheduled_task_runs WHERE task_id = ?')
+      .get(taskId) as { c: number }).c;
+    const rows = db.prepare(`
+      SELECT id, task_id, trigger_kind, status, started_at, finished_at, duration_ms, detail, session_id
+      FROM scheduled_task_runs WHERE task_id = ? ORDER BY id DESC LIMIT ? OFFSET ?
+    `).all(taskId, Math.max(1, Math.min(200, limit)), Math.max(0, offset)) as ScheduledTaskRunRow[];
+    return { rows, total };
   },
 
   /** 启动兜底:上次进程死在 running=1 上的任务全部松开。 */

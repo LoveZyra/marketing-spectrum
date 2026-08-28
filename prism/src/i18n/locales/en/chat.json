@@ -14,7 +14,7 @@
   "messageTypes": {
     "error": "Error",
     "tool": "Tool",
-    "claude": "Claude"
+    "claude": "AI"
   },
   "tools": {
     "settings": "Tool Settings"
@@ -22,7 +22,7 @@
   "interactive": {
     "title": "Interactive Prompt",
     "waiting": "Waiting for your response in the CLI",
-    "instruction": "Please select an option in your terminal where Claude is running."
+    "instruction": "Please select an option in your terminal where AI is running."
   },
   "json": {
     "response": "JSON Response"
@@ -54,7 +54,7 @@
       "sendNext": "Queue next message",
       "update": "Update queued message",
       "label": "Queued",
-      "willSend": "Will send when this finishes",
+      "willSend": "Sends when this finishes · Stop returns it to the box",
       "edit": "Edit queued message",
       "delete": "Delete queued message",
       "serverLabel": "Queued on server",
@@ -66,7 +66,8 @@
     "attachUrl": "Fetch a URL as context",
     "attachUrlPrompt": "Enter a URL to fetch its readable text:",
     "removeDocument": "Remove document",
-    "parsingDocument": "Parsing document…"
+    "parsingDocument": "Parsing document…",
+    "stopDiscards": "Stop (also cancels the message you just sent)"
   },
   "providerSelection": {
     "pressToSearch": "Press <kbd>{{shortcut}}</kbd> to search sessions, files, and commits"
@@ -86,8 +87,12 @@
       "showingLast": "Showing last {{count}} messages ({{total}} total)",
       "loadEarlier": "Load earlier messages",
       "loadAll": "Load all messages",
+      "expandAll": "Expand all in view",
       "loadingAll": "Loading all messages...",
       "allLoaded": "All messages loaded"
+    },
+    "tokens": {
+      "compacting": "compacting"
     }
   },
   "shell": {
@@ -113,7 +118,7 @@
     },
     "loading": "Loading terminal...",
     "connecting": "Connecting to shell...",
-    "startSession": "Start a new Claude session",
+    "startSession": "Start a new session",
     "resumeSession": "Resume session: {{displayName}}...",
     "runCommand": "Run {{command}} in {{projectName}}",
     "startCli": "Starting Claude CLI in {{projectName}}",
@@ -133,7 +138,18 @@
       "minutesSeconds": "{{minutes}}m {{seconds}}s"
     },
     "stop": "Stop",
-    "compacting": "Compacting context"
+    "compacting": "Compacting context",
+    "compaction": {
+      "blocking": "Context is full — compacting before continuing this turn",
+      "slow": "Compacting context — taking longer than usual",
+      "stalled": "Compacting context — no response from the CLI for a while",
+      "done": "Context compacted",
+      "doneWithNumbers": "Compacted {{before}} → {{after}}, freed {{percent}}%",
+      "failed": "Compaction failed — the next turn continues with an uncompacted context",
+      "elapsedWithLast": "{{elapsed}} · last {{last}}",
+      "tooShort": "Context is still short — nothing to compact yet",
+      "aborted": "Compaction cancelled"
+    }
   },
   "projectSelection": {
     "startChatWithProvider": "Select a project to start chatting with {{provider}}"
@@ -223,7 +239,8 @@
       "narration": "{{count}} notes"
     },
     "foldedCount": "+{{count}}",
-    "collapseRun": "Collapse"
+    "collapseRun": "Collapse",
+    "interrupted": "Interrupted"
   },
   "details": {
     "parameters": "Parameters",

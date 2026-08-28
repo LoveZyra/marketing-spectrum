@@ -217,6 +217,21 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     running INTEGER NOT NULL DEFAULT 0
 );
 
+-- 定时任务的运行记录(cz 轮)。此前只有 scheduled_tasks 上的 last_run_* 四个单数列,
+-- 每跑一次覆盖一次 —— 任务连着失败几回时,前几次的失败原因根本查不到。
+-- 这里一次运行一行。trigger 是 SQLite 保留字,所以列名叫 trigger_kind。
+CREATE TABLE IF NOT EXISTS scheduled_task_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    trigger_kind TEXT NOT NULL DEFAULT 'schedule',
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    detail TEXT,
+    session_id TEXT
+);
+
 CREATE TABLE IF NOT EXISTS session_display_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
@@ -318,6 +333,8 @@ ${SESSION_DISPLAY_MESSAGES_TABLE_SCHEMA_SQL}
 CREATE INDEX IF NOT EXISTS idx_display_messages_session_id ON session_display_messages(session_id, id);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_owner ON scheduled_tasks(owner_user_id);
+-- 详情页永远是「这个任务的最近 N 条」,倒序取,所以按 (task_id, id DESC) 建。
+CREATE INDEX IF NOT EXISTS idx_task_runs_task ON scheduled_task_runs(task_id, id DESC);
 
 ${ATTACHMENTS_TABLE_SCHEMA_SQL}
 -- 配额按用户求和,清理按时间扫 —— 两条查询各一个索引

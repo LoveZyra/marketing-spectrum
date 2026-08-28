@@ -14,7 +14,7 @@
   "messageTypes": {
     "error": "エラー",
     "tool": "ツール",
-    "claude": "Claude"
+    "claude": "AI"
   },
   "tools": {
     "settings": "ツール設定"
@@ -22,7 +22,7 @@
   "interactive": {
     "title": "インタラクティブプロンプト",
     "waiting": "CLIでの応答を待っています",
-    "instruction": "Claudeが実行されているターミナルでオプションを選択してください。"
+    "instruction": "AIが実行されているターミナルでオプションを選択してください。"
   },
   "json": {
     "response": "JSONレスポンス"
@@ -65,7 +65,11 @@
       "showingOf": "{{total}}件中{{shown}}件を表示",
       "scrollToLoad": "上にスクロールしてさらに読み込む",
       "showingLast": "最新{{count}}件を表示（全{{total}}件）",
-      "loadEarlier": "過去のメッセージを読み込む"
+      "loadEarlier": "過去のメッセージを読み込む",
+      "expandAll": "すべて表示"
+    },
+    "tokens": {
+      "compacting": "圧縮中"
     }
   },
   "shell": {
@@ -91,7 +95,7 @@
     },
     "loading": "ターミナルを読み込んでいます...",
     "connecting": "シェルに接続しています...",
-    "startSession": "新しいClaudeセッションを開始",
+    "startSession": "新しいAIセッションを開始",
     "resumeSession": "セッションを再開: {{displayName}}...",
     "runCommand": "{{projectName}}で{{command}}を実行",
     "startCli": "{{projectName}}でClaude CLIを起動しています",
@@ -109,6 +113,17 @@
     "elapsed": {
       "seconds": "{{count}}s",
       "minutesSeconds": "{{minutes}}m {{seconds}}s"
+    },
+    "compaction": {
+      "blocking": "コンテキストが満杯です — 圧縮してからこのターンを続行します",
+      "slow": "コンテキストを圧縮中 — いつもより時間がかかっています",
+      "stalled": "コンテキストを圧縮中 — CLI からしばらく応答がありません",
+      "done": "コンテキストを圧縮しました",
+      "doneWithNumbers": "{{before}} → {{after}} に圧縮、{{percent}}% を解放",
+      "failed": "圧縮に失敗しました — 次のターンは未圧縮のまま続行します",
+      "elapsedWithLast": "{{elapsed}} · 前回 {{last}}",
+      "tooShort": "コンテキストはまだ短く、圧縮の必要はありません",
+      "aborted": "圧縮をキャンセルしました"
     }
   },
   "attachments": {

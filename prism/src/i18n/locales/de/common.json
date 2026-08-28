@@ -87,7 +87,7 @@
     "step3": {
       "reviewConfig": "Konfiguration überprüfen",
       "path": "Pfad:",
-      "newEmpty": "Der Arbeitsbereich wird zur Projektliste hinzugefügt und steht für Claude-Sitzungen zur Verfügung."
+      "newEmpty": "Der Arbeitsbereich wird zur Projektliste hinzugefügt und steht für AI-Sitzungen zur Verfügung."
     },
     "buttons": {
       "cancel": "Abbrechen",

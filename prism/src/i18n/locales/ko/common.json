@@ -87,7 +87,7 @@
     "step3": {
       "reviewConfig": "설정 검토",
       "path": "경로:",
-      "newEmpty": "워크스페이스가 프로젝트 목록에 추가되며 Claude 세션에서 사용할 수 있습니다."
+      "newEmpty": "워크스페이스가 프로젝트 목록에 추가되며 AI 세션에서 사용할 수 있습니다."
     },
     "buttons": {
       "cancel": "취소",

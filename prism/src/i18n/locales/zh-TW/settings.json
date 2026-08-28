@@ -285,7 +285,7 @@
   "mcpServers": {
     "title": "MCP 伺服器",
     "description": {
-      "claude": "Model Context Protocol 伺服器為 Claude 提供額外的工具和資料來源"
+      "claude": "Model Context Protocol 伺服器為 AI 提供額外的工具和資料來源"
     },
     "empty": "未設定 MCP 伺服器",
     "config": {

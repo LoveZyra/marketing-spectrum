@@ -237,7 +237,7 @@
   "mcpServers": {
     "title": "MCP 서버",
     "description": {
-      "claude": "Model Context Protocol 서버는 Claude에 추가 도구와 데이터 소스를 제공합니다"
+      "claude": "Model Context Protocol 서버는 AI에 추가 도구와 데이터 소스를 제공합니다"
     },
     "empty": "설정된 MCP 서버 없음",
     "config": {

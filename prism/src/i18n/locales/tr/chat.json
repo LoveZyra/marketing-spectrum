@@ -14,7 +14,7 @@
   "messageTypes": {
     "error": "Hata",
     "tool": "Araç",
-    "claude": "Claude"
+    "claude": "AI"
   },
   "tools": {
     "settings": "Araç Ayarları"
@@ -22,7 +22,7 @@
   "interactive": {
     "title": "Etkileşimli Prompt",
     "waiting": "CLI'da yanıtın bekleniyor",
-    "instruction": "Lütfen Claude'un çalıştığı terminalde bir seçenek seç."
+    "instruction": "Lütfen AI'un çalıştığı terminalde bir seçenek seç."
   },
   "json": {
     "response": "JSON Yanıtı"
@@ -69,8 +69,12 @@
       "showingLast": "Son {{count}} mesaj gösteriliyor ({{total}} toplam)",
       "loadEarlier": "Önceki mesajları yükle",
       "loadAll": "Tüm mesajları yükle",
+      "expandAll": "Tümünü göster",
       "loadingAll": "Tüm mesajlar yükleniyor...",
       "allLoaded": "Tüm mesajlar yüklendi"
+    },
+    "tokens": {
+      "compacting": "sıkıştırma"
     }
   },
   "shell": {
@@ -96,7 +100,7 @@
     },
     "loading": "Terminal yükleniyor...",
     "connecting": "Shell'e bağlanılıyor...",
-    "startSession": "Yeni bir Claude oturumu başlat",
+    "startSession": "Yeni bir AI oturumu başlat",
     "resumeSession": "Oturuma devam et: {{displayName}}...",
     "runCommand": "{{projectName}} içinde {{command}} çalıştır",
     "startCli": "{{projectName}} içinde Claude CLI başlatılıyor",
@@ -114,6 +118,17 @@
     "elapsed": {
       "seconds": "{{count}}s",
       "minutesSeconds": "{{minutes}}d {{seconds}}s"
+    },
+    "compaction": {
+      "blocking": "Bağlam doldu — bu tura devam etmeden önce sıkıştırılıyor",
+      "slow": "Bağlam sıkıştırılıyor — her zamankinden uzun sürüyor",
+      "stalled": "Bağlam sıkıştırılıyor — CLI bir süredir yanıt vermiyor",
+      "done": "Bağlam sıkıştırıldı",
+      "doneWithNumbers": "{{before}} → {{after}} sıkıştırıldı, %{{percent}} boşaltıldı",
+      "failed": "Sıkıştırma başarısız — sonraki tur sıkıştırılmamış bağlamla devam edecek",
+      "elapsedWithLast": "{{elapsed}} · önceki {{last}}",
+      "tooShort": "Bağlam hâlâ kısa — sıkıştırılacak bir şey yok",
+      "aborted": "Sıkıştırma iptal edildi"
     }
   },
   "projectSelection": {

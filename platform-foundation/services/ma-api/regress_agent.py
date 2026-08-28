@@ -230,6 +230,11 @@ for flag in ("--allow-channel-lint", "--skip-validate", "--skip-completeness"):
                            for l in ln),
           str(ln)[:80])
 check("禁止改圈人锚点", all(k in pr for k in P.SEG_ANCHORS), str(P.SEG_ANCHORS))
+_ta_ln = [l for l in pr.splitlines() if "target_audiences" in l]
+check("禁止改 target_audiences(结构指针,不是文案)",
+      bool(_ta_ln) and any(("不要改" in l or "不得" in l or "禁止" in l) for l in _ta_ln),
+      str(_ta_ln)[:80])
+check("说清「全量」要原样保留(别拿人群名去填占位)", "全量" in pr)
 check("禁止写 skill 目录", "只读" in pr or "不要改" in pr)
 check("禁止留 [待润色]", "[待润色]" in pr)
 check("headline 字数底线写进去了", "30" in pr)
@@ -354,6 +359,105 @@ check("action_plan 是数组时,blind_spots 仍记得下来",
 check("扶正的时候原来的行动项没被扔掉",
       P.priority_actions_of(st4d) == [{"detail": "原来的行动项"}],
       json.dumps(st4d.get("action_plan"), ensure_ascii=False)[:160])
+
+
+# target_audiences 是结构指针不是文案:它说的是「这条行动打哪批人」,报告附录的
+# 「↑ #N 回到核心发现」回链靠它算。2026-08-17 线上:核心发现 #2 是模型洞察类
+# finding,草稿里 _action_from_problem 拿不到对应人群(模型 finding 在
+# _segment_from_finding 直接 return None),写的是 ["全量"];Agent 润色时把这个
+# 占位「写实」成了它在 audience_segments 里看到的三个模型人群名,附录于是挂出
+# 三条指向无关发现的死链。现行为:按草稿回填。
+run4e = os.path.join(RUN, "action_audiences")
+os.makedirs(run4e)
+ctx4e = Ctx(run4e)
+
+
+def draft_with_quanliang():
+    st = draft_state()
+    st["action_plan"]["priority_actions"] = [
+        {"title": "启动促付", "problem_rank": 1,
+         "target_audiences": ["创单未付待促付人群"]},
+        {"title": "模型洞察跟进", "problem_rank": 2, "target_audiences": ["全量"]},
+    ]
+    return st
+
+
+sd4e = os.path.join(run4e, "state_draft.json")
+P._dump(sd4e, draft_with_quanliang())
+
+
+def fill_quanliang(prompt, cwd):
+    st = draft_with_quanliang()
+    st["_stage"] = "full"
+    acts = st["action_plan"]["priority_actions"]
+    acts[1]["title"] = "对模型高潜人群做预算倾斜"          # 文案随它改
+    acts[1]["target_audiences"] = ["模型高分待触达人群"]   # 结构指针,不许它改
+    acts[0]["target_audiences"] = ["创单未付待促付人群", "模型高分待触达人群"]
+    P._dump(os.path.join(cwd, "state_full.json"), st)
+    return None
+
+
+cli4e, _ = fake_cli(fill_quanliang)
+info4e = P.run_report_agent(ctx4e, sd4e, cli4e, Steps("skill"))
+check("只动 target_audiences 不算废稿", info4e["used"] is True, str(info4e.get("reason")))
+st4e = P._load(info4e["state_full"])
+acts4e = P.priority_actions_of(st4e)
+check("被「写实」的「全量」回填成「全量」(模型人群不再冒充这条行动的对象)",
+      acts4e[1]["target_audiences"] == ["全量"], str(acts4e[1]["target_audiences"]))
+check("多塞进来的人群名也被摘掉",
+      acts4e[0]["target_audiences"] == ["创单未付待促付人群"],
+      str(acts4e[0]["target_audiences"]))
+check("行动文案照旧不动它的", acts4e[1]["title"] == "对模型高潜人群做预算倾斜",
+      acts4e[1]["title"])
+check("回填这件事必须出现在 warnings",
+      any("target_audiences" in w for w in ctx4e.warns), str(ctx4e.warns)[:120])
+check("这笔账不混进圈人锚点计数", info4e.get("fixed_anchors") == 0,
+      str(info4e.get("fixed_anchors")))
+
+# 没改就不该吵:同样的稿子原样交回来,warnings 里不许出现这条
+run4f = os.path.join(RUN, "action_audiences_clean")
+os.makedirs(run4f)
+ctx4f = Ctx(run4f)
+sd4f = os.path.join(run4f, "state_draft.json")
+P._dump(sd4f, draft_with_quanliang())
+
+
+def keep_audiences(prompt, cwd):
+    st = draft_with_quanliang()
+    st["_stage"] = "full"
+    st["action_plan"]["priority_actions"][1]["title"] = "改文案不改人群"
+    P._dump(os.path.join(cwd, "state_full.json"), st)
+    return None
+
+
+cli4f, _ = fake_cli(keep_audiences)
+info4f = P.run_report_agent(ctx4f, sd4f, cli4f, Steps("skill"))
+check("没改 target_audiences 就不告警(不制造噪声)",
+      not any("target_audiences" in w for w in ctx4f.warns), str(ctx4f.warns)[:120])
+
+# 条数对不上 → 不按位置猜,整个跳过(此时仍有改名反向映射兜着)
+run4g = os.path.join(RUN, "action_audiences_len")
+os.makedirs(run4g)
+ctx4g = Ctx(run4g)
+sd4g = os.path.join(run4g, "state_draft.json")
+P._dump(sd4g, draft_with_quanliang())
+
+
+def drop_action(prompt, cwd):
+    st = draft_with_quanliang()
+    st["_stage"] = "full"
+    st["action_plan"]["priority_actions"] = [
+        {"title": "只剩一条", "target_audiences": ["模型高分待触达人群"]}]
+    P._dump(os.path.join(cwd, "state_full.json"), st)
+    return None
+
+
+cli4g, _ = fake_cli(drop_action)
+info4g = P.run_report_agent(ctx4g, sd4g, cli4g, Steps("skill"))
+st4g = P._load(info4g["state_full"])
+check("行动条数对不上就不按位置猜(对不上就是对不上)",
+      P.priority_actions_of(st4g)[0]["target_audiences"] == ["模型高分待触达人群"],
+      str(P.priority_actions_of(st4g)))
 
 
 # ------------------------------------------------------- 5) 作废路径

@@ -492,7 +492,8 @@ def runner(job_id, params):
     warnings = []
     html = os.path.join(rundir, "diagnosis_report.html")
     if os.path.exists(html):
-        ctx = ma_pipeline.Ctx(params, rundir, log=lambda s: STORE.append_log(job_id, s))
+        ctx = ma_pipeline.Ctx(params, rundir, log=lambda s: STORE.append_log(job_id, s),
+                              job_id=job_id)   # 发布文件名一单一份
         result["report_url"] = publish_html(ctx, html)
         result["artifacts"]["report_html"] = "diagnosis_report.html"
         warnings.extend(ctx.warnings)

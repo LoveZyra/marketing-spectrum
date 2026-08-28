@@ -64,6 +64,7 @@ MA_RUNTIME 只是这两轴的预设名:
                        的话用 MA_ID_COL / MA_UNION_COL 调)
   MA_PUBLIC_DIR       HTML 发布目录,默认按 runtime 取(real=/home/jovyan/prism/public)
   MA_URL_BASE         报告 URL 前缀
+  MA_REPORT_KEEP      同一活动在发布目录保留最近几份报告,默认 20(0=不清理)
   MA_STEP_TIMEOUT     单个子命令超时秒数,默认 1800
   MA_POLISH_TIMEOUT   润色单次 CLI 调用的超时,默认 300
   MA_POLISH_ROUNDS    润色最多几轮(第 1 轮整批,之后分批补漏),默认 3
@@ -215,6 +216,35 @@ PUBLIC_DIR = _env("MA_PUBLIC_DIR", _DEFAULT_PUBLIC.get(RUNTIME, _DEFAULT_PUBLIC[
 URL_BASE = _env("MA_URL_BASE", _DEFAULT_URLBASE.get(RUNTIME, _DEFAULT_URLBASE["stub"]))
 
 MA_CLI = os.path.join(SKILL_DIR, "cli.py")
+
+# 报告发布文件名一单一份。2026-08-17 之前是 diagnosis-report-{activity_id}.html ——
+# 同一活动复诊会把上一单原地盖掉,先前发出去的链接全部改指最新内容(最坏情况是
+# 指到一份带降级横幅的半成品),历史版本再也找不回来。现在名字带上 job_id,
+# 链接与那一单的产物一一对应,永不互相覆盖。
+# 代价是发布目录只增不减,所以配一个按活动的保留上限。
+REPORT_KEEP = _env_int("MA_REPORT_KEEP", 20)   # 同一 activity_id 留最近几份,0=不清理
+
+_REPORT_PREFIX = "diagnosis-report-"
+# 文件名尾巴:job_20260817_161200_a1b2c3(有 job_id)或 20260817_161200_a1b2c3(兜底)。
+# 清理时靠它把「本活动的报告」和「名字以本活动 id 开头的另一个活动的报告」分开——
+# activity_id 允许连字符(ACT9 与 ACT9-B 可以并存),裸 startswith 会误删别人的文件。
+_REPORT_TAIL_RE = re.compile(r"^(?:job_)?\d{8}_\d{6}_[0-9a-z]{6}$")
+
+
+def _job_id_from_rundir(rundir):
+    """rundir 的标准形状是 <jobs>/<job_id>/run —— 取中间那层当 job_id。
+
+    命令行自测走的是 runs/<activity_id>,对不上就返回 None,由 report_filename
+    自己造一个同形状的尾巴兜底。宁可兜底,也不要在这里猜出一个假 job_id。
+    """
+    try:
+        p = os.path.abspath(rundir)
+        if os.path.basename(p) != "run":
+            return None
+        jid = os.path.basename(os.path.dirname(p))
+        return jid if _REPORT_TAIL_RE.match(jid) else None
+    except (OSError, TypeError):
+        return None
 
 
 # --------------------------------------------------------------------------- 环境体检
@@ -395,10 +425,12 @@ class Ctx(object):
     (命令行直接 python3 ma_pipeline.py <activity_id> 就能验证)。
     """
 
-    def __init__(self, params, rundir, log=None, set_phase=None):
+    def __init__(self, params, rundir, log=None, set_phase=None, job_id=None):
         self.params = params
         self.rundir = rundir
         self.activity_id = params["activity_id"]
+        # 报告发布文件名靠它做到一单一份。调用方给了就用给的,没给从 rundir 推。
+        self.job_id = job_id or _job_id_from_rundir(rundir)
         self.push_source = params.get("push_source") or "model"
         self._log = log or (lambda s: sys.stderr.write(s + "\n"))
         self._set_phase = set_phase or (lambda p: None)
@@ -3342,6 +3374,10 @@ self_critique 和 render 后面的流程还会替你复核;不要花时间写批
 - 不要改 audience_segments 里的 name / sql_filter / estimated_size / direction /
   finding_id。这些字段下游已经拿去圈人了,改一个字报告和人群包就对不上。
   profile_text 这类纯描述可以改写。
+- 不要改 action_plan.priority_actions 里的 target_audiences。它不是文案,是
+  「这条行动打哪批人」的结构指针,报告的人群回链靠它算。草稿写的是「全量」就
+  保持「全量」—— 那说明这条发现本来就没有对应人群包,不要拿 audience_segments
+  里的人群名去填它(填错了报告里会出现指向无关发现的死链)。行动的文字描述随你改。
 - 不要删 findings,不要新增或删除 audience_segments,不要编造数据里没有的数字。
 - 不要用 --allow-channel-lint、--skip-validate、--skip-completeness 硬闯门禁。
   渠道词汇违规(REWRITE_REQUIRED)是最高优先级阻塞,只能改文案,不能绕。
@@ -3457,7 +3493,60 @@ def restore_seg_anchors(ctx, draft, out):
     if fixed:
         ctx.warn("Agent 动了 {} 个圈人锚点字段(改名 {} 处),已按草稿回填 —— "
                  "报告里的人群口径必须跟 crowd_rules.json 完全一致".format(fixed, len(renames)))
+    restore_action_audiences(ctx, draft, out)
     return fixed, renames
+
+
+def restore_action_audiences(ctx, draft, out):
+    """把 priority_actions[].target_audiences 按草稿回填。
+
+    这一栏不是文案,是**结构指针** —— 它说的是"这条行动打哪批人",报告附录的
+    人群回链(「↑ #N 回到核心发现」)完全靠它算。而它此前不在 SEG_ANCHORS 里,
+    提示词的硬约束也没提,于是成了 Agent 的自由发挥区。
+
+    2026-08-17 线上实例:核心发现 #2 是模型洞察类 finding,草稿里
+    `_action_from_problem` 拿不到对应人群(模型 finding 在
+    `_segment_from_finding` 直接 return None),写的是 ["全量"];Agent 润色时
+    把这个占位"写实"成了它在 audience_segments 里看到的三个模型人群名,
+    附录里三行模型人群同时挂上「↑ #2」—— 那条发现根本不产出这些人群,是死链。
+
+    对齐口径:先按 problem_rank 配对(草稿与定稿的行动顺序可能被改写),配不上
+    再按位置;两边条数对不上就整个跳过(对不上就是对不上,不猜),此时仍有
+    restore_seg_anchors 的改名反向映射兜着。
+    """
+    try:
+        d_acts = priority_actions_of(draft)
+        o_acts = priority_actions_of(out)
+    except Exception:                                    # noqa: BLE001
+        return 0
+    if not d_acts or not o_acts:
+        return 0
+    by_rank = {}
+    for a in d_acts:
+        pr = a.get("problem_rank")
+        if pr is not None and pr not in by_rank:
+            by_rank[pr] = a
+    positional = len(d_acts) == len(o_acts)
+    fixed = 0
+    for i, o in enumerate(o_acts):
+        if not isinstance(o, dict):
+            continue
+        d = by_rank.get(o.get("problem_rank"))
+        if d is None and positional:
+            d = d_acts[i]
+        if not isinstance(d, dict) or "target_audiences" not in d:
+            continue
+        want = d.get("target_audiences")
+        if not isinstance(want, list):
+            continue
+        if o.get("target_audiences") != want:
+            o["target_audiences"] = list(want)
+            fixed += 1
+    if fixed:
+        ctx.warn("Agent 改了 {} 条行动的 target_audiences,已按草稿回填 —— "
+                 "这一栏是「这条行动打哪批人」的结构指针,报告的人群回链靠它算,"
+                 "改了会挂出指向无关核心发现的死链".format(fixed))
+    return fixed
 
 
 def verify_agent_state(ctx, draft_path, out_path):
@@ -3946,16 +4035,19 @@ def pick_push_rules(all_rules, push_source):
 
       - source:只用 audience_segment。诊断规则(diagnostic_rule)是"发现",
         不是策划挑出来的投放包,不圈人。这条与 run_one_activity.py 一致。
-      - direction:只用 push。这条与离线流程**故意不一致**,是 API 模式特有的。
-        离线流程里 direction 不参与筛选,因为它是留给下游(建表导入 / 推送平台)
-        消费的;API 模式按约定把下游整个去掉了,出参只有报告链接和规则 JSON,
-        消费 direction 的那一环没了,它就必须在这里生效。
-        2026-07-28 那轮吃过亏:6 条 audience_segment 里 3 条是 exclude,其中
-        「跨渠道高频疲劳人群」一条覆盖 49477/50000 人,OR 进 push_sql 之后,
-        出参的 49735 人里九成恰恰是诊断结论说"别推"的人。
+      - direction:**全部带出**(fix21,2026-08-14 改口径)。此前只放行 push,
+        因为 API 模式把下游去掉了、没人消费 direction;现在调用方明确要按 direction
+        自行分流,于是恢复成与离线流程一致 —— 两个方向都进 picked、都出现在出参
+        rules[] 里,由 direction 字段区分。
 
-    按约定这里只做正选,不做反选 —— exclude 规则既不圈人,也不拿去对 push 人群
-    做 AND NOT 过滤,它们只在 excluded 里留个名字备查。
+    ⚠ 红线:**推送口径必须与出参口径分开算**。push_sql / size.push 只能用
+    direction=push 的那批(见 run_pipeline 里的 push_only),exclude 一旦混进去就是
+    2026-07-28 的原样事故:6 条 audience_segment 里 3 条 exclude,其中「跨渠道高频
+    疲劳人群」一条覆盖 49477/50000 人,OR 进 push_sql 之后,出参的 49735 人里九成
+    恰恰是诊断结论说"别推"的人。regress_direction 有专项断言守着这条。
+
+    仍然不做反选 —— exclude 规则不拿去对 push 人群做 AND NOT 过滤,它只是被标记出来
+    交给调用方自己决定怎么用。
 
     模型/规则的划分仍然只看 finding_id 前缀,不看 direction,那是另一个轴:
         fnd_model_*        → 模型输出
@@ -3970,28 +4062,26 @@ def pick_push_rules(all_rules, push_source):
         direction, fix = normalize_direction(r)
         if fix:
             fixes.append(fix)
-        if direction == "push":
-            if (r.get("direction") or "").strip().lower() != "push":
-                # 纠正完要把结果写回出参。否则这条人群在 rules 里、size.push 也算了它,
-                # 字段上却写着 direction=exclude —— 下游照着 direction 过滤一遍,
-                # 等于纠正了个寂寞。原值不丢:direction_raw 留着,再记一条谁改的。
-                r = dict(r)
-                r["direction_from_skill"] = r.get("direction")
-                r["direction"] = "push"
-                r["direction_fixed"] = True
-            segs.append(r)
-        else:
-            # 刻意不带 sql_filter 出去:排除规则不该被下游拿去执行
+        # 归一化结果必须写回出参:否则这条人群 direction 字段还是老值,调用方照着它
+        # 分流就分错了。原值不丢 —— direction_raw / direction_from_skill 都留着。
+        if (r.get("direction") or "").strip().lower() != direction:
+            r = dict(r)
+            r["direction_from_skill"] = r.get("direction")
+            r["direction"] = direction
+            r["direction_fixed"] = True
+        segs.append(r)
+        if direction != "push":
+            # excluded 是「非 push 的那部分」的视图,给 notes / meta 用。
+            # fix21 起这批人也同时出现在 rules[] 里(带 direction=exclude),
+            # 这里保留是为了 notes 能说清"另有 N 条不参与推送",不是另一份数据。
             excluded.append({"name": r.get("name"),
                              "finding_id": r.get("finding_id"),
                              "direction": direction,
                              "direction_raw": r.get("direction_raw"),
+                             "filter_zh": r.get("filter_zh") or "",
                              "estimated_size": r.get("estimated_size"),
-                             # 排除人群同样要带建议动作(运营要知道"为什么不推、那该怎么办"),
-                             # _seg_index 是回填 suggestion 的主键,白名单投影必须带上它,
-                             # 否则排除侧只能走兜底话术(direction_raw 当年就是这么丢的)
                              "_seg_index": r.get("_seg_index"),
-                             "reason": "direction={},按接口口径不参与推送".format(direction)})
+                             "reason": "direction={},不计入 push_sql / size.push".format(direction)})
     if push_source == "model":
         picked = [r for r in segs if (r.get("finding_id") or "").startswith("fnd_model")]
     elif push_source == "rule":
@@ -4132,9 +4222,10 @@ def build_notes(ctx, backend, dropped, degraded_polish, has_rules, excluded=None
 # --------------------------------------------------------------------------- 主流程
 
 
-def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extract_json=None):
+def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extract_json=None,
+                 job_id=None):
     """跑完整条链路,返回接口 result 结构。抛 StepError 表示这一单失败。"""
-    ctx = Ctx(params, rundir, log=log, set_phase=set_phase)
+    ctx = Ctx(params, rundir, log=log, set_phase=set_phase, job_id=job_id)
     backend = get_backend()
     src, steps = backend.source, backend.steps
     ctx.log("runtime={} 后端={} 数据源={} 发布目录={}".format(
@@ -4178,9 +4269,16 @@ def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extrac
                                 "确要放行残缺单请置 MA_REQUIRE_RULES=0".format(len(picked)))
             src.count_rules(ctx, ok)
             for r in ok:
-                ctx.log("规则命中 {} → {}".format(r.get("name"), r.get("population_size")))
-            total = src.count_push_total(ctx, ok)
-            ctx.log("去重后推送人数 size.push = {}".format(total))
+                ctx.log("规则命中 {} [{}] → {}".format(
+                    r.get("name"), r.get("direction"), r.get("population_size")))
+            # ⚠ 红线(fix21):size.push 只数 direction=push 的那批。rules[] 出参
+            # 从这一版起两个方向都带,但"推送人数"永远只算推送侧 —— 混进 exclude
+            # 就是 2026-07-28 的原样事故(49735 人里九成是诊断说"别推"的)。
+            push_only = [r for r in ok if (r.get("direction") or "").strip().lower() == "push"]
+            total = src.count_push_total(ctx, push_only)
+            ctx.log("去重后推送人数 size.push = {}(只数 {} 条 push 规则;另有 {} 条 "
+                    "exclude 随出参带出但不计入)".format(
+                        total, len(push_only), len(ok) - len(push_only)))
             return ok, dropped, total
 
         push_ok, dropped, push_size = ctx.step("crowd_push", _crowd)
@@ -4227,8 +4325,13 @@ def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extrac
             attach_suggestions(push_ok, sf, ctx)
             attach_suggestions(excluded, sf, ctx)
             _strip_internal(dropped)
+            # ⚠ 红线(fix21):push_sql 只由 direction=push 的规则 OR 起来。
+            # push_ok 现在含两个方向(出参 rules[] 要全给),但可执行的推送 SQL
+            # 绝不能把 exclude 谓词并进去。regress_direction 有专项断言守着。
+            _push_only = [r for r in push_ok
+                          if (r.get("direction") or "").strip().lower() == "push"]
             push_sql, count_sql = build_push_sql(
-                push_ok, table=src.sql_table, id_col=src.id_col, union_col=src.union_col,
+                _push_only, table=src.sql_table, id_col=src.id_col, union_col=src.union_col,
                 base_where=src.base_where(ctx) if hasattr(src, "base_where") else None)
             cols = [src.id_col] if src.union_col == src.id_col else [src.id_col, src.union_col]
             spec = {
@@ -4243,12 +4346,14 @@ def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extrac
                 "columns": cols,
                 "push_sql": push_sql,
                 "sql": count_sql,
-                "rules": [dict(r, crowd="push") for r in push_ok],
+                # fix21:两个方向都带出去,crowd 标记跟随 direction —— 调用方按
+                # direction 分流。push_sql / size.push 仍只含 push(见上方红线)。
+                "rules": [dict(r, crowd=(r.get("direction") or "push")) for r in push_ok],
                 "dropped_rules": dropped,
                 "excluded_rules": excluded,
                 "size": {"push": push_size},
                 "notes": build_notes(ctx, backend, dropped, polish_info.get("degraded"),
-                                     bool(push_ok), excluded),
+                                     bool(_push_only), excluded),
             }
             return {
                 "activity_id": ctx.activity_id,
@@ -4286,14 +4391,73 @@ def run_pipeline(params, rundir, log=None, set_phase=None, call_cli=None, extrac
         backend.close()
 
 
+def report_filename(ctx):
+    """这一单的发布文件名 —— 一单一份,不复用不覆盖。
+
+    形如 diagnosis-report-{activity_id}-job_20260817_161200_a1b2c3.html。
+    带 activity_id 是为了运维一眼能看出是哪个活动的;带 job_id 才是唯一性来源。
+    """
+    tail = getattr(ctx, "job_id", None)
+    if not tail or not _REPORT_TAIL_RE.match(tail):
+        # 非标准 rundir(命令行自测那种):自己造一个同形状的尾巴。
+        # 带随机后缀而不是纯时间戳 —— 同一秒内并发两单,纯时间戳照样会撞。
+        tail = "{}_{:06x}".format(time.strftime("%Y%m%d_%H%M%S"), random.getrandbits(24))
+    return "{}{}-{}.html".format(_REPORT_PREFIX, ctx.activity_id, tail)
+
+
+def prune_reports(ctx, keep=None):
+    """同一活动的旧报告只留最近 keep 份,返回删掉几份。
+
+    只动「本活动 + 文件名尾巴形状对得上」的文件:别的活动不碰,2026-08-17 之前
+    那个固定名 diagnosis-report-{activity_id}.html 也不碰(历史链接照样打得开)。
+    清不掉只告警 —— 报告已经发出去了,清理失败不该让整单变红。
+    """
+    keep = REPORT_KEEP if keep is None else keep
+    if keep <= 0:
+        return 0
+    head = "{}{}-".format(_REPORT_PREFIX, ctx.activity_id)
+    try:
+        mine = []
+        for fn in os.listdir(PUBLIC_DIR):
+            if not (fn.startswith(head) and fn.endswith(".html")):
+                continue
+            if not _REPORT_TAIL_RE.match(fn[len(head):-len(".html")]):
+                continue
+            full = os.path.join(PUBLIC_DIR, fn)
+            try:
+                mine.append((os.path.getmtime(full), full))
+            except OSError:
+                continue
+        if len(mine) <= keep:
+            return 0
+        mine.sort(reverse=True)
+        gone = 0
+        for _mt, full in mine[keep:]:
+            try:
+                os.remove(full)
+                gone += 1
+            except OSError:
+                pass
+        if gone:
+            ctx.log("清理活动 {} 的旧报告 {} 份(保留最近 {} 份,MA_REPORT_KEEP 可调,0=不清理)"
+                    .format(ctx.activity_id, gone, keep))
+        return gone
+    except OSError as exc:
+        ctx.warn("旧报告清理失败({}),不影响本次发布".format(exc))
+        return 0
+
+
 def publish_html(ctx, html_path):
     """把报告拷到公开目录并给出 URL。目录不存在时不让整单失败,降级返回本地路径。
 
     ctx.report_banner 非空时,发布副本的 <body> 顶部注入一条置顶横幅(rundir 里的
     原件不动)。这是"降级稿不裸发"的最后一道闸:出参里的 degraded 标志读者看不见,
     压在页面上的字才看得见。
+
+    文件名一单一份(见 report_filename):同一活动复诊不再覆盖上一单的报告,
+    已经发出去的链接永远指向它当初那份内容。
     """
-    name = "diagnosis-report-{}.html".format(ctx.activity_id)
+    name = report_filename(ctx)
     if not os.path.isdir(PUBLIC_DIR):
         ctx.warn("发布目录不存在:{},报告只留在运行目录".format(PUBLIC_DIR))
         return None
@@ -4320,6 +4484,7 @@ def publish_html(ctx, html_path):
     with open(ctx.path("report_url.txt"), "w", encoding="utf-8") as f:
         f.write(url + "\n")
     ctx.log("报告已发布 {}".format(url))
+    prune_reports(ctx)
     return url
 
 

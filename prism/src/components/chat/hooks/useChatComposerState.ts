@@ -1,3 +1,5 @@
+import { emitToast } from '@/shared/view/ui/toastBus';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   ChangeEvent,
@@ -16,12 +18,14 @@ import { uploadFormDataWithProgress } from '../../../utils/uploadWithProgress';
 import type { MarkSessionProcessing } from '../../../hooks/useSessionProtection';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
 import {
+  claimQueuedMessage,
   clearQueuedMessage,
   readQueuedMessage,
   safeLocalStorage,
   writeQueuedMessage,
   type QueuedSendOptions,
 } from '../utils/chatStorage';
+import { queueLockName, runExclusive } from '../utils/queueClaim';
 import type {
   ChatMessage,
   PendingPermissionRequest,
@@ -706,11 +710,19 @@ export function useChatComposerState({
           return false;
         }
 
-        if (!file.size || file.size > 5 * 1024 * 1024) {
-          const fileName = file.name || 'Unknown file';
+        // 0 字节和超限是两回事,原来共用一句"超过 5MB",空文件会被报成超大。
+        if (!file.size) {
           setImageErrors((previous) => {
             const next = new Map(previous);
-            next.set(fileName, '超过 5MB,图片最大 5MB');
+            next.set(file.name || 'Unknown file', '这个文件是空的');
+            return next;
+          });
+          return false;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+          setImageErrors((previous) => {
+            const next = new Map(previous);
+            next.set(file.name || 'Unknown file', '超过 5MB,图片最大 5MB');
             return next;
           });
           return false;
@@ -724,7 +736,14 @@ export function useChatComposerState({
     });
 
     if (validFiles.length > 0) {
-      setAttachedImages((previous) => [...previous, ...validFiles].slice(0, 5));
+      setAttachedImages((previous) => {
+        const merged = [...previous, ...validFiles];
+        if (merged.length > 5) {
+          // 原来是默默 slice(0,5),多出来的图片凭空消失。
+          emitToast({ message: `最多附 5 张图片,多出的 ${merged.length - 5} 张没有附上。`, variant: 'error' });
+        }
+        return merged.slice(0, 5);
+      });
     }
   }, []);
 
@@ -983,8 +1002,15 @@ export function useChatComposerState({
     // 不再限定 image/*:拖进来的任何类型都收,分流交给 acceptDroppedFiles。
     // 大小上限也不在这里卡 —— 图片 5MB、其他 500MB 是两套阈值,由各自那条路
     // 去判并给出对应的提示;在这里统一卡一个数只会让其中一边的提示是错的。
-    maxFiles: 5,
+    // **不要在这里设 maxFiles。** react-dropzone 超过 maxFiles 时会把**全部**文件
+    // 塞进 fileRejections 并清空 acceptedFiles —— 结果是"一次拖 6 个文件,
+    // 什么都不发生",而且因为没配 onDropRejected,连一句提示都没有。
+    // 数量上限交给 acceptDroppedFiles 去判(它会收下前 5 张并提示多出几张)。
     onDrop: acceptDroppedFiles,
+    onDropRejected: (rejections) => {
+      if (rejections.length === 0) return;
+      emitToast({ message: `有 ${rejections.length} 个文件没能附上。`, variant: 'error' });
+    },
     noClick: true,
     noKeyboard: true,
   });
@@ -1390,20 +1416,34 @@ export function useChatComposerState({
     // still live (the cleanup below cancels the send in that case).
     const delay = wasLoading ? 0 : 750;
     const timer = setTimeout(() => {
-      // The saved key is the claim ticket shared with the app-level auto-send
-      // (which handles sessions that finish while not viewed). If it's gone,
-      // the message was already dispatched — don't send it twice.
-      if (sessionKey && !readQueuedMessage(sessionKey)) {
+      const dispatch = () => {
         setQueuedDraft(null);
+        setInput(queuedDraft.content);
+        inputValueRef.current = queuedDraft.content;
+        setAttachedImages(queuedDraft.images);
+        setTimeout(() => {
+          handleSubmitRef.current?.(createFakeSubmitEvent());
+        }, 0);
+      };
+
+      // 没有会话键 = 还没落盘,没有别人能抢,直接发。
+      if (!sessionKey) {
+        dispatch();
         return;
       }
-      setQueuedDraft(null);
-      setInput(queuedDraft.content);
-      inputValueRef.current = queuedDraft.content;
-      setAttachedImages(queuedDraft.images);
-      setTimeout(() => {
-        handleSubmitRef.current?.(createFakeSubmitEvent());
-      }, 0);
+
+      // The saved key is the claim ticket shared with the app-level auto-send
+      // (which handles sessions that finish while not viewed). 认领不到 = 键已经
+      // 没了(已经发过),或者**别的标签页**刚抢走 —— 都不能再发一次。
+      void runExclusive(queueLockName(sessionKey), () => {
+        if (!claimQueuedMessage(sessionKey)) {
+          setQueuedDraft(null);
+          return;
+        }
+        dispatch();
+      }).catch((error) => {
+        console.error('排队草稿发送失败:', error);
+      });
     }, delay);
     return () => clearTimeout(timer);
   }, [isLoading, queuedDraft, sessionKey, setInput, isConnected]);
@@ -1421,6 +1461,24 @@ export function useChatComposerState({
 
   const deleteQueuedDraft = useCallback(() => {
     setQueuedDraft(null);
+  }, []);
+
+  /**
+   * 服务端那份排队被中止带走了 —— 把正文退回输入框。
+   *
+   * 与本地 `queuedDraft` 走的是同一套语义(见 handleAbortSession):停止不替用户
+   * 开跑下一段,但也不吞掉他打过的字。
+   *
+   * **只在输入框为空时回填** —— 用户可能在中止之后已经开始打别的了,
+   * 覆盖他正在打的字比丢掉那条排队更糟。回填不了时调用方会退回原来那条提示,
+   * 至少不会让消息看起来凭空消失。
+   */
+  const restoreQueuedContent = useCallback((content: string): boolean => {
+    if (!content || inputValueRef.current.trim()) return false;
+    setInput(content);
+    inputValueRef.current = content;
+    textareaRef.current?.focus();
+    return true;
   }, []);
 
   useEffect(() => {
@@ -1676,6 +1734,20 @@ export function useChatComposerState({
       return;
     }
 
+    // 停止 = 刹车,不是"停这一条然后接着跑下一条"。
+    //
+    // 原来这里只发 abort:中止同样产生 `complete` → isLoading 由 true 变 false →
+    // 下面那个 flush effect 以 `wasLoading ? 0 : 750` 的 0ms 立刻把排队那条**发出去**。
+    // 于是用户会看到服务端广播的"排队那条已取消",同时一个新回合开跑 ——
+    // 跳过权限档下这意味着刹车没刹住,agent 继续动文件。
+    //
+    // 也不能默默丢掉:排一条纠正再按停止,是引导 agent 最顺手的操作,
+    // 丢了就得重敲。所以退回输入框 —— 不丢东西,也不会有任何东西自动开跑,
+    // 要不要发交回给用户的下一次按键。
+    if (queuedDraft) {
+      editQueuedDraft();
+    }
+
     const targetSessionId = selectedSession?.id || currentSessionId || null;
     if (!targetSessionId) {
       console.warn('Abort requested but no session ID is available.');
@@ -1688,7 +1760,7 @@ export function useChatComposerState({
       type: 'chat.abort',
       sessionId: targetSessionId,
     });
-  }, [canAbortSession, currentSessionId, selectedSession?.id, sendMessage]);
+  }, [canAbortSession, currentSessionId, selectedSession?.id, sendMessage, queuedDraft, editQueuedDraft]);
 
   const handleGrantToolPermission = useCallback(
     (suggestion: { entry: string; toolName: string }) => {
@@ -1837,6 +1909,7 @@ export function useChatComposerState({
     queuedDraft,
     editQueuedDraft,
     deleteQueuedDraft,
+    restoreQueuedContent,
     handleInputChange,
     handleKeyDown,
     handlePaste,

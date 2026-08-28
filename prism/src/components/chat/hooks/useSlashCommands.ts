@@ -524,8 +524,20 @@ export function useSlashCommands({
       }
 
       if (event.key === 'Tab' || event.key === 'Enter') {
-        event.preventDefault();
         const mode = event.key === 'Tab' ? 'complete' : 'submit';
+        // 没高亮任何一项时**不抢回车**(注意 preventDefault 也要一起让开,
+        // 否则回车既不选中也不发送)。
+        //
+        // 原来这里无条件退而取首项:配上 150ms 的查询去抖,快打 `/clear` 立刻回车,
+        // 插进去的是 `commandQuery` 还停在 `cle`/`c`/`''` 时那份列表的首项 ——
+        // 用户敲的和插进去的完全无关。让回车按它本来的意思走(发送);
+        // 想选命令的人本来就会先按方向键。
+        //
+        // Tab 不在此列 —— 它是补全键,"补成第一个匹配项"正是它该有的行为。
+        if (event.key === 'Enter' && selectedCommandIndex < 0) {
+          return false;
+        }
+        event.preventDefault();
         const target = selectedCommandIndex >= 0
           ? filteredCommands[selectedCommandIndex]
           : filteredCommands[0];

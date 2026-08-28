@@ -14,7 +14,7 @@
   "messageTypes": {
     "error": "Errore",
     "tool": "Strumento",
-    "claude": "Claude"
+    "claude": "AI"
   },
   "tools": {
     "settings": "Impostazioni strumento"
@@ -22,7 +22,7 @@
   "interactive": {
     "title": "Prompt interattivo",
     "waiting": "In attesa della tua risposta nella CLI",
-    "instruction": "Seleziona un'opzione nel terminale dove Claude è in esecuzione."
+    "instruction": "Seleziona un'opzione nel terminale dove AI è in esecuzione."
   },
   "json": {
     "response": "Risposta JSON"
@@ -69,8 +69,12 @@
       "showingLast": "Visualizzati ultimi {{count}} messaggi ({{total}} totali)",
       "loadEarlier": "Carica messaggi precedenti",
       "loadAll": "Carica tutti i messaggi",
+      "expandAll": "Mostra tutti",
       "loadingAll": "Caricamento di tutti i messaggi...",
       "allLoaded": "Tutti i messaggi caricati"
+    },
+    "tokens": {
+      "compacting": "compressione"
     }
   },
   "shell": {
@@ -96,7 +100,7 @@
     },
     "loading": "Caricamento terminale...",
     "connecting": "Connessione alla shell...",
-    "startSession": "Avvia una nuova sessione Claude",
+    "startSession": "Avvia una nuova sessione AI",
     "resumeSession": "Riprendi sessione: {{displayName}}...",
     "runCommand": "Esegui {{command}} in {{projectName}}",
     "startCli": "Avvio Claude CLI in {{projectName}}",
@@ -114,6 +118,17 @@
     "elapsed": {
       "seconds": "{{count}}s",
       "minutesSeconds": "{{minutes}}m {{seconds}}s"
+    },
+    "compaction": {
+      "blocking": "Contesto pieno — compressione prima di continuare questo turno",
+      "slow": "Compressione del contesto — più lunga del solito",
+      "stalled": "Compressione del contesto — la CLI non risponde da un po’",
+      "done": "Contesto compresso",
+      "doneWithNumbers": "Compresso {{before}} → {{after}}, liberato {{percent}}%",
+      "failed": "Compressione fallita — il turno successivo proseguirà senza compressione",
+      "elapsedWithLast": "{{elapsed}} · ultimo {{last}}",
+      "tooShort": "Contesto ancora breve — niente da comprimere",
+      "aborted": "Compressione annullata"
     }
   },
   "projectSelection": {

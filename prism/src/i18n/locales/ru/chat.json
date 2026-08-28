@@ -14,7 +14,7 @@
   "messageTypes": {
     "error": "Ошибка",
     "tool": "Инструмент",
-    "claude": "Claude"
+    "claude": "AI"
   },
   "tools": {
     "settings": "Настройки инструмента"
@@ -22,7 +22,7 @@
   "interactive": {
     "title": "Интерактивный запрос",
     "waiting": "Ожидание вашего ответа в CLI",
-    "instruction": "Пожалуйста, выберите опцию в терминале, где запущен Claude."
+    "instruction": "Пожалуйста, выберите опцию в терминале, где запущен AI."
   },
   "json": {
     "response": "JSON ответ"
@@ -69,8 +69,12 @@
       "showingLast": "Показаны последние {{count}} сообщений (всего {{total}})",
       "loadEarlier": "Загрузить более ранние сообщения",
       "loadAll": "Загрузить все сообщения",
+      "expandAll": "Показать все",
       "loadingAll": "Загрузка всех сообщений...",
       "allLoaded": "Все сообщения загружены"
+    },
+    "tokens": {
+      "compacting": "сжатие"
     }
   },
   "shell": {
@@ -96,7 +100,7 @@
     },
     "loading": "Загрузка терминала...",
     "connecting": "Подключение к оболочке...",
-    "startSession": "Начать новый сеанс Claude",
+    "startSession": "Начать новый сеанс AI",
     "resumeSession": "Возобновить сеанс: {{displayName}}...",
     "runCommand": "Выполнить {{command}} в {{projectName}}",
     "startCli": "Запуск Claude CLI в {{projectName}}",
@@ -114,6 +118,17 @@
     "elapsed": {
       "seconds": "{{count}}с",
       "minutesSeconds": "{{minutes}}м {{seconds}}с"
+    },
+    "compaction": {
+      "blocking": "Контекст заполнен — сжатие перед продолжением хода",
+      "slow": "Сжатие контекста — дольше обычного",
+      "stalled": "Сжатие контекста — CLI не отвечает уже некоторое время",
+      "done": "Контекст сжат",
+      "doneWithNumbers": "Сжато {{before}} → {{after}}, освобождено {{percent}}%",
+      "failed": "Сжатие не удалось — следующий ход продолжится без сжатия",
+      "elapsedWithLast": "{{elapsed}} · прошлый {{last}}",
+      "tooShort": "Контекст ещё короткий — сжимать нечего",
+      "aborted": "Сжатие отменено"
     }
   },
   "projectSelection": {

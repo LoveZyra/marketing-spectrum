@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -48,6 +48,35 @@ export default function MermaidDiagram({ code, fallback }: MermaidDiagramProps) 
   const [svg, setSvg] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  /**
+   * 占位源码块的高度。
+   *
+   * 源码块的高度和渲染出来的图**毫无关系**(20 行源码约 420px,图可能 200px
+   * 也可能 800px)。直接整块替换的话,图比源码矮就是一次向上塌陷,下面所有内容
+   * 跟着跳。这里把替换前的高度记下来当 `min-height`,再用一次过渡放开 ——
+   * 变矮变成"收",不是"塌"。变高由浏览器的滚动锚定兜住。
+   */
+  const placeholderRef = useRef<HTMLDivElement>(null);
+  const reservedHeightRef = useRef(0);
+  const [releasedHeight, setReleasedHeight] = useState(false);
+
+  // 替换前把占位块的高度量下来(布局阶段读,不会看到中间态)。
+  useLayoutEffect(() => {
+    if (!svg && placeholderRef.current) {
+      const height = placeholderRef.current.offsetHeight;
+      if (height > 0) reservedHeightRef.current = height;
+    }
+  });
+
+  // 图挂上去之后放开预留高度 —— CSS 那边有 min-height 过渡,收得平滑。
+  useLayoutEffect(() => {
+    if (!svg) {
+      setReleasedHeight(false);
+      return;
+    }
+    const raf = requestAnimationFrame(() => setReleasedHeight(true));
+    return () => cancelAnimationFrame(raf);
+  }, [svg]);
 
   useEffect(() => {
     let cancelled = false;
@@ -85,13 +114,16 @@ export default function MermaidDiagram({ code, fallback }: MermaidDiagramProps) 
 
   if (!svg) {
     // 加载/渲染中:先占位为源码块,图好了再替换 —— 没有空白闪烁。
-    return <div>{fallback}</div>;
+    return <div ref={placeholderRef}>{fallback}</div>;
   }
 
   return (
     <div
       ref={containerRef}
       className="prism-mermaid my-2 overflow-x-auto rounded-lg border border-border bg-card p-3"
+      style={reservedHeightRef.current > 0 && !releasedHeight
+        ? { minHeight: reservedHeightRef.current }
+        : undefined}
       // mermaid.render 的输出是自己生成的 SVG(securityLevel strict 已消毒),
       // 不是用户可控的原始 HTML 直插。
       dangerouslySetInnerHTML={{ __html: svg }}

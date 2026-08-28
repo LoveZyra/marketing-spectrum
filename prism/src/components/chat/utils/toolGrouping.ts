@@ -2,6 +2,8 @@ import type { ChatMessage } from '../types/types';
 
 export interface ToolGroupItem {
   _isGroup: true;
+  /** 跨渲染稳定的组身份,专供 React key —— 见 stabilizeGroupIdentity。 */
+  _key?: string;
   /** 这一段活动里第一个工具的名字;纯思考段为 `thinking`。仅用于 key 与调试。 */
   toolName: string;
   messages: ChatMessage[];
@@ -11,6 +13,8 @@ export interface ToolGroupItem {
 /** 相邻的子代理容器(Task/Agent)收成一组,渲染成并排卡片网格(ci 轮)。 */
 export interface SubagentGroupItem {
   _isSubagentGroup: true;
+  /** 跨渲染稳定的组身份,专供 React key —— 见 stabilizeGroupIdentity。 */
+  _key?: string;
   messages: ChatMessage[];
   timestamp: ChatMessage['timestamp'];
 }
@@ -216,28 +220,83 @@ export function groupConsecutiveTools(
  * 锚点用段内第一条消息的身份(WeakMap):段的边界移动时第一条消息一定换,
  * 天然不会拿错;消息被回收时条目自动消失。
  */
+/**
+ * 组身份的跨渲染登记表。
+ *
+ * `byMember` 把**组里的每一条消息**都指回它所属的组 —— 不是只记段首。
+ * 这是关键:窗口从头部长大(补页 / 看更早 / 全部展开)会换掉段首,
+ * 新工具追加进来会换掉段尾,只认段首或只认段尾都会在其中一种情况下判成"新组"。
+ */
+export interface GroupIdentityState {
+  byMember: WeakMap<ChatMessage, ToolGroupItem | SubagentGroupItem>;
+  /** 新组的自增编号。放在 state 里,组件卸载重挂之前一直连续。 */
+  serial: number;
+}
+
+export function createGroupIdentityState(): GroupIdentityState {
+  return { byMember: new WeakMap(), serial: 0 };
+}
+
+/**
+ * 让活动组在多次渲染之间**保持同一个身份**,包括对象引用和 React key。
+ *
+ * 两件事分开做:
+ *
+ * 1. **对象引用**:内容完全没变时复用上一轮的组对象,下游 `memo` 才不会被击穿。
+ * 2. **`_key`**:内容变了也要继承 —— 组长了一步、或者窗口把更早的几步纳进来,
+ *    它**还是同一段活动**。以前 key 取段首消息(`getMessageKey(messages[0])`),
+ *    窗口一放大段首就换,React 卸载旧的 ActivityTimeline 再挂一个新的:
+ *    用户展开过的步骤自己收回去,几百上千像素的高度当场突变。
+ *
+ * 认亲规则:先按段尾找(跑动中追加新步骤时段尾在变、段首不变 → 段首命中),
+ * 再按段首找(窗口长大时段首在变、段尾不变 → 段尾命中),都不中再逐条兜底。
+ */
 export function stabilizeGroupIdentity(
   items: MessageListItem[],
-  previousByAnchor: WeakMap<ChatMessage, ToolGroupItem | SubagentGroupItem>,
-): { items: MessageListItem[]; nextByAnchor: WeakMap<ChatMessage, ToolGroupItem | SubagentGroupItem> } {
-  const nextByAnchor = new WeakMap<ChatMessage, ToolGroupItem | SubagentGroupItem>();
+  previous: GroupIdentityState,
+): { items: MessageListItem[]; next: GroupIdentityState } {
+  const next: GroupIdentityState = { byMember: new WeakMap(), serial: previous.serial };
+
   const out = items.map((item) => {
     const isGroup = isToolGroupItem(item) || isSubagentGroupItem(item);
     if (!isGroup) return item as MessageListItem;
     const groupItem = item as ToolGroupItem | SubagentGroupItem;
-    const anchor = groupItem.messages[0];
-    if (!anchor) return item;
-    const previous = previousByAnchor.get(anchor);
-    // 两种组共用一张锚表:同一条消息不可能同时当两种组的段首,类型不会串。
-    const reusable = Boolean(
-      previous
-      && ('_isGroup' in previous) === ('_isGroup' in groupItem)
-      && previous.messages.length === groupItem.messages.length
-      && previous.messages.every((message, index) => message === groupItem.messages[index]),
+    const messages = groupItem.messages;
+    if (messages.length === 0) return item;
+
+    // 两种组共用一张表:同一条消息不可能同时属于两种组,类型不会串。
+    const sameKind = (candidate: ToolGroupItem | SubagentGroupItem | undefined) => (
+      candidate && ('_isGroup' in candidate) === ('_isGroup' in groupItem) ? candidate : undefined
     );
-    const group = reusable ? previous! : groupItem;
-    nextByAnchor.set(anchor, group);
+
+    let previousGroup = sameKind(previous.byMember.get(messages[0]))
+      ?? sameKind(previous.byMember.get(messages[messages.length - 1]));
+    if (!previousGroup) {
+      for (const message of messages) {
+        previousGroup = sameKind(previous.byMember.get(message));
+        if (previousGroup) break;
+      }
+    }
+
+    const contentUnchanged = Boolean(
+      previousGroup
+      && previousGroup.messages.length === messages.length
+      && previousGroup.messages.every((message, index) => message === messages[index]),
+    );
+
+    let group: ToolGroupItem | SubagentGroupItem;
+    if (contentUnchanged) {
+      group = previousGroup!;
+    } else {
+      next.serial += previousGroup ? 0 : 1;
+      group = { ...groupItem, _key: previousGroup?._key ?? `group_${next.serial}` };
+    }
+
+    for (const message of messages) {
+      next.byMember.set(message, group);
+    }
     return group;
   });
-  return { items: out, nextByAnchor };
+
+  return { items: out, next };
 }

@@ -169,3 +169,35 @@ describe('summarizeActivityRun', () => {
       .toEqual([{ key: 'mcp', count: 1 }, { key: 'tool', count: 1 }]);
   });
 });
+
+/**
+ * db:会话闲下来之后,没有结果的工具行不能再显示「运行中」。
+ *
+ * 回合被中止/超时收掉时,那条 tool_result 永远不会到 —— 卡片会一直转下去。
+ * 线上就是这个画面:界面显示"正在压缩",旁边一张 Bash 卡片转个不停。
+ * 会话都已经不在跑了还说"运行中",是在骗人。
+ */
+describe('会话闲下来后的工具行', () => {
+  const running = () => toolMessage({ toolName: 'Bash', toolInput: { command: 'sleep 999' } });
+
+  it('会话还在跑 = 运行中(老行为不变)', () => {
+    expect(summarizeToolRow(running(), true).status).toBe('running');
+  });
+
+  it('会话已经不在跑但仍没有结果 = 已中断,而不是永远转下去', () => {
+    expect(summarizeToolRow(running(), false).status).toBe('interrupted');
+  });
+
+  it('不传第二个参数时保持老行为', () => {
+    expect(summarizeToolRow(running()).status).toBe('running');
+  });
+
+  it('已经有结果的行不受影响 —— 迟到的结果照样能把卡片收掉', () => {
+    const done = toolMessage({
+      toolName: 'Bash',
+      toolInput: { command: 'echo hi' },
+      toolResult: { content: 'hi' },
+    });
+    expect(summarizeToolRow(done, false).status).toBe('done');
+  });
+});

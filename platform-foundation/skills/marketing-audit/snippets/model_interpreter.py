@@ -29,6 +29,8 @@ Agent 拿到这些"候选产物"后继续进行筛选 / 合并 / 润色，interp
 from __future__ import annotations
 
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 # 内置阈值（model_interpreter 专用，不依赖外部阈值配置）
@@ -295,6 +297,18 @@ _FEAT_TAG: dict[str, tuple] = {
     "pre_is_marketing_first": ("营销首触", "自然进入"),
     "pre_has_mkt_click": ("点过营销", "未点营销"),
     "pre_min_mkt_response_sec": ("响应慢", "响应快"),
+    # 2026-08-17 补:这几个在生产报告的模型规则里出现过,registry 兜底只能起出
+    # 「次数」「时间差」这类通用词(拼进名字就是「无次数人群」),显式给标签。
+    # test_seg_naming 的标签覆盖门禁守着:模型规则用到的字段必须起得出非通用中文标签。
+    "pre_night_cnt": ("深夜活跃", "非深夜活跃"),
+    "pre_last_order_to_touch_min": ("触达距下单久", "刚下过单"),
+    "pre_big_promo_expose": ("曝光过大促", "未曝光大促"),
+    "pre_has_target_product_order": ("目标品类成单", "无目标品类成单"),
+    "insite_channel_cnt": ("多渠道触达", "单渠道触达"),
+    "visit_days": ("高频访问", "低频访问"),
+    "order_pc": ("高消费频次", "低消费频次"),
+    "pre_first_active_hour": ("晚活跃", "早活跃"),
+    "member_level": ("高会员等级", "低会员等级"),
     # 价格敏感
     "pre_coupon_collect_cnt": ("活跃领券", "不领券"),
     "pre_has_coupon": ("持券", "无券"),
@@ -318,6 +332,8 @@ _COND_RE = re.compile(
 _EQ_OPS = ("==", "!=")
 _DESC_CACHE: "dict[str, str] | None" = None
 _MAX_NAME_LEN = 20          # 人群名长度上限（报告表格一行放得下）
+_TAG_LEN = 8                # 单个标签长度上限(「有目标品类创单」这类要放得下)
+_NULL_TOKENS = ("空值", "__NA__")   # 渲染层的空值标注,不是类别值(见 _parse_conds)
 
 
 def _parse_conds(rule_text: str) -> list[tuple]:
@@ -335,6 +351,11 @@ def _parse_conds(rule_text: str) -> list[tuple]:
                 continue
         elif m.group(4):
             vals = [v.strip() for v in (m.group(6) or "").split(",") if v.strip()]
+            # 「空值」/「__NA__」是渲染层的空值标注,不是业务类别值。留着会被
+            # _cond_tag 当成一个类别写进人群名 —— 线上出过「非消费频次:空值等人群」。
+            # 这里只剥值,条件本身留着(_model_seg_action 还要靠字段查 dimension);
+            # 值剥空的条件由 _build_seg_names 在起名时跳过。
+            vals = [v for v in vals if v not in _NULL_TOKENS]
             out.append((m.group(4), m.group(5), vals))
     return out
 
@@ -360,15 +381,45 @@ _DIR_AFFIX = re.compile(r"^(?:高|低|多|少|有|无|未|深|浅)|(?:高|低|�
 
 
 def _tag_from_desc(name: str) -> str:
-    """registry 描述 → ≤6 字短标签（第二级兜底）。"""
+    """registry 描述 → ≤6 字短标签（第二级兜底）。
+
+    2026-08-17:前缀**循环剥到不动为止**。原来只 sub 一遍,而
+    「近1天是否有活动目标品类的创单」里 `近1天` 先被剥掉之后,`是否` 就不在串首了、
+    那条规则不再命中 —— 剩下「是否有活动目标品类的创单」再被硬截 6 字,
+    得到半句「是否有活动目」,前面再拼方向词就成了线上那个「无是否有活动目」。
+    """
     d = _feat_desc(name)
     if not d:
         return ""
-    d = _DESC_STRIP.sub("", d).split("，")[0].split(",")[0].strip()
+    # 先切掉括号说明(闭合的和残缺半括号都切:「客单价（元，消费价值）」里逗号在括号内,
+    # 先按逗号切会留下「客单价（元」这种半截),再切逗号后的解释从句
+    d = re.split(r"[（(]", d, 1)[0].strip() or d
+    d = d.split("，")[0].split(",")[0].strip()
+    for _ in range(6):                   # 循环剥前缀,剥不动就停
+        d2 = _DESC_STRIP.sub("", d).strip()
+        if d2 == d:
+            break
+        d = d2
     m = _DESC_TAIL.search(d)
-    if m and len(d) > 6:                 # 长描述取尾部核心名词（中文核心词多在后段）
-        d = m.group(0)
+    if m and len(d) > 6 and m.group(0) not in _GENERIC_TAIL:
+        d = m.group(0)                   # 长描述取尾部核心名词（中文核心词多在后段）
+    elif len(d) > 6:
+        # 2026-08-17:尾巴是纯通用名词(次数/时间差/占比…)时取尾巴等于没说 ——
+        # 「近1天深夜时段行为次数」会起出「次数」,拼进人群名就是「无次数人群」。
+        # 这时改取**前段**(那里才有区分度),并把断在半个词上的尾字去掉。
+        d = _trim_word(d[:6])
     return d[:6]
+
+
+_GENERIC_TAIL = {"次数", "数量", "时间差", "占比", "阶段", "标记", "标志", "品类数"}
+_DANGLING = "的了过在是与和对"     # 截断后挂在末尾的虚字,去掉
+
+
+def _trim_word(t: str) -> str:
+    """把硬截出来的尾字虚词去掉(「首条行为的小」→「首条行为」)。"""
+    while t and t[-1] in _DANGLING:
+        t = t[:-1]
+    return t
 
 
 def _neutral_tag(feat: str) -> str:
@@ -382,6 +433,26 @@ def _neutral_tag(feat: str) -> str:
     return (_tag_from_desc(feat) or _humanize_field(feat))[:6]
 
 
+_CJK = re.compile(r"[一-鿿]")
+
+
+def _zh_tag(feat: str) -> str:
+    """字段 → 中文短标签;查不到中文返回空串。
+
+    2026-08-17:**不再退回英文字段名**。原来第三级兜底是 _humanize_field,于是
+    没有中文标签的字段被硬塞进人群名,产出「低bigpromoexpo深漏斗人群」这种串
+    (线上实例)。人群名是给运营看的,一个看不懂的英文半截词不如不写 ——
+    该字段的条件仍在 filter_zh / sql_filter 里,一个字没少。
+    """
+    base = _FEAT_TAG.get(feat)
+    if base:
+        head = base[0] if isinstance(base, tuple) else base
+        if _CJK.search(head or ""):
+            return head
+    d = _tag_from_desc(feat)
+    return d if _CJK.search(d or "") else ""
+
+
 def _humanize_field(name: str) -> str:
     """字段名 → 可读短串（第三级兜底，保证任何字段都能起出可区分的名字）。"""
     s = re.sub(r"^pre_", "", name or "")
@@ -390,38 +461,116 @@ def _humanize_field(name: str) -> str:
 
 
 def _cond_tag(feat: str, op, val) -> str:
-    """单个条件 → 带方向的短标签。"""
+    """单个条件 → 短标签。查不到中文标签、或该条件零信息量,一律返回空串。
+
+    2026-08-17 两处返工(线上实例:`客单价 >= 0` 被命名成「高客单价」):
+      ① **阈值参与判断**。原来只看方向符号(`>=` 就写"高"),完全不看阈值 ——
+         `gmv >= 0` 在非负字段上等于"客单价不为空",几乎全量,命名成「高客单价」
+         是**反的**:运营照这个名字去投,投的是完全不同的人。
+         现在按阈值分档:
+             `> 0`  → 有X      (真有值,有业务含义)
+             `>= 0` → 空串     (等于"不为空",零信息量,不进名字)
+             `<= 0` → 无X
+             其余   → 高X / 低X
+      ② **查不到中文标签就不进名字**(见 _zh_tag)。原来第三级兜底把英文字段名
+         硬塞进去,产出「低bigpromoexpo深漏斗人群」。
+    被排除的条件只是不参与**命名**,它在 filter_zh / sql_filter 里一个字没少。
+    """
     if op in ("in", "not in"):
-        # 分类条件:方向由类别值本身表达,字段用中性词,值直接进名字(信息量远高于字段名)
         vals = [str(v) for v in (val if isinstance(val, list) else [val])]
+        vals = [v for v in vals if v not in _NULL_TOKENS]
+        if not vals:
+            return ""
         head = _neutral_tag(feat)
+        if not _CJK.search(head or ""):
+            return ""                      # 字段没中文标签 → 不进名字
         neg = "非" if op == "not in" else ""
-        if not re.search(r"[一-鿿]", head):
-            # 字段没有中文标签(registry 也查不到):英文字段名不如类别值可读,直接用值
-            return (neg + "/".join(vals[:2]) + ("等" if len(vals) > 2 else ""))[:14]
         shown = "/".join(vals[:2]) + ("等" if len(vals) > 2 else "")
-        if len(head) + len(shown) > 10:   # 太长时只留第一个值,不做半个词的截断
+        if len(head) + len(shown) > 10:     # 太长只留第一个值,不做半个词的截断
             shown = vals[0] + ("等" if len(vals) > 1 else "")
         return (neg + f"{head}:{shown}")[:14]
-    if op in _EQ_OPS:                     # ==/!= 按"值即方向"归一(见 _EQ_OPS 注释)
-        try:
-            high = (float(val) != 0) if op == "==" else (float(val) == 0)
-        except (TypeError, ValueError):
-            high = op == "=="
-    else:
-        high = op in (">", ">=")
+
+    try:
+        v = float(val)
+    except (TypeError, ValueError):
+        return ""
+    if op in _EQ_OPS:                       # ==/!= 按"值即方向"归一
+        high = (v != 0) if op == "==" else (v == 0)
+        v = 0.0 if v in (0.0, 1.0) else v
+        op = ">" if high else "<="
+    is_lower = op in (">", ">=")
+
+    neutral = _neutral_tag(feat)
+    if not _CJK.search(neutral or ""):
+        return ""                           # 字段没中文标签 → 不进名字
+
+    if v == 0:
+        if is_lower and op != ">":
+            return ""      # `>= 0` 在非负字段上 = 不为空,零信息量,不进名字
+        if not is_lower and op != "<=":
+            return ""      # `< 0` 在非负字段上无解,不该出现
+        # 精选表有成对写法就直接用 —— 它写的是地道说法(「未曝光大促」),
+        # 拿中性词拼「无」会得到「无曝光过大促」这种别扭串(2026-08-17 实测)。
+        base = _FEAT_TAG.get(feat)
+        if isinstance(base, tuple):
+            return base[0] if is_lower else base[1]
+        return (("有" if is_lower else "无") + neutral)[:_TAG_LEN]
+
     base = _FEAT_TAG.get(feat)
     if base:
         if isinstance(base, tuple):
-            return base[0] if high else base[1]
-        return base if high else "低" + base
-    tag = _tag_from_desc(feat) or _humanize_field(feat)
-    try:                                  # 二值字段的 0/1 切分用有/无更自然
-        if float(val) in (0.0, 1.0) and _field_type(feat) == "binary":
-            return ("有" if high else "无") + tag
+            return base[0] if is_lower else base[1]
+        return base if is_lower else "低" + base
+    try:                                    # 二值字段的 0/1 切分用有/无更自然
+        if v in (0.0, 1.0) and _field_type(feat) == "binary":
+            return (("有" if is_lower else "无") + neutral)[:_TAG_LEN]
     except (TypeError, ValueError):
         pass
-    return ("高" if high else "低") + tag
+    return (("高" if is_lower else "低") + neutral)[:_TAG_LEN]
+
+
+# 命名取哪两个条件:按信息量排序(小的优先)。同档保持条件在规则里的书写顺序,
+# 保证同一份数据重跑必然同名 —— 人群名是圈人锚点。
+_INFO_CAT_POS = 0      # 分类正选:「目标品类:机票」最具体
+_INFO_HAVE = 1         # 有X / 无X:二值事实,运营一眼看懂
+_INFO_CAT_NEG = 2      # 分类反选:「非会员等级:1」信息量次之
+_INFO_LEVEL = 3        # 高X / 低X:程度词,最泛
+
+
+_TAG_LONG = 8          # 超过这个长度的标签降档:名字一行要放得下
+
+
+def _is_zero_cut(op, val) -> bool:
+    """是不是"有/无"型切分(阈值为 0 的数值条件)。
+
+    按**条件形状**判,不看标签长什么样 —— 精选表的成对写法不以「有/无」开头
+    (pre_has_target_product_create → 「目标品类创单」),按前缀判会把这类最好懂的
+    二值事实误降到「高/低」那一档,名字里就轮不到它(2026-08-17 实测)。
+    """
+    if op in ("in", "not in"):
+        return False
+    try:
+        return float(val) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _cond_info(c) -> int:
+    feat, op, val = c
+    tag = _cond_tag(feat, op, val)
+    if not tag:
+        return 99
+    if op == "in":
+        base = _INFO_CAT_POS
+    elif op == "not in":
+        base = _INFO_CAT_NEG
+    elif _is_zero_cut(op, val):
+        base = _INFO_HAVE       # 阈值为 0 的数值切分 = 有/无,二值事实最好懂
+    else:
+        base = _INFO_LEVEL
+    # 又长又泛的降两档:「非消费频次:近1年无消费」(13 字)不该挤掉「深漏斗」(3 字)。
+    # 2026-08-17 实测,不降档时三条人群名有两条被这个双重否定长串占满。
+    return base + 2 if len(tag) > _TAG_LONG else base
 
 
 def _seg_name_from_rule(rule_text: str, idx: int) -> str:
@@ -430,112 +579,150 @@ def _seg_name_from_rule(rule_text: str, idx: int) -> str:
 
 
 def _build_seg_names(rule_texts: list[str], idxs: "list[int] | None" = None) -> list[str]:
-    """一组规则一起起名 —— fix20 的核心改动。
+    """一组规则一起起名,产出「关键特征·关键特征人群」。
 
-    原实现从一张 17 字段固定表里做子串匹配，命中不到就退化成「模型高潜人群一/二」，
-    而同一批 top 规则往往共享同一个高频特征（如 pre_max_funnel_depth），于是三条
-    规则全叫「深漏斗高潜人群」，只能靠 ·变体N 区分，名字零信息量。
+    命名口径(2026-08-17 重写):
+      1. **只用有中文标签、有信息量的条件**。查不到中文标签的字段不进名字
+         (原来会塞英文半截,产出「低bigpromoexpo深漏斗人群」);`>= 0` 这类
+         "等于不为空"的零信息条件也不进(原来会写成「高客单价」,是反的)。
+      2. **按区分度选**:只在本条出现的"独有条件"优先 —— 一组规则往往共享大半
+         条件,拿共有条件命名会三条全叫一个名字。
+      3. **同档按信息量排**:分类正选 > 有/无 > 分类反选 > 高/低。
+      4. 取前 2 个标签,`A·B人群`。凑不够 2 个就用共有条件里"组内取值不同"的补。
+      5. 一个都凑不出 → 「模型高潜人群N」。
 
-    改成**按区分度命名**：
-      1. 统计各字段在这组规则里的出现次数；只在本条出现的是「独有条件」；
-      2. 名字主体取本条最多 2 个独有条件的带方向标签（无独有条件时，取与其它规则
-         阈值不同的共有条件并把阈值写进名字）；
-      3. 共有条件挑一个作收尾词（保留人群的共性语义，如「深漏斗」）；
-      4. 标签三级兜底：_FEAT_TAG 精选表 → registry 中文描述 → 字段名可读化，
-         保证任何字段都能起出可区分的名字；
-      5. 全部失败才退回「模型高潜人群N」。
-    结果确定性：只依赖规则文本与其顺序，同一份数据重跑必然同名（人群名是圈人锚点）。
+    三道闸保证名字**一定唯一**(见 _name_ok / _disambiguate_names):
+      闸一 格式门禁(不合格的那条退回编号名);闸二 撞名补第三个区分标签;
+      闸三 仍撞则 `·变体N` —— 这一步在数学上封死。
+
+    确定性:只依赖规则文本与其顺序,同一份数据重跑必然同名(人群名是圈人锚点)。
     """
     idxs = idxs if idxs is not None else list(range(len(rule_texts)))
-    conds = [_parse_conds(t) for t in rule_texts]
+    # 起名只看"有中文标签且有信息量"的条件;被滤掉的条件在 filter_zh/sql_filter 里一字不少
+    conds_all = [_parse_conds(t) for t in rule_texts]
+    conds = [[c for c in cs if _cond_tag(*c)] for cs in conds_all]
+
     freq: dict[str, int] = {}
     for cs in conds:
         for feat in {c[0] for c in cs}:
             freq[feat] = freq.get(feat, 0) + 1
 
+    def _ranked(cs):
+        """信息量优先,同档保持书写顺序(enumerate 做稳定次键 → 重跑必然同序)。"""
+        return [c for _i, c in sorted(enumerate(cs), key=lambda p: (_cond_info(p[1]), p[0]))]
+
     names: list[str] = []
     for k, cs in enumerate(conds):
-        uniq = [c for c in cs if freq.get(c[0], 0) == 1]
-        shared = [c for c in cs if freq.get(c[0], 0) > 1]
-        tags = [_cond_tag(*c) for c in uniq[:2]]
-        used_feats = {c[0] for c in uniq[:2]}
-        if not tags and shared:
-            # 全是共有字段：找与其它规则"取值不同"的那个来命名。
-            # 优先看标签是否已能区分（如 深漏斗 vs 浅漏斗、持券 vs 无券）——能区分就不加
-            # 阈值,否则会写出「持券≥0…」这种噪声;只有标签也撞了(同方向、只差阈值)才补阈值。
-            o_tags = [{c[0]: _cond_tag(*c) for c in conds[j]}
-                      for j in range(len(conds)) if j != k]
+        uniq = _ranked([c for c in cs if freq.get(c[0], 0) == 1])
+        shared = _ranked([c for c in cs if freq.get(c[0], 0) > 1])
+        tags, used = [], set()
+
+        def _add(t: str) -> bool:
+            """收下这个标签。与已选标签互为子串的不收 —— 那是同一件事说两遍
+            (「目标品类深漏斗·深漏斗人群」,2026-08-17 实测)。"""
+            if not t or any(t in x or x in t for x in tags):
+                return False
+            tags.append(t)
+            return True
+
+        for c in uniq:
+            if len(tags) >= 2:
+                break
+            if _add(_cond_tag(*c)):
+                used.add(c[0])
+        if len(tags) < 2:
+            # 共有条件补位:优先"组内取值与别人不同"的(它才有区分度),
+            # 其次任意共有条件(至少保留人群的共性语义,如「深漏斗」)
             o_vals = [{c[0]: (c[1], str(c[2])) for c in conds[j]}
                       for j in range(len(conds)) if j != k]
-            for c in shared:
-                my_tag = _cond_tag(*c)
-                if any(o.get(c[0], my_tag) != my_tag for o in o_tags):
-                    tags = [my_tag]                  # 标签本身已能区分
-                    used_feats.add(c[0])
-                    break
-            if not tags:
-                mine_of = lambda c: (c[1], str(c[2]))
-                for c in shared:
-                    if any(o.get(c[0], mine_of(c)) != mine_of(c) for o in o_vals):
-                        tag = _cond_tag(*c)
-                        if not isinstance(c[2], list):   # 数值:补阈值;分类:值已在标签里
-                            op = "≥" if c[1] in (">", ">=") else "≤"
-                            tag = f"{tag}{op}{_fmt_threshold(float(c[2]))}"
-                        tags = [tag]
-                        used_feats.add(c[0])
+            def _differs(c):
+                mine = (c[1], str(c[2]))
+                return any(o.get(c[0], mine) != mine for o in o_vals)
+            for pool in ([c for c in shared if _differs(c)], shared):
+                for c in pool:
+                    if len(tags) >= 2:
                         break
-        suffix = ""
-        for c in shared:
-            # 收尾词必须换一个字段:同字段再来一次会写出「深漏斗≥2.5深漏斗人群」
-            if c[0] in used_feats:
-                continue
-            t = _cond_tag(*c)
-            if t and t not in tags:
-                suffix = t
-                break
-        if not tags and not suffix:
-            names.append(f"模型高潜人群{_CN_NUM[k] if k < len(_CN_NUM) else k + 1}")
-            continue
-        name = "·".join(tags) + suffix + "人群"
-        if len(name) > _MAX_NAME_LEN:                  # 超长先砍收尾词，再砍第二个标签
-            name = "·".join(tags) + "人群"
-            if len(name) > _MAX_NAME_LEN and len(tags) > 1:
-                name = tags[0] + "人群"
-        names.append(name[:_MAX_NAME_LEN])
+                    if c[0] in used:
+                        continue
+                    if _add(_cond_tag(*c)):
+                        used.add(c[0])
+                if len(tags) >= 2:
+                    break
+        name = "·".join(tags) + "人群" if tags else ""
+        if len(name) > _MAX_NAME_LEN and len(tags) > 1:   # 超长先砍第二个标签
+            name = tags[0] + "人群"
+        names.append(name[:_MAX_NAME_LEN] if _name_ok(name[:_MAX_NAME_LEN])
+                     else f"模型高潜人群{_CN_NUM[k] if k < len(_CN_NUM) else k + 1}")
     return _disambiguate_names(names, conds)
 
 
-def _disambiguate_names(names: list[str], conds: list) -> list[str]:
-    """撞名后处理：给同名的规则补一个"组内取值不同"的条件，直到名字唯一。
+# ── 闸一:格式门禁 ────────────────────────────────────────────────────
+_NAME_BAD = re.compile(r"[A-Za-z_]|空值|NULL|None|__NA__")
 
-    命名主逻辑按"独有字段"起名，但两条规则字段集完全相同、只差阈值时（决策树很常见，
-    如 insite_product_cnt>4.5 vs >3.5）仍会撞。此时在名字里补上那个区分条件的阈值 ——
-    这比退回「·变体2」有信息量得多（变体N 只是编号，运营看不出两批人差在哪）。
+
+def _name_ok(name: str) -> bool:
+    """人群名格式门禁:中文、以「人群」结尾、有实际标签、长度可控。
+
+    不合格的那条退回「模型高潜人群N」—— 一个看得懂的编号名,好过一个
+    半截英文词或一句反话。
+    """
+    if not name or not name.endswith("人群"):
+        return False
+    body = name[:-2].strip("·")
+    if not body or len(name) > _MAX_NAME_LEN + 6:   # +6 给闸二补的区分段留位置
+        return False
+    return not _NAME_BAD.search(name)
+
+
+def _disambiguate_names(names: list[str], conds: list) -> list[str]:
+    """闸二 + 闸三:撞名后处理,保证输出**一定唯一**。
+
+    闸二:给同名的规则补一个"组内取值不同"的条件标签(优先信息量高的),
+          得到「A·B·C人群」—— 比退回「变体2」有信息量得多,运营能看出两批人差在哪。
+    闸三:补完仍撞(说明两条规则的条件集完全相同 —— 那本该被去冗拦掉),
+          追加 `·变体N`。这一步不依赖任何数据,数学上封死唯一性。
+
+    最后再做一次全局兜底扫描:任何仍然重复的(含闸二产出的新撞名)一律加序号。
     """
     dup: dict = {}
     for i, n in enumerate(names):
         dup.setdefault(n, []).append(i)
-    for n, idxs in dup.items():
-        if len(idxs) < 2:
+    for n, ids in dup.items():
+        if len(ids) < 2:
             continue
-        for k in idxs:
+        for k in ids:
             mine = {c[0]: (c[1], str(c[2])) for c in conds[k]}
-            others = [{c[0]: (c[1], str(c[2])) for c in conds[j]} for j in idxs if j != k]
-            for c in conds[k]:
-                if all(o.get(c[0]) != mine[c[0]] for o in others):
-                    # 优先补"区分条件的标签"(如 ·高x2),它有业务含义;
-                    # 标签已经在名字里(同字段同方向、只差阈值)才退而补阈值。
-                    tag = _cond_tag(*c)
-                    if tag and tag not in n:
-                        extra = "·" + tag
-                    elif isinstance(c[2], list):
-                        extra = "·" + "/".join(str(x) for x in c[2][:2])
-                    else:
-                        op = "≥" if c[1] in (">", ">=") else "≤"
-                        extra = f"{op}{_fmt_threshold(float(c[2]))}"
-                    base = n[:-2] if n.endswith("人群") else n
-                    names[k] = (base + extra + "人群")[:_MAX_NAME_LEN + 6]
+            others = [{c[0]: (c[1], str(c[2])) for c in conds[j]} for j in ids if j != k]
+            cand = ""
+            for c in sorted(conds[k], key=_cond_info):
+                if not all(o.get(c[0]) != mine.get(c[0]) for o in others):
+                    continue                       # 这个条件组内取值相同,区分不了
+                t = _cond_tag(*c)
+                if not t:
+                    continue
+                base = n[:-2] if n.endswith("人群") else n
+                if t not in n:
+                    cand = base + "·" + t + "人群"          # 补一个新标签
+                elif not isinstance(c[2], list):
+                    # 标签已经在名字里(同字段同方向、只差阈值)→ 把阈值贴到**它自己**
+                    # 后面。老实现是贴到名字末尾,会写出「高客单价·深漏斗≥900人群」
+                    # 这种把阈值挂到隔壁特征上的串。
+                    op = "≥" if c[1] in (">", ">=") else "≤"
+                    cand = base.replace(t, f"{t}{op}{_fmt_threshold(float(c[2]))}", 1) + "人群"
+                else:
+                    cand = base + "·" + "/".join(str(x) for x in c[2][:2]) + "人群"
+                if _name_ok(cand[:_MAX_NAME_LEN + 6]):
                     break
+                cand = ""
+            if cand:
+                names[k] = cand[:_MAX_NAME_LEN + 6]
+    # 闸三:全局兜底 —— 到这一步还重复的,一律追加 ·变体N
+    seen: dict = {}
+    for i, n in enumerate(names):
+        seen[n] = seen.get(n, 0) + 1
+        if seen[n] > 1:
+            base = n[:-2] if n.endswith("人群") else n
+            names[i] = f"{base}·变体{seen[n]}人群"
     return names
 
 
@@ -547,9 +734,8 @@ def _dedup_by_overlap(qualified: list, ma: dict, max_jac: float, top_n: int) -> 
     不猜、不用规则文本近似判重,宁可退回 fix19 行为。
     返回 (选中列表, 被跳过明细)。
     """
-    pairs = ((ma.get("rule_overlap") or {}).get("pairs")) or []
-    if not pairs:
-        return qualified[:top_n], []
+    ovl = ma.get("rule_overlap") or {}
+    pairs = ovl.get("pairs") or []
     jac: dict = {}
     for p in pairs:
         try:
@@ -558,8 +744,35 @@ def _dedup_by_overlap(qualified: list, ma: dict, max_jac: float, top_n: int) -> 
             continue
         jac[(i, j)] = v
         jac[(j, i)] = v
+
+    def _same_people(a: dict, b: dict) -> bool:
+        """不依赖掩码的**同批人**判定:交付条件逐字相同,或"只差一个数值阈值 +
+        命中/转化数完全相同"。
+
+        2026-08-17 线上:三条模型人群里两条只差 pre_last_order_to_touch_min<=2.5 vs
+        <=3.5,覆盖 524 人 / 预计增量 138 单**一模一样** —— 就是同一批人。掩码判重
+        本该拦住它(Jaccard=1.0),但那次没拿到掩码,fail-open 放了进来。
+        这道守卫不需要任何掩码,专治这种退化情形;它只在两条规则的统计量逐位相同时
+        才生效,不会误伤真正不同的人群。
+        """
+        sa, sb = (a.get("rule_sql") or "").strip(), (b.get("rule_sql") or "").strip()
+        if sa and sa == sb:
+            return True
+        na, nb = int(a.get("sample_count") or 0), int(b.get("sample_count") or 0)
+        ca, cb = int(a.get("n_converted") or -1), int(b.get("n_converted") or -2)
+        if not na or na != nb or ca != cb:
+            return False
+        # 统计量相同还不够(可能是巧合):要求条件集只在一个数值阈值上有差异
+        ta = {(f, o): v for f, o, v in _parse_conds(a.get("rule") or a.get("rule_text") or "")}
+        tb = {(f, o): v for f, o, v in _parse_conds(b.get("rule") or b.get("rule_text") or "")}
+        if set(ta) != set(tb):
+            return False
+        diff = [k for k in ta if ta[k] != tb[k]]
+        return len(diff) == 1 and not isinstance(ta[diff[0]], list)
+
     picked: list = []
     dropped: list = []
+    blind: list = []
     for item in qualified:
         if len(picked) >= top_n:
             break
@@ -570,6 +783,11 @@ def _dedup_by_overlap(qualified: list, ma: dict, max_jac: float, top_n: int) -> 
             if v is not None and v >= max_jac:
                 hit = (kept, v)
                 break
+            if v is None:
+                if _same_people(item[3], kept[3]):
+                    hit = (kept, None)      # 掩码缺席,但统计量证明是同一批人
+                    break
+                blind.append((ri, kept[2]))
         if hit is None:
             picked.append(item)
         else:
@@ -579,7 +797,81 @@ def _dedup_by_overlap(qualified: list, ma: dict, max_jac: float, top_n: int) -> 
                 "rule": (item[3].get("rule") or item[3].get("rule_text") or ""),
                 "kept": (kept[3].get("rule") or kept[3].get("rule_text") or ""),
             })
+    # 判重数据缺席是 fail-open(放行),必须留痕 —— 上一次就是它静默放行的
+    if blind:
+        dropped.append({"jaccard": None, "_blind": sorted({tuple(sorted(b)) for b in blind}),
+                        "rule": "", "kept": ""})
     return picked, dropped
+
+
+
+# ── 模型人群的建议动作:按主导维度写实,不再是一句通用套话 ──────────────────
+# 2026-08-14:原来这里对每条模型人群都写死「下一周期对该群体做优先级投放或预算倾斜」。
+# 模型 seg 标了 needs_polish=True,本意让 Agent 按业务语义改写,但 Agent 被要求聚焦在
+# 改名与校验筛选条件上,action 通常不动 —— 于是这句套话一路进报告与 API 出参,
+# 三条人群三句一模一样,运营看不出该对谁做什么。
+# 改法:用规则自己的条件字段查 registry 的 dimension,取主导维度给对应动作,
+# 再缀上这条规则的量化依据(lift / 覆盖 / 预计增量)。同一份数据重跑必然同句(确定性)。
+
+_DIM_ACTION = {
+    "funnel":              "该群体已深入主流程漏斗,优先投放并配合限时优惠推动完成下单",
+    "path":                "该群体浏览路径已较深,优先投放并缩短决策链路(直达目标页)",
+    "product_preference":  "该群体目标品类意向明确,按其偏好品类定向投放素材与优惠",
+    "coupon":              "该群体对优惠敏感,优先发放目标品类券并引导核销",
+    "order_context":       "该群体已有下单意向未完成,推送支付提醒与限时券促成交",
+    "pre_marketing":       "该群体对营销触达反应正向,可适度提高触达频次与预算",
+    "platform_engagement": "该群体平台活跃度高,优先在其主活跃平台投放",
+    "cross_channel":       "该群体跨渠道触达有效,保持多渠道协同并统一素材口径",
+    "user_profile":        "该群体画像特征集中,优先投放并可作为相似人群扩展的种子",
+    "decision_cycle":      "该群体决策周期特征明显,按其节奏择时投放",
+    "order_history":       "该群体历史消费特征突出,按客单价梯度匹配权益力度",
+}
+_DIM_ACTION_FALLBACK = "下一周期对该群体优先投放或预算倾斜"
+
+
+@lru_cache(maxsize=1)
+def _registry_dimensions() -> dict:
+    """{字段名: dimension},给模型人群的建议动作选主导维度用。缺 yaml 返回空 dict。"""
+    try:
+        import yaml  # type: ignore
+        path = Path(__file__).resolve().parent.parent / "feature_schema" / "feature_registry.yaml"
+        reg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return {f["name"]: (f.get("dimension") or "")
+                for f in reg.get("features", []) if f.get("name")}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _model_seg_action(rule_text: str, lift: float, n_sample: int,
+                      inc_orders: int, pred_cvr: float) -> str:
+    """模型人群 → 建议动作(主导维度动作 + 量化依据)。
+
+    主导维度 = 该规则条件字段里出现次数最多的 dimension(并列时按 _DIM_ACTION 的
+    声明顺序取先者,保证确定性)。一个维度都查不到时退回通用话术 —— 宁可通用,
+    不猜错方向。
+    """
+    dims: dict = {}
+    reg = _registry_dimensions()
+    for feat, _op, _val in _parse_conds(rule_text or ""):
+        d = reg.get(feat) or ""
+        if d in _DIM_ACTION:
+            dims[d] = dims.get(d, 0) + 1
+    if dims:
+        top = max(dims.values())
+        # 并列取 _DIM_ACTION 声明顺序里的先者 —— 不依赖 dict 迭代顺序,重跑必然同句
+        head = next(d for d in _DIM_ACTION if dims.get(d) == top)
+        base = _DIM_ACTION[head]
+    else:
+        base = _DIM_ACTION_FALLBACK
+
+    bits = []
+    if lift and lift > 0:
+        bits.append("转化率为大盘 {:.1f} 倍".format(lift))
+    if n_sample:
+        bits.append("覆盖 {:,} 人".format(int(n_sample)))
+    if inc_orders and inc_orders > 0:
+        bits.append("预计增量 {:,} 单".format(int(inc_orders)))
+    return "{}({})".format(base, "、".join(bits)) if bits else base
 
 
 def _interpret_decision_rules(ma: dict, t: dict, out: dict) -> None:
@@ -613,6 +905,25 @@ def _interpret_decision_rules(ma: dict, t: dict, out: dict) -> None:
     qualified, dropped = _dedup_by_overlap(qualified, ma, float(t["decision_rule_max_jaccard"]),
                                            top_n)
     for d in dropped:
+        if d.get("_blind"):
+            # 判重数据缺席 = 这几对规则没被判过重,是放行不是判定。必须写出来:
+            # 2026-08-17 线上三条模型人群里两条圈同一批人,就是这种静默放行的结果。
+            out["auto_blind_spots"].append({
+                "topic": "模型规则去冗:{} 对规则拿不到命中掩码,未做重叠判定(已放行)".format(
+                    len(d["_blind"])),
+                "evidence": "规则下标对:{}".format(d["_blind"][:6]),
+                "recommended_probe": "查 model_analysis.rule_overlap.rules_without_mask —— "
+                                     "掩码算不出来说明 rule_pandas 求值失败,那是链路 bug,不是阈值问题",
+            })
+            continue
+        if d.get("jaccard") is None:
+            out["auto_blind_spots"].append({
+                "topic": "模型规则去冗:与已选人群覆盖/转化数完全相同(同一批人)未纳入",
+                "evidence": "被跳过:{} | 已选:{}".format(d["rule"][:80], d["kept"][:80]),
+                "recommended_probe": "两条规则只差一个数值阈值且统计量逐位相同;"
+                                     "如确需并列展示,关掉 _same_people 守卫",
+            })
+            continue
         out["auto_blind_spots"].append({
             "topic": "模型规则去冗:与已选人群高度重叠(Jaccard={:.2f})未纳入".format(d["jaccard"]),
             "evidence": "被跳过:{} | 已选:{}".format(d["rule"][:80], d["kept"][:80]),
@@ -654,7 +965,8 @@ def _interpret_decision_rules(ma: dict, t: dict, out: dict) -> None:
                 f"决策树规则 lift={lift:.1f}× (predicted_cvr={pred_cvr:.2%}, "
                 f"baseline={overall_cvr:.2%}), 命中 {n_sample:,} 用户"
             ),
-            "action": "下一周期对该群体做优先级投放或预算倾斜",
+            "action": _model_seg_action(rule_text, lift, n_sample,
+                                        estimated_incremental_orders, pred_cvr),
             "estimated_size": n_sample,
             "baseline_cvr": overall_cvr,
             "expected_cvr_mid": pred_cvr,
@@ -676,7 +988,7 @@ _INT_FIELD_TYPES = ("count", "ordinal", "binary")   # registry 中值域为整�
 # 最小可表示非零值 ≈ 3e-3（促销占比 1/365）；(0, 1e-6) 内不存在任何真实取值，
 # 落在那里的切分点必然是树内部产物。门槛比最小真实值仍保守 1000 倍，
 # 且对真实数据**选中的行完全不变**（`x > 1e-10` ≡ `x > 0`）。
-_SENTINEL_EPS = 1e-6   # 与 model_analyst 同一约定
+_SENTINEL_EPS = 1e-4   # 与 model_analyst 同一约定(2026-08-17 由 1e-6 提到 1e-4,见那边推导)
 _CMP_RE = re.compile(r"(\w+)\s*(>=|<=|>|<)\s*(\d+(?:\.\d+)?(?:[eE]-?\d+)?)")
 
 

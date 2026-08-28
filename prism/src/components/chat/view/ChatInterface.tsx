@@ -65,7 +65,7 @@ function ChatInterface({
   // Highest live `seq` observed per session. Written by the realtime handler
   // on every sequenced frame, read whenever a `chat.subscribe` is sent so the
   // server replays only the events this client actually missed.
-  const lastSeqRef = useRef(new Map<string, number>());
+  const lastSeqRef = useRef(new Map<string, { runId: string | null; seq: number }>());
 
   const resetStreamingState = useCallback(() => {
     for (const timer of streamTimerRef.current.values()) clearTimeout(timer);
@@ -107,6 +107,7 @@ function ChatInterface({
     sessionActivity,
     isProcessing,
     canAbortSession,
+    abortDiscardsPending,
     currentSessionId,
     setCurrentSessionId,
     isLoadingSessionMessages,
@@ -119,7 +120,9 @@ function ChatInterface({
     setTokenBudget,
     visibleMessageCount,
     visibleMessages,
+    streamingText,
     loadEarlierMessages,
+    expandAllMessages,
     loadAllMessages,
     allMessagesLoaded,
     isLoadingAllMessages,
@@ -207,6 +210,7 @@ function ChatInterface({
     queuedDraft,
     editQueuedDraft,
     deleteQueuedDraft,
+    restoreQueuedContent,
     handleInputChange,
     handleKeyDown,
     handlePaste,
@@ -274,7 +278,8 @@ function ChatInterface({
       type: 'chat.subscribe',
       sessions: [{
         sessionId: selectedSession.id,
-        lastSeq: lastSeqRef.current.get(selectedSession.id) ?? 0,
+        lastSeq: lastSeqRef.current.get(selectedSession.id)?.seq ?? 0,
+        lastRunId: lastSeqRef.current.get(selectedSession.id)?.runId ?? null,
       }],
     });
   }, [selectedProject, selectedSession, sendMessage, sessionStore]);
@@ -333,6 +338,9 @@ function ChatInterface({
     sessionStore,
     onChangedFiles: handleChangedFiles,
     onServerQueueChange: handleServerQueueChange,
+    // 排队被中止带走时,正文退回输入框(只在当前正看着这条会话、且输入框为空时)。
+    onServerQueueReturned: (sid, content) =>
+      sid === (selectedSession?.id ?? currentSessionId) && restoreQueuedContent(content),
   });
 
   useEffect(() => {
@@ -469,6 +477,7 @@ function ChatInterface({
           isLoadingSessionMessages={isLoadingSessionMessages}
           isProcessing={isProcessing}
           hasActivityIndicator={hasActivityIndicator}
+          streamingText={streamingText}
           activity={hasActivityIndicator ? sessionActivity : null}
           chatMessages={chatMessages}
           selectedSession={selectedSession}
@@ -482,6 +491,7 @@ function ChatInterface({
           visibleMessageCount={visibleMessageCount}
           visibleMessages={visibleMessages}
           loadEarlierMessages={loadEarlierMessages}
+          expandAllMessages={expandAllMessages}
           loadAllMessages={loadAllMessages}
           allMessagesLoaded={allMessagesLoaded}
           isLoadingAllMessages={isLoadingAllMessages}
@@ -538,6 +548,7 @@ function ChatInterface({
           handleGrantToolPermission={handleGrantToolPermission}
           isLoading={isProcessing}
           onAbortSession={handleAbortSession}
+          abortDiscardsPending={abortDiscardsPending}
           activeModel={activeSessionModel ?? claudeModel}
           activeModelReal={activeModelReal}
           permissionMode={permissionMode}
@@ -547,6 +558,9 @@ function ChatInterface({
           availableEffortOptions={currentProviderEffortOptions}
           onSelectEffort={handleSelectEffort}
           tokenBudget={tokenBudget}
+          isCompacting={sessionActivity?.statusKind === 'compacting'
+            && sessionActivity?.compaction?.phase !== 'done'
+            && sessionActivity?.compaction?.phase !== 'failed'}
           onShowTokenUsage={showCostModal}
           onShowModelPicker={showModelsModal}
           onShowCheckpoints={handleShowCheckpoints}

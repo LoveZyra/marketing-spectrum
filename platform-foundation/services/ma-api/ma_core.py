@@ -594,6 +594,82 @@ def parse_params(data):
 # 抽成模块级函数是为了能离线回归 —— 这段逻辑此前埋在 handler 里,
 # 加字段全靠人眼盯,fix18.1 的 suggestion 就没有任何用例守着。
 PUBLIC_RULE_KEYS = ("name", "finding_id", "sql_filter", "filter_zh", "direction", "suggestion")
+# fix22(2026-08-14):出参 direction 的取值从 push/exclude 换成**人群包操作类型**。
+#   create —— 模型分析产出的推送人群:模型新发现的人群,下游新建人群包;
+#   alter  —— 其余一律:规则库产出的推送人群、以及所有非推送(exclude)人群,
+#             下游在已有人群包上做修改。
+# 只在这一层做映射,**流水线内部仍用 push/exclude**:push_sql / size.push 的红线过滤、
+# normalize_direction 的促付救回、notes、报告全都依赖 direction=="push" 这个判断。
+# 改内部值要牵动十几处、还得重写刚立的红线断言,风险没必要 —— 映射放投影层,
+# 天然保证"出参口径怎么变,推送口径都不受影响"。
+CROWD_OP_CREATE = "create"
+CROWD_OP_ALTER = "alter"
+MODEL_FINDING_PREFIX = "fnd_model"
+
+
+# fix23(2026-08-14):suggestion 前置分档标注。出参 direction 只有 create/alter 两值,
+# 而 alter 里混着「规则产出要推的」和「诊断明说别推的」—— 展示时分不出。前缀补上这层:
+#   【建议推送】模型分析产出的推送人群(= direction create)
+#   【建议优化】规则库产出的推送人群
+#   【建议排除】非推送人群(内部 exclude)
+# 前缀是机器生成的固定 token,UI 可直接切出来做标签/配色,不依赖润色文案的措辞。
+SUGGEST_PREFIXES = ("【建议推送】", "【建议优化】", "【建议排除】")
+SUGGEST_PREFIX_PUSH, SUGGEST_PREFIX_OPTIMIZE, SUGGEST_PREFIX_EXCLUDE = SUGGEST_PREFIXES
+
+
+def suggest_prefix(rule):
+    """一条规则 → suggestion 的分档前缀。与 crowd_operation 同一套判定口径。
+
+    读的是**归一化之后**的 direction:促付人群(direction_raw=促付)在 pick_push_rules
+    里被救回 push,所以它是【建议优化】而不是【建议排除】—— 这是 2026-07-29 那个线上
+    问题的回归点,前缀口径不能倒退回原始值。
+    """
+    if not isinstance(rule, dict):
+        return SUGGEST_PREFIX_EXCLUDE
+    if (rule.get("direction") or "").strip().lower() != "push":
+        return SUGGEST_PREFIX_EXCLUDE
+    if (rule.get("finding_id") or "").startswith(MODEL_FINDING_PREFIX):
+        return SUGGEST_PREFIX_PUSH
+    return SUGGEST_PREFIX_OPTIMIZE
+
+
+def public_suggestion(rule):
+    """suggestion 加前缀。
+
+    幂等且自纠正:文案已带任一已知前缀时先剥掉再按当前口径重加 —— 重复投影不会
+    叠成「【建议推送】【建议推送】…」,上游万一带了错前缀也会被纠正成对的那个。
+    文案为空时只给前缀(分档信息本身有用,但不凭空编业务话术)。
+    """
+    if not isinstance(rule, dict):
+        return None
+    raw = rule.get("suggestion")
+    text = (raw or "").strip()
+    for p in SUGGEST_PREFIXES:
+        while text.startswith(p):
+            text = text[len(p):].strip()
+    return suggest_prefix(rule) + text
+
+
+def crowd_operation(rule):
+    """一条规则 → 人群包操作类型(create / alter)。
+
+    判定依据是 finding_id 前缀,与 push_source 分流同一套口径:
+    fnd_model_* 是模型分析产出,其余(fnd_r* / fnd_pos_* 以及任何将来新增的前缀)
+    都按规则产出算 —— 认不出的前缀落 alter 是保守侧:它只会让下游去改已有人群包,
+    不会凭空新建一个。
+    """
+    if not isinstance(rule, dict):
+        return CROWD_OP_ALTER
+    direction = (rule.get("direction") or "").strip().lower()
+    finding_id = rule.get("finding_id") or ""
+    if direction == "push" and finding_id.startswith(MODEL_FINDING_PREFIX):
+        return CROWD_OP_CREATE
+    return CROWD_OP_ALTER
+# 排除人群的投影键。fix21 起 /result **不再**单独给这个数组(rules[] 已含两个方向,
+# 再给一份就是同批人的第二份拷贝,调用方并起来会重复计数)。函数保留:meta.json 的
+# crowd_spec.excluded_rules 仍在,排查/内部工具按同一套白名单纪律读它。
+PUBLIC_EXCLUDED_KEYS = ("name", "finding_id", "filter_zh", "direction", "direction_raw",
+                        "estimated_size", "suggestion", "reason")
 
 
 def public_rules(spec):
@@ -611,8 +687,35 @@ def public_rules(spec):
                     "sql_filter": r.get("sql_filter"),
                     # 中文口径:给运营看的,翻不动是空串。**执行仍以 sql_filter 为准**
                     "filter_zh": r.get("filter_zh") or "",
+                    # 人群包操作类型(create/alter),不是原始的 push/exclude ——
+                    # 原值留在 meta.json 的 crowd_spec.rules[].direction 里。
+                    "direction": crowd_operation(r),
+                    # 带【建议推送/优化/排除】前缀 —— alter 里的两类人靠它区分
+                    "suggestion": public_suggestion(r)})
+    return out
+
+
+def public_excluded(spec):
+    """crowd_spec.excluded_rules[] → 八个字段的白名单投影,顺序固定。
+
+    **不进 /result**(fix21 起 rules[] 已带两个方向)。留着给排查工具与内部消费方,
+    白名单纪律与 public_rules 一致:不给 sql_filter、不漏内部键。
+
+    direction_raw 必须带:促付(创单未付)这类第三方向在圈人侧归 exclude,但它的业务
+    动作与"低质人群别推"完全不同 —— 丢了它,调用方就分不出"不推"和"换个方式推"。
+    """
+    out = []
+    for r in (spec or {}).get("excluded_rules") or []:
+        if not isinstance(r, dict):
+            continue
+        out.append({"name": r.get("name"),
+                    "finding_id": r.get("finding_id"),
+                    "filter_zh": r.get("filter_zh") or "",
                     "direction": r.get("direction"),
-                    "suggestion": r.get("suggestion")})
+                    "direction_raw": r.get("direction_raw"),
+                    "estimated_size": r.get("estimated_size"),
+                    "suggestion": r.get("suggestion"),
+                    "reason": r.get("reason")})
     return out
 
 
@@ -812,6 +915,13 @@ def make_handler(mode, runner, extra_health=None):
                 # 中文不保证可解析、翻不动时是空串,下游不要拿它做任何判断。
                 # 同样只加在这份收窄过的公开契约里;skill 侧还带 pandas_filter,
                 # 那是原始 pandas 口径,属内部账,留在 meta.json。
+                # 2026-08-14(fix21):rules[] 从这一版起**同时带 push 与 exclude**,
+                # 由每条的 direction 字段区分 —— 调用方按 direction 自行分流。
+                # ⚠ 调用方必读:不要把 rules[] 整个 OR 起来去推。exclude 是诊断结论
+                # 明说"本活动别推"的人群(7/28 那单里一条 exclude 就覆盖 49477/50000)。
+                # 服务端产出的 push_sql / size.push 已经只含 push 那批,可直接用;
+                # 若要自己拼 SQL,必须先按 direction 过滤。
+                # 不另给 excluded_rules 数组:同一批人出现在两处,调用方并起来就会重复计数。
                 rules = public_rules(spec)
                 self._send(200, {
                     "job_id": meta["job_id"],

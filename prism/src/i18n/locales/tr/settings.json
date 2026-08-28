@@ -238,7 +238,7 @@
   "mcpServers": {
     "title": "MCP Sunucuları",
     "description": {
-      "claude": "Model Context Protocol sunucuları Claude'a ek araçlar ve veri kaynakları sağlar"
+      "claude": "Model Context Protocol sunucuları AI'a ek araçlar ve veri kaynakları sağlar"
     },
     "empty": "Yapılandırılmış MCP sunucusu yok",
     "config": {

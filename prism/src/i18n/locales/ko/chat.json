@@ -14,7 +14,7 @@
   "messageTypes": {
     "error": "오류",
     "tool": "도구",
-    "claude": "Claude"
+    "claude": "AI"
   },
   "tools": {
     "settings": "도구 설정"
@@ -22,7 +22,7 @@
   "interactive": {
     "title": "대화형 프롬프트",
     "waiting": "CLI에서 응답을 기다리는 중",
-    "instruction": "Claude가 실행 중인 터미널에서 옵션을 선택해주세요."
+    "instruction": "AI가 실행 중인 터미널에서 옵션을 선택해주세요."
   },
   "json": {
     "response": "JSON 응답"
@@ -69,8 +69,12 @@
       "showingLast": "마지막 {{count}}개 메시지 표시 (총 {{total}}개)",
       "loadEarlier": "이전 메시지 로드",
       "loadAll": "모든 메시지 로드",
+      "expandAll": "전체 펼치기",
       "loadingAll": "모든 메시지 로딩 중...",
       "allLoaded": "모든 메시지 로드 완료"
+    },
+    "tokens": {
+      "compacting": "압축 중"
     }
   },
   "shell": {
@@ -96,7 +100,7 @@
     },
     "loading": "터미널 로딩 중...",
     "connecting": "Shell에 연결 중...",
-    "startSession": "새 Claude 세션 시작",
+    "startSession": "새 AI 세션 시작",
     "resumeSession": "세션 재개: {{displayName}}...",
     "runCommand": "{{projectName}}에서 {{command}} 실행",
     "startCli": "{{projectName}}에서 Claude CLI 시작",
@@ -114,6 +118,17 @@
     "elapsed": {
       "seconds": "{{count}}s",
       "minutesSeconds": "{{minutes}}m {{seconds}}s"
+    },
+    "compaction": {
+      "blocking": "컨텍스트가 가득 찼습니다 — 압축 후 이 턴을 계속합니다",
+      "slow": "컨텍스트 압축 중 — 평소보다 오래 걸립니다",
+      "stalled": "컨텍스트 압축 중 — CLI가 한동안 응답하지 않습니다",
+      "done": "컨텍스트를 압축했습니다",
+      "doneWithNumbers": "{{before}} → {{after}}로 압축, {{percent}}% 확보",
+      "failed": "압축 실패 — 다음 턴은 압축되지 않은 컨텍스트로 계속됩니다",
+      "elapsedWithLast": "{{elapsed}} · 지난번 {{last}}",
+      "tooShort": "컨텍스트가 아직 짧아 압축할 것이 없습니다",
+      "aborted": "압축이 취소되었습니다"
     }
   },
   "projectSelection": {

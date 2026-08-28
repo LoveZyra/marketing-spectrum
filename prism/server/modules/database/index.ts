@@ -14,7 +14,8 @@ export { notificationPreferencesDb } from '@/modules/database/repositories/notif
 export { projectsDb } from '@/modules/database/repositories/projects.db.js';
 export { scanStateDb } from '@/modules/database/repositories/scan-state.db.js';
 export { scheduledTasksDb } from '@/modules/database/repositories/scheduled-tasks.db.js';
-export type { ScheduledTaskRow, ScheduledTaskInsert, TaskFrequency, TaskSessionMode } from '@/modules/database/repositories/scheduled-tasks.db.js';
+export { taskRunHistoryLimit } from '@/modules/database/repositories/scheduled-tasks.db.js';
+export type { ScheduledTaskRow, ScheduledTaskInsert, ScheduledTaskRunRow, TaskFrequency, TaskSessionMode } from '@/modules/database/repositories/scheduled-tasks.db.js';
 export { sessionsDb } from '@/modules/database/repositories/sessions.db.js';
 export { uiSettingsDb, type UiSettingsRecord } from '@/modules/database/repositories/ui-settings.db.js';
 export { userDb } from '@/modules/database/repositories/users.js';

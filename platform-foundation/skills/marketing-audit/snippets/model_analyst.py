@@ -620,10 +620,22 @@ def _dedup_rules(rules: list[DecisionRule], top_n: int) -> list[DecisionRule]:
 # 最小可表示非零值 ≈ 3e-3（促销占比 1/365）；(0, 1e-6) 内不存在任何真实取值，
 # 落在那里的切分点必然是树内部产物。门槛比最小真实值仍保守 1000 倍，
 # 且对真实数据**选中的行完全不变**（`x > 1e-10` ≡ `x > 0`）。
-_SENTINEL_EPS = 1e-6
+# 2026-08-17:1e-6 → 1e-4。原来的 1e-6 是"保守 1000 倍"的选择,代价是落在
+# [1e-6, 1e-4) 的阈值只能写成 5~6 位小数(`> 0.00003`),破了"最多 4 位小数"那条
+# 业务要求 —— 而这个破例其实不必要:
+#   · 全表只有 4 个 rate 型字段(pre_popup_click_rate / pre_push_click_rate /
+#     pre_events_per_hour / serialid_bonus),分母分别是"每人每天的弹屏曝光数 /
+#     Push 曝光数 / 小时数"和"近1年订单数",最细粒度是 1/365 ≈ 2.7e-3;
+#   · 规则库阈值出自 threshold_computer 的 round(x, 4),取值只能是 0 或 ≥1e-4,
+#     构造上就落不进 (0, 1e-4);
+#   → (0, 1e-4) 与 (-1e-4, 0) 内不存在任何真实取值,余量仍有 27 倍。
+# 唯一能产生这个区间取值的是树切分点,而它逐条过叶子 oracle:万一某列真有落在
+# 这里的取值,那条规则会被剔除+告警,不会带着错圈的人上线。
+_SENTINEL_EPS = 1e-4
 
 
 _MAX_DECIMALS = 4   # 阈值最多保留 4 位小数（业务要求；再多既不可读也无业务意义）
+
 
 
 def _fmt_threshold(v: float) -> str:
@@ -634,9 +646,9 @@ def _fmt_threshold(v: float) -> str:
       2) 最多 4 位小数 —— 树切分点是相邻取值的中点，带一堆浮点噪声
          （`2.5000000000000004`、`15.520000000000001`），照抄出去既难读又毫无意义。
 
-    唯一例外：4 位小数会把值抹成 0 的极小阈值（率值特征的 3e-05 等），
-    那样等价于把 `> 0.00003` 写成 `> 0`，语义全变。这时才继续加位数，
-    取第一个非零写法（仍然不用科学计数法）。
+    2026-08-17 起**没有例外**:哨兵门槛提到 1e-4(见 _SENTINEL_EPS 的推导),
+    (0, 1e-4) 内不存在真实取值,所以抹成 0 是恒等的,不再为 `0.00003` 破例加位数。
+    比较位置上的归零由 _merge_render_clauses 连算符一起做(光抹数值会改变人群)。
 
     ⚠ 2026-08-07 修回归：fix20 为消灭科学计数法改成"加位数直到 float 完全相等"，
     结果把浮点噪声全暴露出来（线上出现 `> 2.50000000000000044409`）。
@@ -649,15 +661,8 @@ def _fmt_threshold(v: float) -> str:
         # 9.9e-7 在第 6 位会进位成 0.000001，看着非零其实仍在哨兵区间内。
         return "0"
     s = f"{v:.{_MAX_DECIMALS}f}".rstrip("0").rstrip(".")
-    if s and float(s) != 0:
-        return s
-    for nd in (5, 6):   # 极小阈值：最多再加到 6 位；仍为 0 说明它在哨兵区间，写 0
-        s = f"{v:.{nd}f}".rstrip("0").rstrip(".")
-        if s and float(s) != 0:
-            return s
-    # 6 位仍表示不出非零 ⇒ |v| < 1e-6 ⇒ 哨兵区间（见 _SENTINEL_EPS 推导）。
-    # 老实现会一路加到 40 位，产出 `0.0000000001` 这种既不可读、业务上也等价于 0 的串。
-    return "0"
+    # 4 位表示不出非零 ⇒ |v| < 1e-4 ⇒ 哨兵区间,写 0(不再加位数破例)。
+    return s if (s and float(s) != 0) else "0"
 
 
 def _fmt_threshold_exact(v: float) -> str:
@@ -670,6 +675,16 @@ def _fmt_threshold_exact(v: float) -> str:
     f = float(v)
     if f == int(f):
         return str(int(f))
+    # 兜底:树内部零哨兵(LightGBM 的 kZeroThreshold = 1e-35f,全精度展开就是三十
+    # 几个零)不该走到这里 —— 正常路径上 _merge_render_clauses 已经把它连**算符**
+    # 一起归零了(`> -1e-35` → `>= 0`,恒等改写)。
+    # 真走到这里说明那一步漏了某条路径:这里只能抹数值、动不了算符,而光抹数值会
+    # 改变圈到的人(取值恰好为 0 的行),叶子 oracle 会把那条规则剔掉。所以吵一声,
+    # 让"规则莫名消失"能被追到源头,而不是安静地产出一个长串。
+    if f != 0 and abs(f) < _SENTINEL_EPS:
+        logger.warning("阈值哨兵漏到执行形态渲染层(%r):已按 0 输出,但算符没跟着改,"
+                       "该规则大概率会被叶子 oracle 剔除 —— 查 _merge_render_clauses", f)
+        return "0"
     return np.format_float_positional(f, trim="-")
 
 
@@ -805,13 +820,20 @@ def _merge_render_clauses(steps: list, cat_maps: dict | None = None,
                 s, p, vs = _notin(neg)
                 sql_parts.append(s); pd_parts.append(p); disp_out = vs
 
-        # display:沿用旧样式,空值并进清单展示
+        # display:沿用旧样式,空值并进清单展示。
+        # 2026-08-17:drop_null(交付形态)下不再往 NOT IN 清单里塞「空值」——
+        # 那时每条分支的 null_in 都是 False,这个标注会出现在**每一个**分类子句上,
+        # 纯噪声;更要命的是人群命名器(model_interpreter._parse_conds)把它当成一个
+        # 真实类别值,起出「非消费频次:空值等人群」这种名字(线上实锤)。
+        # 交付形态本来就不圈空值人群,不标反而是准确的;MA_MODEL_SEG_NULL=1 时
+        # (drop_null=False)标注仍然有信息量,照旧保留。
+        _null_token = [] if (null_in or drop_null) else ["空值"]
         if disp_in or not disp_out:
             path.append("{} in [{}]".format(
                 feat, ",".join((["空值"] if null_in else []) + disp_in)))
         if disp_out:
             path.append("{} not in [{}]".format(
-                feat, ",".join(([] if null_in else ["空值"]) + disp_out))
+                feat, ",".join(_null_token + disp_out))
                 + ("(含空值)" if null_in else ""))
 
         val_sql = " AND ".join(sql_parts)
@@ -840,12 +862,44 @@ def _merge_render_clauses(steps: list, cat_maps: dict | None = None,
     for feat in order:
         if feat in num_bounds:
             lo, hi, na_inc = num_bounds[feat]
+            # 树内部零哨兵 → 直接写 0。
+            # 线上出现 `近1年客单价 > -0.000…00010000000180025095`:尾数
+            # 1.0000000180025095 是 float32(1e-35) 提升成 double 的唯一值,也就是
+            # LightGBM 源码里的 kZeroThreshold(1e-35f)—— 树用来分开"零/缺失"与
+            # 真实数值的内部常量,不是业务阈值,全精度展开就是三十几个零。
+            #
+            # ⚠ 数值和算符必须一起动。光把数值抹成 0、算符不动:
+            #   `> -1e-35` → `> 0` 会把取值恰好为 0 的人排除掉(而这个切分点存在的
+            #   目的恰恰就是把 0 和正值分开),条件与真实叶子对不上,叶子 oracle 会
+            #   把整条规则剔掉 —— 人群凭空消失。
+            # 下面四种改写都是**恒等**的,依据是 _SENTINEL_EPS 那条论证:真实数据在
+            # 0 的两侧邻域内不存在取值(最小可表示非零值 ≈ 3e-3)。
+            #   t>0: `> t`/`>= t` ≡ `> 0`  ;  `< t`/`<= t` ≡ `<= 0`
+            #   t<0: `> t`/`>= t` ≡ `>= 0` ;  `< t`/`<= t` ≡ `< 0`
+            # 三形态(display/SQL/pandas)在这里一次改齐,不会再出现"display 写 0、
+            # SQL 写 -1e-35"这种两边圈的人不一样的情况。oracle 仍逐条复验。
+            if lo is not None and lo[0] != 0 and abs(float(lo[0])) < _SENTINEL_EPS:
+                lo = (0.0, float(lo[0]) < 0)      # 负哨兵 → >=0;正哨兵 → >0
+            if hi is not None and hi[0] != 0 and abs(float(hi[0])) < _SENTINEL_EPS:
+                hi = (0.0, float(hi[0]) > 0)      # 正哨兵 → <=0;负哨兵 → <0
             if is_int_feat is not None and is_int_feat(feat):
                 import math as _math
+                # 整数域字段(registry type ∈ count/ordinal/binary)的阈值直接写成整数。
+                #
+                # 为什么树会给出 27.5:切分点落在**两个相邻观测值之间**,整数列上
+                # "27 和 28 之间"就是 27.5。所以 `visit_days <= 27.5` 是树的原话,
+                # 不是精度问题 —— 但业务读「近90天访问天数 <= 27.5」只会困惑。
+                #
+                # 整数域上这四种改写是恒等的(取值只能是整数,落不进 (27, 28)):
+                #   `<= k.5` ≡ `< k.5` ≡ `<= k`
+                #   `>= k.5` ≡ `>  k.5` ≡ `>= k+1`
+                # 先钉到 floor+0.5(把 1.5000000000000002 这类噪声归位),再写成整数。
+                # 三形态一起改,叶子 oracle 逐条复验:万一某列被 registry 标错了类型
+                # (声明 count 实际有小数),那条规则会被剔除+告警,不会错圈人。
                 if lo is not None and float(lo[0]) != int(lo[0]):
-                    lo = (_math.floor(float(lo[0])) + 0.5, lo[1])
+                    lo = (_math.floor(float(lo[0])) + 1, True)      # > k.5 → >= k+1
                 if hi is not None and float(hi[0]) != int(hi[0]):
-                    hi = (_math.floor(float(hi[0])) + 0.5, hi[1])
+                    hi = (_math.floor(float(hi[0])), True)          # <= k.5 → <= k
             disp_parts, sql_parts, pd_parts = [], [], []
             fs, fp = _fs(feat), _fp(feat)
             if lo is not None:
@@ -1537,26 +1591,37 @@ def _rule_overlap(
       - pairs: list of {i, j, jaccard} —— fix20 新增,i/j 是规则在 decision_rules
         里的**下标**(不是截断文本),下游(model_interpreter 选人群)据此做去冗贪心;
         文本标签会被截断/改写,只有下标能稳定 join。
-      - n_rules_covered: 实际算了掩码的规则数(掩码解析失败/命中<10 的不计)
+      - n_rules_covered: 实际算了掩码的规则数
+      - rules_without_mask: 没算出掩码的规则下标 —— 下游据此判断"去冗数据是否完整",
+        缺了要吵出来而不是静默放行(见下)
 
-    fix20:top_n 默认改为 0 = 覆盖全部规则(原来只算前 5 条)。掩码运算只在验证集上做,
-    10 条规则 45 对,开销可忽略;覆盖不全会让下游去冗对拿不到数据的规则失效。
+    fix20:top_n 默认改为 0 = 覆盖全部规则(原来只算前 5 条)。掩码运算开销可忽略;
+    覆盖不全会让下游去冗对拿不到数据的规则失效。
+
+    2026-08-17 两处返工(线上出现三条模型人群里两条圈同一批人、去冗没拦住):
+      ① 掩码改用 **rule_pandas**(与 rule_sql 同源渲染、已被叶子 oracle 逐行自检的
+         交付形态)。原来解析的是 rule_text —— 那是 display 形态,注释里写明"允许取整
+         美化,不参与执行",且它不认训练帧的 '__NA__' 哨兵:同一条规则 display 解析
+         圈 132 人、交付形态只有 91 人(本地实测)。拿一个近似population算重叠度,
+         判重结论当然不可靠。rule_pandas 缺失/求值失败才退回老解析器。
+      ② 去掉 `m.sum() >= 10` 这道**静默**跳过。命中少的规则同样要判重 —— 小集合的
+         Jaccard 恰恰最容易是 1.0(两条规则圈的就是同一小撮人);跳过的结果是下游
+         拿不到这一对,fail-open 放它进人群包。要跳过也得让下游看见(rules_without_mask)。
     """
     # fix20:门槛原来硬写 "is_converted",而本函数算的是 target_col(可能是 is_paid)——
     # 目标列换成 is_paid 且数据里没有 is_converted 时,整个 O28 会被静默跳过。改为查真正用到的列。
     if not rules or target_col not in df.columns:
         return {}
     subset = rules if not top_n else rules[:top_n]
-    masks, labels, idxs = [], [], []
+    masks, labels, idxs, missing = [], [], [], []
     for ri, rule in enumerate(subset):
-        try:
-            m = _apply_rule_mask(df, rule.rule_text)
-        except Exception:
-            m = None
-        if m is not None and m.sum() >= 10:
-            masks.append(m)
-            labels.append(rule.rule_text[:50])
-            idxs.append(ri)
+        m = _rule_mask_for_overlap(df, rule)
+        if m is None:
+            missing.append(ri)
+            continue
+        masks.append(m)
+        labels.append(rule.rule_text[:50])
+        idxs.append(ri)
 
     matrix = []
     pairs = []
@@ -1578,13 +1643,44 @@ def _rule_overlap(
                 prec_b = float(df.loc[masks[j], target_col].mean()) if masks[j].sum() else 0
                 if prec_a > 0.5 and prec_b > 0.5:
                     complementary.append((labels[i], labels[j]))
+    if missing:
+        logger.warning("规则重叠(O28):%d/%d 条规则算不出命中掩码(下标 %s),"
+                       "这些规则的去冗判重会失效", len(missing), len(subset), missing[:8])
     return {
         "jaccard_matrix": matrix,
         "redundant_pairs": redundant,
         "complementary_pairs": complementary,
         "pairs": pairs,
         "n_rules_covered": len(masks),
+        "n_rules_total": len(subset),
+        "rules_without_mask": missing,
     }
+
+
+def _rule_mask_for_overlap(df: pd.DataFrame, rule) -> "np.ndarray | None":
+    """判重用的命中掩码。优先交付形态(rule_pandas),退回 display 解析器。
+
+    为什么必须优先 rule_pandas:它与 rule_sql 出自同一次渲染、被叶子 oracle 逐行
+    验证过,是"这条规则真正会圈到的人";rule_text 是展示串,阈值做过美化、也不认
+    训练帧的 '__NA__' 哨兵。判重要判的是**交付出去的那批人**,不是展示串的近似。
+    """
+    cond = getattr(rule, "rule_pandas", "") or ""
+    if cond:
+        try:
+            try:
+                from .diagnostic_engine import eval_condition as _ev
+            except ImportError:
+                from diagnostic_engine import eval_condition as _ev
+            m = _ev(cond, df)
+            if m is not None:
+                return np.asarray(m, dtype=bool)
+        except Exception:      # noqa: BLE001 —— 退回老路,不因判重炸掉整份分析
+            pass
+    try:
+        m = _apply_rule_mask(df, getattr(rule, "rule_text", "") or "")
+    except Exception:          # noqa: BLE001
+        m = None
+    return None if m is None else np.asarray(m, dtype=bool)
 
 
 def _score_distribution(
@@ -1900,7 +1996,9 @@ def run_model_analysis(
             calib["note"] = ("训练数据为类别下采样产物(正样本全保留),预测概率绝对值反映"
                              "采样先验而非线上先验;桶级校准仅在采样口径内有意义")
     rule_stab     = _rule_stability(df_val, rules, target_col=effective_target)     # O25
-    rule_ovlp     = _rule_overlap(df_val, rules, target_col=effective_target)        # O28
+    # O28:在**全量帧**上算重叠 —— 规则的交付命中(sample_count)也是在这份帧上算的,
+    # 只在 20% 验证集上算会让小人群的命中数掉到个位数,判重跟着失真/失效。
+    rule_ovlp     = _rule_overlap(df, rules, target_col=effective_target)           # O28
     score_dist    = _score_distribution(y_val, val_scores)                          # O29
     strat_buckets = _stratified_score_buckets(df_val, y_val, val_scores)            # O30
 

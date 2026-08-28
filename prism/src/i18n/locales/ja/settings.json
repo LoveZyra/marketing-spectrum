@@ -237,7 +237,7 @@
   "mcpServers": {
     "title": "MCPサーバー",
     "description": {
-      "claude": "Model Context Protocolサーバーは、Claudeに追加のツールやデータソースを提供します"
+      "claude": "Model Context Protocolサーバーは、AIに追加のツールやデータソースを提供します"
     },
     "empty": "MCPサーバーは設定されていません",
     "config": {

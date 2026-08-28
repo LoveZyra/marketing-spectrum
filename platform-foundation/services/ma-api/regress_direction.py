@@ -62,12 +62,21 @@ CASES = [
                                             "sql_filter": "a=1",
                                             "finding_id": "fnd_r98"}, False),
 ]
-for label, rule, want_in in CASES:
+# fix21 起 segs 收全部方向(出参 rules[] 要全给),所以这里断言的不再是"进没进 segs",
+# 而是**归一化后的 direction 对不对** —— 那才是调用方分流的依据,也是 push_sql
+# 过滤的依据。want_push=True 表示这条应当被判成 push。
+for label, rule, want_push in CASES:
     segs, picked, excluded, fixes = P.pick_push_rules([rule], "both")
-    check(label, (len(segs) == 1) == want_in,
-          "segs={} excluded={}".format(len(segs), len(excluded)))
+    got = (segs[0].get("direction") if segs else None)
+    if rule.get("source") != "audience_segment" or not rule.get("sql_filter"):
+        # source 轴:诊断规则是"发现"不是投放包,压根不进 segs —— 这条没变
+        check(label, len(segs) == 0, "segs={}(source 轴挡掉,符合预期)".format(len(segs)))
+    else:
+        check(label, len(segs) == 1 and (got == "push") == want_push,
+              "segs={} direction={} excluded={}".format(len(segs), got, len(excluded)))
 _, _, ex, _ = P.pick_push_rules([CASES[1][1]], "both")
-check("excluded_rules 不带 sql_filter", "sql_filter" not in (ex[0] if ex else {}))
+check("excluded 视图不带 sql_filter(它只给 notes/meta 用)",
+      "sql_filter" not in (ex[0] if ex else {}))
 
 # 2026-07-29 job_...105131 的出参:fnd_r41 确实进了 rules、size.push 也算了它,
 # 可它自己的 direction 字段还写着 exclude。下游照 direction 再过一遍就白救了。
@@ -98,8 +107,9 @@ check("不就地改坏调用方的 dict(direction 这支同样)", _bare.get("dir
 _odd = {"source": "audience_segment", "direction": "冷却", "sql_filter": "a=1",
         "name": "近期已触达疲劳人群", "finding_id": "fnd_r98"}
 _segso, _, _exo, _fixo = P.pick_push_rules([_odd], "both")
-check("认不出来的方向按 exclude 处理,不硬塞进推送包",
-      not _segso and len(_exo) == 1 and _exo[0].get("direction") == "exclude",
+check("认不出来的方向按 exclude 处理(进 rules[] 但 direction=exclude,不进 push_sql)",
+      len(_segso) == 1 and _segso[0].get("direction") == "exclude"
+      and len(_exo) == 1 and _exo[0].get("direction") == "exclude",
       json.dumps(_exo, ensure_ascii=False)[:160])
 check("认不出来也要吵一声,不能无声吞掉",
       any("未识别" in f for f in _fixo), json.dumps(_fixo, ensure_ascii=False)[:160])
@@ -167,19 +177,52 @@ if real_rules is not None:
                 print("      ! {}".format(fx))
             names = {r.get("finding_id") for r in picked}
             check("真实数据:fnd_r41 被认回 push", "fnd_r41" in names)
+
+            # ── fix21 红线:rules[] 带两个方向,但推送口径只含 push ──────────────
+            # 这是 7/28 事故的唯一防线。picked 现在故意含 exclude(出参要全给),
+            # 一旦有人把 push_only 那层过滤删掉/写错,下面三条会立刻红。
+            _push_only = [r for r in picked
+                          if (r.get("direction") or "").strip().lower() == "push"]
+            _excl_in_picked = [r for r in picked
+                               if (r.get("direction") or "").strip().lower() != "push"]
+            check("fix21:picked 同时含 push 与 exclude(出参 rules[] 全给)",
+                  bool(_push_only) and bool(_excl_in_picked),
+                  "push={} exclude={}".format(len(_push_only), len(_excl_in_picked)))
+            _sql_push = P.build_push_sql(_push_only, "tmp_dm.t", "mapid", "unionid")
+            _sql_push = ((_sql_push[0] or "") + (_sql_push[1] or "")
+                         if isinstance(_sql_push, tuple) else (_sql_push or ""))
+            _leak = [r.get("finding_id") for r in _excl_in_picked
+                     if (r.get("sql_filter") or "").strip()
+                     and (r.get("sql_filter") or "").strip() in _sql_push
+                     and (r.get("sql_filter") or "").strip()
+                     not in {(x.get("sql_filter") or "").strip() for x in _push_only}]
+            check("★ fix21 红线:push_sql 不含任何 exclude 独有谓词", not _leak, str(_leak))
+            check("★ fix21 红线:push_sql 谓词数 == push 规则数(exclude 一条没混进来)",
+                  _sql_push.count("OR") // 2 + 1 == len(_push_only) or len(_push_only) <= 1,
+                  "push 规则 {} 条".format(len(_push_only)))
+            # 反向用例:故意把 exclude 并进去,断言必须能抓到 —— 防止上面那条恒真
+            _bad = P.build_push_sql(picked, "tmp_dm.t", "mapid", "unionid")
+            _bad = (_bad[0] or "") + (_bad[1] or "") if isinstance(_bad, tuple) else (_bad or "")
+            _caught = any((r.get("sql_filter") or "").strip() in _bad for r in _excl_in_picked)
+            check("★ 反向用例:exclude 真混进 push_sql 时断言抓得到(防哨兵恒真)", _caught)
             # fix20(2026-08-14 部署实证):「fnd_r37/fnd_r11 挡在包外」是按 20260728
             # 存档里它们是 exclude 写死的。重放优先取服务器上最新真实 job,而方向是
             # **数据的事实** —— 某活动把 #37 判成显著正向(positive→push)完全合法,
             # 写死 id 会把"数据变了"误报成"代码坏了"。真正的不变量与 id 无关:
             # 数据里非 push 方向、又不是促付回收(direction_raw=促付)的条目,
             # 一个都不许进推送包;它们的谓词也不许出现在 push_sql 里。
+            # fix21:非 push 方向现在**应当**出现在 picked/rules[] 里(调用方按
+            # direction 分流)。所以这里断言的不再是"没进包",而是"进了包但方向标对了" ——
+            # 标错方向 = 下游分流分错 = 和当年混进 push_sql 一样的后果。
             blocked = {r.get("finding_id") for r in real_rules
                        if isinstance(r, dict)
                        and (r.get("direction") or "") != "push"
                        and (r.get("direction_raw") or "") != "促付"}
-            leaked = names & blocked
-            check("真实数据:非 push 方向条目一个都没进包(#37/#11 老断言的一般化)",
-                  not leaked, str(leaked or ""))
+            _in_pack = {r.get("finding_id"): (r.get("direction") or "") for r in picked}
+            _mislabeled = [fid for fid in blocked
+                           if _in_pack.get(fid) not in (None, "exclude")]
+            check("真实数据:非 push 条目进了 rules[] 且方向标成 exclude(不是标成 push)",
+                  not _mislabeled, str(_mislabeled or ""))
             sql = P.build_push_sql(picked, "tmp_dm.t", "mapid", "unionid")
             if isinstance(sql, tuple):          # build_push_sql 返回 (push_sql, count_sql)
                 sql = (sql[0] or "") + (sql[1] or "")
@@ -235,7 +278,12 @@ print("  dropped_rules  = {} 条".format(len(dropped)))
 
 ids = {r.get("finding_id") for r in rules}
 ex_ids = {e.get("finding_id") for e in excluded}
-check("哨兵1 fnd_r37 没混进推送包", "fnd_r37" not in ids)
+# fix21:fnd_r37 现在会出现在 rules[] 里(调用方要按 direction 分流),
+# 但它必须被标成 exclude,且绝不能进 push_sql —— 见哨兵4。
+_r37 = [r for r in rules if r.get("finding_id") == "fnd_r37"]
+check("哨兵1 fnd_r37 进 rules[] 但被标成 exclude",
+      bool(_r37) and all((r.get("direction") or "") == "exclude" for r in _r37),
+      str([r.get("direction") for r in _r37]))
 check("哨兵2 fnd_r41 被认回 push", "fnd_r41" in ids and "fnd_r41" not in ex_ids)
 check("哨兵3 坏列规则被 dry-run 剔掉", len(dropped) >= 1)
 check("哨兵4 push_sql 不含 fnd_r37 谓词",

@@ -132,7 +132,7 @@
     "step3": {
       "reviewConfig": "Review Your Configuration",
       "path": "Path:",
-      "newEmpty": "The workspace will be added to your project list and will be available for Claude sessions."
+      "newEmpty": "The workspace will be added to your project list and will be available for AI sessions."
     },
     "buttons": {
       "cancel": "Cancel",
@@ -247,10 +247,10 @@
     "subtitle": "Run tasks on a schedule or on demand; results land in the target session. Scheduled server-side — they run even with the browser closed.",
     "searchPh": "Search tasks…",
     "newTask": "New task",
-    "createWithClaude": "Create with Claude",
+    "createWithClaude": "Create with AI",
     "setupManually": "Fill in the form manually",
     "loading": "Loading…",
-    "empty": "No scheduled tasks yet. Click “New task” — let Claude ask for the details, or fill in the form yourself.",
+    "empty": "No scheduled tasks yet. Click “New task” — let AI ask for the details, or fill in the form yourself.",
     "noMatch": "No matching tasks.",
     "back": "Back to tasks",
     "edit": "Edit",
@@ -297,7 +297,7 @@
       "name": "Name",
       "namePh": "e.g. Daily morning report",
       "instructions": "Instructions",
-      "instructionsPh": "The message sent to Claude when the task fires, e.g. summarize yesterday's log metrics into a table.",
+      "instructionsPh": "The message sent to AI when the task fires, e.g. summarize yesterday's log metrics into a table.",
       "pickProject": "Pick a project…",
       "defaultModel": "Default model",
       "frequency": "Frequency",
@@ -317,8 +317,8 @@
       "targetSession": "Target session",
       "targetSessionAuto": "Auto-create one and pin it (default)"
     },
-    "claudeStarted": "Request sent to Claude — continue the conversation in the chat tab.",
-    "needProject": "Pick a project in the sidebar first, then let Claude create the task.",
+    "claudeStarted": "Request sent to AI — continue the conversation in the chat tab.",
+    "needProject": "Pick a project in the sidebar first, then let AI create the task.",
     "select": {
       "noMatch": "No matches",
       "searchProjects": "Search projects…",
@@ -326,9 +326,13 @@
       "browseFolder": "Choose a different folder…"
     },
     "fixedSessionPending": "Created and pinned on the first run",
-    "newTaskHint": "Choose how to create it: let Claude ask for the details, or fill in the form",
+    "newTaskHint": "Choose how to create it: let AI ask for the details, or fill in the form",
     "createWithClaudeHint": "Describe it in a sentence; Claude asks for the rest",
-    "setupManuallyHint": "Set name, frequency and target session yourself"
+    "setupManuallyHint": "Set name, frequency and target session yourself",
+    "triggerManual": "Manual",
+    "triggerSchedule": "Scheduled",
+    "openRunSession": "Open this run's session",
+    "moreRuns": "Show earlier ({{count}})"
   },
   "export": {
     "md": "Markdown",

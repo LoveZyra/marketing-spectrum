@@ -32,7 +32,9 @@ export const getIntrinsicMessageKey = (message: ChatMessage): string | null => {
     return null;
   }
 
-  const contentPreview = typeof message.content === 'string' ? message.content.slice(0, 48) : '';
   const toolName = typeof message.toolName === 'string' ? message.toolName : '';
-  return `message-${message.type}-${timestamp}-${toolName}-${contentPreview}`;
+  // 兜底 key **不含正文**。以前带正文前 48 字,于是流式那条每来一批 token 就换一次
+  // key —— React 卸载重建整个气泡,markdown 重解析、代码块重新高亮、高度先塌后涨。
+  // 同一时间戳下的多条由 ChatMessagesPane 的出现次序做后缀消歧,不需要正文参与。
+  return `message-${message.type}-${timestamp}-${toolName}`;
 };

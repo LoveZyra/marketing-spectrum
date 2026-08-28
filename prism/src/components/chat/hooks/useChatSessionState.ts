@@ -6,9 +6,16 @@ import type { MarkSessionIdle, SessionActivityMap } from '../../../hooks/useSess
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage } from '../types/types';
+import {
+  initialWindowAfterLoadAll,
+  revealBatch,
+  visibleCountForTarget,
+} from '../utils/messageWindow';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
 
 import { normalizedToChatMessages } from './useChatMessages';
+
+import { emitToast } from '@/shared/view/ui/toastBus';
 
 const MESSAGES_PER_PAGE = 20;
 /**
@@ -25,6 +32,10 @@ const AUTO_FILL_MAX_WAITS = 60;
 /** 判定"真的能滚了"之前,等布局落定的时间。 */
 const AUTO_FILL_SETTLE_MS = 180;
 const INITIAL_VISIBLE_MESSAGES = 100;
+/** 离底部多近算"在底部"。和 isNearBottom 用同一个口径。 */
+const FOLLOW_BOTTOM_SLACK_PX = 50;
+/** 常量空数组:每次返回新的 `[]` 会让下游 useMemo 每轮都失效。 */
+const EMPTY_STORE_MESSAGES: NormalizedMessage[] = [];
 
 interface UseChatSessionStateArgs {
   selectedProject: Project | null;
@@ -39,14 +50,11 @@ interface UseChatSessionStateArgs {
   /** When each session's `chat.subscribe` was last sent; guards stale idle acks. */
   statusCheckSentAtRef: MutableRefObject<Map<string, number>>;
   /** Highest live seq observed per session; sent as `lastSeq` on subscribe. */
-  lastSeqRef: MutableRefObject<Map<string, number>>;
+  /** 每条会话的补发游标:记住它属于哪一轮,轮次一换就从头算。 */
+  lastSeqRef: MutableRefObject<Map<string, { runId: string | null; seq: number }>>;
   sessionStore: SessionStore;
 }
 
-interface ScrollRestoreState {
-  height: number;
-  top: number;
-}
 
 /* ------------------------------------------------------------------ */
 /*  Helper: Convert a ChatMessage to a NormalizedMessage for the store */
@@ -106,6 +114,33 @@ function chatMessageToNormalized(
 /*  Hook                                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 只要会话在跑就允许中止 —— **故意不看 `canInterrupt`**。
+ *
+ * 自动压缩那条状态发的是 `canInterrupt: false`,而停止按钮只按 isLoading 渲染。
+ * 两者一叠加,就出现了"按钮可见、可点、按下去什么都不发生、也没有任何反馈"。
+ * 服务端 `handleChatAbort` 从不看这个字段,自动压缩那段还专门写了"压缩期间落地
+ * 的中止要取消整个 run" —— 能力一直都在,只是被前端锁在门外。
+ *
+ * 立成规矩:界面任何时候都不允许进入一个没有出口的状态。
+ */
+export function canAbortActivity(activity: { canInterrupt?: boolean } | null): boolean {
+  return activity !== null;
+}
+
+/**
+ * 这个阶段中止会**连带丢掉刚发出的那条消息**。
+ *
+ * 压缩是在把用户消息推给 CLI **之前**做的,此时中止会走 `finishAborted()`,
+ * 那条消息根本没被递交就没了;服务端还会 `dropPendingSend(sessionId, 'aborted')`。
+ * 用户有权在按下去之前知道这件事,否则只会看到消息凭空消失。
+ * `canInterrupt` 现在的唯一用途就是标出这类阶段。
+ */
+export function abortDiscardsPendingSend(activity: { canInterrupt?: boolean } | null): boolean {
+  return activity !== null && activity.canInterrupt === false;
+}
+
+
 export function useChatSessionState({
   selectedProject,
   selectedSession,
@@ -144,11 +179,20 @@ export function useChatSessionState({
   const isLoadingSessionRef = useRef(false);
   const isLoadingMoreRef = useRef(false);
   const allMessagesLoadedRef = useRef(false);
-  const topLoadLockRef = useRef(false);
-  const pendingScrollRestoreRef = useRef<ScrollRestoreState | null>(null);
-  const pendingInitialScrollRef = useRef(true);
+  const scrollAnchorRef = useRef<{
+    element: HTMLElement;
+    /** 从**末尾**倒数第几行。前插不改变这个值,重挂载也不影响 —— 元素引用失效时靠它找回。 */
+    indexFromEnd: number;
+    /** 锚点顶边相对滚动容器顶部的偏移。 */
+    offset: number;
+    /** 记录这一刻的 scrollTop —— 下一次用它判断"是不是用户自己滚了"。 */
+    scrollTop: number;
+  } | null>(null);
+  /** 前插内容前,让调用方声明「这一次的位移不是用户造成的」。 */
+  const holdAnchorRef = useRef(false);
+  /** 是否处于跟底模式。直接由滚动事件写,不经过 state —— state 落后一次 commit。 */
+  const followBottomRef = useRef(true);
   const messagesOffsetRef = useRef(0);
-  const scrollPositionRef = useRef({ height: 0, top: 0 });
   const loadAllFinishedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadAllOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoadedSessionKeyRef = useRef<string | null>(null);
@@ -206,9 +250,6 @@ export function useChatSessionState({
     setSearchTarget(null);
     wasNearTopRef.current = false;
     searchScrollActiveRef.current = false;
-    topLoadLockRef.current = false;
-    pendingScrollRestoreRef.current = null;
-    pendingInitialScrollRef.current = true;
     lastLoadedSessionKeyRef.current = null;
 
     if (loadAllOverlayTimerRef.current) {
@@ -233,7 +274,21 @@ export function useChatSessionState({
   // placeholder entry exists anymore.
   const sessionActivity = (activeSessionId && processingSessions?.get(activeSessionId)) || null;
   const isProcessing = sessionActivity !== null;
-  const canAbortSession = isProcessing && sessionActivity.canInterrupt;
+  /**
+   * 只要在跑就能中止 —— **不看 `canInterrupt`**。
+   *
+   * 之前这里是 `isProcessing && sessionActivity.canInterrupt`,而自动压缩那条
+   * 状态发的是 `canInterrupt: false`。后果是:停止按钮照常渲染(它只看 isLoading)、
+   * 照常能点,`handleAbortSession` 第一行却直接 return —— **按钮可见、可点、
+   * 什么都不做,也没有任何反馈**。而服务端 `handleChatAbort` 压根不看这个字段,
+   * 自动压缩那段还专门写了"压缩期间落地的中止要取消整个 run"。
+   * 也就是说服务端的中止逻辑是完整的,只是被前端锁在门外。
+   *
+   * 界面任何时候都不该进入一个没有出口的状态,所以这个闸门整个去掉。
+   * `canInterrupt` 保留,但只用来提示**中止的代价**(见 abortDiscardsPending)。
+   */
+  const canAbortSession = canAbortActivity(sessionActivity);
+  const abortDiscardsPending = abortDiscardsPendingSend(sessionActivity);
 
   // Ref mirror so effects can read the latest map without re-running on
   // every activity transition.
@@ -277,7 +332,12 @@ export function useChatSessionState({
     setPendingUserMessage(null);
   }, [activeSessionId, pendingUserMessage, sessionStore]);
 
-  const storeMessages = activeSessionId ? sessionStore.getMessages(activeSessionId) : [];
+  const storeMessages = activeSessionId ? sessionStore.getMessages(activeSessionId) : EMPTY_STORE_MESSAGES;
+  /**
+   * 正在打字的正文。它**不在** `storeMessages` 里(见 useSessionStore 的
+   * `streamingText`),所以列表那条 useMemo 链在流式期间引用不变、整体跳过。
+   */
+  const streamingText = sessionStore.getStreamingText(activeSessionId);
 
   // Reset viewHiddenCount when store messages change
   const prevStoreLenRef = useRef(0);
@@ -295,6 +355,11 @@ export function useChatSessionState({
     if (viewHiddenCount > 0 && viewHiddenCount < all.length) return all.slice(0, -viewHiddenCount);
     return all;
   }, [storeMessages, viewHiddenCount, pendingUserMessage]);
+
+  // 搜索跳转要在 await 之后读**最新**的消息数组算窗口大小 —— 那时闭包里的
+  // `chatMessages` 还是发起那一帧的旧值(新拉回来的整段历史不在里面)。
+  const chatMessagesRef = useRef(chatMessages);
+  chatMessagesRef.current = chatMessages;
 
   /* ---------------------------------------------------------------- */
   /*  addMessage / clearMessages / rewindMessages                     */
@@ -327,12 +392,16 @@ export function useChatSessionState({
   }, []);
 
   const scrollToBottomAndReset = useCallback(() => {
-    scrollToBottom();
+    // 先砍窗口再滚:反过来的话滚动发生在旧 DOM 上,随后删掉顶部消息、
+    // scrollHeight 缩水,浏览器再钳一次 scrollTop —— 白滚一次还多跳一下。
+    // 砍完窗口这次 commit 会走控制器的跟底分支,不需要在这里手动滚。
     if (allMessagesLoaded) {
       setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
       setAllMessagesLoaded(false);
       allMessagesLoadedRef.current = false;
+      return;
     }
+    scrollToBottom();
   }, [allMessagesLoaded, scrollToBottom]);
 
   const isNearBottom = useCallback(() => {
@@ -349,14 +418,22 @@ export function useChatSessionState({
       if (!hasMoreMessages || !selectedSession || !selectedProject) return false;
 
       isLoadingMoreRef.current = true;
-      const previousScrollHeight = container.scrollHeight;
-      const previousScrollTop = container.scrollTop;
+      // 接上加载指示。此前 `setIsLoadingMoreMessages` 在整个 src/ 里只出现在
+      // 声明处 —— 也就是说"正在加载更早的消息"永远不渲染,向上翻页零反馈,
+      // 而这个恒 false 的值还占着几个依赖数组和判空,读代码会以为有保护。
+      setIsLoadingMoreMessages(true);
 
       try {
         const slot = await sessionStore.fetchMore(selectedSession.id, {
           limit: MESSAGES_PER_PAGE,
         });
-        if (!slot) return false;
+        if (!slot) {
+          // fetchMore 现在会在失败时返回 null(以前是原样返回旧 slot,于是断网
+          // 被当成"加载成功、只是没有新内容",这条会话从此不再自动跟底)。
+          // 说一声再退出 —— 静默失败比失败本身更难查。
+          emitToast({ message: '加载更早的消息失败,请稍后重试。', variant: 'error' });
+          return false;
+        }
         if (slot.serverMessages.length === 0) {
           if (!slot.hasMore) {
             setHasMoreMessages(false);
@@ -372,7 +449,8 @@ export function useChatSessionState({
           return false;
         }
 
-        pendingScrollRestoreRef.current = { height: previousScrollHeight, top: previousScrollTop };
+        // 前插:声明这次位移不是用户造成的,控制器按上一帧的锚把视口校回原位。
+        holdAnchorRef.current = true;
         setHasMoreMessages(slot.hasMore);
         setTotalMessages(slot.total);
         setVisibleMessageCount((prev) => prev + MESSAGES_PER_PAGE);
@@ -389,6 +467,7 @@ export function useChatSessionState({
         return true;
       } finally {
         isLoadingMoreRef.current = false;
+        setIsLoadingMoreMessages(false);
       }
     },
     [hasMoreMessages, isLoadingMoreMessages, selectedProject, selectedSession, sessionStore],
@@ -558,6 +637,12 @@ export function useChatSessionState({
 
     const nearBottom = isNearBottom();
     setIsUserScrolledUp(!nearBottom);
+    // 跟不跟底立刻定下来。**不能等 state** —— 流式期间每 ~100ms 一次 commit,
+    // 用户刚滚上去而状态还没提交,那一帧就会拿着旧的 false 把视口钉回底部。
+    followBottomRef.current = nearBottom;
+    // 这里**不再取锚**:原来每个滚动事件都 querySelectorAll + 逐条 rect,
+    // 拖动时 60~120Hz,几百条消息在 DOM 里就是滚不动。取锚交给控制器,
+    // 它每次 commit 只做一次二分。
 
     const scrolledNearTop = container.scrollTop < 100;
 
@@ -577,80 +662,37 @@ export function useChatSessionState({
       wasNearTopRef.current = false;
     }
 
-    if (!allMessagesLoadedRef.current) {
-      if (!scrolledNearTop) { topLoadLockRef.current = false; return; }
-      if (topLoadLockRef.current) {
-        if (container.scrollTop > 20) topLoadLockRef.current = false;
-        return;
-      }
-      const didLoad = await loadOlderMessages(container);
-      if (didLoad) topLoadLockRef.current = true;
+    /**
+     * 到顶就取下一页。
+     *
+     * 这里原来还有一把 `topLoadLockRef`:取过一页就锁上,**只有 scrollTop
+     * 重新超过 20/100 才解锁**。而取完一页要靠滚动补偿把视口放回原处,
+     * 补偿之后 scrollTop 落在哪儿是不定的 —— 一旦落在 20 以内,这把锁就
+     * 再也解不开了。表现就是"向上滑没反应,必须先向下滑一下再向上滑,
+     * 而且不一定成功"。
+     *
+     * 而它本来就是多余的:`loadOlderMessages` 开头已经有
+     * `isLoadingMoreRef.current || isLoadingMoreMessages` 的重入保护,
+     * 取完之后如果人还在顶上,再取一页正是应该的行为。
+     */
+    if (!allMessagesLoadedRef.current && scrolledNearTop) {
+      await loadOlderMessages(container);
     }
   }, [hasMoreMessages, isNearBottom, loadOlderMessages]);
-
-  useLayoutEffect(() => {
-    if (!pendingScrollRestoreRef.current || !scrollContainerRef.current) return;
-    const { height, top } = pendingScrollRestoreRef.current;
-    const container = scrollContainerRef.current;
-    const newScrollHeight = container.scrollHeight;
-    container.scrollTop = top + Math.max(newScrollHeight - height, 0);
-    pendingScrollRestoreRef.current = null;
-  }, [chatMessages.length]);
 
   // Reset scroll/pagination state on session change
   useEffect(() => {
     if (!searchScrollActiveRef.current) {
-      pendingInitialScrollRef.current = true;
       setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
     }
-    topLoadLockRef.current = false;
-    pendingScrollRestoreRef.current = null;
     wasNearTopRef.current = false;
     setIsUserScrolledUp(false);
+    // 换会话:锚点和跟底状态都要重置,否则上一条会话的锚会被
+    // "倒数第几行"恢复到新会话的列表里,把视口钉在一个毫无关系的位置。
+    scrollAnchorRef.current = null;
+    holdAnchorRef.current = false;
+    followBottomRef.current = true;
   }, [selectedProject?.projectId, selectedSession?.id]);
-
-  // Initial scroll to bottom — robust to lazy content reflow.
-  // The previous implementation fired one scrollToBottom() at +200ms and
-  // cleared the pending flag. When markdown blocks, code highlighting, or
-  // images finished rendering after that window, scrollHeight grew but
-  // nothing re-anchored the viewport, leaving the chat tab visually
-  // "scrolled way up" with the latest assistant message off-screen.
-  //
-  // This version re-scrolls every animation frame while scrollHeight is
-  // still growing, capped at ~1s (60 frames) or 3 consecutive stable
-  // frames. Cancels cleanly on session change via the pending flag.
-  useEffect(() => {
-    if (!pendingInitialScrollRef.current || !scrollContainerRef.current || isLoadingSessionMessages) return;
-    if (chatMessages.length === 0) { pendingInitialScrollRef.current = false; return; }
-    if (searchScrollActiveRef.current) { pendingInitialScrollRef.current = false; return; }
-
-    const container = scrollContainerRef.current;
-    let frame = 0;
-    let lastHeight = 0;
-    let stableCount = 0;
-    let rafId = 0;
-
-    const tick = () => {
-      if (!pendingInitialScrollRef.current || !scrollContainerRef.current) return;
-      container.scrollTop = container.scrollHeight;
-      if (container.scrollHeight === lastHeight) {
-        stableCount++;
-      } else {
-        stableCount = 0;
-        lastHeight = container.scrollHeight;
-      }
-      frame++;
-      if (stableCount < 3 && frame < 60) {
-        rafId = requestAnimationFrame(tick);
-      } else {
-        pendingInitialScrollRef.current = false;
-      }
-    };
-    rafId = requestAnimationFrame(tick);
-    return () => {
-      if (rafId) cancelAnimationFrame(rafId);
-    };
-  }, [chatMessages.length, isLoadingSessionMessages, scrollToBottom]);
 
   // Main session loading effect — store-based
   useEffect(() => {
@@ -680,7 +722,8 @@ export function useChatSessionState({
         type: 'chat.subscribe',
         sessions: [{
           sessionId: selectedSessionId,
-          lastSeq: lastSeqRef.current.get(selectedSessionId) ?? 0,
+          lastSeq: lastSeqRef.current.get(selectedSessionId)?.seq ?? 0,
+          lastRunId: lastSeqRef.current.get(selectedSessionId)?.runId ?? null,
         }],
       });
       // Only record the send time if the frame went out. Recording it for a
@@ -769,11 +812,10 @@ export function useChatSessionState({
       try {
         // Skip store refresh during active streaming
         if (!isProcessing) {
+          // 刷新完不再自己排一发跟底:那个 200ms 定时器**没有 cleanup**,
+          // 用户在这 200ms 内滚上去照样被拽回底部。跟底交给滚动控制器 ——
+          // 它每次 commit 都跑,而且用户一滚就立刻交出控制权。
           await sessionStore.refreshFromServer(selectedSession.id);
-
-          if (isNearBottom()) {
-            setTimeout(() => scrollToBottom(), 200);
-          }
         }
       } catch (error) {
         console.error('Error reloading messages from external update:', error);
@@ -824,7 +866,9 @@ export function useChatSessionState({
               setHasMoreMessages(false);
               setTotalMessages(slot.total);
               messagesOffsetRef.current = slot.total;
-              setVisibleMessageCount(Infinity);
+              setVisibleMessageCount((prev) =>
+                visibleCountForTarget(chatMessagesRef.current, target, prev),
+              );
               setAllMessagesLoaded(true);
               allMessagesLoadedRef.current = true;
               await new Promise(resolve => setTimeout(resolve, 300));
@@ -833,7 +877,9 @@ export function useChatSessionState({
             // Fall through and scroll in current messages
           }
       }
-      setVisibleMessageCount(Infinity);
+      // 只放开到**刚好盖住目标**的那一段,而不是整段进 DOM。定位不到时
+      // visibleCountForTarget 会退回全长 —— 搜索跳转不能因为省 DOM 而跳不到。
+      setVisibleMessageCount((prev) => visibleCountForTarget(chatMessagesRef.current, target, prev));
 
       const findAndScroll = (retriesLeft: number) => {
         const container = scrollContainerRef.current;
@@ -912,38 +958,120 @@ export function useChatSessionState({
     return chatMessages.slice(-visibleMessageCount);
   }, [chatMessages, visibleMessageCount]);
 
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-    scrollPositionRef.current = { height: container.scrollHeight, top: container.scrollTop };
-  });
 
-  // 纯文本流式时,消息条数不变(就一条 `__streaming_` 消息在变长),只有它的
-  // **正文长度**在增长 —— 所以跟底 effect 除了看条数,还要看最后一条的正文长度,
-  // 否则长回答会一路"打字"到视野外、页面纹丝不动,直到冒出新行(工具/thinking)
-  // 才跳一下。
-  const lastMessageContentLength = useMemo(() => {
-    const last = chatMessages[chatMessages.length - 1];
-    return typeof last?.content === 'string' ? last.content.length : 0;
-  }, [chatMessages]);
-
-  useEffect(() => {
-    if (!scrollContainerRef.current || chatMessages.length === 0) return;
-    if (isLoadingMoreRef.current || isLoadingMoreMessages || pendingScrollRestoreRef.current) return;
-    if (searchScrollActiveRef.current) return;
-
-    if (!isUserScrolledUp) {
-      setTimeout(() => scrollToBottom(), 50);
+  /**
+   * 锚点:视口顶部那条消息 + 它距容器顶的偏移。
+   *
+   * **按元素锚,不按高度差锚。** 高度差那套(`newHeight - oldHeight`)只在
+   * "一次 commit 里高度就到位"时成立;而这里的内容是分批落地的 ——
+   * 代码高亮、mermaid、KaTeX 都在之后的帧里才撑开。前插 200 条时实测:
+   * commit 那一刻只长了 6179px,随后又长了 15000+px,按高度差补的那一下
+   * 只补了零头,用户照样被甩走。
+   *
+   * 浏览器原生的 `overflow-anchor` 本来能兜住,但**程序化写过 scrollTop 之后
+   * 它会被抑制** —— 而守位本身就要写 scrollTop,自相矛盾。所以自己盯着一个
+   * 真实元素,每次 commit 校一次,直到高度稳定。
+   */
+  const captureAnchor = useCallback((container: HTMLDivElement, rows: NodeListOf<HTMLElement>) => {
+    if (rows.length === 0) {
+      scrollAnchorRef.current = null;
       return;
     }
+    // **二分**找视口顶部那条,不逐条 getBoundingClientRect。
+    // 原来是线性扫 + 每条一次 rect —— 505 条消息在 DOM 里时,每个滚动事件都要
+    // 做一遍强制布局,而拖动时滚动事件是 60~120Hz。那就是"滚不动"的直接原因。
+    // offsetTop 在第一次刷新布局之后是缓存读,二分只要 ~9 次。
+    const scrollTop = container.scrollTop;
+    let lo = 0;
+    let hi = rows.length - 1;
+    let found = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const row = rows[mid];
+      if (row.offsetTop + row.offsetHeight > scrollTop + 8) {
+        found = mid;
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    scrollAnchorRef.current = {
+      element: rows[found],
+      indexFromEnd: rows.length - 1 - found,
+      offset: rows[found].offsetTop - scrollTop,
+      scrollTop,
+    };
+  }, []);
 
+  /**
+   * 滚动控制器 —— **全局唯一**写 `scrollTop` 的地方。
+   *
+   * 以前这件事散在四个 effect 加一个 60 帧 rAF 循环里,互相踩:
+   *
+   * - 记录"变化前高度"的那个 effect **没有依赖数组**,每次渲染都跑,而且声明在
+   *   跟底 effect **之前** —— 它先把基准刷成本次 commit **之后**的高度,
+   *   跟底 effect 再去算 `heightDiff` 恒等于 0。「用户上翻时保持阅读位置」
+   *   那段补偿代码**从来没生效过**。
+   * - layout effect 先消费并清空 `pendingScrollRestoreRef`,passive effect 里
+   *   那句 `|| pendingScrollRestoreRef.current` 守卫因此永远读到 null ——
+   *   每次翻页都排一发 50ms 跟底,靠竞态侥幸取消。主线程忙一点就取消不掉,
+   *   这就是"有时候翻页后突然弹到底、有时候又不弹"。
+   * - 首屏跟底那个 rAF 循环逐帧无条件写 `scrollTop`,最长一秒 —— 这一秒里
+   *   用户的滚轮被逐帧夺回。
+   *
+   * 现在合成一个 **layout effect**(绘制前写,不会有中间帧被看见),没有依赖数组
+   * 所以每次 commit 都跑。只有两种常态:**跟底**(用户在底部)和**守位**
+   * (用户上翻在读,盯着锚点元素校正)。首屏不再特殊对待 —— 刚进会话
+   * `isUserScrolledUp` 本来就是 false,跟底模式自然把它钉在底部,而且用户
+   * 一滚就立刻交出控制权。
+   */
+  useLayoutEffect(() => {
     const container = scrollContainerRef.current;
-    const prevHeight = scrollPositionRef.current.height;
-    const prevTop = scrollPositionRef.current.top;
-    const newHeight = container.scrollHeight;
-    const heightDiff = newHeight - prevHeight;
-    if (heightDiff > 0 && prevTop > 0) container.scrollTop = prevTop + heightDiff;
-  }, [chatMessages.length, lastMessageContentLength, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom]);
+    if (!container) return;
+
+    // 搜索定位期间完全不插手 —— 平滑滚动还在跑,谁碰谁打断。
+    if (searchScrollActiveRef.current) return;
+
+    const rows = container.querySelectorAll<HTMLElement>('.chat-message');
+    const anchor = scrollAnchorRef.current;
+    const hold = holdAnchorRef.current;
+    holdAnchorRef.current = false;
+
+    /**
+     * 用户自己动过没有?
+     *
+     * 判据是「容器现在的 scrollTop,和我们上次离开时留下的那个值,一不一样」。
+     * 不一样就只可能是用户 —— 这时候**绝不能纠正**,否则就是跟用户抢方向盘:
+     * 他往上滚一点、控制器把他拽回锚点,表现就是"滚不动、那几行固定在那里"。
+     * 前插内容(翻页 / 看更早)会先置 `holdAnchorRef`,那种位移不算用户动的。
+     */
+    const userMoved = !hold && anchor !== null && Math.abs(container.scrollTop - anchor.scrollTop) > 1;
+    if (userMoved) {
+      followBottomRef.current =
+        container.scrollHeight - container.scrollTop - container.clientHeight < FOLLOW_BOTTOM_SLACK_PX;
+    }
+
+    if (followBottomRef.current && rows.length > 0) {
+      // 跟底。写在 layout 阶段,绘制前完成 —— 不会出现"先画在上面再跳下去"。
+      container.scrollTop = container.scrollHeight;
+    } else if (!userMoved && anchor) {
+      // 守位:位移只可能来自 DOM 变化,把锚点校回它原来的偏移。
+      // 元素可能被重挂载(前插一批会让列表整体重排),**倒数第几行**这个坐标
+      // 前插不会改变,拿它把锚找回来。
+      const row = anchor.element.isConnected
+        ? anchor.element
+        : rows[rows.length - 1 - anchor.indexFromEnd];
+      if (row) {
+        const target = row.offsetTop - anchor.offset;
+        if (Math.abs(target - container.scrollTop) >= 1) {
+          container.scrollTop = Math.max(0, target);
+        }
+      }
+    }
+
+    // 决策之后才重新取锚 —— 这一句必须留在最后。
+    captureAnchor(container, rows);
+  });
 
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -970,8 +1098,6 @@ export function useChatSessionState({
     }
 
     const container = scrollContainerRef.current;
-    const previousScrollHeight = container ? container.scrollHeight : 0;
-    const previousScrollTop = container ? container.scrollTop : 0;
 
     try {
       const slot = await sessionStore.fetchFromServer(requestSessionId, {
@@ -983,13 +1109,15 @@ export function useChatSessionState({
 
       if (slot) {
         if (container) {
-          pendingScrollRestoreRef.current = { height: previousScrollHeight, top: previousScrollTop };
+          holdAnchorRef.current = true;
         }
 
         setHasMoreMessages(false);
         setTotalMessages(slot.total);
         messagesOffsetRef.current = slot.total;
-        setVisibleMessageCount(Infinity);
+        // 「加载全部」= 把整段历史**拉到本地**,不等于一次性全部进 DOM。先显示一
+        // 批,剩下的交给「看更早的」/「全部展开」。
+        setVisibleMessageCount(initialWindowAfterLoadAll);
         setAllMessagesLoaded(true);
 
         setLoadAllJustFinished(true);
@@ -1013,9 +1141,30 @@ export function useChatSessionState({
     }
   }, [selectedSession, selectedProject, isLoadingAllMessages, currentSessionId, sessionStore]);
 
+  /**
+   * 前插内容之前先记锚点。
+   *
+   * 「看更早的」一次在**视口上方**插进 200 条,而 `chatMessages.length` 并没有变
+   * —— 以前没有任何 effect 会因此触发,scrollTop 原地不动,用户瞬间被甩到几千
+   * 像素之外。窗口类操作必须自己交锚点给控制器。
+   */
+  const anchorBeforeReveal = useCallback(() => { holdAnchorRef.current = true; }, []);
+
   const loadEarlierMessages = useCallback(() => {
-    setVisibleMessageCount((prev) => prev + 100);
-  }, []);
+    anchorBeforeReveal();
+    setVisibleMessageCount(revealBatch);
+  }, [anchorBeforeReveal]);
+
+  /**
+   * 「全部展开」:整段进 DOM 的**唯一**入口,而且要用户自己点。
+   *
+   * 上面那行「显示最近 N 条(共 M 条)」已经把代价摆在眼前了,想要 Ctrl+F 全文的
+   * 人还是能拿到,只是不再由「加载全部」和搜索跳转顺手替他决定。
+   */
+  const expandAllMessages = useCallback(() => {
+    anchorBeforeReveal();
+    setVisibleMessageCount(Number.POSITIVE_INFINITY);
+  }, [anchorBeforeReveal]);
 
   return {
     chatMessages,
@@ -1025,6 +1174,7 @@ export function useChatSessionState({
     sessionActivity,
     isProcessing,
     canAbortSession,
+    abortDiscardsPending,
     currentSessionId,
     setCurrentSessionId,
     isLoadingSessionMessages,
@@ -1037,8 +1187,10 @@ export function useChatSessionState({
     setTokenBudget,
     visibleMessageCount,
     visibleMessages,
+    streamingText,
     loadEarlierMessages,
     loadAllMessages,
+    expandAllMessages,
     allMessagesLoaded,
     isLoadingAllMessages,
     loadAllJustFinished,

@@ -132,7 +132,7 @@
     "step3": {
       "reviewConfig": "查看您的配置",
       "path": "路径：",
-      "newEmpty": "工作区将被添加到您的项目列表中，并可用于 Claude 会话。"
+      "newEmpty": "工作区将被添加到您的项目列表中，并可用于对话会话。"
     },
     "buttons": {
       "cancel": "取消",
@@ -247,10 +247,10 @@
     "subtitle": "按计划或随时手动执行任务，结果写进目标会话。服务端调度，浏览器关了也照跑。",
     "searchPh": "搜索任务…",
     "newTask": "新建任务",
-    "createWithClaude": "让 Claude 创建",
+    "createWithClaude": "让 AI 创建",
     "setupManually": "手动填写表单",
     "loading": "加载中…",
-    "empty": "还没有定时任务。点右上角「新建任务」,让 Claude 问齐细节帮你建,或自己填表。",
+    "empty": "还没有定时任务。点右上角「新建任务」,让 AI 问齐细节帮你建,或自己填表。",
     "noMatch": "没有匹配的任务。",
     "back": "返回任务列表",
     "edit": "编辑",
@@ -297,7 +297,7 @@
       "name": "名称",
       "namePh": "例如：每日晨报",
       "instructions": "执行指令",
-      "instructionsPh": "到点后发给 Claude 的消息，例如：汇总昨日日志的关键指标成表格。",
+      "instructionsPh": "到点后发给 AI 的消息，例如：汇总昨日日志的关键指标成表格。",
       "pickProject": "选择项目…",
       "defaultModel": "默认模型",
       "frequency": "频率",
@@ -317,8 +317,8 @@
       "targetSession": "目标会话",
       "targetSessionAuto": "自动新建一个并固定(默认)"
     },
-    "claudeStarted": "已把需求发给 Claude,到对话页继续聊即可。",
-    "needProject": "先在左侧选一个项目,再让 Claude 帮你建任务。",
+    "claudeStarted": "已把需求发给 AI,到对话页继续聊即可。",
+    "needProject": "先在左侧选一个项目,再让 AI 帮你建任务。",
     "select": {
       "noMatch": "没有匹配项",
       "searchProjects": "搜索项目…",
@@ -326,9 +326,13 @@
       "browseFolder": "选择其它目录…"
     },
     "fixedSessionPending": "首次运行时自动创建并固定",
-    "newTaskHint": "选择创建方式:让 Claude 问齐细节,或自己填表",
+    "newTaskHint": "选择创建方式:让 AI 问齐细节,或自己填表",
     "createWithClaudeHint": "说一句需求,缺的细节它会问你",
-    "setupManuallyHint": "自己填名称、频率、目标会话"
+    "setupManuallyHint": "自己填名称、频率、目标会话",
+    "triggerManual": "手动",
+    "triggerSchedule": "定时",
+    "openRunSession": "看这次的会话",
+    "moreRuns": "看更早的({{count}} 条)"
   },
   "export": {
     "md": "Markdown",

@@ -485,6 +485,105 @@ else:
           "MA_API_HOST" in js and "plan.host" in js)
 
 
+# ================================================= 4) 报告发布:一单一链接
+print("\n=== 4) 报告发布:链接一单一份,不再互相覆盖 ===")
+# 2026-08-17 之前发布文件名是 diagnosis-report-{activity_id}.html —— 同一活动复诊
+# 会把上一单原地盖掉:先前发出去的链接全部改指最新内容(最坏是指到一份带降级
+# 横幅的半成品),历史版本再也找不回来。现在名字带 job_id,一单一份。
+
+_PUB = tempfile.mkdtemp()
+_JOBS = tempfile.mkdtemp()
+_OLD_PUB, _OLD_URL, _OLD_KEEP = P.PUBLIC_DIR, P.URL_BASE, P.REPORT_KEEP
+P.PUBLIC_DIR, P.URL_BASE = _PUB, "http://host/pub"
+
+
+def _publish(aid, jid, keep=None):
+    """造一单标准形状的 rundir(<jobs>/<job_id>/run)并发布,返回 url。"""
+    rd = os.path.join(_JOBS, jid, "run")
+    os.makedirs(rd, exist_ok=True)
+    html = os.path.join(rd, "diagnosis_report.html")
+    with open(html, "w", encoding="utf-8") as f:
+        f.write("<html><body>" + jid + "</body></html>")
+    ctx = P.Ctx({"activity_id": aid}, rd, log=lambda _s: None)
+    if keep is not None:
+        P.REPORT_KEEP = keep
+    return ctx, P.publish_html(ctx, html)
+
+
+_c1, _u1 = _publish("ACT9", "job_20260817_161200_aaaaaa", keep=0)
+_c2, _u2 = _publish("ACT9", "job_20260817_161300_bbbbbb", keep=0)
+_c3, _u3 = _publish("ACT9", "job_20260817_161400_cccccc", keep=0)
+
+check("同一活动连下三单 → 三个不同链接", len({_u1, _u2, _u3}) == 3,
+      "\n    ".join([_u1 or "", _u2 or "", _u3 or ""]))
+check("job_id 从 rundir 推得出来", _c1.job_id == "job_20260817_161200_aaaaaa", str(_c1.job_id))
+check("文件名带活动号(运维一眼看出是哪个活动)", "diagnosis-report-ACT9-" in (_u1 or ""), _u1 or "")
+check("三份内容各自留在盘上,没被后来的单覆盖",
+      sorted(open(os.path.join(_PUB, os.path.basename(u)), encoding="utf-8").read()
+             .count(j) for u, j in
+             ((_u1, "aaaaaa"), (_u2, "bbbbbb"), (_u3, "cccccc"))) == [1, 1, 1])
+check("URL 前缀仍取 MA_URL_BASE", (_u1 or "").startswith("http://host/pub/"), _u1 or "")
+
+# 显式传 job_id 优先于从 rundir 推(方案 B 的 Ctx 就是这么用的)
+_ctx_x = P.Ctx({"activity_id": "ACT9"}, os.path.join(_JOBS, "不是标准形状"),
+               job_id="job_20260817_170000_dddddd")
+check("显式给的 job_id 说了算", _ctx_x.job_id == "job_20260817_170000_dddddd", str(_ctx_x.job_id))
+
+# 非标准 rundir(命令行自测 runs/<activity_id>):兜底造尾巴,同秒两次也不撞
+_ctx_cli = P.Ctx({"activity_id": "ACT9"}, os.path.join(_JOBS, "runs", "ACT9"))
+check("非标准 rundir 不猜假 job_id", _ctx_cli.job_id is None, str(_ctx_cli.job_id))
+_n1, _n2 = P.report_filename(_ctx_cli), P.report_filename(_ctx_cli)
+check("兜底文件名同秒两次也不撞(纯时间戳会撞)", _n1 != _n2, _n1 + " / " + _n2)
+check("兜底文件名形状与正常单一致(清理认得出来)",
+      P._REPORT_TAIL_RE.match(_n1[len("diagnosis-report-ACT9-"):-len(".html")]) is not None, _n1)
+
+# ---- 保留策略:只动本活动,别人的和历史遗留的一概不碰
+_legacy = os.path.join(_PUB, "diagnosis-report-ACT9.html")
+with open(_legacy, "w", encoding="utf-8") as f:
+    f.write("2026-08-17 之前那个固定名")
+# ACT9-B 是**另一个活动**,名字恰好以 ACT9- 开头 —— 裸 startswith 会把它误删
+_cb, _ub = _publish("ACT9-B", "job_20260817_161500_eeeeee", keep=0)
+_c4, _u4 = _publish("ACT9", "job_20260817_161600_ffffff", keep=1)
+
+_left = sorted(os.listdir(_PUB))
+check("保留上限生效:同一活动只剩最近 1 份",
+      len([f for f in _left if f.startswith("diagnosis-report-ACT9-job")]) == 1, str(_left))
+check("留下的是最新那一份",
+      os.path.basename(_u4 or "") in _left, str(_left))
+check("另一个活动(名字以本活动 id 开头)没被误删",
+      "diagnosis-report-ACT9-B-job_20260817_161500_eeeeee.html" in _left, str(_left))
+check("2026-08-17 之前的固定名不碰(老链接照样打得开)",
+      "diagnosis-report-ACT9.html" in _left, str(_left))
+
+P.REPORT_KEEP = 0
+_c5, _u5 = _publish("ACT9", "job_20260817_161700_999999")
+check("MA_REPORT_KEEP=0 → 一份都不清",
+      len([f for f in os.listdir(_PUB) if f.startswith("diagnosis-report-ACT9-job")]) == 2,
+      str(sorted(os.listdir(_PUB))))
+
+# 清理炸了不能让整单红
+_c6, _u6 = _publish("ACT9", "job_20260817_161800_888888", keep=2)
+P.PUBLIC_DIR = os.path.join(_PUB, "这个目录不存在")
+check("清理目录都没了也只是 0,不抛", P.prune_reports(_c6, keep=1) == 0)
+P.PUBLIC_DIR = _PUB
+
+# 发布目录不存在时的老行为不变:告警 + report_url=None
+P.PUBLIC_DIR = os.path.join(_PUB, "缺席的发布目录")
+_c7 = P.Ctx({"activity_id": "ACT9"}, os.path.join(_JOBS, "job_20260817_161900_777777", "run"),
+            log=lambda _s: None)
+_html7 = _c7.path("diagnosis_report.html")
+os.makedirs(_c7.rundir, exist_ok=True)
+with open(_html7, "w", encoding="utf-8") as f:
+    f.write("<html><body>x</body></html>")
+check("发布目录不存在 → 仍是告警降级,不抛也不给假链接",
+      P.publish_html(_c7, _html7) is None and any("发布目录不存在" in w for w in _c7.warnings),
+      str(_c7.warnings)[:80])
+
+P.PUBLIC_DIR, P.URL_BASE, P.REPORT_KEEP = _OLD_PUB, _OLD_URL, _OLD_KEEP
+shutil.rmtree(_PUB, ignore_errors=True)
+shutil.rmtree(_JOBS, ignore_errors=True)
+
+
 print("\n=== 汇总:{} 过 / {} 挂 ===".format(len(OK), len(BAD)))
 for b in BAD:
     print("  挂: {}".format(b))

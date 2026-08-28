@@ -87,7 +87,7 @@
     "step3": {
       "reviewConfig": "Yapılandırmanı Gözden Geçir",
       "path": "Yol:",
-      "newEmpty": "Çalışma alanı proje listene eklenecek ve Claude oturumları için kullanılabilir olacak."
+      "newEmpty": "Çalışma alanı proje listene eklenecek ve AI oturumları için kullanılabilir olacak."
     },
     "buttons": {
       "cancel": "İptal",

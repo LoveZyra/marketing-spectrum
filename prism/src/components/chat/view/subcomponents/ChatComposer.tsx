@@ -58,6 +58,8 @@ interface ChatComposerProps {
   handleGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
   isLoading: boolean;
   onAbortSession: () => void;
+  /** 这个阶段中止会连带丢掉刚发的那条消息 —— 按钮上说清楚,别让消息凭空消失。 */
+  abortDiscardsPending?: boolean;
   /** Model alias this conversation is running (what the user picks). Null while unknown. */
   activeModel: string | null;
   /**
@@ -74,6 +76,8 @@ interface ChatComposerProps {
   availableEffortOptions: NonNullable<ProviderModelOption['effort']>['values'];
   onSelectEffort: (effort: string) => void;
   tokenBudget: Record<string, unknown> | null;
+  /** 会话正在压缩上下文 —— 芯片上的百分比此刻是压缩前的快照,让位给"压缩中"。 */
+  isCompacting?: boolean;
   onShowTokenUsage: () => void;
   /** 打开 /models 弹窗。模型徽标的点击入口 —— 和敲 /models 同一条路径。 */
   onShowModelPicker: () => void;
@@ -154,6 +158,7 @@ function ChatComposer({
   handleGrantToolPermission,
   isLoading,
   onAbortSession,
+  abortDiscardsPending,
   activeModel,
   activeModelReal,
   permissionMode,
@@ -163,6 +168,7 @@ function ChatComposer({
   availableEffortOptions,
   onSelectEffort,
   tokenBudget,
+  isCompacting = false,
   onShowTokenUsage,
   onShowModelPicker,
   onToggleCommandMenu,
@@ -382,6 +388,13 @@ function ChatComposer({
 
 
   const hasQueuedDraft = Boolean(queuedDraft);
+  /** 写进了 imageErrors、但文件并没有被收下的那些 —— 它们在附件列表里找不到位置。 */
+  const rejectedImageErrors = useMemo(() => {
+    if (imageErrors.size === 0) return [] as Array<[string, string]>;
+    const attachedNames = new Set(attachedImages.map((file) => file.name));
+    return [...imageErrors.entries()].filter(([name]) => !attachedNames.has(name));
+  }, [imageErrors, attachedImages]);
+
   const canQueueDraft = isLoading && Boolean(input.trim());
   // 快捷键说明不再占底栏排版位(那段长文案被左侧一排 chip 挤压后会折行,
   // 底栏随之长高 —— 就是"对话框突然变化"的主要来源),收进发送按钮的悬停提示。
@@ -490,6 +503,24 @@ function ChatComposer({
                 <p className="mt-0.5 text-xs text-muted-foreground">图片随消息一起发送,其他文件落到项目里</p>
               </div>
             </div>
+          )}
+
+          {/* 被拒文件的错误需要**独立的**出口。
+              `imageErrors` 原来只在遍历 `attachedImages` 时渲染,而超限/空文件恰恰
+              没进那个数组 —— 于是那条错误写进了 state 却没有任何渲染路径,
+              用户看到的是"拖进去什么都没发生"。 */}
+          {rejectedImageErrors.length > 0 && (
+            <PromptInputHeader>
+              <div className="rounded-md bg-transparent px-2 pt-2">
+                {rejectedImageErrors.map(([name, message]) => (
+                  <div key={name} className="flex items-center gap-1.5 py-0.5 text-[11.5px] text-destructive">
+                    <span className="max-w-56 truncate font-mono">{name}</span>
+                    <span>·</span>
+                    <span>{message}</span>
+                  </div>
+                ))}
+              </div>
+            </PromptInputHeader>
           )}
 
           {(attachedImages.length > 0 || attachedDocs.length > 0 || parsingDocs) && (
@@ -745,7 +776,7 @@ function ChatComposer({
                 onClick={onShowModelPicker}
                 className={`inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   modelJustChanged
-                    ? 'border-primary/30 bg-primary/8 text-foreground ring-2 ring-primary/30 dark:text-primary'
+                    ? 'bg-primary/8 border-primary/30 text-foreground ring-2 ring-primary/30 dark:text-primary'
                     : 'border-border text-card-foreground hover:border-border-strong'
                 }`}
                 title={
@@ -910,7 +941,7 @@ function ChatComposer({
               </div>
             )}
 
-            <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />
+            <TokenUsageSummary usage={tokenBudget} isCompacting={isCompacting} onClick={onShowTokenUsage} />
 
           </PromptInputTools>
 
@@ -925,7 +956,9 @@ function ChatComposer({
                 type="button"
                 onClick={onAbortSession}
                 aria-label={t('input.stop', { defaultValue: '停止' })}
-                title={t('input.stop', { defaultValue: '停止' })}
+                title={abortDiscardsPending
+                  ? t('input.stopDiscards', { defaultValue: '停止(会连同刚发出的这条消息一起取消)' })
+                  : t('input.stop', { defaultValue: '停止' })}
                 className="grid h-8 w-8 flex-none place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground active:translate-y-px"
               >
                 <SquareIcon className="h-3.5 w-3.5" strokeWidth={2} />

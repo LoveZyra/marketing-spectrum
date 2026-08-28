@@ -186,6 +186,47 @@ type PendingSend = {
 
 const pendingSends = new Map<string, PendingSend>();
 
+/**
+ * 谁**正在看**哪条会话(chat.subscribe 登记,socket 关闭时摘掉)。
+ *
+ * 注意和 `broadcastToSessionViewers` 的区别:那个按"能不能看见"过滤,是**权限**;
+ * 这个是"此刻真的开着这条会话",是**意愿**。推流集合该跟后者走 —— 按权限推
+ * 会把整段助手输出发给共享项目里所有没在看的人。
+ *
+ * 用途:新一轮开跑时,把这些 socket 一并接进推流集合。原来只接"发起这一轮的
+ * 那个 socket",于是空闲时订阅过的第二个标签页整轮一帧收不到。
+ */
+const sessionViewers = new Map<string, Set<WebSocket>>();
+
+function rememberSessionViewer(sessionId: string, ws: WebSocket): void {
+  let viewers = sessionViewers.get(sessionId);
+  if (!viewers) {
+    viewers = new Set();
+    sessionViewers.set(sessionId, viewers);
+  }
+  viewers.add(ws);
+}
+
+function forgetViewerEverywhere(ws: WebSocket): void {
+  for (const [sessionId, viewers] of sessionViewers) {
+    if (viewers.delete(ws) && viewers.size === 0) sessionViewers.delete(sessionId);
+  }
+}
+
+/** 把所有正在看这条会话的 socket 接进这一轮的推流集合。 */
+function attachSessionViewers(sessionId: string): void {
+  const viewers = sessionViewers.get(sessionId);
+  if (!viewers) return;
+  for (const viewer of viewers) {
+    if (viewer.readyState !== WS_OPEN_STATE) {
+      viewers.delete(viewer);
+      continue;
+    }
+    chatRunRegistry.attachConnection(sessionId, viewer);
+  }
+  if (viewers.size === 0) sessionViewers.delete(sessionId);
+}
+
 /** 排队消息的存活上限。超时的不再发 —— 半小时前那句话的语境早就不在了。 */
 const PENDING_SEND_TTL_MS = 30 * 60 * 1000;
 
@@ -245,11 +286,23 @@ function queuedFrame(sessionId: string, pending: PendingSend) {
  * 回合"是两回事,不说清楚就变成消息凭空消失。
  */
 function dropPendingSend(sessionId: string, reason: 'cancelled' | 'aborted' | 'expired'): boolean {
+  const pending = pendingSends.get(sessionId);
   if (!pendingSends.delete(sessionId)) return false;
+  // 被中止带走的那条要**把正文一起还回去** —— 前端会把它退回输入框。
+  //
+  // 「停止」是刹车,不该顺手替用户开跑下一段;但也不能把他打过的字吞掉,
+  // 因为"排一条纠正再按停止"正是引导 agent 最顺手的操作。所以正文原样退回,
+  // 发不发交回给用户的下一次按键。
+  // 撤销(cancelled)是用户自己点的删除,他不想要了,不退;
+  // 过期(expired)半小时前的语境早就不在了,也不退,只留一句说明。
+  const content = reason === 'aborted' && typeof pending?.data?.content === 'string'
+    ? pending.data.content
+    : null;
   broadcastToSessionViewers(sessionId, {
     kind: 'chat_queue_cancelled',
     sessionId,
     reason,
+    ...(content ? { content } : {}),
     timestamp: new Date().toISOString(),
   });
   return true;
@@ -341,6 +394,11 @@ async function handleChatSend(
     connection: ws,
     userId,
   });
+
+  if (run) {
+    // 这一轮的推流集合不只有发起方 —— 所有正在看这条会话的 socket 一并接上。
+    attachSessionViewers(sessionId);
+  }
 
   if (!run) {
     // F7:不再直接打回去 —— 收下这一条,回合结束自动续发(见 pendingSends)。
@@ -586,6 +644,8 @@ function handleChatSubscribe(
       continue;
     }
 
+    const lastRunIdRaw = (target as AnyRecord).lastRunId;
+    const lastRunId = typeof lastRunIdRaw === 'string' && lastRunIdRaw ? lastRunIdRaw : null;
     const lastSeqRaw = (target as AnyRecord).lastSeq;
     const lastSeq = typeof lastSeqRaw === 'number' && Number.isFinite(lastSeqRaw)
       ? Math.max(0, Math.floor(lastSeqRaw))
@@ -613,8 +673,13 @@ function handleChatSubscribe(
       maybePrewarm(sessionId, dependencies);
     }
 
-    // Future live events for this run should land on the socket that asked —
-    // this is what makes mid-stream page refreshes work for all providers.
+    // 订阅即登记 —— **不再只在"这一刻正好在跑"时才接**。
+    //
+    // 原来只有 `isProcessing` 为真才 attachConnection,于是"空闲时订阅过这条会话"
+    // 的第二个标签页,在下一轮开跑时根本不在推流集合里:整轮一帧收不到,
+    // 连 complete 都没有(因而也不触发兜底刷新),界面停在旧状态直到手动切走再切回。
+    // F7 排队续发同理 —— 新 run 只认"当初排队的那个 socket"。
+    rememberSessionViewer(sessionId, ws);
     if (isProcessing) {
       chatRunRegistry.attachConnection(sessionId, ws);
     }
@@ -643,6 +708,8 @@ function handleChatSubscribe(
       sessionId,
       isProcessing,
       lastSeq: run?.lastSeq ?? 0,
+      // 客户端据此判断自己手里的游标属于哪一轮;轮次一换,游标必须跟着重置。
+      runId: chatRunRegistry.currentRunId(sessionId),
       pendingPermissions,
       // F7:排队中的那条也要报出来 —— 刷新页面或换设备后,"有一条在等"这件事
       // 不能只活在发起它的那个标签页里。
@@ -657,7 +724,7 @@ function handleChatSubscribe(
     // replaying them (e.g. after a page reload where the client's lastSeq is
     // 0) would duplicate messages the history fetch already returned.
     if (isProcessing) {
-      for (const event of chatRunRegistry.replayEvents(sessionId, lastSeq)) {
+      for (const event of chatRunRegistry.replayEvents(sessionId, lastSeq, lastRunId)) {
         sendJson(ws, event);
       }
     }
@@ -685,6 +752,12 @@ function maybePrewarm(sessionId: string, dependencies: ChatWebSocketDependencies
   if (now - last < PREWARM_DEBOUNCE_MS) return;
   lastPrewarmAt.set(sessionId, now);
 
+  // 终端正接管着这段对话时**不能**预热 —— 预热会再建一个进程 resume 同一段对话,
+  // 和 PTY 同时写同一份 transcript,正是所有权登记要消掉的双写(症状:聊了半天,
+  // 另一边少一截)。REST 那条同功能接口一直有这道闸门(server/index.js),
+  // 这条 WS 路径是 F14 后加的,当时漏了。
+  if (currentHolder(sessionId)) return;
+
   let session;
   try {
     session = sessionsDb.getSessionById(sessionId);
@@ -693,6 +766,10 @@ function maybePrewarm(sessionId: string, dependencies: ChatWebSocketDependencies
   }
   if (!session?.provider_session_id) return;
 
+  // 注意:这里只传得出 sessionId + cwd,而 runtime 的签名是按 cwd/effort/bypass 算的。
+  // 用户开着非默认 effort 或「跳过权限」时,第一条真实消息会因为签名不符而
+  // dispose 重建 —— 预热白做。要根治得让预热拿到用户的档位设置,那需要另外一条
+  // 数据通路,这里先不动;至少它不会再造成双写。
   void Promise.resolve(
     prewarm({ sessionId: session.provider_session_id, cwd: session.project_path ?? undefined }),
   ).catch(() => {
@@ -839,5 +916,6 @@ export function handleChatConnection(
     // 但摘掉能让 `liveConnectionCount()` 立刻反映现实 —— 审批帧要不要认为
     // "送到了"读的就是它。
     chatRunRegistry.detachConnection(ws);
+    forgetViewerEverywhere(ws);
   });
 }

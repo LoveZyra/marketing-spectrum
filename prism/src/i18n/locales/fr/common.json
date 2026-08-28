@@ -87,7 +87,7 @@
     "step3": {
       "reviewConfig": "Vérifiez votre configuration",
       "path": "Chemin :",
-      "newEmpty": "L'espace de travail sera ajouté à votre liste de projets et disponible pour les sessions Claude."
+      "newEmpty": "L'espace de travail sera ajouté à votre liste de projets et disponible pour les sessions AI."
     },
     "buttons": {
       "cancel": "Annuler",

@@ -47,6 +47,11 @@ function PlainCodeBlock({ customStyle, codeTagProps, children }: Omit<CodeHighli
       style={{
         ...(isDarkMode ? DARK_FALLBACK : LIGHT_FALLBACK),
         fontSize: '0.875rem',
+        // **必须和高亮版一致**。这里不写的话会继承 prose-sm 的 1.6666667,
+        // 而 oneDark/oneLight 的 `pre[class*="language-"]` 是 1.5 ——
+        // 高亮 chunk 落地那一刻每个代码块高度掉约 11%(40 行的块少 90 多像素),
+        // 下面所有内容整体上跳。转录里十几个代码块就是十几次。
+        lineHeight: 1.5,
         overflow: 'auto',
         ...customStyle,
       }}

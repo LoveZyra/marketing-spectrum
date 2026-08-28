@@ -93,7 +93,7 @@
     "step3": {
       "reviewConfig": "檢閱您的設定",
       "path": "路徑：",
-      "newEmpty": "工作區將加入您的專案列表，並可用於 Claude 工作階段。"
+      "newEmpty": "工作區將加入您的專案列表，並可用於 AI 工作階段。"
     },
     "buttons": {
       "cancel": "取消",

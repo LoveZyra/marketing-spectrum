@@ -703,6 +703,69 @@
     animation: prism-scan 2.4s linear infinite;
   }
 
+  /* 压缩心跳。**一次性**脉冲,靠 React 的 key 换新元素来重放 —— 所以它只在
+     服务端真的送来一次心跳(CLI 往流里推了东西)时才跳。这一点是刻意的:
+     循环动画在 CLI 卡死时照转不误,而这颗点会跟着停,正好是"还活着吗"的答案。 */
+  @keyframes prism-compaction-beat {
+    0%   { transform: scale(0.6); opacity: 0.35; }
+    35%  { transform: scale(1.35); opacity: 1; }
+    100% { transform: scale(0.6); opacity: 0.35; }
+  }
+
+  .prism-compaction-beat {
+    animation: prism-compaction-beat 900ms var(--motion-ease);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .prism-compaction-beat { animation: none; opacity: 0.7; }
+  }
+
+  /* 用量芯片上的压缩标记。这里没有心跳信号可用(心跳挂在活动指示器上),
+     所以用一个很轻的常驻呼吸,只表达"这件事正在发生",不假装表达进度。 */
+  @keyframes prism-compaction-chip {
+    0%, 100% { opacity: 0.45; }
+    50%      { opacity: 1; }
+  }
+
+  .prism-compaction-chip {
+    animation: prism-compaction-chip 1.6s var(--motion-ease) infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .prism-compaction-chip { animation: none; opacity: 0.8; }
+  }
+
+  /*
+   * 活动时间轴的收尾折叠。
+   *
+   * 回合结束时那几行要收进抬头。直接卸载的话几百像素当场消失,页面"啪"地跳一下;
+   * 这里用 grid 的 `1fr → 0fr` 过渡把它收起来 —— 不需要量高度,行留在 DOM 里,
+   * 看着是"收进去",不是"凭空不见"。
+   */
+  .prism-activity-rows {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows var(--motion-base) var(--motion-ease);
+  }
+
+  .prism-activity-rows.is-collapsed {
+    grid-template-rows: 0fr;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* 减少动效不是"更快的动画",是**没有**动画。 */
+    .prism-activity-rows { transition: none; }
+  }
+
+  /* mermaid 从源码占位换成图时,预留高度平滑放开(见 MermaidDiagram)。 */
+  .prism-mermaid {
+    transition: min-height var(--motion-base) var(--motion-ease);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .prism-mermaid { transition: none; }
+  }
+
   /* 搜索命中提示:发丝线级别的两段环,1.2s */
   .search-highlight-flash {
     animation: search-flash 1.2s var(--motion-ease);
@@ -802,20 +865,31 @@
     animation: chat-activity-exit var(--motion-fast) var(--motion-ease) both;
   }
 
+  /*
+   * 这里**故意不用** `content-visibility: auto`。
+   *
+   * 它让视口外的消息根本不布局,拿 96/180/240px 的估高顶替 —— 而真实高度从
+   * 24px(一行用户消息)到几千像素(带代码块的长回答)都有。于是
+   * `container.scrollHeight` 全程失真,而跟底、保位、自动补页**全部**读它。
+   * 更糟的是往上翻:每条消息越过视口边界就从估高弹到真高,下面所有内容
+   * (包括正在看的那一屏)被推走 —— 越往上翻跳得越厉害。
+   *
+   * 它换来的性能,dd 轮的分批渲染已经覆盖(DOM 封顶 MESSAGE_BATCH_SIZE 条),
+   * 不值得用整个滚动系统的正确性去换。
+   *
+   * `contain` 也一并去掉:它让每条消息成为独立布局根,浏览器自带的滚动锚定
+   * (overflow-anchor)更难找到锚点,而那正是下面要依赖的机制。
+   */
+
+  /*
+   * 滚动锚定:视口上方的内容长高或缩短时,浏览器自动补偿 scrollTop,
+   * 让你正在看的那一行**留在原地**。异步落地的代码高亮、mermaid、KaTeX、
+   * 字体,全靠它兜住。默认值就是 auto,这里显式写出来是当作契约 ——
+   * 谁要在消息容器里加 `overflow-anchor: none` 得先解释清楚。
+   */
+  .chat-messages-pane,
   .chat-message {
-    contain: layout style paint;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 180px;
-  }
-
-  .chat-message.assistant {
-    contain-intrinsic-size: auto 240px;
-  }
-
-  .chat-message.user,
-  .chat-message.tool,
-  .chat-message.error {
-    contain-intrinsic-size: auto 96px;
+    overflow-anchor: auto;
   }
 
   /* 输入框滚动条 */

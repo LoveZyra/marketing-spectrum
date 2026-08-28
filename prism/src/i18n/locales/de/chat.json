@@ -14,7 +14,7 @@
   "messageTypes": {
     "error": "Fehler",
     "tool": "Werkzeug",
-    "claude": "Claude"
+    "claude": "AI"
   },
   "tools": {
     "settings": "Werkzeugeinstellungen"
@@ -22,7 +22,7 @@
   "interactive": {
     "title": "Interaktive Eingabeaufforderung",
     "waiting": "Warte auf deine Antwort in der CLI",
-    "instruction": "Bitte wähl eine Option in deinem Terminal, in dem Claude läuft."
+    "instruction": "Bitte wähl eine Option in deinem Terminal, in dem AI läuft."
   },
   "json": {
     "response": "JSON-Antwort"
@@ -69,8 +69,12 @@
       "showingLast": "Letzte {{count}} Nachrichten werden angezeigt ({{total}} gesamt)",
       "loadEarlier": "Frühere Nachrichten laden",
       "loadAll": "Alle Nachrichten laden",
+      "expandAll": "Alle im Verlauf anzeigen",
       "loadingAll": "Alle Nachrichten werden geladen...",
       "allLoaded": "Alle Nachrichten geladen"
+    },
+    "tokens": {
+      "compacting": "komprimiert"
     }
   },
   "shell": {
@@ -96,7 +100,7 @@
     },
     "loading": "Terminal wird geladen...",
     "connecting": "Verbindung zum Terminal wird hergestellt...",
-    "startSession": "Neue Claude-Sitzung starten",
+    "startSession": "Neue AI-Sitzung starten",
     "resumeSession": "Sitzung fortsetzen: {{displayName}}...",
     "runCommand": "{{command}} in {{projectName}} ausführen",
     "startCli": "Claude CLI wird in {{projectName}} gestartet",
@@ -114,6 +118,17 @@
     "elapsed": {
       "seconds": "{{count}}s",
       "minutesSeconds": "{{minutes}}m {{seconds}}s"
+    },
+    "compaction": {
+      "blocking": "Kontext ist voll — wird vor dem Fortsetzen komprimiert",
+      "slow": "Kontext wird komprimiert — dauert länger als sonst",
+      "stalled": "Kontext wird komprimiert — die CLI antwortet seit einiger Zeit nicht",
+      "done": "Kontext komprimiert",
+      "doneWithNumbers": "{{before}} → {{after}} komprimiert, {{percent}}% frei",
+      "failed": "Komprimierung fehlgeschlagen — die nächste Runde läuft unkomprimiert weiter",
+      "elapsedWithLast": "{{elapsed}} · zuletzt {{last}}",
+      "tooShort": "Kontext ist noch kurz — nichts zu komprimieren",
+      "aborted": "Komprimierung abgebrochen"
     }
   },
   "projectSelection": {

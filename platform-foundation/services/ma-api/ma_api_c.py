@@ -145,6 +145,7 @@ def runner(job_id, params):
             set_phase=lambda p: STORE.update(job_id, phase=p),
             call_cli=_make_cli(job_id, cli),
             extract_json=extract_json,
+            job_id=job_id,          # 报告发布文件名靠它做到一单一份
         )
     except StepError as exc:
         raise JobError(exc.code, exc.message, exc.detail)

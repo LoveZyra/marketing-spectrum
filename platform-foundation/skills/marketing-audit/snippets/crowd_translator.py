@@ -30,10 +30,12 @@ _MAX_DECIMALS = 4   # 阈值最多保留 4 位小数（与 model_analyst._MAX_DE
 
 
 def _sci_to_plain(text: str) -> str:
-    """科学计数法数字字面量 → 位置计数写法，最多 4 位小数；改不动的原样保留。
+    """科学计数法数字字面量 → 位置计数写法，**最多 4 位小数**；改不动的原样保留。
 
-    4 位会把值抹成 0 的极小阈值（3e-05 这类率值切分点）才继续加位数取非零写法 ——
-    直接抹成 0 会让 `> 0.00003` 变成 `> 0`，语义全变。
+    2026-08-17 起没有例外:4 位表示不出非零 ⇒ |v| < 1e-4 ⇒ 落在"真实取值不存在"的
+    区间(见 model_analyst._SENTINEL_EPS 的推导),抹成 0 是恒等的。
+    比较位置上的归零由 collapse_tiny_thresholds 连算符一起做 —— 光抹数值会把取值
+    恰好为 0 的人排除掉,那是改变人群。
     """
     def _one(m: "re.Match[str]") -> str:
         raw = m.group(0)
@@ -43,17 +45,63 @@ def _sci_to_plain(text: str) -> str:
             return raw
         if v == int(v):
             return str(int(v))
+        if abs(v) < _TINY_EPS:
+            # 哨兵区间直接归零,不靠"第 4 位能否表示出非零"来判 ——
+            # 5e-05 在第 4 位会进位成 0.0001,看着非零其实仍在哨兵区间内。
+            return "0"
         s = f"{v:.{_MAX_DECIMALS}f}".rstrip("0").rstrip(".")
         if s and float(s) != 0:
             return s
-        for nd in (5, 6):             # 最多再加到 6 位
-            s = f"{v:.{nd}f}".rstrip("0").rstrip(".")
-            if s and float(s) != 0:
-                return s
-        # 兜到这里说明 |v| < 1e-6 且未被哨兵归一化命中（非比较位置的字面量）。
-        # 返回 raw 会把 `3e-08` 泄给运营看，违背"全链路不出科学计数法"的约定 → 写 0。
+        # 4 位表示不出非零 ⇒ |v| < 1e-4 ⇒ 哨兵区间 → 写 0。
+        # 写 "0" 而不是 f"{v:.0f}" —— 后者对极小负数会吐出 "-0"(2026-08-17 实测)。
         return "0"
     return _SCI_NUM.sub(_one, text)
+
+
+# 极小阈值(树内部零哨兵 / 科学计数法尾巴)在**比较位置**上归零。
+# 2026-08-17:模型侧在 model_analyst._merge_render_clauses 已经这么做了(线上出过
+# `近1年客单价 > -0.000…00010000000180025095`,那是 LightGBM 的 kZeroThreshold)。
+# 规则库人群这条路(pandas_filter → pandas_to_sql → sql_to_zh)当时没覆盖到:
+#   · _sci_to_plain 只认科学计数法,**定点写法**的 `0.0000000001` 直接穿过去;
+#   · _trim_float_noise 对"四舍五入会变成 0"的值明确拒绝改动(它只抹噪声);
+# 于是同一类长串还能从这条路进 sql_filter / filter_zh。
+#
+# ⚠ 数值和算符必须一起改,理由与模型侧同一条:光把 `> -1e-35` 抹成 `> 0` 会把取值
+# 恰好为 0 的人排除掉。四种改写都是恒等的(真实数据在 0 的两侧邻域内没有取值):
+#   v>0: `> v`/`>= v` ≡ `> 0` ;  `< v`/`<= v` ≡ `<= 0`
+#   v<0: `> v`/`>= v` ≡ `>= 0`;  `< v`/`<= v` ≡ `< 0`
+_TINY_EPS = 1e-4        # 与 model_analyst._SENTINEL_EPS 同一门槛(见那边推导)
+_NUM_LIT = r"-?(?:\d+\.\d*(?:[eE][-+]?\d+)?|\.\d+(?:[eE][-+]?\d+)?|\d+[eE][-+]?\d+)"
+_TINY_CMP = re.compile(r"(>=|<=|>|<)\s*(" + _NUM_LIT + r")")
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+
+def collapse_tiny_thresholds(text: str) -> str:
+    """比较位置上的极小阈值(0 < |v| < 1e-6)连算符一起归零;引号内的字面量不动。"""
+    if not text:
+        return text
+
+    def _one(m):
+        op, raw = m.group(1), m.group(2)
+        try:
+            v = float(raw)
+        except ValueError:
+            return m.group(0)
+        if v == 0 or abs(v) >= _TINY_EPS:
+            return m.group(0)
+        if v > 0:
+            op2 = ">" if op in (">", ">=") else "<="
+        else:
+            op2 = ">=" if op in (">", ">=") else "<"
+        return "{} 0".format(op2)
+
+    out, last = [], 0
+    for q in _QUOTED.finditer(text):          # 引号内是值,不是阈值,一个字不动
+        out.append(_TINY_CMP.sub(_one, text[last:q.start()]))
+        out.append(q.group(0))
+        last = q.end()
+    out.append(_TINY_CMP.sub(_one, text[last:]))
+    return "".join(out)
 
 
 # 长尾小数(≥5 位)：树切分点的浮点噪声长这样(2.5000000000000004 / 15.520000000000001)
@@ -84,6 +132,13 @@ def _trim_float_noise(text: str) -> str:
             return raw
         if r != 0 and abs(r - v) <= abs(v) * _NOISE_REL:
             return s
+        # 抹不动:四舍五入会真的改变这个值(如率值切分点 0.00003、手写规则 0.12345)。
+        # 但小数位多到 8 位以上的"真值"业务上不存在(阈值在 threshold_computer 里
+        # 是 round(cut, 4) 出来的)—— 真出现说明上游有一条路没走那道 round,
+        # 吵一声,别让它安静地进出参和报告。
+        if len(raw.split(".")[-1]) > 8:
+            print("[crowd_translator] ⚠ 阈值 {} 小数位过多且不是浮点噪声(抹了会改变取值),"
+                  "原样保留 —— 查上游是否漏了 round(x, 4)".format(raw))
         return raw
     return _LONG_DEC.sub(_one, text)
 
@@ -210,6 +265,35 @@ _SQL_BADCHAR = re.compile(r"[~&|!{}\[\];:#@$^\\?%]")
 _SQL_IDENT = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 
 
+_DISP_NUM = re.compile(r"(?<![\w.])-?\d+\.\d+(?![\w.])")
+
+
+def _round_display_nums(text: str) -> str:
+    """展示口径:把数字收到最多 4 位小数(去掉尾随 0)。只用于给人看的投影。
+
+    与 _trim_float_noise 的区别是**不设容差** —— 那个只抹浮点噪声(相对误差
+    ≤1e-9),保证圈到的人一行不差;这个是展示层,允许四舍五入真的改变第 5 位,
+    因为它不参与执行。两者各管一头,别混用。
+    """
+    def _one(m):
+        raw = m.group(0)
+        # 只动**真的超过 4 位**的:`1.0` / `2.5` / `0.0027` 一个字不改。
+        # 报告折叠里的「原条件」也走这一道,fix28 钉着"原条件原文一个字不改" ——
+        # 把 `1.0` 规整成 `1` 也算改。所以这里只处理病态长串,其余原样透传。
+        frac = raw.split(".")[-1]
+        if len(frac) <= _MAX_DECIMALS:
+            return raw
+        try:
+            v = float(raw)
+        except ValueError:
+            return raw
+        s = "{:.{}f}".format(v, _MAX_DECIMALS).rstrip("0").rstrip(".")
+        if not s or s in ("-", "-0"):
+            return "0"
+        return s
+    return _DISP_NUM.sub(_one, text)
+
+
 def sql_to_zh(sql: str, label_map=None) -> str:
     """英文 SQL 条件 → 中文口径,逐 token 直译。
 
@@ -237,6 +321,15 @@ def sql_to_zh(sql: str, label_map=None) -> str:
             return "\x00{}\x00".format(len(lits) - 1)
 
         t = _SQL_LIT.sub(_stash, sql)
+
+        # ①b 展示口径:数字一律收到最多 4 位小数。
+        # 中文条件是**给人看的投影**(下游执行以 sql_filter 为准,见本函数注释),
+        # 页面上不该出现 `598.19793701171875` 这种串。
+        # 只能在这里收,不能在源头收 —— 执行形态必须逐位保真:2026-08-14 实测
+        # 把 598.19793701171875 美化成 598.1979 恰好翻转了一行,叶子 oracle 当场
+        # 判定条件与真实叶子不符、整条规则被剔(fix30 缺陷 #2)。
+        # 字面量已在 ① 摘走,所以这里动不到值(类别名、LIKE 的内容都安全)。
+        t = _round_display_nums(t)
 
         # ② 闭合语法守卫:结构认不出 → fail(不给 best-effort)
         if _SQL_FOREIGN.search(t) or _SQL_BADCHAR.search(t):
@@ -288,7 +381,9 @@ def build_crowd_rules(report: dict) -> list[dict]:
     for r in drs:
         if not r.get("effective_signal"):
             continue
-        cond = r.get("condition") or ""
+        # 极小阈值连算符一起归零 —— 在这里做,pandas_filter 与 sql_filter 才同源
+        # (只改 SQL 会让两个形态圈的人不一样,ma-api 的一致性自检要拿它们对数)
+        cond = _trim_float_noise(collapse_tiny_thresholds(r.get("condition") or ""))
         sql = pandas_to_sql(cond)
         rules.append({
             "source": "diagnostic_rule",
@@ -316,8 +411,9 @@ def build_crowd_rules(report: dict) -> list[dict]:
     # 2) audience_segments：优先用 segment 自带的 filter_conditions_sql（模型seg），
     #    否则把 pandas filter_conditions 翻译成 SQL（规则seg）
     for s in report.get("audience_segments") or []:
-        cond = s.get("filter_conditions") or ""
-        sql = s.get("filter_conditions_sql") or pandas_to_sql(cond)
+        cond = _trim_float_noise(collapse_tiny_thresholds(s.get("filter_conditions") or ""))
+        # 模型 seg 自带的 SQL 在源头(model_analyst)已归零;这里再过一道,兜住老 state
+        sql = collapse_tiny_thresholds(s.get("filter_conditions_sql") or "") or pandas_to_sql(cond)
         direction = s.get("direction") or "push"
         direction_raw = None
         if direction not in VALID_DIRECTIONS:

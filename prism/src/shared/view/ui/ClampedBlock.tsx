@@ -39,12 +39,27 @@ export function ClampedBlock({
   const [isExpanded, setIsExpanded] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
 
+  /**
+   * 量高度用 ResizeObserver,不用 `children` 当依赖。
+   *
+   * `children` 是父组件**每次渲染都新建**的 React 元素,拿它当依赖等于"父组件
+   * 每渲染一次就强制一次同步回流"。流式期间父组件每秒渲染约十次,转录里几十个
+   * 工具卡 —— 每秒几百次强制布局。它不直接改滚动位置,但主线程被这样占住,
+   * 别处那些靠时序取消的定时器就会取消不掉,抖动就从"偶发"变成"常态"。
+   *
+   * 观察真实尺寸变化才是这里要的语义:内容长高了才重新判断要不要夹。
+   */
   React.useLayoutEffect(() => {
     const element = contentRef.current;
-    if (!element) return;
+    if (!element) return undefined;
     // 只在收起状态下量:展开后 scrollHeight 本来就等于 clientHeight
-    setOverflows(element.scrollHeight > maxHeight + 8);
-  }, [children, maxHeight, isExpanded]);
+    const measure = () => setOverflows(element.scrollHeight > maxHeight + 8);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [maxHeight, isExpanded]);
 
   React.useEffect(() => {
     if (!copied) return undefined;

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+
 import { test } from 'vitest';
 
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
@@ -357,5 +358,66 @@ test('startRun rejects a second concurrent run for the same session', async () =
       userId: null,
     });
     assert.ok(third);
+  });
+});
+
+test('第二轮的补发不会被上一轮的游标滤掉(runId 判轮次)', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('app-run-5', 'claude', '/workspace/demo');
+    const connection = new FakeConnection();
+
+    // 第 1 轮:跑到 seq=3,客户端游标停在 3
+    const first = chatRunRegistry.startRun({
+      appSessionId: 'app-run-5', provider: 'claude', providerSessionId: null, connection, userId: null,
+    });
+    assert.ok(first);
+    for (const c of ['a', 'b', 'c']) {
+      first.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'x', content: c });
+    }
+    const firstRunId = chatRunRegistry.currentRunId('app-run-5');
+    assert.ok(firstRunId);
+    chatRunRegistry.completeRun('app-run-5', { exitCode: 0 });
+
+    // 第 2 轮:seq 又从 0 开始
+    const second = chatRunRegistry.startRun({
+      appSessionId: 'app-run-5', provider: 'claude', providerSessionId: null, connection, userId: null,
+    });
+    assert.ok(second);
+    for (const c of ['d', 'e'] ) {
+      second.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'x', content: c });
+    }
+    const secondRunId = chatRunRegistry.currentRunId('app-run-5');
+    assert.notEqual(secondRunId, firstRunId, '每轮必须是不同的 runId,否则这条判据形同虚设');
+
+    // 带着**上一轮**的游标来重连 —— 这正是事故现场:
+    // 只按 seq 过滤的话 `seq > 3` 在第 2 轮一条都匹配不上,整轮内容丢失。
+    const replayed = chatRunRegistry.replayEvents('app-run-5', 3, firstRunId);
+    assert.deepEqual(replayed.map((e) => e.content), ['d', 'e'], '轮次不同就该从头补');
+
+    // 同一轮的游标照旧只补更新的
+    const sameRun = chatRunRegistry.replayEvents('app-run-5', 1, secondRunId);
+    assert.deepEqual(sameRun.map((e) => e.content), ['e']);
+  });
+});
+
+test('审批帧不进重放缓冲(否则刷新后已回答的框会重新弹出来)', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('app-run-6', 'claude', '/workspace/demo');
+    const connection = new FakeConnection();
+    const run = chatRunRegistry.startRun({
+      appSessionId: 'app-run-6', provider: 'claude', providerSessionId: null, connection, userId: null,
+    });
+    assert.ok(run);
+
+    run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'x', content: 'a' });
+    run.writer.send({ kind: 'permission_request', provider: 'claude', sessionId: 'x', requestId: 'r1', toolName: 'Bash' });
+    run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'x', content: 'b' });
+
+    const replayed = chatRunRegistry.replayEvents('app-run-6', 0);
+    assert.deepEqual(
+      replayed.map((e) => e.kind),
+      ['stream_delta', 'stream_delta'],
+      '审批的权威来源是 chat_subscribed.pendingPermissions,重放里不该再有一份',
+    );
   });
 });

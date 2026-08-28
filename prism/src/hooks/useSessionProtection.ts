@@ -1,10 +1,14 @@
 import { useCallback, useState } from 'react';
 
+import type { CompactionActivity } from '../components/chat/utils/compactionProgress';
+
 export interface SessionActivity {
   /** Provider-supplied status line; null renders the default activity label. */
   statusText: string | null;
   /** 状态类别。'compacting' 时指示器换成"正在压缩上下文"的样子。 */
   statusKind?: 'compacting' | null;
+  /** 压缩实况(阶段 / 心跳 / pre-post token / 耗时)。见 compactionProgress。 */
+  compaction?: CompactionActivity | null;
   canInterrupt: boolean;
   /**
    * When this request was first marked as processing (client clock). Drives
@@ -19,13 +23,19 @@ export type SessionActivitySnapshot = {
   sessionId: string;
   statusText?: string | null;
   statusKind?: 'compacting' | null;
+  compaction?: CompactionActivity | null;
   canInterrupt?: boolean;
   startedAt?: number;
 };
 
 export type MarkSessionProcessing = (
   sessionId?: string | null,
-  activity?: { statusText?: string | null; statusKind?: 'compacting' | null; canInterrupt?: boolean },
+  activity?: {
+    statusText?: string | null;
+    statusKind?: 'compacting' | null;
+    compaction?: CompactionActivity | null;
+    canInterrupt?: boolean;
+  },
 ) => void;
 
 export type MarkSessionIdle = (
@@ -38,6 +48,28 @@ export type SyncProcessingSessions = (
 ) => void;
 
 const LOCAL_ACTIVITY_GRACE_MS = 10_000;
+
+/**
+ * 压缩帧的等价判定。
+ *
+ * `beat` **必须**参与比较 —— 心跳的全部意义就是"又跳了一下",它是压缩帧里唯一
+ * 会变的字段。漏掉它,连续两帧会被判等价、直接丢掉,界面就退化成一行不动的字,
+ * 和卡死长得一模一样。
+ */
+const compactionsMatch = (
+  left: CompactionActivity | null | undefined,
+  right: CompactionActivity | null | undefined,
+): boolean => {
+  if (!left || !right) return !left && !right;
+  return left.phase === right.phase
+    && left.beat === right.beat
+    && left.trigger === right.trigger
+    && left.blocking === right.blocking
+    && left.preTokens === right.preTokens
+    && left.postTokens === right.postTokens
+    && left.durationMs === right.durationMs
+    && left.error === right.error;
+};
 
 const sessionActivityMapsMatch = (
   left: ReadonlyMap<string, SessionActivity>,
@@ -53,6 +85,7 @@ const sessionActivityMapsMatch = (
       !rightActivity
       || leftActivity.statusText !== rightActivity.statusText
       || leftActivity.statusKind !== rightActivity.statusKind
+      || !compactionsMatch(leftActivity.compaction, rightActivity.compaction)
       || leftActivity.canInterrupt !== rightActivity.canInterrupt
       || leftActivity.startedAt !== rightActivity.startedAt
     ) {
@@ -88,6 +121,8 @@ export function useSessionProtection() {
           activity?.statusText !== undefined ? activity.statusText : existing?.statusText ?? null,
         statusKind:
           activity?.statusKind !== undefined ? activity.statusKind : existing?.statusKind ?? null,
+        compaction:
+          activity?.compaction !== undefined ? activity.compaction : existing?.compaction ?? null,
         canInterrupt: activity?.canInterrupt ?? existing?.canInterrupt ?? true,
         startedAt: existing?.startedAt ?? Date.now(),
       };
@@ -96,6 +131,7 @@ export function useSessionProtection() {
         existing
         && existing.statusText === next.statusText
         && existing.statusKind === next.statusKind
+        && compactionsMatch(existing.compaction, next.compaction)
         && existing.canInterrupt === next.canInterrupt
       ) {
         return prev;
@@ -155,6 +191,13 @@ export function useSessionProtection() {
         updated.set(sessionId, {
           statusText:
             snapshot.statusText !== undefined ? snapshot.statusText : existing?.statusText ?? null,
+          // statusKind 必须保留。轮询快照里没有这一项,而它整个不进对象的话就成了
+          // undefined —— 于是每 5 秒把「正在压缩上下文」抹回普通转圈;更糟的是
+          // 等价比较**把 statusKind 算在内**,所以每次轮询必然判不等、返回新 Map、
+          // 触发一次顶层重渲染。
+          statusKind: snapshot.statusKind ?? existing?.statusKind ?? null,
+          // 同理:轮询快照里没有压缩实况,不带上就会把它抹掉。
+          compaction: snapshot.compaction ?? existing?.compaction ?? null,
           canInterrupt: snapshot.canInterrupt ?? existing?.canInterrupt ?? true,
           startedAt: snapshotStartedAt ?? existing?.startedAt ?? now,
         });

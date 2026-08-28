@@ -2,7 +2,7 @@ import { describe, test, expect } from 'vitest';
 
 import type { ChatMessage } from '../types/types';
 
-import { groupConsecutiveTools, isSubagentGroupItem, isToolGroupItem, stabilizeGroupIdentity } from './toolGrouping';
+import { createGroupIdentityState, groupConsecutiveTools, isSubagentGroupItem, isToolGroupItem, stabilizeGroupIdentity } from './toolGrouping';
 import type { SubagentGroupItem, ToolGroupItem } from './toolGrouping';
 
 const tool = (toolName: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
@@ -29,22 +29,22 @@ describe('stabilizeGroupIdentity', () => {
     const a = tool('Read');
     const b = tool('Bash');
     const firstPass = groupConsecutiveTools([a, b]);
-    const { items: firstItems, nextByAnchor } = stabilizeGroupIdentity(firstPass, new WeakMap());
+    const { items: firstItems, next } = stabilizeGroupIdentity(firstPass, createGroupIdentityState());
     const firstGroup = firstItems[0] as ToolGroupItem;
 
     // 第二轮:同样的消息对象(store 里没变的消息就是同一个引用)
     const secondPass = groupConsecutiveTools([a, b]);
-    const { items: secondItems } = stabilizeGroupIdentity(secondPass, nextByAnchor);
+    const { items: secondItems } = stabilizeGroupIdentity(secondPass, next);
     expect(secondItems[0]).toBe(firstGroup);
   });
 
   test('段内新增一步:换新组对象', () => {
     const a = tool('Read');
     const b = tool('Bash');
-    const { nextByAnchor } = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), new WeakMap());
+    const { next } = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), createGroupIdentityState());
 
     const c = tool('Edit');
-    const { items } = stabilizeGroupIdentity(groupConsecutiveTools([a, b, c]), nextByAnchor);
+    const { items } = stabilizeGroupIdentity(groupConsecutiveTools([a, b, c]), next);
     const group = items[0] as ToolGroupItem;
     expect(group.messages).toHaveLength(3);
   });
@@ -52,11 +52,11 @@ describe('stabilizeGroupIdentity', () => {
   test('某一步被替换(如 tool_result 落地换了消息对象):换新组对象', () => {
     const a = tool('Read');
     const b = tool('Bash');
-    const first = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), new WeakMap());
+    const first = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), createGroupIdentityState());
     const firstGroup = first.items[0] as ToolGroupItem;
 
     const bWithResult = tool('Bash', { toolResult: { content: 'ok', isError: false } });
-    const second = stabilizeGroupIdentity(groupConsecutiveTools([a, bWithResult]), first.nextByAnchor);
+    const second = stabilizeGroupIdentity(groupConsecutiveTools([a, bWithResult]), first.next);
     expect(second.items[0]).not.toBe(firstGroup);
     expect((second.items[0] as ToolGroupItem).messages[1]).toBe(bWithResult);
   });
@@ -65,12 +65,12 @@ describe('stabilizeGroupIdentity', () => {
     const a = tool('Read');
     const t1 = text('正文');
     const firstPass = groupConsecutiveTools([a, t1]);
-    const first = stabilizeGroupIdentity(firstPass, new WeakMap());
+    const first = stabilizeGroupIdentity(firstPass, createGroupIdentityState());
     const firstGroup = first.items[0] as ToolGroupItem;
     expect(isToolGroupItem(first.items[1])).toBe(false);
 
     const t2 = text('正文换了一条');
-    const second = stabilizeGroupIdentity(groupConsecutiveTools([a, t2]), first.nextByAnchor);
+    const second = stabilizeGroupIdentity(groupConsecutiveTools([a, t2]), first.next);
     expect(second.items[0]).toBe(firstGroup);
     expect(second.items[1]).toBe(t2);
   });
@@ -203,8 +203,70 @@ describe('groupConsecutiveTools · 子代理卡片组', () => {
   test('组身份保持对子代理组同样生效', () => {
     const a = agent('任务A');
     const b = agent('任务B');
-    const first = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), new WeakMap());
-    const second = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), first.nextByAnchor);
+    const first = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), createGroupIdentityState());
+    const second = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), first.next);
     expect(second.items[0]).toBe(first.items[0]);
+  });
+});
+
+/**
+ * key 的稳定性。**这是最要命的一条**:key 一变,React 卸载旧的 ActivityTimeline
+ * 再挂一个新的 —— 用户展开过的步骤自己收回去,几百上千像素的高度当场突变。
+ * 以前 key 取段首消息,窗口从头部长大(补页 / 看更早 / 全部展开)必然换段首。
+ */
+describe('stabilizeGroupIdentity 的 _key', () => {
+  test('段内追加新步骤:key 不变(段首没动)', () => {
+    const a = tool('Read');
+    const b = tool('Bash');
+    const first = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), createGroupIdentityState());
+    const key = (first.items[0] as ToolGroupItem)._key;
+
+    const c = tool('Edit');
+    const second = stabilizeGroupIdentity(groupConsecutiveTools([a, b, c]), first.next);
+    expect((second.items[0] as ToolGroupItem)._key).toBe(key);
+  });
+
+  test('窗口从头部长大、段首换人:key 仍然不变(段尾没动)', () => {
+    const a = tool('Read');
+    const b = tool('Bash');
+    // 第一轮窗口只切到 [b]
+    const first = stabilizeGroupIdentity(groupConsecutiveTools([b]), createGroupIdentityState());
+    const key = (first.items[0] as ToolGroupItem)._key;
+    expect(key).toBeTruthy();
+
+    // 窗口放大,更早的 a 被纳进来 —— 段首从 b 变成 a
+    const second = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), first.next);
+    expect((second.items[0] as ToolGroupItem)._key).toBe(key);
+  });
+
+  test('两头都换(段首纳入更早的、段尾追加新的):靠逐条兜底仍然认亲', () => {
+    const a = tool('Read');
+    const b = tool('Bash');
+    const first = stabilizeGroupIdentity(groupConsecutiveTools([b]), createGroupIdentityState());
+    const key = (first.items[0] as ToolGroupItem)._key;
+
+    const c = tool('Edit');
+    const second = stabilizeGroupIdentity(groupConsecutiveTools([a, b, c]), first.next);
+    expect((second.items[0] as ToolGroupItem)._key).toBe(key);
+  });
+
+  test('真的是另一段活动:拿到新 key', () => {
+    const a = tool('Read');
+    const first = stabilizeGroupIdentity(groupConsecutiveTools([a]), createGroupIdentityState());
+    const keyA = (first.items[0] as ToolGroupItem)._key;
+
+    const z = tool('Grep');
+    const second = stabilizeGroupIdentity(groupConsecutiveTools([z]), first.next);
+    expect((second.items[0] as ToolGroupItem)._key).not.toBe(keyA);
+  });
+
+  test('复用组对象时 key 当然也跟着保住', () => {
+    const a = tool('Read');
+    const b = tool('Bash');
+    const first = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), createGroupIdentityState());
+    const group = first.items[0] as ToolGroupItem;
+    const second = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), first.next);
+    expect(second.items[0]).toBe(group);
+    expect((second.items[0] as ToolGroupItem)._key).toBe(group._key);
   });
 });

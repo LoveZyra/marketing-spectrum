@@ -237,7 +237,7 @@
   "mcpServers": {
     "title": "Serveurs MCP",
     "description": {
-      "claude": "Les serveurs Model Context Protocol fournissent des outils et sources de données supplémentaires à Claude"
+      "claude": "Les serveurs Model Context Protocol fournissent des outils et sources de données supplémentaires à AI"
     },
     "empty": "Aucun serveur MCP configuré",
     "config": {

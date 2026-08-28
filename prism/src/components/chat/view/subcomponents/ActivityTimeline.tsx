@@ -23,7 +23,7 @@ import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult } f
 import type { Project } from '../../../../types/app';
 import type { ToolGroupItem } from '../../utils/toolGrouping';
 import type { ActivityIconKey, ActivityVerb } from '../../utils/toolRowSummary';
-import { planActivityFold, summarizeActivityRun, summarizeToolRow, toolTarget } from '../../utils/toolRowSummary';
+import { ACTIVITY_TAIL_ROWS, planActivityFold, summarizeActivityRun, summarizeToolRow, toolTarget } from '../../utils/toolRowSummary';
 import { cn } from '../../../../lib/utils';
 import { ClampedBlock } from '../../../../shared/view/ui';
 
@@ -48,6 +48,8 @@ interface ActivityTimelineProps {
   showRawParameters?: boolean;
   showThinking?: boolean;
   selectedProject?: Project | null;
+  /** 会话此刻还在跑吗 —— 决定没结果的工具行是「运行中」还是「已中断」。 */
+  sessionIsProcessing?: boolean;
 }
 
 const ICONS: Record<ActivityIconKey, LucideIcon> = {
@@ -124,6 +126,7 @@ function ActivityTimeline({
   showRawParameters,
   showThinking,
   selectedProject,
+  sessionIsProcessing = true,
 }: ActivityTimelineProps) {
   const { t } = useTranslation('chat');
   const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(() => new Set<string>());
@@ -141,10 +144,12 @@ function ActivityTimeline({
         index,
         kind,
         key: getMessageKey(message),
-        summary: kind === 'tool' ? summarizeToolRow(message) : null,
+        summary: kind === 'tool' ? summarizeToolRow(message, sessionIsProcessing) : null,
       };
     }),
-    [group.messages, getMessageKey],
+    // sessionIsProcessing 必须进依赖:会话由「在跑」变成「不在跑」时,
+    // 那些还没有结果的工具行要从「运行中」翻成「已中断」,不重算就翻不过来。
+    [group.messages, getMessageKey, sessionIsProcessing],
   );
 
   const summarySegments = useMemo(() => summarizeActivityRun(group.messages), [group.messages]);
@@ -153,10 +158,25 @@ function ActivityTimeline({
     .join(' · ');
 
   // 这一轮还有没有在跑的步骤 —— 决定收起时留几行(规则见 planActivityFold)。
+  // 折不折看的是**回合有没有结束**,而不是这一段里还有没有工具在跑 ——
+  // 后者会在最后一个工具刚返回、正文还没开始写的那一刻把整段塌掉(见 planActivityFold)。
   const hasRunning = rows.some((row) => row.summary?.status === 'running');
-  const { visibleCount, foldedCount, canFold, showSummary } = planActivityFold(rows.length, hasRunning);
+  const keepTail = hasRunning || sessionIsProcessing;
+  const { visibleCount, foldedCount, canFold, showSummary } = planActivityFold(rows.length, keepTail);
   const collapsedRows = visibleCount === 0 ? [] : rows.slice(rows.length - visibleCount);
-  const visibleRows = isRunOpen ? rows : collapsedRows;
+
+  /**
+   * 收尾折叠走**高度过渡**,不是瞬间卸载。
+   *
+   * 回合结束时 `visibleCount` 从 3 掉到 0,如果直接把行卸载,几百像素当场消失 ——
+   * 页面"啪"地跳一下。这里让行**留在 DOM 里**,由容器从 `1fr` 过渡到 `0fr`
+   * (grid 的收起技巧,不需要量高度),看着是收进抬头,而不是凭空不见。
+   * 代价是每段多留 3 行不可见的 DOM,换一次不刺眼的收尾。
+   */
+  const rowsCollapsed = !isRunOpen && visibleCount === 0;
+  const visibleRows = isRunOpen
+    ? rows
+    : (rowsCollapsed ? rows.slice(Math.max(0, rows.length - ACTIVITY_TAIL_ROWS)) : collapsedRows);
 
   const toggle = (key: string) => {
     setExpandedKeys((current) => {
@@ -200,6 +220,11 @@ function ActivityTimeline({
         </div>
       ))}
 
+      <div
+        className={cn('prism-activity-rows', rowsCollapsed && 'is-collapsed')}
+        aria-hidden={rowsCollapsed || undefined}
+      >
+      <div className="min-h-0 overflow-hidden">
       {visibleRows.map((row, position) => {
         const index = row.index;
         const isFirst = position === 0;
@@ -317,9 +342,11 @@ function ActivityTimeline({
                 <span className="flex-none font-mono text-[11px] text-muted-foreground">
                   {summary?.status === 'running' && !summary.duration
                     ? t('activity.running', { defaultValue: '运行中' })
-                    : summary?.status === 'error'
-                      ? t('activity.failed', { defaultValue: '失败' })
-                      : summary?.duration}
+                    : summary?.status === 'interrupted'
+                      ? t('activity.interrupted', { defaultValue: '已中断' })
+                      : summary?.status === 'error'
+                        ? t('activity.failed', { defaultValue: '失败' })
+                        : summary?.duration}
                 </span>
               </button>
 
@@ -365,6 +392,8 @@ function ActivityTimeline({
           </div>
         );
       })}
+      </div>
+      </div>
     </div>
   );
 }

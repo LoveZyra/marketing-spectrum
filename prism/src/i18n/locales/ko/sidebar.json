@@ -5,7 +5,7 @@
     "searchPlaceholder": "프로젝트 검색...",
     "projectNamePlaceholder": "프로젝트 이름",
     "newSession": "새 세션",
-    "fetchingProjects": "Claude 프로젝트와 세션을 가져오는 중",
+    "fetchingProjects": "AI 프로젝트와 세션을 가져오는 중",
     "projects": "프로젝트",
     "noMatchingProjects": "일치하는 프로젝트 없음",
     "tryDifferentSearch": "검색어를 변경해보세요",
