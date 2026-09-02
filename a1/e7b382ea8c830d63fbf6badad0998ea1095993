@@ -1,0 +1,38 @@
+.gitignore
+  h_4e3a4dcdcf415f 36-40
+prism/CHANGELOG.md
+  h_4e3a4dcdcf415f 11-128
+prism/server/index.js
+  h_4e3a4dcdcf415f 208-226
+prism/server/modules/database/index.ts
+  h_4e3a4dcdcf415f 4
+prism/server/modules/database/project-access.ts
+  h_4e3a4dcdcf415f 58-79
+prism/server/modules/database/repositories/scheduled-tasks.db.ts
+  h_4e3a4dcdcf415f 2,117-128,131-152
+prism/server/modules/database/tests/scheduled-task-visibility.test.ts
+  h_4e3a4dcdcf415f 1-168
+prism/src/components/auth/context/AuthContext.tsx
+  h_4e3a4dcdcf415f 5,117-139,206-208
+prism/src/components/file-tree/hooks/useFileTreeUpload.ts
+  h_4e3a4dcdcf415f 6-7,253-254
+prism/src/utils/api.js
+  h_4e3a4dcdcf415f 4-5,9-10,15,50-53,100-102,104-105
+prism/src/utils/tokenRefresh.test.ts
+  h_4e3a4dcdcf415f 1-114
+prism/src/utils/tokenRefresh.ts
+  h_4e3a4dcdcf415f 1-78
+prism/src/utils/uploadWithProgress.ts
+  h_4e3a4dcdcf415f 3-4,87-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "a1e7b382ea8c830d63fbf6badad0998ea1095993",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
