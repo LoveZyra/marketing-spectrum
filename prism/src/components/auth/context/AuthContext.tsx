@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 
 import { IS_PLATFORM } from '../../../constants/config';
 import { api } from '../../../utils/api';
+import { decodeJwtPayload } from '../../../utils/tokenRefresh';
 import { AUTH_ERROR_MESSAGES, AUTH_TOKEN_STORAGE_KEY } from '../constants';
 import type {
   AuthContextValue,
@@ -113,6 +114,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return () => window.removeEventListener('prism:session-expired', onExpired);
   }, [clearSession]);
 
+  // dj:同一浏览器的其他标签页换了账号/退出时,本页跟上 —— 此前旧标签页会
+  // 继续挂着旧账号的界面,而它发出去的请求其实已经带着新账号的令牌,身份错位。
+  // storage 事件只在**其他**标签页触发,不会响应本页自己的写入。
+  // 同一用户的静默续期(localStorage 已被写入方更新)刻意不动 React 状态,
+  // 避免 WebSocket 因 token 变化整个重连。
+  useEffect(() => {
+    if (IS_PLATFORM) return;
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== AUTH_TOKEN_STORAGE_KEY) return;
+      if (!event.newValue) {
+        clearSession();
+        return;
+      }
+      const nextUserId = decodeJwtPayload(event.newValue)?.userId;
+      const currentUserId = token ? decodeJwtPayload(token)?.userId : null;
+      if (nextUserId != null && currentUserId != null && nextUserId === currentUserId) return;
+      // 换了人(或本页原本停在登录页):整页按新身份重启,是最干净的一致性。
+      window.location.reload();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [clearSession, token]);
+
   const login = useCallback<AuthContextValue['login']>(
     async (username, password) => {
       try {
@@ -179,7 +203,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     clearSession();
 
     if (tokenToInvalidate) {
-      void api.auth.logout().catch((caughtError: unknown) => {
+      // 本地已清,localStorage 里没有令牌了;把捕获的旧令牌显式带上,登出
+      // 事件才能落进服务端审计日志(此前这一枪永远 401,从没记上过)。
+      void api.auth.logout({ token: tokenToInvalidate }).catch((caughtError: unknown) => {
         console.error('Logout endpoint error:', caughtError);
       });
     }

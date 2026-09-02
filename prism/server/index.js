@@ -205,6 +205,25 @@ app.use(cors({
     exposedHeaders: ['X-Refreshed-Token', 'X-Prism-Truncated'],
 }));
 
+// dj:/api 一律禁缓存。这些 JSON 响应此前没有任何 Cache-Control 却带着 ETag,
+// 浏览器磁盘缓存会把响应头(含 X-Refreshed-Token 静默续期头)一起存下;后续同
+// URL 命中 304 时,按 RFC 7234 缓存里未被替换的旧头要合并回响应 —— 于是 A 账号
+// 时代缓存下来的续期令牌,能在 B 账号登录后"复活"并把 B 的会话整个换成 A。
+// 线上表现:退出 root 后无论登谁,最终都跳回 root;网络面板只看得到 304,
+// 看不到被合并进来的头,极难排查。三件事一起断根:
+//   * no-store —— 浏览器与合规代理都不再存 /api 响应,毒源断掉;
+//   * Vary: Authorization —— 兜住只认 Vary 的中间层缓存,按用户分键;
+//   * etag 关掉 —— /api 不再产生可供"304 合并"的响应(动态 JSON 上 ETag 本来
+//     就没有收益,反而让历史毒缓存一直靠 304 续命)。静态资源走 express.static
+//     自己的 ETag/Cache-Control,不受这个 app 级开关影响。
+// SSE / 预览等自设缓存头的路由在各自 handler 里后写,照旧生效。
+app.set('etag', false);
+app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.vary('Authorization');
+    next();
+});
+
 // 营销诊断 API 反代(/api/ma/* -> 本机回环的诊断服务),PRISM_MA_API_TARGET 不配
 // 就完全不挂载。位置是有讲究的,三点都不能挪:
 //   * 在 express.json 之前 —— 这样请求体是原样透传的字节流,不用先解析再重新

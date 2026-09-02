@@ -8,6 +8,124 @@
 
 ---
 
+## 2026-08-31 · dj — 会话串号修复:续期令牌被 HTTP 缓存重放(安全)
+
+**现象**:同一浏览器退出 root 后,无论登哪个账号,最终都"跳回" root 登录态;
+和用户名无关,F5 也解不开。已在真实 Chromium 上端到端复现。
+
+**根因是四件事叠加**,缺一不可:
+
+1. 服务端对"过半寿命"(签发超 3.5 天)的 JWT,在响应头 `X-Refreshed-Token`
+   里静默续一张新令牌;客户端拿到就**无条件**写进 localStorage;
+2. `/api` 的 JSON 响应此前**没有任何 Cache-Control,却带 ETag** ——
+   浏览器磁盘缓存把响应连同那个续期头一起存了下来;
+3. 换账号后应用重拉同一批 GET,响应体没变就命中 **304**;按 RFC 7234,缓存里
+   未被替换的旧头要**合并回响应** —— root 时代缓存的续期头就此复活,把新账号
+   的令牌整个换成 root 的;
+4. 翻回 root 后响应体继续不变 → 继续 304 → 毒缓存**永不更新**,并在自己的令牌
+   又过半寿命时自我续毒。网络面板只显示 304,看不到被合并的头,极难排查。
+
+这不只是显示错乱:**低权限账号会静默继承 root 的有效 JWT**,共享电脑上等于
+无密码提权。存量已中招的浏览器,清一次"缓存的图片和文件"即恢复;部署本轮后
+不会再发生。
+
+### 修复(两端各自独立成立,互为兜底)
+
+| 端 | 改动 |
+| --- | --- |
+| 服务端 | `/api` 全量 `Cache-Control: no-store` + `Vary: Authorization`,并关掉 app 级 ETag —— 动态 JSON 上 304 本无收益,反而给历史毒缓存续命。静态资源仍走 express.static 自己的缓存策略 |
+| 客户端 | 新增 `src/utils/tokenRefresh.ts`:三处接收 `X-Refreshed-Token` 的地方(fetch 封装、两处上传 XHR)全部改走共享闸门 —— **续期令牌的 userId 必须与当前存储令牌一致才落盘**,否则丢弃并 warn。顺带挡住换号瞬间旧账号在途响应晚到的覆盖竞态;已登出的会话也不允许被晚到的头复活 |
+
+### 顺带修的两件
+
+- **登出从没记上过审计日志**:`AuthContext.logout` 先清本地再调登出接口,请求
+  永远不带令牌、永远 401。现在把捕获的旧令牌显式带上,`logout` 事件正常落库。
+- **跨标签页会话同步**:其他标签页换账号/退出时,本页此前继续挂着旧账号界面,
+  发请求却已带新账号令牌,身份错位。现在监听 `storage` 事件:别处退出 → 本页
+  清会话;换了人 → 本页整页重载按新身份来;同一用户的静默续期不动 React 状态
+  (避免 WebSocket 无谓重连)。
+
+改动面:`server/index.js`、`src/utils/tokenRefresh.ts`(新)+ 测试、
+`src/utils/api.js`、`src/utils/uploadWithProgress.ts`、
+`src/components/file-tree/hooks/useFileTreeUpload.ts`、
+`src/components/auth/context/AuthContext.tsx`。无迁移,无依赖变化。
+
+---
+
+## 2026-08-28 · di — 定时任务权限跟随项目可见性
+
+**项目分享给谁,任务就跟着给谁,而且是全权**(看 / 改 / 删 / 立即运行同一道判据,
+不分读写)。这是把任务对齐到会话已有的做法 —— `canViewerSeeSession` 本来就是
+原样转发 `canViewerSeeProject`,下游对象不自带权限。
+
+### 一、`projectPath` 此前一次校验都没有
+
+```ts
+if (!projectPath) return { ok: false, error: '必须选择项目' };
+out.project_path = projectPath;        // ← 到此为止,只查了非空
+```
+
+项目路由和文件路由都过 `validateWorkspacePath`(解符号链接、强制
+`WORKSPACES_ROOT` 包含、挡系统目录),唯独任务这条没有。于是**任何登录用户**都能
+`POST /api/tasks` 带 `projectPath: "/"`,到点就以那个 cwd 跑一个跳权限的 agent。
+
+现在两道门,缺一不可:**路径合法**(`validateWorkspacePath`,挡越界)+
+**项目可见**(`canViewerSeeProjectPath`,挡越权)。四个入口全挂上:
+
+| 入口 | 说明 |
+| --- | --- |
+| `POST /` | 建任务 |
+| `PATCH /:id` | **改 projectPath 等于把任务搬到另一个项目**,必须重过 —— 否则"先建在可见项目、再改到别处"就是一条绕过 |
+| `POST /via-ticket` | 「让 AI 创建」通道,用签票人的身份过同样两道门。这条是给会话里的 Claude 用的,更不能比人工建任务松 |
+| 不可见时的回话 | 与"项目不存在"同形,不给"这个路径存不存在"的探针 |
+
+### 二、可见性从「只有主人」放开到「项目可见者」
+
+`listByOwner` → `listVisibleTo(userId)`:**自己建的 ∪ 跑在自己能看见的项目上的**。
+
+SQL 侧复用 `buildProjectVisibilityClause` —— 和
+`projectsDb.getProjectPaths(visibleTo)` 是**同一个**子句生成器,不是另写一份。
+`owner_user_id = ?` 那一支不能省:任务可能跑在还没被扫描进 `projects` 表的路径上,
+那时项目子查询命不中,但主人自己总该看得见。
+
+`canTouch` 同步改成 `owner || root || 项目可见`,GET / PATCH / DELETE / 立即运行
+全走它。
+
+新增 parity 测试(7 项)钉住 SQL 侧与 JS 侧不漂:私有项目不可见、分享后可见、
+显式 public 可见、无主项目只在公共目录下可见、主人对未扫描项目仍可见,
+以及五种路径逐条交叉验证。项目/会话那边就因为同类问题栽过一次
+(HTTP 列表按 owner 过滤了、`session_upserted` 广播没有),这条必须钉住。
+
+### 三、`permissionMode` 保持 `bypassPermissions` 默认,但收白名单
+
+默认不动 —— 无人值守的任务弹权限框等于永远卡住。收白名单纯粹是**健壮性**:
+以前任意字符串都会被原样塞进 SDK。合法值取 SDK 自己那套:
+`default / acceptEdits / bypassPermissions / plan / dontAsk / auto`。
+
+需要记在这里的一句:这么定之后,**`projectPath` 的校验就是唯一的边界** ——
+所有权、读写分级、权限模式三道都不设防,能不能碰一个任务完全取决于
+"你能不能看见那个项目"。第一条因此不是可选项。
+
+对照着看这个取舍是成立的:在一个你能看见的项目里,你**本来就能**开对话跑 agent,
+权限模式也是同一套;任务没有给出新能力,新的只是"无人值守 + 反复执行"。
+
+### 四、`listDue` 只捞有效账号的任务
+
+```sql
+AND EXISTS (SELECT 1 FROM users u
+            WHERE u.id = t.owner_user_id AND u.is_active = 1 AND u.approval_status = 'approved')
+```
+
+用户被停用/拒批之后,他留下的定时器不该继续以他的名义跑下去。以前只看
+`enabled + next_run_at`,删掉的人的任务会一直跑到有人手动发现为止。
+
+### 五、门禁
+
+`typecheck` 双份通过;`eslint` **0 错误**(44 warning,与 dh 持平);
+`vitest` **992 全过**(dh 是 985,新增 7);双端构建通过。
+
+---
+
 ## 2026-08-28 · dh — dg 滚动控制器的四处回归 + 翻页锁
 
 线上跑 dg 之后报回来两条:**向上滚翻不动页,必须先向下滑一下再向上滑,

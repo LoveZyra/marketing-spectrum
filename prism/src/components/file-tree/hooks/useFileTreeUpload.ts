@@ -3,7 +3,8 @@ import type { DragEvent } from 'react';
 
 import { IS_PLATFORM } from '../../../constants/config';
 import type { Project } from '../../../types/app';
-import { apiKeyHeaders, authenticatedFetch, isValidRefreshedToken } from '../../../utils/api';
+import { apiKeyHeaders, authenticatedFetch } from '../../../utils/api';
+import { installRefreshedToken } from '../../../utils/tokenRefresh';
 import {
   MAX_FILE_UPLOAD_COUNT,
   MAX_FILE_UPLOAD_SIZE_BYTES,
@@ -249,10 +250,8 @@ const uploadFormDataWithProgress = (
     };
 
     xhr.onload = () => {
-      const refreshedToken = xhr.getResponseHeader('X-Refreshed-Token');
-      if (isValidRefreshedToken(refreshedToken)) {
-        localStorage.setItem('auth-token', refreshedToken);
-      }
+      // 经共享闸门落盘:形状不对、或与当前用户不一致(缓存重放/换号竞态)都丢弃(dj)。
+      installRefreshedToken(xhr.getResponseHeader('X-Refreshed-Token'));
 
       const payload = parseUploadResponse(xhr);
       if (xhr.status >= 200 && xhr.status < 300) {

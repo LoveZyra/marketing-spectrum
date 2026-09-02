@@ -1,6 +1,7 @@
 import { IS_PLATFORM } from '../constants/config';
 
-import { apiKeyHeaders, isValidRefreshedToken } from './api';
+import { apiKeyHeaders } from './api';
+import { installRefreshedToken } from './tokenRefresh';
 
 /**
  * POST a FormData body and report transfer progress.
@@ -83,12 +84,10 @@ export const uploadFormDataWithProgress = <T = Record<string, unknown>>(
     }
 
     xhr.onload = () => {
-      // Same sliding-session refresh authenticatedFetch performs. Validated
-      // before storing so a malformed header cannot overwrite a good token.
-      const refreshedToken = xhr.getResponseHeader('X-Refreshed-Token');
-      if (isValidRefreshedToken(refreshedToken)) {
-        localStorage.setItem('auth-token', refreshedToken);
-      }
+      // Same sliding-session refresh authenticatedFetch performs, via the
+      // shared guard: malformed headers and tokens belonging to a different
+      // user (cache replay / account-switch race) are both dropped (dj).
+      installRefreshedToken(xhr.getResponseHeader('X-Refreshed-Token'));
 
       const payload = parseJsonBody(xhr);
       if (xhr.status >= 200 && xhr.status < 300) {

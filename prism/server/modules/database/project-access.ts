@@ -55,3 +55,25 @@ export function resolveVisibleProjectRoot(viewer: Viewer, projectId: string): st
 
   return visible ? projectRoot : null;
 }
+
+/**
+ * 按**项目路径**判可见性 —— `resolveVisibleProjectRoot` 的路径寻址版。
+ *
+ * 定时任务是按 `project_path` 存的(不是 projectId),而它的权限面整个挂在
+ * 项目可见性上:能看见这个项目 = 能看/改/删/立即运行跑在它上面的任务。
+ * 判定必须和项目、会话走**同一个** `canViewerSeeProject`,否则三套语义之间
+ * 一定会漂,而漂出来的那条缝就是权限洞。
+ *
+ * 路径在 DB 里还没有对应项目行时,按"无主项目"判 —— 落在公共目录下才对
+ * 非 root 可见,否则仅 root。方向上宁可多挡。
+ */
+export function canViewerSeeProjectPath(viewer: Viewer, projectPath: string | null | undefined): boolean {
+  const normalized = typeof projectPath === 'string' && projectPath.trim() ? projectPath.trim() : null;
+  if (!normalized) return false;
+  const project = projectsDb.getProjectPath(normalized);
+  return canViewerSeeProject({
+    ...projectVisibilityInput(project, normalized),
+    viewerUserId: viewer.userId,
+    viewerUsername: viewer.username,
+  });
+}

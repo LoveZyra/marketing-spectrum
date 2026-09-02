@@ -1,16 +1,18 @@
 import { IS_PLATFORM } from "../constants/config";
 import { emitToast } from "../shared/view/ui/toastBus";
 
+import { hasJwtShape, installRefreshedToken } from "./tokenRefresh";
+
 // Only accept a refreshed token that has this app's issued JWT shape
 // (three base64url segments). An attacker-injected/malformed header value
 // must never overwrite the stored auth token.
+// dj 起实现挪进 tokenRefresh.ts(落盘还要求 userId 与当前令牌一致);这里保留
+// 同名导出给既有调用方(改密响应体校验、两处上传)继续用作形状检查。
 /**
  * @param {unknown} token
  * @returns {token is string}
  */
-export const isValidRefreshedToken = (token) =>
-  typeof token === 'string' &&
-  /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
+export const isValidRefreshedToken = (token) => hasJwtShape(token);
 
 // Optional API-key gate: when the deployment sets PRISM_API_KEY on the server,
 // the frontend must send the matching key with every /api request. Bake the
@@ -45,10 +47,10 @@ export const authenticatedFetch = (url, options = {}) => {
       ...options.headers,
     },
   }).then((response) => {
-    const refreshedToken = response.headers.get('X-Refreshed-Token');
-    if (isValidRefreshedToken(refreshedToken)) {
-      localStorage.setItem('auth-token', refreshedToken);
-    }
+    // dj:经共享闸门落盘 —— 续期令牌必须与当前存储令牌同属一个 userId 才接受,
+    // 否则丢弃。挡住两件事:HTTP 缓存 304 合并复活的旧账号续期头(no-store 之前
+    // 的历史缓存),以及切换账号瞬间旧账号在途响应晚到的覆盖竞态。
+    installRefreshedToken(response.headers.get('X-Refreshed-Token'));
     // 全局 401 兜底:令牌过期/被撤销后,原先各面板表现为"点了没反应"(只有文件树
     // 单独分辨过 401)。这里集中处理一次 —— 登录态下拿到 401,弹一条提示并派发
     // session-expired 事件,由 AuthProvider 清会话跳回登录。用去抖避免一次并发风暴
@@ -95,9 +97,12 @@ export const api = {
     }),
     user: () => authenticatedFetch('/api/auth/user'),
     // options.all = true → 服务端 bump token_version,撤销该账号所有设备的旧令牌。
-    logout: (options) => authenticatedFetch('/api/auth/logout', {
+    // options.token:AuthContext.logout 先清本地再调这里,localStorage 已经空了;
+    // 不带上捕获的旧令牌,这一枪永远 401,审计日志里就永远记不上 logout(dj 修)。
+    logout: ({ all, token } = {}) => authenticatedFetch('/api/auth/logout', {
       method: 'POST',
-      ...(options ? { body: JSON.stringify(options) } : {}),
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+      body: JSON.stringify(all ? { all: true } : {}),
     }),
     // 改密成功服务端会吊销其他设备令牌并返回本会话的新令牌(调用方负责落 localStorage)。
     changePassword: (currentPassword, newPassword) => authenticatedFetch('/api/auth/change-password', {

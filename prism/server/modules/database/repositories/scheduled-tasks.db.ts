@@ -1,4 +1,5 @@
 import { getConnection } from '@/modules/database/connection.js';
+import { buildProjectVisibilityClause } from '@/modules/database/visibility-sql.js';
 
 /**
  * 定时任务表(cj 轮,B 方案)。
@@ -113,11 +114,42 @@ export const scheduledTasksDb = {
     return getConnection().prepare(`SELECT ${COLUMNS} FROM scheduled_tasks WHERE owner_user_id = ? ORDER BY created_at DESC`).all(ownerUserId) as ScheduledTaskRow[];
   },
 
-  /** 捞出到点该跑的任务(启用、时刻已到、没在跑)。 */
-  listDue(nowIso: string): ScheduledTaskRow[] {
+  /**
+   * 一个用户能看到的任务:**自己建的** ∪ **跑在他能看见的项目上的**。
+   *
+   * 任务的权限面整个挂在项目可见性上(项目分享给谁,任务就跟着给谁,而且是全权)。
+   * 这里的子查询和 `projectsDb.getProjectPaths(visibleTo)` 用的是**同一个**
+   * `buildProjectVisibilityClause` —— 两处必须逐字同义,漂开的那条缝就是权限洞。
+   *
+   * `owner_user_id = ?` 这一支不能省:任务可能跑在一个还没被扫描进 projects 表的
+   * 路径上,那时项目子查询命不中,但主人自己总该看得见。
+   */
+  listVisibleTo(viewerUserId: number): ScheduledTaskRow[] {
+    const visibility = buildProjectVisibilityClause({ userId: viewerUserId });
     return getConnection().prepare(`
       SELECT ${COLUMNS} FROM scheduled_tasks
-      WHERE enabled = 1 AND running = 0 AND next_run_at IS NOT NULL AND next_run_at <= ?
+      WHERE owner_user_id = ?
+         OR project_path IN (SELECT project_path FROM projects WHERE ${visibility.sql})
+      ORDER BY created_at DESC
+    `).all(viewerUserId, ...visibility.params) as ScheduledTaskRow[];
+  },
+
+  /**
+   * 捞出到点该跑的任务(启用、时刻已到、没在跑)。
+   *
+   * 还要求**主人仍然是个有效账号** —— 用户被停用/拒批之后,他留下的定时器
+   * 不该继续以他的名义跑下去。以前只看 enabled + next_run_at,删掉的人的任务
+   * 会一直跑到有人手动发现为止。
+   */
+  listDue(nowIso: string): ScheduledTaskRow[] {
+    return getConnection().prepare(`
+      SELECT ${COLUMNS} FROM scheduled_tasks t
+      WHERE t.enabled = 1 AND t.running = 0
+        AND t.next_run_at IS NOT NULL AND t.next_run_at <= ?
+        AND EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.id = t.owner_user_id AND u.is_active = 1 AND u.approval_status = 'approved'
+        )
     `).all(nowIso) as ScheduledTaskRow[];
   },
 
