@@ -9,7 +9,7 @@ import express from 'express';
 import { Octokit } from '@octokit/rest';
 
 import { userDb, apiKeysDb, githubTokensDb, projectsDb, sessionsDb, sessionMessagesDb, canViewerSeeSession } from '../modules/database/index.js';
-import { chatRunRegistry } from '../modules/websocket/index.js';
+import { chatRunRegistry, drainPendingSendForSession } from '../modules/websocket/index.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
 import { IS_PLATFORM } from '../constants/config.js';
 import { readRequestViewer } from '../shared/project-visibility.js';
@@ -1382,6 +1382,10 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         // 兜底的终止帧:运行时崩了或者没发自己的 complete 时,不能让页面
         // 永远转圈。只对"还是当前这一轮"生效。
         chatRunRegistry.completeRunIfCurrent(run, { exitCode: 1 });
+        // dv:这一轮也可能压着用户在页面上排的那条(F7 的排队按会话存在服务端)。
+        // 此前只有 WS 那条路径会续发,外部 API 跑完没人来接,排队那条一直躺到
+        // 30 分钟 TTL 过期被丢 —— 用户永远等不到回复。
+        drainPendingSendForSession(appSessionId);
       });
 
       return;
@@ -1471,6 +1475,8 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         // 释放运行位:回合结束(成功/失败)都要放,否则这个会话会被永久标成
         // "有回合在跑",后续请求全被 409 挡下。
         if (syncRun) chatRunRegistry.completeRunIfCurrent(syncRun, { exitCode: 0 });
+        // dv:同步路径同理 —— 跑完把排队那条接上去。
+        if (syncRun) drainPendingSendForSession(syncRun.appSessionId);
       }
 
       /**

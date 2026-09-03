@@ -88,7 +88,9 @@ export function toolMetric(
     const added = newText ? countLines(newText) : 0;
     const removed = oldText ? countLines(oldText) : 0;
     if (added || removed) {
-      return { text: `+${added} −${removed}`, isWrite: true };
+      // ef:新建文件(没有 old_string)只说写了多少行 —— `−0` 是编辑才有的概念,
+      // 挂在新建行上是一句没有信息量的噪声(设计稿里写入行是「+86 行」)。
+      return { text: removed ? `+${added} −${removed}` : `+${added} 行`, isWrite: true };
     }
     return { text: '', isWrite: true };
   }
@@ -109,6 +111,42 @@ export function toolMetric(
   return { text: '', isWrite: false };
 }
 
+/**
+ * ef:一段活动的**总耗时**(设计稿抬头右端那个「1 分 12 秒」)。
+ *
+ * 逐行相加而不是"最后一行结束 − 第一行开始":工具之间还夹着模型思考的时间,
+ * 端到端差值会把那部分也算进来 —— 抬头说的是"这一轮的工具跑了多久"。
+ * 一条都算不出来时返回空串,抬头就不显示这一项。
+ */
+export function formatRunDuration(
+  messages: Array<{ timestamp?: ChatMessage['timestamp']; toolResult?: ChatMessage['toolResult'] }>,
+): string {
+  let total = 0;
+  let counted = 0;
+  for (const message of messages) {
+    const endRaw = message.toolResult && typeof message.toolResult === 'object'
+      ? (message.toolResult as Record<string, unknown>).timestamp
+      : undefined;
+    if (endRaw === undefined || endRaw === null) continue;
+    const start = new Date(message.timestamp as string | number | Date).getTime();
+    const end = new Date(endRaw as string | number | Date).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) continue;
+    total += end - start;
+    counted += 1;
+  }
+  if (counted === 0) return '';
+  return formatDurationMs(total);
+}
+
+/** 毫秒 → 「0.4s」/「12.0s」/「1m 12s」。toolDuration 与 formatRunDuration 共用。 */
+export function formatDurationMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
 export function toolDuration(
   startedAt: ChatMessage['timestamp'],
   toolResult: ChatMessage['toolResult'],
@@ -120,13 +158,7 @@ export function toolDuration(
   const end = new Date(endRaw as string | number | Date).getTime();
   if (!Number.isFinite(start) || !Number.isFinite(end)) return '';
 
-  const ms = end - start;
-  if (ms < 0) return '';
-  if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  const minutes = Math.floor(ms / 60_000);
-  const seconds = Math.round((ms % 60_000) / 1000);
-  return `${minutes}m ${seconds}s`;
+  return formatDurationMs(end - start);
 }
 
 /* ── 行文案与图标(活动时间轴) ─────────────────────────────────── */

@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 
 import { authenticatedFetch } from '../../../../utils/api';
 import type { ChatImage } from '../../types/types';
+import { chatImageSrcCache, ImageSrcCache } from '../../utils/imageSrcCache';
 
 type ChatMessageImagesProps = {
   images: ChatImage[];
@@ -22,7 +23,12 @@ function useChatImageSrc(
   projectId?: string | null,
   enabled: boolean = true,
 ): { src: string | null; failed: boolean } {
-  const [src, setSrc] = useState<string | null>(image.data || null);
+  // ee:同一张图的 object URL 走模块级缓存 —— 乐观行被服务端拷贝换掉时组件会重挂,
+  // 首帧就从缓存同步拿到 src,不再"先紫底、再重取一遍"(见 utils/imageSrcCache.ts)。
+  const cacheKey = image.path ? ImageSrcCache.key(projectId, image.path) : null;
+  const [src, setSrc] = useState<string | null>(() => (
+    image.data || (cacheKey ? chatImageSrcCache.peek(cacheKey) : null)
+  ));
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -30,6 +36,16 @@ function useChatImageSrc(
       setSrc(image.data);
       setFailed(false);
       return;
+    }
+
+    // 缓存命中:计引用、直接用,不发请求;卸载时释放引用。
+    if (cacheKey) {
+      const cached = chatImageSrcCache.acquire(cacheKey);
+      if (cached) {
+        setSrc(cached);
+        setFailed(false);
+        return () => chatImageSrcCache.release(cacheKey);
+      }
     }
 
     // 还没滚到视野附近:不发请求,占位块先顶着。附件图取的是**原图** blob,
@@ -67,7 +83,7 @@ function useChatImageSrc(
       : [globalUrl, projectUrl]
     ).filter((url): url is string => Boolean(url));
 
-    let objectUrl: string | null = null;
+    let acquiredKey: string | null = null;
     const controller = new AbortController();
 
     const load = async () => {
@@ -79,8 +95,12 @@ function useChatImageSrc(
             continue;
           }
           const blob = await response.blob();
-          objectUrl = URL.createObjectURL(blob);
-          setSrc(objectUrl);
+          const objectUrl = URL.createObjectURL(blob);
+          // 放进缓存(put 即视为本组件已持有一个引用);同 key 已有的话用已有的那份。
+          const key = cacheKey ?? ImageSrcCache.key(projectId, imagePath);
+          const owned = chatImageSrcCache.put(key, objectUrl, blob.size);
+          acquiredKey = key;
+          setSrc(owned);
           return;
         } catch (error) {
           if (error instanceof Error && error.name === 'AbortError') {
@@ -96,11 +116,10 @@ function useChatImageSrc(
 
     return () => {
       controller.abort();
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
+      // 不再在这里 revoke:URL 归缓存所有,由 LRU 在没人引用时回收。
+      if (acquiredKey) chatImageSrcCache.release(acquiredKey);
     };
-  }, [image.data, image.path, projectId, enabled]);
+  }, [image.data, image.path, projectId, enabled, cacheKey]);
 
   return { src, failed };
 }

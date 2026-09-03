@@ -183,3 +183,35 @@ describe('登录', () => {
     assert.equal((await post('/login', {})).status, 400);
   });
 });
+
+/**
+ * ec:修改密码时当前密码打错,**不能**回 401。
+ *
+ * 这条路走的是带 Bearer 的 authenticatedFetch,前端把登录态下的任何 401 一律当
+ * "会话失效"处理 —— 实测:当前密码错一个字,整个人被弹回登录页。调用方是已认证
+ * 的,错的是表单里的一个字段,所以是 403 + 明确的 code;密码对的那条路照旧回
+ * 新令牌(本设备无感续用)。
+ */
+describe('修改密码', () => {
+  test('当前密码错 → 403 + code,不是会让前端登出的 401', async () => {
+    await post('/register', { username: 'first', password: 'password-1' });
+    const login = await post('/login', { username: 'first', password: 'password-1' });
+    const token = String(login.body.token);
+    const wrong = await post('/change-password', { currentPassword: 'nope-nope', newPassword: 'password-2' }, { authorization: `Bearer ${token}` });
+    assert.equal(wrong.status, 403);
+    assert.equal(wrong.body.code, 'CURRENT_PASSWORD_INCORRECT');
+    // 旧密码仍然有效 —— 什么都没改
+    assert.equal((await post('/login', { username: 'first', password: 'password-1' })).status, 200);
+  });
+
+  test('当前密码对 → 200 + 新令牌;旧密码随即失效', async () => {
+    await post('/register', { username: 'first', password: 'password-1' });
+    const login = await post('/login', { username: 'first', password: 'password-1' });
+    const token = String(login.body.token);
+    const ok = await post('/change-password', { currentPassword: 'password-1', newPassword: 'password-2' }, { authorization: `Bearer ${token}` });
+    assert.equal(ok.status, 200);
+    assert.equal(typeof ok.body.token, 'string');
+    assert.equal((await post('/login', { username: 'first', password: 'password-1' })).status, 401);
+    assert.equal((await post('/login', { username: 'first', password: 'password-2' })).status, 200);
+  });
+});

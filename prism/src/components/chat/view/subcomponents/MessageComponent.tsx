@@ -1,5 +1,5 @@
 import { memo, useMemo, useRef, useState } from 'react';
-import { Archive, ChevronRight, Wrench } from 'lucide-react';
+import { Archive, ChevronRight, PencilLine, RotateCcw, Wrench, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type {
@@ -7,15 +7,18 @@ import type {
   ClaudePermissionSuggestion,
   PermissionGrantResult,
 } from '../../types/types';
+import { matchSkillInvocation, useSkillsCatalog } from '../../hooks/useSkillsCatalog';
 import { formatUsageLimitText } from '../../utils/chatFormatting';
 import { cn } from '../../../../lib/utils';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
+import type { TurnOutputFile } from '../../utils/turnOutputs';
 
 import ChatMessageImages from './ChatMessageImages';
-import { Markdown } from './Markdown';
+import { Markdown, StreamingMarkdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
+import TurnOutputsCard from './TurnOutputsCard';
 import UserMessageBody from './UserMessageBody';
 
 type DiffLine = {
@@ -39,6 +42,16 @@ type MessageComponentProps = {
   /** F2:这条错误消息是对话末尾且当前空闲 —— 显示「重发上一条」。 */
   showRetry?: boolean;
   onRetry?: () => void;
+  /** ef:这条是对话收尾的助手回答 —— 悬停操作里给一枚「重跑」。 */
+  canRerun?: boolean;
+  /**
+   * eh:这一轮产出的文件。渲染在**正文最下方、复制/重跑那一行之上** ——
+   * 和 Cowork 一样:读完结论,产出就在同一块内容的末尾,不是另起一张卡浮在外面。
+   */
+  turnOutputs?: TurnOutputFile[];
+  onFileOpenPath?: (filePath: string) => void;
+  /** ei:产出下载走会话产出通道 —— 项目目录之外的产出也能下。 */
+  outputsSessionId?: string | null;
   /**
    * 活动时间轴的展开区用:只要消息主体,不要头像 / 角色名 / 时间戳那圈外壳 ——
    * 那些信息时间轴的行上已经有了,再来一遍就是噪声。
@@ -54,7 +67,7 @@ type InteractiveOption = {
 
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, onEditRerun, showRetry = false, onRetry, bare = false }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, onEditRerun, showRetry = false, onRetry, canRerun = false, turnOutputs, onFileOpenPath, outputsSessionId, bare = false }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = bare || (prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -63,6 +76,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
       (prevMessage.type === 'error')));
   const messageRef = useRef<HTMLDivElement | null>(null);
   const userCopyContent = String(message.content || '');
+  // do:显式技能调用徽标。用户消息首词命中技能命令(`/echo-probe …`)时,气泡上方
+  // 标出「技能 · 名称」,悬停给描述 —— 不然斜杠原文对旁人是一串黑话。
+  const skillsCatalog = useSkillsCatalog();
+  const skillInvocation = useMemo(
+    () => (message.type === 'user' ? matchSkillInvocation(userCopyContent, skillsCatalog) : null),
+    [message.type, userCopyContent, skillsCatalog]
+  );
   const formattedMessageContent = useMemo(
     () => formatUsageLimitText(String(message.content || '')),
     [message.content]
@@ -80,7 +100,16 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
     !message.isThinking;
 
 
-  const formattedTime = useMemo(() => new Date(message.timestamp).toLocaleTimeString(), [message.timestamp]);
+  /**
+   * du:流式那条消息的 timestamp 是**哨兵 0**(ChatMessagesPane 为稳住下游
+   * memo 特意固定的),直接格式化会显示 1970 纪元时间 —— 正在生成的气泡底下
+   * 挂一个「08:00:00」。窄屏没有 hover 遮掩,常驻可见。哨兵一律不显示时间。
+   */
+  const formattedTime = useMemo(() => {
+    const raw = message.timestamp;
+    if (raw === 0 || raw === '0') return '';
+    return new Date(raw).toLocaleTimeString();
+  }, [message.timestamp]);
   const shouldHideThinkingMessage = Boolean(message.isThinking && !showThinking);
   const [isCompactSummaryOpen, setIsCompactSummaryOpen] = useState(false);
 
@@ -146,7 +175,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
     >
       {message.type === 'user' ? (
         /* User turn on the right: claude.ai-style attachment cards above the bubble */
-        <div className="flex w-full min-w-0 items-end justify-end sm:max-w-[85%]">
+        <div className="flex w-full min-w-0 items-end justify-end sm:max-w-[70%]">
           <div className="flex min-w-0 flex-1 flex-col items-end gap-2 sm:flex-initial">
             {message.images && message.images.length > 0 && (
               <ChatMessageImages
@@ -159,7 +188,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                  绿底白字那版把提问做成了整屏最抢眼的东西,而它只是上下文。
                  复制 / 时间 / 编辑重跑移到气泡外,悬停才出现。 */
               <>
-                <div className="prism-panel max-w-full rounded-[var(--radius-bubble)] bg-card px-4 py-2.5 text-[15px] leading-[26px] text-foreground">
+                {skillInvocation && (
+                  <div
+                    className="flex max-w-full items-center gap-1 rounded-full border border-border bg-muted/60 px-2 py-0.5 text-[11px] text-muted-foreground"
+                    title={skillInvocation.description || undefined}
+                  >
+                    <Zap className="h-3 w-3 flex-none" strokeWidth={2} aria-hidden />
+                    <span className="min-w-0 truncate">
+                      {t('skills.invokedBadge', { defaultValue: '技能' })} · {skillInvocation.name}
+                    </span>
+                  </div>
+                )}
+                <div className="prism-panel max-w-full rounded-bubble bg-card px-4 py-2.5 text-sm leading-6 text-foreground">
                   <UserMessageBody content={userCopyContent} />
                 </div>
                 <div className="flex items-center gap-1.5 font-mono text-[10.5px] text-muted-foreground transition-opacity sm:opacity-0 sm:focus-within:opacity-100 sm:group-hover/msg:opacity-100">
@@ -167,10 +207,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                     <button
                       type="button"
                       onClick={() => onEditRerun(message)}
-                      className="rounded-sm px-1 py-0.5 transition-colors hover:text-foreground"
-                      title={t('fork.editRerunTitle', { defaultValue: '从这里分叉：编辑此消息并重新运行' })}
+                      className="grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-accent hover:text-foreground"
+                      aria-label={t('fork.editRerun', { defaultValue: '编辑重跑' })}
+                      title={`${t('fork.editRerun', { defaultValue: '编辑重跑' })} · ${t('fork.editRerunTitle', { defaultValue: '从这里分叉：编辑此消息并重新运行' })}`}
                     >
-                      {t('fork.editRerun', { defaultValue: '编辑重跑' })}
+                      <PencilLine className="h-3.5 w-3.5" aria-hidden />
                     </button>
                   )}
                   {shouldShowUserCopyControl && (
@@ -430,13 +471,21 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                   }
 
                   // Normal rendering for non-JSON content
+                  // 流式走两段式渲染:封版前缀 memo 住,每次 flush 只重解析
+                  // 正在打的那一段(见 StreamingMarkdown / splitStreamingMarkdown)。
                   return message.type === 'assistant' ? (
+                    message.isStreaming ? (
+                      <StreamingMarkdown className="chat-answer prose prose-sm font-sans dark:prose-invert">
+                        {content}
+                      </StreamingMarkdown>
+                    ) : (
                     <Markdown
                       className="chat-answer prose prose-sm font-sans dark:prose-invert"
                       streaming={Boolean(message.isStreaming)}
                     >
                       {content}
                     </Markdown>
+                    )
                   ) : (
                     <div className="whitespace-pre-wrap">
                       {content}
@@ -456,6 +505,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                     {t('retry.lastTurn', { defaultValue: '重发上一条消息' })}
                   </button>
                 )}
+
+                {/* eh:本轮产出 —— 正文的最后一块,压在复制/重跑那一行之上。 */}
+                {turnOutputs && turnOutputs.length > 0 && (
+                  <div className="mt-3">
+                    <TurnOutputsCard files={turnOutputs} onFileOpen={onFileOpenPath} sessionId={outputsSessionId} />
+                  </div>
+                )}
               </div>
             )}
 
@@ -463,6 +519,20 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               <div className="mt-2 flex w-full items-center gap-2 font-mono text-[10.5px] text-muted-foreground transition-opacity sm:opacity-0 sm:focus-within:opacity-100 sm:group-hover/msg:opacity-100">
                 {shouldShowAssistantCopyControl && (
                   <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
+                )}
+                {/* ef:设计稿的回答下方是「复制 + 重跑」两枚图标。重跑只挂在
+                    收尾那条上(由 ChatMessagesPane 判定),它重发的是上一条用户
+                    消息 —— 挂在历史中段没有意义,那是「编辑重跑」的分叉语义。 */}
+                {canRerun && onRetry && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    aria-label={t('retry.lastTurn', { defaultValue: '重发上一条消息' })}
+                    title={t('retry.lastTurn', { defaultValue: '重发上一条消息' })}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+                  </button>
                 )}
                 {!isGrouped && <span>{formattedTime}</span>}
                 {/* 这一轮实际服务的模型(响应元数据)。模型的自我介绍会顺着上下文

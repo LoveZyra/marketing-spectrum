@@ -1,20 +1,28 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useToast } from '../../../../shared/view/ui';
 import { downloadSessionExport, type SessionExportOptions } from '../../../../utils/session-export';
-import SessionExportMenu from '../../../../shared/view/SessionExportMenu';
+import { copyTextToClipboard } from '../../../../utils/clipboard';
+import { api } from '../../../../utils/api';
 import type { MainContentHeaderProps } from '../../types/types';
 
 import MobileMenuButton from './MobileMenuButton';
 import MainContentTabSwitcher from './MainContentTabSwitcher';
 import MainContentTitle from './MainContentTitle';
+import SessionActionsMenu from './SessionActionsMenu';
 
 /**
  * 主区顶栏(设计稿 2a / 2b)。桌面端的标签切换已移到左侧图标轨(AppRail),
- * 这里只留标题块 + 右侧两个元素:常驻会话胶囊与导出;移动端保留顶部标签栏。
+ * 移动端保留顶部标签栏。
  *
- * 稿子规格:发丝线下边框、内边距 12px 20px、元素间距 16px。
+ * ef:整条顶栏收成**一行 44px** —— 左边标题(带就地改名的铅笔)+ 项目芯片
+ * (路径 / 会话 id / 常驻状态进标题的悬停提示),右边一枚「…」:导出对话、
+ * 常驻会话开关、复制项目路径、删除会话。原来的「常驻会话」胶囊和「导出」按钮撤掉。
+ *
+ * 「常驻会话」这一行是**真状态**:挂载时问一次 `/runtime`,开 = prewarm、
+ * 关 = release(见 server/index.js 的两个 runtime 路由)。之前那个胶囊只认
+ * "本页见过它在跑",刷新即忘、也关不掉。
  */
 export default function MainContentHeader({
   activeTab,
@@ -24,13 +32,42 @@ export default function MainContentHeader({
   isMobile,
   onMenuClick,
   isPersistentSession = false,
+  onRenameSession,
+  onDeleteSession,
 }: MainContentHeaderProps) {
   const { t } = useTranslation('common');
   const { toast } = useToast();
   const [isExporting, setIsExporting] = useState(false);
+  const [resident, setResident] = useState(false);
+  const [residentBusy, setResidentBusy] = useState(false);
 
-  const showExport = activeTab === 'chat' && Boolean(selectedSession);
-  const showPersistentPill = !isMobile && activeTab === 'chat' && Boolean(selectedSession) && isPersistentSession;
+  const sessionId = selectedSession?.id ? String(selectedSession.id) : null;
+  const showMenu = activeTab === 'chat' && Boolean(sessionId);
+  const projectPath = selectedProject.fullPath || selectedProject.path || '';
+
+  // 常驻状态:切会话时问一次服务端。失败按"没常驻"处理 —— 这一行只是个开关,
+  // 查不到就别谎报开着。
+  const refreshResident = useCallback(async (id: string) => {
+    try {
+      const response = await api.sessionRuntime(id);
+      if (!response.ok) { setResident(false); return; }
+      const data = await response.json();
+      setResident(Boolean(data?.resident));
+    } catch {
+      setResident(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!sessionId || activeTab !== 'chat') { setResident(false); return; }
+    void refreshResident(sessionId);
+  }, [sessionId, activeTab, refreshResident]);
+
+  // 本页见过它在跑 = 服务端一定给它建了运行时(MainContent 的老判据),
+  // 拿来做乐观更新:回合一开跑就把开关点亮,不用等下一次查询。
+  useEffect(() => {
+    if (isPersistentSession) setResident(true);
+  }, [isPersistentSession]);
 
   const handleExport = async (options: SessionExportOptions) => {
     if (!selectedSession || isExporting) return;
@@ -49,17 +86,58 @@ export default function MainContentHeader({
     }
   };
 
+  const handleTogglePersistent = async (next: boolean) => {
+    if (!sessionId || residentBusy) return;
+    setResidentBusy(true);
+    try {
+      const response = next
+        ? await api.prewarmSession(sessionId, {})
+        : await api.releaseSessionRuntime(sessionId);
+      const data = response.ok ? await response.json() : null;
+      if (next) {
+        const warmed = Boolean(data?.warmed);
+        setResident(warmed);
+        toast(warmed
+          ? { message: t('mainContent.persistentOnDone', { defaultValue: '已挂起常驻运行时,下一轮不用重建进程' }), variant: 'success' }
+          : { message: t('mainContent.persistentOnFailed', { defaultValue: '暂时挂不上常驻运行时(可能是常驻池已满或本轮正忙)' }), variant: 'error' });
+      } else {
+        const released = data?.released !== false;
+        setResident(!released ? Boolean(data?.resident) : false);
+        toast(released
+          ? { message: t('mainContent.persistentOffDone', { defaultValue: '已释放常驻运行时,下一轮会重建进程' }), variant: 'success' }
+          : { message: t('mainContent.persistentOffBusy', { defaultValue: '这一轮还在跑,跑完再释放' }), variant: 'error' });
+      }
+    } catch {
+      toast({ message: t('mainContent.persistentFailed', { defaultValue: '常驻开关没生效,请重试' }), variant: 'error' });
+    } finally {
+      setResidentBusy(false);
+      if (sessionId) void refreshResident(sessionId);
+    }
+  };
+
+  const copyProjectPath = async () => {
+    if (!projectPath) return;
+    // 生产走 HTTP(127.0.0.1:8080 反代),navigator.clipboard 不可用 —— 走带 execCommand 回退的封装。
+    const copied = await copyTextToClipboard(projectPath);
+    toast(copied
+      ? { message: t('mainContent.pathCopied', { defaultValue: '已复制项目路径' }), variant: 'success' }
+      : { message: t('mainContent.pathCopyFailed', { defaultValue: '复制失败,请手动复制' }), variant: 'error' });
+  };
+
+  // 设计稿:顶栏正好 44px(含下边框,box-sizing 全局是 border-box)。高度写死而
+  // 不是靠内边距凑 —— 标题、芯片、「…」三者高度不同,靠 padding 撑会随内容漂。
+  // 移动端留 52px:那里还挤着菜单键与标签栏。
   return (
-    <div className="pwa-header-safe flex-shrink-0 border-b border-border bg-background px-3 py-2.5 sm:px-5 sm:py-3">
-      <div className="flex items-center gap-4">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          {isMobile && <MobileMenuButton onMenuClick={onMenuClick} />}
-          <MainContentTitle
-            activeTab={activeTab}
-            selectedProject={selectedProject}
-            selectedSession={selectedSession}
-          />
-        </div>
+    <div className="pwa-header-safe flex h-[52px] flex-shrink-0 items-center border-b border-border bg-background px-3 sm:h-11 sm:px-5">
+      <div className="flex w-full items-center gap-3">
+        {isMobile && <MobileMenuButton onMenuClick={onMenuClick} />}
+        <MainContentTitle
+          activeTab={activeTab}
+          selectedProject={selectedProject}
+          selectedSession={selectedSession}
+          isPersistentSession={resident || isPersistentSession}
+          onRenameSession={onRenameSession}
+        />
 
         {/* 移动端:顶部标签栏(桌面端由图标轨接管) */}
         <div className="min-w-0 flex-shrink-0 md:hidden">
@@ -69,36 +147,22 @@ export default function MainContentHeader({
           />
         </div>
 
-        {/* 常驻会话胶囊:淡色下文字走墨色 —— 绿色不在浅底做小字 */}
-        {showPersistentPill && (
-          <span
-            className="hidden flex-shrink-0 items-center gap-1.5 rounded-full border border-primary/40 px-2.5 py-1 text-xs text-foreground dark:border-primary/[0.32] dark:text-primary md:inline-flex"
-            title={t('mainContent.persistentSessionHint', {
-              defaultValue: '这段对话在服务端挂着常驻运行时,下一轮无需重建进程',
-            })}
-          >
-            <span className="h-1.5 w-1.5 flex-none rounded-full bg-primary" aria-hidden />
-            {t('mainContent.persistentSession', { defaultValue: '常驻会话' })}
-          </span>
-        )}
-
-        {/* 桌面端右侧动作:导出(F12 起点开选格式) */}
-        {!isMobile && showExport && (
-          <SessionExportMenu onExport={(options) => void handleExport(options)}>
-            {({ onClick, ref }) => (
-              <button
-                ref={ref}
-                type="button"
-                onClick={onClick}
-                disabled={isExporting}
-                className="hidden flex-shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-card-foreground transition-colors hover:border-border-strong hover:bg-card active:translate-y-px disabled:opacity-60 md:inline-flex"
-              >
-                {isExporting
-                  ? t('mainContent.exporting', { defaultValue: '导出中…' })
-                  : t('mainContent.export')}
-              </button>
-            )}
-          </SessionExportMenu>
+        {showMenu && (
+          <SessionActionsMenu
+            isPersistent={resident}
+            persistentBusy={residentBusy}
+            onTogglePersistent={(next) => void handleTogglePersistent(next)}
+            onExport={(options) => void handleExport(options)}
+            isExporting={isExporting}
+            projectPath={projectPath}
+            onOpen={() => { if (sessionId) void refreshResident(sessionId); }}
+            onCopyPath={() => void copyProjectPath()}
+            onDelete={() => {
+              if (sessionId) {
+                onDeleteSession?.(sessionId, (selectedSession?.summary as string) || t('mainContent.newSession'));
+              }
+            }}
+          />
         )}
       </div>
     </div>

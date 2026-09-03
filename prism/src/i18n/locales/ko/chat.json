@@ -144,5 +144,31 @@
     "acceptEdits": "Edits files without asking. Still asks before running commands.",
     "auto": "Decides routine calls itself; asks about the rest.",
     "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
+  },
+  "workPanel": {
+    "title": "작업 패널",
+    "checklist": "작업 목록",
+    "outputs": "산출 파일",
+    "allDone": "모두 완료",
+    "noChecklist": "이 대화에는 아직 작업 목록이 없습니다.",
+    "noOutputs": "이 대화에는 아직 산출 파일이 없습니다.",
+    "open": "열기",
+    "download": "이 파일 다운로드",
+    "collapse": "작업 패널 접기",
+    "expand": "작업 패널 펼치기",
+    "doneFolded": "완료 {{count}}개 · 펼치기",
+    "doneUnfold": "완료된 {{count}}개 접기",
+    "historyTruncated": "세션이 길어 이전 기록은 불러오지 않았습니다.",
+    "earlierFolded": "이전 {{count}}개 · 펼치기",
+    "earlierUnfold": "이전 {{count}}개 접기"
+  },
+  "skills": {
+    "invokedBadge": "스킬"
+  },
+  "toolStatus": {
+    "running": "실행 중",
+    "completed": "완료",
+    "error": "오류",
+    "denied": "거부됨"
   }
 }

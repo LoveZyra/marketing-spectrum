@@ -144,5 +144,31 @@
     "acceptEdits": "Edits files without asking. Still asks before running commands.",
     "auto": "Decides routine calls itself; asks about the rest.",
     "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
+  },
+  "workPanel": {
+    "title": "Pannello di lavoro",
+    "checklist": "Attività",
+    "outputs": "File prodotti",
+    "allDone": "Tutto completato",
+    "noChecklist": "Nessun elenco di attività in questa conversazione.",
+    "noOutputs": "Nessun file prodotto in questa conversazione.",
+    "open": "Apri",
+    "download": "Scarica questo file",
+    "collapse": "Comprimi il pannello",
+    "expand": "Espandi il pannello",
+    "doneFolded": "{{count}} completate · mostra",
+    "doneUnfold": "Nascondi {{count}} completate",
+    "historyTruncated": "Sessione lunga — voci precedenti non caricate.",
+    "earlierFolded": "{{count}} precedenti · mostra",
+    "earlierUnfold": "Nascondi {{count}} precedenti"
+  },
+  "skills": {
+    "invokedBadge": "Competenza"
+  },
+  "toolStatus": {
+    "running": "In corso",
+    "completed": "Completato",
+    "error": "Errore",
+    "denied": "Rifiutato"
   }
 }

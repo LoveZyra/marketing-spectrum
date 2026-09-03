@@ -31,7 +31,21 @@
     "persistentSession": "常驻会话",
     "persistentSessionHint": "这段对话在服务端挂着常驻运行时，下一轮无需重建进程",
     "exporting": "导出中…",
-    "tabNeedsProject": "「{{tab}}」需要先选一个项目 —— 从左侧选一个就会打开。"
+    "tabNeedsProject": "「{{tab}}」需要先选一个项目 —— 从左侧选一个就会打开。",
+    "more": "更多",
+    "copyProjectPath": "复制项目路径",
+    "pathCopied": "已复制项目路径",
+    "pathCopyFailed": "复制失败，请手动复制",
+    "exportSession": "导出对话",
+    "renameSession": "重命名会话",
+    "deleteSession": "删除会话",
+    "persistentOn": "已开",
+    "persistentOff": "未开",
+    "persistentOnDone": "已挂起常驻运行时，下一轮不用重建进程",
+    "persistentOnFailed": "暂时挂不上常驻运行时（可能是常驻池已满或本轮正忙）",
+    "persistentOffDone": "已释放常驻运行时，下一轮会重建进程",
+    "persistentOffBusy": "这一轮还在跑，跑完再释放",
+    "persistentFailed": "常驻开关没生效，请重试"
   },
   "fileTree": {
     "loading": "正在加载文件...",

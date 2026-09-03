@@ -312,7 +312,11 @@ router.post('/change-password', authenticateToken, authRateLimiter, async (req, 
         outcome: 'failure',
         detail: 'change-password: wrong current password',
       });
-      return res.status(401).json({ error: 'Current password is incorrect' });
+      // ec:这里以前回 401。可这条路走的是带 Bearer 的 authenticatedFetch,
+      // 前端把登录态下的任何 401 一律当"会话失效" —— 当前密码打错一个字,
+      // 整个人被踢回登录页(实测)。调用方明明是已认证的,错的是**表单里的
+      // 一个字段**,那是 403/400 的事,不是 401 的事。
+      return res.status(403).json({ error: '当前密码不正确', code: 'CURRENT_PASSWORD_INCORRECT' });
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 12);

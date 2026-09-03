@@ -49,9 +49,17 @@ describe('显示日志:什么该留下', () => {
   it('每 token 一条的流式增量、瞬时状态、权限询问一律不留 —— 留了就是把洪流灌进库里', () => {
     for (const kind of ['stream_delta', 'stream_end', 'complete', 'status',
                         'permission_request', 'permission_cancelled',
-                        'session_created', 'checkpoint_created', 'changed_files']) {
+                        'session_created', 'checkpoint_created']) {
       expect(isDurableDisplayMessage({ kind })).toBe(false);
     }
+  });
+
+  it('dr:changed_files 改为落库(工作面板认非 Write 写盘的唯一证据;落库时剥 diff)', () => {
+    expect(isDurableDisplayMessage({ kind: 'changed_files' })).toBe(true);
+  });
+
+  it('dt:files_reverted 落库(回滚/还原后产出面板与磁盘对齐的依据)', () => {
+    expect(isDurableDisplayMessage({ kind: 'files_reverted' })).toBe(true);
   });
 
   it('未知 kind 默认不留(白名单语义)', () => {

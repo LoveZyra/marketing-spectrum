@@ -161,8 +161,12 @@ const MessageCopyControl = ({
     setIsDropdownOpen(false);
   };
 
+  // du:用户档原来是 `text-primary-foreground` —— 那是「主色底上的字」,浅色
+  // 主题下是白色。而这个控件早就搬到气泡**外面**、坐在页面底色上了:白字白底、
+  // 深色主题近黑字近黑底,整行 hover 出来也看不见,得把鼠标精确压到按钮上
+  // 才显形。两档统一用次要色。
   const toneClass = messageType === 'user'
-    ? 'text-primary-foreground hover:text-foreground'
+    ? 'text-muted-foreground hover:text-foreground'
     : 'text-muted-foreground hover:text-body';
   const copyTitle = copied ? t('copyMessage.copied') : t('copyMessage.copy');
   const rootClassName = canSelectCopyFormat
@@ -176,7 +180,8 @@ const MessageCopyControl = ({
         onClick={handleCopyClick}
         title={copyTitle}
         aria-label={copyTitle}
-        className={`inline-flex items-center gap-1 rounded px-1 py-0.5 transition-colors ${toneClass}`}
+        // ef:设计稿的悬停操作是一排 24×24 的图标钮(不是带内边距的文字钮)。
+        className={`grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-accent ${toneClass}`}
       >
         {copied ? (
           <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
@@ -200,7 +205,6 @@ const MessageCopyControl = ({
             <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
           </svg>
         )}
-        <span className="text-[10px] font-semibold uppercase tracking-wide">{selectedFormatTag}</span>
       </button>
 
       {canSelectCopyFormat && (
@@ -209,9 +213,9 @@ const MessageCopyControl = ({
             ref={triggerRef}
             type="button"
             onClick={() => (isDropdownOpen ? setIsDropdownOpen(false) : openDropdown())}
-            className={`rounded px-1 py-0.5 transition-colors ${toneClass}`}
+            className={`grid h-6 w-4 place-items-center rounded-md transition-colors hover:bg-accent ${toneClass}`}
             aria-label={t('copyMessage.selectFormat', { defaultValue: 'Select copy format' })}
-            title={t('copyMessage.selectFormat', { defaultValue: 'Select copy format' })}
+            title={`${t('copyMessage.selectFormat', { defaultValue: 'Select copy format' })} · ${selectedFormatTag}`}
           >
             <svg
               className={`h-3 w-3 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`}
@@ -227,7 +231,7 @@ const MessageCopyControl = ({
             <div
               ref={menuRef}
               style={menuStyle}
-              className="prism-modal-shadow min-w-36 rounded-md border border-border bg-popover p-1"
+              className="prism-modal-shadow min-w-36 rounded-panel border border-border bg-popover p-1"
             >
               {copyFormatOptions.map((option) => {
                 const isSelected = option.format === selectedFormat;

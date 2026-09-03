@@ -13,6 +13,7 @@ import type {
 } from 'react';
 import { useDropzone } from 'react-dropzone';
 
+import { schedulePushAccountSettings } from '../../../utils/accountSettings';
 import { authenticatedFetch } from '../../../utils/api';
 import { uploadFormDataWithProgress } from '../../../utils/uploadWithProgress';
 import type { MarkSessionProcessing } from '../../../hooks/useSessionProtection';
@@ -35,8 +36,9 @@ import type {
 import type { Project, ProjectSession, LLMProvider, ProviderModelsCacheInfo } from '../../../types/app';
 import { escapeRegExp } from '../utils/chatFormatting';
 import { buildDocsBlock, type AttachedDoc } from '../utils/attachmentPrompt';
-import { draftStorageKey } from '../utils/composerDrafts';
+import { draftStorageKey, mergeQueuedIntoInput } from '../utils/composerDrafts';
 import { stepHistoryWalk, type HistoryWalkState } from '../utils/composerHistory';
+import { describeSkillInvocationInput } from '../utils/skillNaming';
 
 /**
  * prism: 分片落盘。反向代理(nginx/openresty)的 client_max_body_size 会在请求到
@@ -64,7 +66,11 @@ const fetchLandLimits = async (): Promise<{ chunkBytes: number }> => {
   return landLimitsCache;
 };
 
-type LandPayload = { name?: string; text?: string; chars?: number; truncated?: boolean };
+type LandPayload = {
+  name?: string; text?: string; chars?: number; truncated?: boolean;
+  /** ed:服务端落盘时顺带抽出的正文(见 documents.js extractLandedText)。 */
+  extractedText?: string; extractedChars?: number; extractedTruncated?: boolean;
+};
 
 /**
  * 附件落盘要落到**会话所属项目**的 attachments/ 下,所以每条上传都得带上
@@ -602,6 +608,11 @@ export function useChatComposerState({
     ],
   );
 
+  /**
+   * dx:底栏的 token 用量芯片已移除,所以目前没有调用方 —— 保留这条入口是
+   * 因为它和 showModelsModal 是同一形状的 API(走 executeCommand,与手敲
+   * /cost 同一条路径),将来想把用量放回某处时直接接上即可。
+   */
   const showCostModal = useCallback(() => {
     executeCommand(
       {
@@ -860,9 +871,17 @@ export function useChatComposerState({
           chars: payload.chars || (payload.text || '').length,
           truncated: Boolean(payload.truncated),
           source: 'file' as const,
-          // /land never parses: `text` is the staged disk path, so it rides
-          // with the prompt as a bare line rather than inside an envelope.
+          // /land: `text` is the staged disk path, so it rides with the prompt
+          // as a bare line. ed: the server may also hand back extracted text for
+          // document types — that part goes in an envelope (see buildDocsBlock).
           kind: 'path' as const,
+          ...(payload.extractedText
+            ? {
+              extractedText: payload.extractedText,
+              extractedChars: payload.extractedChars ?? payload.extractedText.length,
+              extractedTruncated: Boolean(payload.extractedTruncated),
+            }
+            : {}),
         }].slice(0, 8));
       } catch (error) {
         addMessage({
@@ -1045,7 +1064,11 @@ export function useChatComposerState({
       permissionMode: resolvePermissionModeForProvider(provider, permissionMode),
       toolsSettings,
       skipPermissions: toolsSettings?.skipPermissions || false,
-      sessionSummary: getNotificationSessionSummary(selectedSession, currentInput),
+      // do:技能调用当首条消息时,命名用「技能名:参数」而不是斜杠原文。
+      sessionSummary: getNotificationSessionSummary(
+        selectedSession,
+        describeSkillInvocationInput(currentInput, slashCommands),
+      ),
     };
   }, [
     claudeModel,
@@ -1054,6 +1077,7 @@ export function useChatComposerState({
     provider,
     resolvePermissionModeForProvider,
     selectedSession,
+    slashCommands,
   ]);
 
   const handleSubmit = useCallback(
@@ -1208,7 +1232,11 @@ export function useChatComposerState({
       }
 
       const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
-      const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
+      // do:`/技能名 参数` 开场的新会话,侧栏名字用「技能名:参数」,不挂斜杠黑话。
+      const sessionSummary = getNotificationSessionSummary(
+        selectedSession,
+        describeSkillInvocationInput(currentInput, slashCommands),
+      );
 
       // Prism edit-and-rerun: a pending fork forces a brand-new session that
       // branches off the parent's native conversation (truncated at the forked
@@ -1281,7 +1309,11 @@ export function useChatComposerState({
         sessionId: targetSessionId,
         content: messageContent,
         options: {
-          ...buildSendOptions(messageContent),
+          // du:发送内容用 messageContent(含附件块),但**命名**只能用
+          // currentInput —— 传含附件的那份,服务端会把会话名落成
+          // 「总结一下 <attached-document name=…>」这种带标签尾巴的东西,
+          // 还与前端乐观显示的名字不一致。
+          ...buildSendOptions(currentInput),
           images: uploadedImages,
           ...(forkInfo ? { forkFrom: forkInfo } : {}),
           ...(hiddenContext ? { hiddenContext } : {}),
@@ -1536,6 +1568,8 @@ export function useChatComposerState({
     } else {
       safeLocalStorage.removeItem(activeDraftKey);
     }
+    // dl:草稿进账号级同步(F11),停笔 8 秒推一次 —— 换台设备接着打。
+    schedulePushAccountSettings();
   }, [input, activeDraftKey]);
 
   useEffect(() => {
@@ -1745,7 +1779,22 @@ export function useChatComposerState({
     // 丢了就得重敲。所以退回输入框 —— 不丢东西,也不会有任何东西自动开跑,
     // 要不要发交回给用户的下一次按键。
     if (queuedDraft) {
-      editQueuedDraft();
+      // dn-B2:输入框已有内容时不覆盖 —— 合并(排队在前、正在打的在后)留在
+      // 输入框;图片同样并起来。输入框为空时保持原行为(整条退回,含图片)。
+      const current = inputValueRef.current;
+      if (current.trim()) {
+        const merged = mergeQueuedIntoInput(queuedDraft.content, current);
+        const queuedImages = queuedDraft.images;
+        setQueuedDraft(null);
+        setInput(merged);
+        inputValueRef.current = merged;
+        if (queuedImages.length > 0) {
+          setAttachedImages((previous) => [...queuedImages, ...previous].slice(0, 5));
+        }
+        textareaRef.current?.focus();
+      } else {
+        editQueuedDraft();
+      }
     }
 
     const targetSessionId = selectedSession?.id || currentSessionId || null;
@@ -1861,6 +1910,12 @@ export function useChatComposerState({
     if (!String(content || '').trim()) {
       return;
     }
+    // dn-B3:输入框里有未发送的字时不覆盖 —— 提示一句,让用户自己处理。
+    // 静默吃掉正在打的内容,比"重试没反应"糟得多。
+    if (inputValueRef.current.trim()) {
+      emitToast({ message: '输入框里有未发送的内容 —— 先发送或清空它,再点重试。', variant: 'error' });
+      return;
+    }
     setInput(content);
     inputValueRef.current = content;
     setTimeout(() => {
@@ -1897,6 +1952,8 @@ export function useChatComposerState({
     removeAttachedDoc,
     handleDocFiles,
     handleAnyFiles,
+    // ed:「+」菜单第一项「添加附件」—— 与拖拽 / 粘贴同一条分流(图片给模型看,其它存进项目)。
+    handleAttachFiles: acceptDroppedFiles,
     attachDocFromUrl,
     parsingDocs: parsingDocsCount > 0,
     docUploadProgress,

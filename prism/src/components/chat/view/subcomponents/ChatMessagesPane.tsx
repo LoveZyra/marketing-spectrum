@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { memo, useCallback, useMemo, useRef } from 'react';
-import type { Dispatch, RefObject, SetStateAction } from 'react';
+import type { Dispatch, ReactNode, RefObject, SetStateAction } from 'react';
 
 import type { ChatMessage } from '../../types/types';
 import type {
@@ -11,6 +11,9 @@ import type {
 import { Shimmer } from '../../../../shared/view/ui';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
+import type { RecentSessionEntry } from '../../utils/recentSessions';
+import { extractTurnOutputsCached, type TurnOutputFile } from '../../utils/turnOutputs';
+import { cn } from '../../../../lib/utils';
 import { createGroupIdentityState, groupConsecutiveTools, isSubagentGroupItem, isToolGroupItem, stabilizeGroupIdentity } from '../../utils/toolGrouping';
 import type { SubagentGroupItem, ToolGroupItem } from '../../utils/toolGrouping';
 
@@ -66,6 +69,19 @@ interface ChatMessagesPaneProps {
   onEditRerun?: (message: ChatMessage) => void;
   /** F2:失败一键重试 —— 重发最近一条用户消息。 */
   onRetryLastTurn?: () => void;
+  /**
+   * ef:首页空态(没选会话、没有消息)。这时滚动容器铺点阵画布(全库只此一处),
+   * 输入框以 composerSlot 的形式嵌在问候语下面,再带上跨项目的最近会话。
+   */
+  isHome?: boolean;
+  composerSlot?: ReactNode;
+  recentSessions?: RecentSessionEntry[];
+  onOpenSession?: (sessionId: string) => void;
+  /**
+   * ej:助手回答 id → 这一轮的产出文件,**服务端按全量历史算好**的那份。
+   * 有它就以它为准,没有(还没拉到 / 刚跑完的这一轮)才退回窗口内现推。
+   */
+  serverTurnOutputs?: ReadonlyMap<string, TurnOutputFile[]>;
 }
 
 /**
@@ -110,6 +126,11 @@ function ChatMessagesPane({
   selectedProject,
   onEditRerun,
   onRetryLastTurn,
+  isHome = false,
+  composerSlot = null,
+  recentSessions,
+  onOpenSession,
+  serverTurnOutputs,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
   // 上一轮的组身份登记表(每条消息都指回它所属的组)—— 见 stabilizeGroupIdentity。
@@ -129,6 +150,33 @@ function ChatMessagesPane({
    * (补页 / 看更早 / 全部展开)会换掉段首,key 一变 React 就卸载重建整个
    * 时间轴:展开态丢失、高度当场突变。
    */
+  /**
+   * ej:服务端产出映射落到**这一遍渲染的下标**上。
+   *
+   * 一条显示日志消息可能被拆成多条 ChatMessage(id 带 `#序号` 后缀),卡片只
+   * 挂**最后一条** —— 产出该在这一轮说完话之后。先扫一遍再渲染,省得渲染中途
+   * 还要往后看。
+   */
+  const serverOutputsByIndex = useMemo(() => {
+    if (!serverTurnOutputs || serverTurnOutputs.size === 0) return null;
+    const lastIndexById = new Map<string, number>();
+    groupedVisibleMessages.forEach((item, index) => {
+      if (isToolGroupItem(item) || isSubagentGroupItem(item)) return;
+      if (item.type !== 'assistant' || item.isStreaming) return;
+      const rawId = typeof item.id === 'string' ? item.id : '';
+      if (!rawId) return;
+      const baseId = rawId.split('#')[0];
+      if (serverTurnOutputs.has(baseId)) lastIndexById.set(baseId, index);
+    });
+    if (lastIndexById.size === 0) return null;
+    const byIndex = new Map<number, TurnOutputFile[]>();
+    for (const [baseId, index] of lastIndexById) {
+      const files = serverTurnOutputs.get(baseId);
+      if (files) byIndex.set(index, files);
+    }
+    return byIndex;
+  }, [groupedVisibleMessages, serverTurnOutputs]);
+
   /**
    * 流式气泡的消息对象。只随正文变化重建,其余一切保持不变;key 写死成
    * `message-streaming`,整段打字过程 DOM 节点从头到尾是同一个。
@@ -196,14 +244,17 @@ function ChatMessagesPane({
        * scrollHeight 骤变、浏览器钳一次 scrollTop,整屏内容上跳。留白本来就是
        * 给活动指示器让位的,常驻的代价只是空会话底部多一点空,比每轮跳两次划算。
        */
-      className="chat-messages-pane relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-12 pt-3 sm:pb-14 sm:pt-4"
+      className={cn(
+        'chat-messages-pane relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto',
+        isHome ? 'prism-canvas py-6' : 'pb-12 pt-3 sm:pb-14 sm:pt-4',
+      )}
     >
       {/*
         * 正文宽度**恒定**。原来空会话用 68rem(给起始卡片排得开),有消息之后收到
         * 54.25rem —— 第一条消息落地的瞬间容器从 1088px 缩到 868px,已渲染的内容
         * 全部重新折行。宽度改成只属于空态那一块,消息列表这一支永远是 54.25rem。
         */}
-      <div className="mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4">
+      <div className={isHome ? 'flex min-h-full flex-col justify-center' : 'mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4'}>
       {(isLoadingSessionMessages || isProcessing) && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-muted-foreground">
           <div className="flex items-center justify-center space-x-2">
@@ -211,22 +262,25 @@ function ChatMessagesPane({
           </div>
         </div>
       ) : chatMessages.length === 0 ? (
-        <div className="mx-auto w-full max-w-[68rem]">
-          <ChatEmptyState
-            selectedSession={selectedSession}
-            currentSessionId={currentSessionId}
-            provider={provider}
-            setInput={setInput}
-          />
-        </div>
+        <ChatEmptyState
+          selectedSession={selectedSession}
+          currentSessionId={currentSessionId}
+          provider={provider}
+          setInput={setInput}
+          composerSlot={composerSlot}
+          recentSessions={recentSessions}
+          onOpenSession={onOpenSession}
+        />
       ) : (
         <>
-          {/* Loading indicator for older messages (hide when load-all is active) */}
+          {/* Loading indicator for older messages (hide when load-all is active).
+              dl:换成骨架行 —— 顶端在补一页的时候,看到的是"内容的形状",
+              而不是一行孤零零的文字。高度固定,落地后由滚动控制器守位。 */}
           {isLoadingMoreMessages && !isLoadingAllMessages && !allMessagesLoaded && (
-            <div className="py-3 text-center text-muted-foreground">
-              <div className="flex items-center justify-center space-x-2">
-                <Shimmer as="p" className="text-sm">{t('session.loading.olderMessages')}</Shimmer>
-              </div>
+            <div className="space-y-2.5 py-3" role="status" aria-label={t('session.loading.olderMessages')}>
+              <div className="h-3.5 w-2/5 animate-pulse rounded bg-muted" />
+              <div className="h-3.5 w-4/5 animate-pulse rounded bg-muted" />
+              <div className="h-3.5 w-3/5 animate-pulse rounded bg-muted" />
             </div>
           )}
 
@@ -273,8 +327,28 @@ function ChatMessagesPane({
           {(() => {
             let prevMessage: ChatMessage | null = null;
             const lastItem = groupedVisibleMessages[groupedVisibleMessages.length - 1];
+            /**
+             * ef:一轮的「产出」卡跟在**回答正文之后**(设计稿)。产出来自上面
+             * 那段工具流,所以先在渲染工具组时把它算出来存这儿,等这一轮的助手
+             * 回答渲染完再一起吐出来;中途遇到别的东西(用户又发了一条、错误)
+             * 就丢掉 —— 那说明这一轮没有正文可挂。
+             */
+            let pendingTurnOutputs: TurnOutputFile[] = [];
+            /**
+             * eh 修:**窗口没到头时,第一段工具流是被切断的,不能拿它算产出。**
+             *
+             * 重进会话时先渲染的是尾部窗口,窗口起点常常落在某一轮的工具流中间 ——
+             * 这一段只有末尾几个 Write,卡片先显示「产出 2」;等更早的消息补进来、
+             * 这一段接回完整,又变成「产出 5」(用户截图)。数字当着人的面跳,
+             * 比晚一点出现糟得多。
+             *
+             * 判据很直白:**渲染列表的第一项就是工具组**,而且窗口并没有覆盖到
+             * 对话开头 —— 真实对话的第一条永远是用户消息,所以"工具组排在最前"
+             * 只可能是被窗口切掉了前半截。这种情况下这一轮不出卡片,等窗口补齐。
+             */
+            const windowStartsAtBeginning = !hasMoreMessages && visibleMessageCount >= chatMessages.length;
 
-            return groupedVisibleMessages.map((item) => {
+            return groupedVisibleMessages.map((item, renderedIndex) => {
               // 子代理卡片组:抬头 + 网格子卡 + 点开看各自的步骤时间轴(ci 轮)。
               if (isSubagentGroupItem(item)) {
                 const groupPrevMessage = item.messages[item.messages.length - 1] || prevMessage;
@@ -291,6 +365,9 @@ function ChatMessagesPane({
               if (isToolGroupItem(item)) {
                 const groupPrevMessage = prevMessage;
                 prevMessage = item.messages[item.messages.length - 1] || prevMessage;
+                pendingTurnOutputs = renderedIndex === 0 && !windowStartsAtBeginning
+                  ? []
+                  : extractTurnOutputsCached(item, item.messages, selectedProject?.fullPath || selectedProject?.path);
 
                 return (
                   <ActivityTimeline
@@ -312,6 +389,14 @@ function ChatMessagesPane({
 
               const messagePrevMessage = prevMessage;
               prevMessage = item;
+              // 服务端那份优先:它随消息一起到达、算的是全量历史,所以卡片
+              // 一出现就是最终形态。拉不到(接口失败)或这一轮刚跑完还没回写时,
+              // 才退回窗口内现推 —— 那一轮就在眼前,窗口一定是完整的。
+              const serverOutputs = serverOutputsByIndex?.get(renderedIndex);
+              const turnOutputs = item.type === 'assistant' && !item.isStreaming
+                ? (serverOutputs ?? pendingTurnOutputs)
+                : [];
+              if (item.type !== 'assistant' || !item.isStreaming) pendingTurnOutputs = [];
 
               // 只有**收尾在错误上**的对话才给重试按钮:老错误早被后面的
               // 对话翻篇了,回合在跑时也不该再塞一条。
@@ -337,6 +422,10 @@ function ChatMessagesPane({
                   onEditRerun={onEditRerun}
                   showRetry={showRetry}
                   onRetry={onRetryLastTurn}
+                  canRerun={Boolean(onRetryLastTurn && item === lastItem && item.type === 'assistant' && !isProcessing)}
+                  turnOutputs={turnOutputs}
+                  onFileOpenPath={onFileOpen}
+                  outputsSessionId={selectedSession?.id || currentSessionId || null}
                 />
               );
             });

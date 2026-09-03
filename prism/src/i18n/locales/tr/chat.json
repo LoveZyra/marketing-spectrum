@@ -144,5 +144,31 @@
     "acceptEdits": "Edits files without asking. Still asks before running commands.",
     "auto": "Decides routine calls itself; asks about the rest.",
     "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
+  },
+  "workPanel": {
+    "title": "Çalışma paneli",
+    "checklist": "Görevler",
+    "outputs": "Üretilen dosyalar",
+    "allDone": "Tümü tamamlandı",
+    "noChecklist": "Bu konuşmada henüz görev listesi yok.",
+    "noOutputs": "Bu konuşmada henüz üretilen dosya yok.",
+    "open": "Aç",
+    "download": "Bu dosyayı indir",
+    "collapse": "Paneli daralt",
+    "expand": "Paneli genişlet",
+    "doneFolded": "{{count}} tamamlandı · göster",
+    "doneUnfold": "Tamamlanan {{count}} öğeyi gizle",
+    "historyTruncated": "Uzun oturum — daha eski kayıtlar yüklenmedi.",
+    "earlierFolded": "{{count}} daha eski · göster",
+    "earlierUnfold": "{{count}} daha eskiyi gizle"
+  },
+  "skills": {
+    "invokedBadge": "Beceri"
+  },
+  "toolStatus": {
+    "running": "Çalışıyor",
+    "completed": "Tamamlandı",
+    "error": "Hata",
+    "denied": "Reddedildi"
   }
 }

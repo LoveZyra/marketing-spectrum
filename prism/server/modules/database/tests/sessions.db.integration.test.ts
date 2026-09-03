@@ -82,3 +82,19 @@ test('repository reads normalize SQLite UTC timestamps to ISO strings', async ()
     assert.match(row?.updated_at ?? '', /^\d{4}-\d{2}-\d{2}T/);
   });
 });
+
+test('setSessionCustomNameIfEmpty names unnamed sessions once and never overwrites', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createSession('session-unnamed', 'claude', '/workspace/demo-project');
+    sessionsDb.setSessionCustomNameIfEmpty('session-unnamed', 'echo-probe:你好');
+    assert.equal(sessionsDb.getSessionById('session-unnamed')?.custom_name, 'echo-probe:你好');
+
+    // 已有名字(哪怕就是它自己落的)不再覆盖 —— 用户改名永远优先。
+    sessionsDb.setSessionCustomNameIfEmpty('session-unnamed', '别的名字');
+    assert.equal(sessionsDb.getSessionById('session-unnamed')?.custom_name, 'echo-probe:你好');
+
+    sessionsDb.createSession('session-named', 'claude', '/workspace/demo-project', '人工命名');
+    sessionsDb.setSessionCustomNameIfEmpty('session-named', '不该生效');
+    assert.equal(sessionsDb.getSessionById('session-named')?.custom_name, '人工命名');
+  });
+});

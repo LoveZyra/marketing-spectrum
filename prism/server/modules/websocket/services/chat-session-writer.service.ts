@@ -34,6 +34,15 @@ type ChatSessionWriterOptions = {
    * `complete` after an abort already completed the run).
    */
   decorateOutboundEvent: (message: NormalizedMessage) => NormalizedMessage | null;
+  /**
+   * du:这一轮的出站帧要不要落显示日志。默认要。
+   *
+   * 唯一置 false 的场合:老会话的历史**没能抄进日志**(seed 失败)。那时候
+   * 往日志里写哪怕一行,`fetchHistory` 都会立刻改判日志为权威,几百条历史
+   * 从界面消失且不可恢复。宁可这一轮不留日志(照样正常推流、transcript
+   * 那条老路还在),等下一轮 seed 重试成功再开始记。
+   */
+  persistDisplayLog?: boolean;
 };
 
 /**
@@ -204,7 +213,9 @@ export class ChatSessionWriter {
      * 写在投递**之前**、且不看有没有 socket 在连:用户关掉标签页,回合照跑,
      * 日志照记。这一点是它比"前端 store"更可靠的地方。
      */
-    if (typeof message.sessionId === 'string' && message.sessionId) {
+    // du:seed 失败的那一轮整轮不落日志(见 persistDisplayLog 的说明)。
+    if (this.options.persistDisplayLog !== false
+      && typeof message.sessionId === 'string' && message.sessionId) {
       sessionMessagesDb.append(message.sessionId, message);
     }
 

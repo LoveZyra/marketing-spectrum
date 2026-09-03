@@ -89,7 +89,9 @@ export default function SidebarProjectSessions({
   const hasSessions = sessions.length > 0;
 
   return (
-    <div className="ml-3 space-y-1 border-l border-border pl-3">
+    /* ef:会话块只靠 18px 缩进表达从属,不再画一条左侧竖线 —— 设计稿里侧栏
+       除了分区发丝线没有别的线,项目行的展开箭头已经把层级说清楚了。 */
+    <div className="ml-[18px] space-y-0.5">
       <div className="px-3 pb-1 pt-1 md:hidden">
         <button
           className="flex h-11 w-full items-center justify-center gap-2 rounded-md border border-border text-xs font-semibold text-card-foreground transition-colors hover:border-border-strong active:translate-y-px"

@@ -15,6 +15,252 @@ import type {
 } from '@/shared/types.js';
 import { AppError, sliceTailPage } from '@/shared/utils.js';
 
+/**
+ * dq:右侧工作面板的数据帧(任务清单 + 产出文件的原料)。
+ *
+ * 面板此前只从**前端已加载的消息窗口**(首屏尾 20 条)折叠,长会话一刷新,
+ * 早前回合的 TodoWrite/TaskCreate/Write 全部不在窗口里 —— 清单与产出凭空
+ * 变少。这里从**全量历史**(显示日志优先,老会话回落 transcript 回放,与
+ * fetchHistory 同源)把相关工具帧滤出来发给前端;折叠逻辑留在前端一份,
+ * 服务端只发原料,不复制规则。
+ */
+export type SessionWorkFrame = {
+  id?: string;
+  timestamp?: string;
+  /**
+   * 'tool' = 工具调用帧(默认);'changed_file' = checkpoint 改动清单里的
+   * 一个新增文件(dr) —— Bash/python 写盘没有 Write 帧,这是它们唯一的
+   * 落库证据。changed_file 帧的 toolInput 形如 { file_path: 绝对路径 }。
+   */
+  kind?: 'tool' | 'changed_file';
+  toolName: string;
+  toolInput: unknown;
+  resultContent: string | null;
+  resultIsError: boolean;
+};
+
+const WORK_TOOL_NAMES: ReadonlySet<string> = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'Write']);
+
+/**
+ * 纯函数:从一段 NormalizedMessage 历史里收集工作面板帧。
+ * tool_result 是独立行(按 toolId 配对;子代理的 child 行同样在历史里,
+ * 一并收 —— 子代理写的文件、立的任务也是这个会话的工作)。
+ * changed_files 行(dr 起落库)展开为逐文件的 changed_file 帧:git 相对
+ * 路径用帧上的 cwd 拼成绝对路径,与 Write 帧同构、可跨通路去重。
+ */
+/**
+ * ej:**一轮的产出**,按回合归到那条助手回答上。
+ *
+ * 这是"对话正文下面那张产出卡"的**唯一数据源**。它必须由服务端从**全量显示
+ * 日志**算出来,而不能由前端从"当前加载到的消息窗口"现推 —— 重进会话先渲染的
+ * 是尾部窗口,窗口起点常落在某一轮工具流中间,前端推出来的结果会随着历史陆续
+ * 补齐而变(用户实测:先「产出 2」,过一会儿变「产出 5」;加了截断保护之后变成
+ * 先没有、过一会儿才出现)。挂到回合上之后,卡片和消息一起到达、此后不再变。
+ */
+export type TurnOutputFile = {
+  /** 绝对路径 */
+  path: string;
+  /** 写入行数;算不出来时为 null(界面就不显示这一项) */
+  addedLines: number | null;
+};
+
+export type CollectedWorkFrames = {
+  frames: SessionWorkFrame[];
+  /**
+   * 助手回答的消息 id → 这一轮写出来的文件。
+   *
+   * **在帧数截断之前**按全量算好(和 revertedPaths 同一个道理):截断丢的是
+   * 载荷里的帧,不该让历史回合的产出卡跟着一起丢。
+   */
+  turnOutputs: Record<string, TurnOutputFile[]>;
+  /**
+   * dt:至今仍处于"已回滚"状态的**绝对路径** —— files_reverted 落库后,
+   * 之前的产出帧已在本函数内删除,但前端窗口里的旧 Write 工具帧还会把
+   * 文件加回来,前端要拿这个集合做最终减法;回滚后重写的文件会从集合里
+   * 移除(时序折叠)。
+   */
+  revertedPaths: string[];
+  /** dw:帧数触顶、较早的帧未随本次响应下发(前端据此提示,别装作全都在)。 */
+  truncated?: boolean;
+};
+
+/**
+ * dw:单次响应的帧数上限。
+ *
+ * 这个接口原本无条件回**整个会话**的工作帧:会话切换一次、每个回合结束再
+ * 一次,长会话(几百次 Write + 几百个 Task 事件)每次都要把全量 toolInput
+ * 重新序列化下发。工作面板本身没有任何清理机制(不按时间过期、不分页),
+ * 所以载荷只会一直涨。
+ *
+ * 截断保留**尾部**:清单的当前状态、最近的产出都在尾部,越新越要紧。
+ * revertedPaths 在截断**之前**按全量算好,所以"某文件已被回滚"这条结论
+ * 不会因为截断而丢失。
+ */
+export const MAX_WORK_FRAMES = 1500;
+
+/** ej:回合产出映射的条数上限 —— 只是路径,比帧轻得多,但也不该无限涨。 */
+export const MAX_TURN_OUTPUT_ENTRIES = 500;
+
+/**
+ * ek:**单轮**的文件条数上限。
+ *
+ * 一轮批量任务写出几百个文件是真会发生的(用户那条会话一次三十几个)。卡片本身
+ * 到几十行就已经读不动了,再多只是把载荷撑大。超出的部分不进卡片 —— 它们仍在
+ * 右侧会话级产出表里,那张表本来就是用来翻的。
+ */
+export const MAX_FILES_PER_TURN = 50;
+
+function frameFilePath(frame: SessionWorkFrame): string | null {
+  const input = frame.toolInput as { file_path?: unknown } | null | undefined;
+  return typeof input?.file_path === 'string' ? input.file_path : null;
+}
+
+export function collectWorkFrames(messages: readonly NormalizedMessage[]): CollectedWorkFrames {
+  const resultByToolId = new Map<string, { content?: string; isError?: boolean }>();
+  for (const message of messages) {
+    if (message.kind === 'tool_result' && message.toolId) {
+      resultByToolId.set(message.toolId, { content: message.content, isError: message.isError });
+    }
+  }
+
+  const frames: SessionWorkFrame[] = [];
+  const reverted = new Set<string>();
+  /**
+   * 回合归属:写入帧先攒着,**攒到这一轮结束**(下一条用户消息,或日志走完)
+   * 才整批挂到该轮**最后一条助手正文**上。
+   *
+   * ek 修:ej 的写法是"遇到助手正文就挂上去、清空",在真实会话里是错的 ——
+   * 一轮长任务里模型会在工具之间不停说话("任务 32 完成。任务 33:"),那些
+   * 过渡性正文同样是 `kind:'text' role:'assistant'`,于是产出被挂到了**中间那句**
+   * 上;而中间正文在前端会被吸进活动时间轴当 narration 行渲染(见
+   * toolGrouping 的 isAbsorbableNarration),根本不是那条独立的回答 —— 卡片就
+   * 谁也看不见,只能等前端从窗口现推的兜底路径慢慢补出来(用户实测:"最开始
+   * 没有产出文件,要过很久才有")。
+   *
+   * 前端的判据是"收尾的最终回答后面没有活动,永远保持大正文排版",所以这里
+   * 对应的锚点就是**这一轮最后一条助手正文**:记住它,到边界再结算。
+   */
+  const turnOutputs: Record<string, TurnOutputFile[]> = {};
+  let pendingTurnFiles: TurnOutputFile[] = [];
+  /** 本轮至今最后一条**有内容的助手正文**的消息 id —— 结算时挂它。 */
+  let pendingAnchorId = '';
+  let turnCount = 0;
+  const flushTurn = () => {
+    if (pendingAnchorId && pendingTurnFiles.length > 0 && turnCount < MAX_TURN_OUTPUT_ENTRIES) {
+      turnOutputs[pendingAnchorId] = pendingTurnFiles;
+      turnCount += 1;
+    }
+    pendingTurnFiles = [];
+    pendingAnchorId = '';
+  };
+  const notePendingWrite = (absolutePath: string | null, content: unknown) => {
+    if (!absolutePath) return;
+    if (pendingTurnFiles.length >= MAX_FILES_PER_TURN) return;
+    if (pendingTurnFiles.some((file) => file.path === absolutePath)) return;
+    const text = typeof content === 'string' ? content : null;
+    pendingTurnFiles.push({ path: absolutePath, addedLines: text ? text.split('\n').length : null });
+  };
+  const dropPendingWrite = (absolutePath: string) => {
+    pendingTurnFiles = pendingTurnFiles.filter((file) => file.path !== absolutePath);
+    for (const key of Object.keys(turnOutputs)) {
+      const kept = turnOutputs[key].filter((file) => file.path !== absolutePath);
+      if (kept.length === 0) delete turnOutputs[key];
+      else turnOutputs[key] = kept;
+    }
+  };
+  const noteFileFrame = (absolutePath: string | null) => {
+    // 回滚后又重新写出来 → 撤销"已回滚"标记,产出恢复。
+    if (absolutePath) reverted.delete(absolutePath);
+  };
+
+  for (const message of messages) {
+    if (message.kind === 'files_reverted') {
+      const cwd = typeof message.cwd === 'string' && message.cwd ? message.cwd.replace(/[\\/]+$/, '') : '';
+      const paths = Array.isArray(message.paths) ? message.paths : [];
+      for (const entry of paths) {
+        if (typeof entry !== 'string' || !entry.trim()) continue;
+        const absolute = cwd ? `${cwd}/${entry.trim()}` : entry.trim();
+        reverted.add(absolute);
+        dropPendingWrite(absolute);
+        // 时序:删掉此前收集的该文件产出帧;之后的重写会重新入列。
+        for (let index = frames.length - 1; index >= 0; index -= 1) {
+          if (frameFilePath(frames[index]) === absolute) frames.splice(index, 1);
+        }
+      }
+      continue;
+    }
+
+    if (message.kind === 'changed_files') {
+      const cwd = typeof message.cwd === 'string' && message.cwd ? message.cwd : '';
+      const files = Array.isArray(message.files) ? message.files : [];
+      for (const entry of files) {
+        const file = entry as { path?: unknown; status?: unknown; untracked?: unknown };
+        const relPath = typeof file.path === 'string' ? file.path.trim() : '';
+        if (!relPath) continue;
+        // 只算新增:修改/删除既有文件不是"产出了一个文件"。
+        if (file.status !== 'added' && !file.untracked) continue;
+        const absolute = cwd ? `${cwd.replace(/[\\/]+$/, '')}/${relPath}` : relPath;
+        noteFileFrame(absolute);
+        // Bash / python 写盘没有 Write 帧,checkpoint 的改动清单是它们唯一的证据;
+        // 行数无从得知(这里只有路径),界面上就不显示写入量。
+        notePendingWrite(absolute, null);
+        frames.push({
+          id: typeof message.id === 'string' ? `${message.id}::${relPath}` : undefined,
+          timestamp: typeof message.timestamp === 'string' ? message.timestamp : undefined,
+          kind: 'changed_file',
+          toolName: 'Write',
+          toolInput: { file_path: absolute },
+          resultContent: 'checkpoint',
+          resultIsError: false,
+        });
+      }
+      continue;
+    }
+
+    // 回合边界。助手正文 = 更新锚点(只记住,不结算 —— 后面可能还有正文);
+    // 用户发言 = 上一轮到此为止,先结算再开新一轮。没有锚点的那些产出就不出卡片
+    // (它们仍在会话级产出表里,只是没有"这一轮"的落点)。
+    if (message.kind === 'text') {
+      const messageId = typeof message.id === 'string' ? message.id : '';
+      const hasContent = typeof message.content === 'string' && message.content.trim().length > 0;
+      if (message.role === 'assistant' && hasContent) {
+        if (messageId) pendingAnchorId = messageId;
+      } else if (message.role === 'user') {
+        flushTurn();
+      }
+      continue;
+    }
+
+    if (message.kind !== 'tool_use') continue;
+    const toolName = typeof message.toolName === 'string' ? message.toolName : '';
+    if (!WORK_TOOL_NAMES.has(toolName)) continue;
+    const paired = message.toolResult
+      ?? (message.toolId ? resultByToolId.get(message.toolId) : undefined);
+    const frame: SessionWorkFrame = {
+      id: typeof message.id === 'string' ? message.id : undefined,
+      timestamp: typeof message.timestamp === 'string' ? message.timestamp : undefined,
+      toolName,
+      toolInput: message.toolInput ?? null,
+      resultContent: typeof paired?.content === 'string' ? paired.content : null,
+      resultIsError: Boolean(paired?.isError),
+    };
+    if (toolName === 'Write' && frame.resultContent !== null && !frame.resultIsError) {
+      const written = frameFilePath(frame);
+      noteFileFrame(written);
+      const input = message.toolInput as { content?: unknown } | null | undefined;
+      notePendingWrite(written, input?.content);
+    }
+    frames.push(frame);
+  }
+  // 日志走完 = 最后一轮的边界。刚跑完的这一轮全靠这一句才有卡片。
+  flushTurn();
+
+  if (frames.length > MAX_WORK_FRAMES) {
+    return { frames: frames.slice(-MAX_WORK_FRAMES), revertedPaths: [...reverted], turnOutputs, truncated: true };
+  }
+  return { frames, revertedPaths: [...reverted], turnOutputs };
+}
+
 type CreateAppSessionResult = {
   sessionId: string;
   provider: LLMProvider;
@@ -225,20 +471,40 @@ export const sessionsService = {
      */
     const loggedCount = sessionMessagesDb.countForSession(sessionId);
     if (loggedCount > 0) {
+      const limit = options.limit ?? null;
+      const offset = options.offset ?? 0;
+
+      // dn-O1:带 limit 的分页请求(首屏 / 上翻 / 每轮 complete 的尾窗刷新,
+      // 也就是**全部热路径**)改走 SQL 尾页,不再整段读出 + 全量 parse 再切。
+      // 活跃回合里每个 durable 帧落库都会打穿指纹缓存,此前每轮刷新都是一次
+      // 全量重读 —— 长会话(数千行)一轮省一次整段读盘。
+      if (limit !== null) {
+        const page = sessionMessagesDb.listTailPage(sessionId, limit, offset);
+        return {
+          messages: page.messages.map((message) => ({ ...message, sessionId })),
+          total: page.total,
+          hasMore: page.hasMore,
+          offset,
+          limit,
+        };
+      }
+
+      // limit=null 的全量路径(搜索定位 / 加载全部)保持原样,继续吃指纹缓存。
       const logged = sessionMessagesDb.listForSession(sessionId);
-      const { page, hasMore } = sliceTailPage(logged, options.limit ?? null, options.offset ?? 0);
+      const { page, hasMore } = sliceTailPage(logged, null, offset);
       return {
         messages: page.map((message) => ({ ...message, sessionId })),
         total: logged.length,
         hasMore,
-        offset: options.offset ?? 0,
-        limit: options.limit ?? null,
+        offset,
+        limit,
       };
     }
 
     // App-created sessions that never produced a provider transcript yet
     // (e.g. first message still streaming) simply have no history.
     if (!session.provider_session_id) {
+      // (fetchWorkFrames 也依赖本方法的这条空历史路径。)
       return {
         messages: [],
         total: 0,
@@ -263,6 +529,17 @@ export const sessionsService = {
         sessionId,
       })),
     };
+  },
+
+  /**
+   * dq:工作面板帧 —— 全量历史(与 fetchHistory 同源:显示日志优先、老会话
+   * transcript 回放)滤出 TodoWrite/TaskCreate/TaskUpdate/Write 的 tool_use
+   * 行并配好结果。只在会话切换与回合结束各拉一次;全量 parse 有指纹缓存,
+   * 空闲期命中,回合结束与尾窗刷新共享同一次重建。
+   */
+  async fetchWorkFrames(sessionId: string): Promise<CollectedWorkFrames> {
+    const { messages } = await sessionsService.fetchHistory(sessionId, { limit: null, offset: 0 });
+    return collectWorkFrames(messages);
   },
 
 
@@ -446,17 +723,29 @@ export const sessionsService = {
 
     let deleted = 0;
     let failed = 0;
-    // 每轮都从 offset 0 取:删掉一批之后后面的会往前挪,固定翻页反而会跳过条目。
+    /**
+     * dv:游标按"这一页留下了几条"前进,而不是恒取 offset 0 + 空页即收工。
+     *
+     * 删掉的条目会让后面的往前挪,所以删成功的那部分不推进游标(下一轮读到的
+     * 就是新补上来的);**没删的**(不够旧、或删失败)则留在原位,必须跳过去,
+     * 否则:① 带 `olderThanDays` 时,只要最新那一页archived 全是近期的,
+     * `targets.length === 0` 就直接 break,后面真正够旧的一条都清不到 ——
+     * 清理静默地什么也没做;② 少量删不动的条目会把游标永远钉在原地。
+     */
+    let offset = 0;
     for (;;) {
-      const page = sessionsDb.getArchivedSessionsPage(visibilityScopeOf(viewer), MAX_ARCHIVED_PAGE_SIZE, 0);
+      const page = sessionsDb.getArchivedSessionsPage(
+        visibilityScopeOf(viewer), MAX_ARCHIVED_PAGE_SIZE, offset,
+      );
+      if (page.rows.length === 0) break;
+
       const targets = page.rows.filter((row) => {
         if (cutoff === null) return true;
         const stamp = Date.parse(row.updated_at ?? row.created_at ?? '');
         return Number.isFinite(stamp) && stamp < cutoff;
       });
-      if (targets.length === 0) break;
 
-      let progressed = false;
+      let deletedThisPage = 0;
       for (const row of targets) {
         try {
           await this.deleteOrArchiveSessionById(row.session_id, {
@@ -464,13 +753,16 @@ export const sessionsService = {
             deletedFromDisk: options.deletedFromDisk ?? true,
           });
           deleted += 1;
-          progressed = true;
+          deletedThisPage += 1;
         } catch {
           failed += 1;
         }
       }
-      // 一整页全失败就停,别转圈:再来一次拿到的还是同一批。
-      if (!progressed) break;
+
+      // 这一页留下来的条数 = 读到的 - 删掉的;游标跨过它们继续往后。
+      offset += page.rows.length - deletedThisPage;
+      // 整页读满且一条没删 → 继续翻;不满一页且没删 → 到底了。
+      if (deletedThisPage === 0 && page.rows.length < MAX_ARCHIVED_PAGE_SIZE) break;
     }
 
     return { deleted, failed };

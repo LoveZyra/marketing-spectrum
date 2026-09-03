@@ -99,11 +99,13 @@ export const TaskListContent: React.FC<TaskListContentProps> = ({ content }) => 
         </div>
       </div>
       <div className="space-y-px">
-        {tasks.map((task) => {
+        {tasks.map((task, index) => {
           const config = statusConfig[task.status] || statusConfig.pending;
           return (
             <div
-              key={task.id}
+              // dv:`task.id` 来自模型输出,不保证唯一(重复 id 会让 React 复用
+              // 错行:勾选状态串到别的任务上)。补上序号去歧义。
+              key={`${task.id ?? 'task'}-${index}`}
               className="group flex items-center gap-1.5 py-0.5"
             >
               <span className="flex-shrink-0">{config.icon}</span>

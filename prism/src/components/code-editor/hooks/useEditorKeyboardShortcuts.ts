@@ -3,12 +3,18 @@ import { useEffect } from 'react';
 type UseEditorKeyboardShortcutsParams = {
   onSave: () => void;
   onClose: () => void;
+  /**
+   * ec:Esc 的去处。不传就是 onClose(老行为);最大化时调用方传"还原",
+   * 让第一次 Esc 只退出最大化、第二次才关编辑器(见 utils/editorEscape.ts)。
+   */
+  onEscape?: () => void;
   dependency: string;
 };
 
 export const useEditorKeyboardShortcuts = ({
   onSave,
   onClose,
+  onEscape,
   dependency,
 }: UseEditorKeyboardShortcutsParams) => {
   useEffect(() => {
@@ -21,7 +27,7 @@ export const useEditorKeyboardShortcuts = ({
           return;
         }
         event.preventDefault();
-        onClose();
+        (onEscape ?? onClose)();
         return;
       }
 
@@ -39,5 +45,5 @@ export const useEditorKeyboardShortcuts = ({
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [dependency, onClose, onSave]);
+  }, [dependency, onClose, onEscape, onSave]);
 };

@@ -6,6 +6,7 @@ import {
   FilePlus2,
   FolderSearch,
   Globe,
+  ChevronDown,
   ChevronRight,
   ListChecks,
   MessageSquareText,
@@ -23,13 +24,12 @@ import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult } f
 import type { Project } from '../../../../types/app';
 import type { ToolGroupItem } from '../../utils/toolGrouping';
 import type { ActivityIconKey, ActivityVerb } from '../../utils/toolRowSummary';
-import { ACTIVITY_TAIL_ROWS, planActivityFold, summarizeActivityRun, summarizeToolRow, toolTarget } from '../../utils/toolRowSummary';
+import { ACTIVITY_TAIL_ROWS, formatRunDuration, planActivityFold, summarizeActivityRun, summarizeToolRow, toolTarget } from '../../utils/toolRowSummary';
 import { cn } from '../../../../lib/utils';
 import { ClampedBlock } from '../../../../shared/view/ui';
 
 import MessageComponent from './MessageComponent';
 import { Markdown } from './Markdown';
-import MessageCopyControl from './MessageCopyControl';
 
 type DiffLine = {
   type: string;
@@ -108,9 +108,9 @@ const SUMMARY_TEXT: Record<ActivityIconKey, { key: string; fallback: string }> =
  *
  * 两种情况都点抬头展开全部。进行中且不足 3 步的段全摊着,没什么可折的。
  *
- * 竖线是靠每行图标列里的两截线拼出来的:图标上方固定 8px、下方 `flex-1` 撑到行底。
- * 首行不画上截、末行不画下截,于是线正好起于第一个图标、止于最后一个图标;
- * 某一行展开后,它的下截会自然拉长,竖线继续贯穿展开区,不会断。
+ * 竖线是每行图标下方那一截拼出来的:`flex-1` 撑到本行底部,末行不画。于是线
+ * 正好起于第一个图标、止于最后一个图标;某一行展开后,它这一截自然拉长,
+ * 竖线继续贯穿展开区,不会断(ej 修:此前写死 10px,展开就断)。
  *
  * 每行只给一句人话(工具自带 description 就用它),原始命令、参数、输出都收在
  * 展开区里 —— 展开走的还是既有的 MessageComponent,渲染能力一项不减。
@@ -161,6 +161,8 @@ function ActivityTimeline({
   // 折不折看的是**回合有没有结束**,而不是这一段里还有没有工具在跑 ——
   // 后者会在最后一个工具刚返回、正文还没开始写的那一刻把整段塌掉(见 planActivityFold)。
   const hasRunning = rows.some((row) => row.summary?.status === 'running');
+  // 抬头右端的整段耗时:把各行耗时加起来(没有一行报出耗时就不显示)。
+  const runDuration = useMemo(() => formatRunDuration(group.messages), [group.messages]);
   const keepTail = hasRunning || sessionIsProcessing;
   const { visibleCount, foldedCount, canFold, showSummary } = planActivityFold(rows.length, keepTail);
   const collapsedRows = visibleCount === 0 ? [] : rows.slice(rows.length - visibleCount);
@@ -190,22 +192,34 @@ function ActivityTimeline({
   return (
     <div className="chat-message tool px-3 sm:px-0" data-message-timestamp={group.timestamp || undefined}>
       {/* 整段小结:一句话说清这一轮干了什么。上面还压着更早的步骤时,
-          这一行就是那些步骤的入口(点开=展开全部,再点=收回到最新 3 步)。 */}
+          这一行就是那些步骤的入口(点开=展开全部,再点=收回到最新 3 步)。
+          ei:**不套白框**。eg 那轮按 mockup 给它加了卡片外框,实机看下来那是给
+          对话流凭空多加一层容器 —— 一轮里可能有好几段活动,几个白框摞在正文之间
+          比内容本身还抢眼。回到一行次级墨色的纯文本(Cowork 的做法),
+          容器交给消息本身。 */}
       {showSummary && (canFold ? (
         <button
           type="button"
+          data-activity-summary
           onClick={() => setIsRunOpen((current) => !current)}
           aria-expanded={isRunOpen}
-          className="group flex w-full items-center gap-1.5 py-1.5 text-left text-[13px] leading-5 text-muted-foreground transition-colors hover:text-foreground"
+          className="group flex w-full items-center gap-2 py-1.5 text-left text-[13px] leading-5 text-muted-foreground transition-colors hover:text-foreground"
         >
-          <ChevronRight
-            className={cn('h-3.5 w-3.5 flex-none transition-transform', isRunOpen && 'rotate-90')}
-            strokeWidth={2}
-            aria-hidden
-          />
-          <span className="min-w-0 truncate">{summaryText}</span>
-          {/* 整段收起时不给「+N」—— 抬头那句话本身已经把这一轮说完了;
-              只有"上面还压着一截"的半折状态才需要标出被折了多少。 */}
+          {isRunOpen
+            ? <ChevronDown className="h-3.5 w-3.5 flex-none text-muted-foreground" aria-hidden />
+            : <ChevronRight className="h-3.5 w-3.5 flex-none text-muted-foreground" aria-hidden />}
+          <span className="min-w-0 flex-1 truncate">{summaryText}</span>
+          {/* 右端:跑完给整段耗时(设计稿),还在跑给进行中标记;
+              半折状态(上面还压着一截)则标出被折了多少。 */}
+          {runDuration && !isRunOpen && collapsedRows.length === 0 && (
+            <span className="flex-none font-mono text-[11px] text-muted-foreground">{runDuration}</span>
+          )}
+          {hasRunning && (
+            <span className="flex flex-none items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+              <span className="prism-dot h-1.5 w-1.5 flex-none bg-primary" aria-hidden />
+              {t('activity.running', { defaultValue: '运行中' })}
+            </span>
+          )}
           {(isRunOpen || collapsedRows.length > 0) && (
             <span className="flex-none font-mono text-[11px] text-muted-foreground">
               {isRunOpen
@@ -215,20 +229,26 @@ function ActivityTimeline({
           )}
         </button>
       ) : (
-        <div className="flex w-full items-center gap-1.5 py-1.5 pl-[19px] text-[13px] leading-5 text-muted-foreground">
-          <span className="min-w-0 truncate">{summaryText}</span>
+        <div className="flex w-full items-center gap-2 py-1.5 pl-[22px] text-[13px] leading-5 text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">{summaryText}</span>
+          {runDuration && (
+            <span className="flex-none font-mono text-[11px] text-muted-foreground">{runDuration}</span>
+          )}
         </div>
       ))}
 
       <div
         className={cn('prism-activity-rows', rowsCollapsed && 'is-collapsed')}
         aria-hidden={rowsCollapsed || undefined}
+        // 收起的行留在 DOM 里做高度过渡,但对键盘和读屏必须真正不存在:
+        // aria-hidden 挡不住 Tab 焦点落进看不见的按钮。inert 经 ref 设置,
+        // 因为 React 18 还不认布尔的 inert 属性。
+        ref={(el) => { if (el) el.inert = rowsCollapsed; }}
       >
-      <div className="min-h-0 overflow-hidden">
+      <div className="min-h-0 overflow-hidden pt-0.5">
       {visibleRows.map((row, position) => {
+        const isLastRow = position === visibleRows.length - 1;
         const index = row.index;
-        const isFirst = position === 0;
-        const isLast = position === visibleRows.length - 1;
         const isExpanded = expandedKeys.has(row.key);
         const summary = row.summary;
 
@@ -237,43 +257,44 @@ function ActivityTimeline({
         if (row.kind === 'narration') {
           const narrationText = String(row.message.content || '');
           return (
-            <div key={row.key} className="flex items-start gap-2.5">
-              <span className="flex w-[18px] flex-none flex-col items-center self-stretch" aria-hidden>
-                <span
-                  className={cn('h-3 w-px flex-none', isFirst ? 'bg-transparent' : 'prism-rail-line')}
-                  data-state="charged"
-                />
-                <span className="flex h-4 w-4 flex-none items-center justify-center">
+            <div key={row.key} className="flex gap-2">
+              {/*
+                ek:圆点要和正文**第一行的中心**对齐,所以这一格的高度得跟着正文算:
+                正文 `py-1.5`(6px)+ 13.5px/22 的首行 → 中心在 6 + 11 = 17px,
+                格高 34px 时圆点正好落在那儿。此前写的是 26px(格中心 13px),
+                圆点比字高了 4px —— 探针量出来就是 −4(用户截图里看得出来)。
+              */}
+              <span className="flex w-4 flex-none flex-col items-center" aria-hidden>
+                <span className="flex h-[34px] items-center justify-center">
                   <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
                 </span>
-                <span
-                  className={cn('w-px flex-1', isLast ? 'bg-transparent' : 'prism-rail-line')}
-                  data-state="charged"
-                />
+                {!isLastRow && <span className="prism-activity-link min-h-[10px] w-px flex-1" />}
               </span>
 
-              <div className="group/narration min-w-0 flex-1 py-1.5">
+              {/* ej:复制只留 ClampedBlock 右上角那一枚。这里原本在正文下面又挂了
+                  一个 MessageCopyControl,同一段话两个复制按钮(用户截图)——
+                  一个悬停出现在右上、一个常驻在左下,谁也说不清有什么区别。 */}
+              <div className="min-w-0 flex-1 py-1.5">
                 <ClampedBlock maxHeight={320} copyText={narrationText}>
                   <Markdown className="prose prose-sm max-w-none font-sans text-[13.5px] leading-[22px] text-body dark:prose-invert">
                     {narrationText}
                   </Markdown>
                 </ClampedBlock>
-                <div className="mt-1 flex items-center text-[11px] opacity-0 transition-opacity focus-within:opacity-100 group-hover/narration:opacity-100">
-                  <MessageCopyControl content={narrationText} messageType="assistant" />
-                </div>
               </div>
             </div>
           );
         }
 
         const iconKey: ActivityIconKey = summary ? summary.icon : 'thinking';
+        /**
+         * 行首图标 = **工具类型**(读=书、写=加号文件、执行=终端…),失败换 XCircle。
+         *
+         * eh:eg 那轮改成过一列 ✓ / ◌ / ✕ 的状态图标,试下来是丢信息 ——
+         * 扫一眼看不出这一段里都动用了什么。**状态交给颜色**(这也是竖线时代
+         * 就在用的那套):进行中 = 强调紫,跑完 = 次级墨色,失败 = 红。
+         * 竖线不恢复:抬头卡片已经把这一段框起来了,里面再画一条贯穿线是第二层框。
+         */
         const Icon = summary?.status === 'error' ? XCircle : ICONS[iconKey];
-
-        // 竖线的「充能」:某一步跑完,它下面那截线就亮起来(深色下是自上而下
-        // 的强调色渐变,淡色下仍是一条普通发丝线)。还没轮到的那截保持暗。
-        const isRowDone = summary ? summary.status !== 'running' : true;
-        const prevDone = index > 0 && rows[index - 1].summary?.status !== 'running';
-        const railState = (done: boolean) => (done ? 'charged' : 'pending');
 
         const label = summary
           ? summary.label.description
@@ -293,24 +314,32 @@ function ActivityTimeline({
           : t('activity.thinking', { defaultValue: '思考' });
 
         return (
-          <div key={row.key} className="flex items-start gap-2.5">
-            {/* 图标列:上截 8px 对齐文字中线,下截撑满整行(含展开区) */}
-            <span className="flex w-[18px] flex-none flex-col items-center self-stretch" aria-hidden>
-              <span
-                className={cn('h-3 w-px flex-none', isFirst ? 'bg-transparent' : 'prism-rail-line')}
-                data-state={railState(prevDone)}
-              />
+          <div key={row.key} className="flex gap-2">
+            {/*
+              图标列:图标 + 图标下方的连接线(最后一行不画)。
+              eh:这是 Cowork 那种「竖线把相邻两步串起来」的连法 —— 只连相邻两个
+              图标之间的空档,不是 eg 之前那条贯穿整段的长轨(长轨在抬头卡片里
+              等于第二层框)。
+              ej:连接线由固定 10px 改成 `flex-1`(行不再 items-start,图标列跟着
+              行高撑满)。之前展开某一行,行高涨了几百像素、线还是那 10px,
+              线就在展开区顶上断成一小截、下一个图标孤零零挂在下面(用户截图)。
+              现在展开多高、线就跟到多高,始终把上下两个图标连起来。
+            */}
+            <span className="flex w-4 flex-none flex-col items-center" aria-hidden>
+              <span className="flex h-[30px] items-center justify-center">
               <Icon
                 className={cn(
                   'h-4 w-4 flex-none',
-                  summary?.status === 'running' ? 'text-primary' : 'text-muted-foreground',
+                  summary?.status === 'error'
+                    ? 'text-destructive'
+                    : summary?.status === 'running'
+                      ? 'text-primary'
+                      : 'text-muted-foreground',
                 )}
                 strokeWidth={2}
               />
-              <span
-                className={cn('w-px flex-1', isLast ? 'bg-transparent' : 'prism-rail-line')}
-                data-state={railState(isRowDone)}
-              />
+              </span>
+              {!isLastRow && <span className="prism-activity-link min-h-[10px] w-px flex-1" />}
             </span>
 
             <div className="min-w-0 flex-1">
@@ -318,7 +347,7 @@ function ActivityTimeline({
                 type="button"
                 onClick={() => toggle(row.key)}
                 aria-expanded={isExpanded}
-                className="group flex w-full items-center gap-2.5 py-2.5 text-left"
+                className="group flex w-full items-center gap-2.5 py-[5px] text-left"
               >
                 <span
                   className="min-w-0 flex-1 truncate text-[13px] leading-5 text-body transition-colors group-hover:text-foreground"
@@ -353,25 +382,18 @@ function ActivityTimeline({
               {isExpanded && (
                 <div className="pb-2 pt-0.5">
                   {row.message.isThinking ? (
-                    <>
-                      {/* 思考是旁注不是正文:压一档字号与颜色,左侧留发丝线,
-                          太长先折 10 行左右,底下给「展开全部」。 */}
-                      <ClampedBlock
-                        maxHeight={220}
-                        copyText={String(row.message.content || '')}
-                        contentClassName="border-l border-border pl-3"
-                      >
-                        <Markdown className="prose prose-sm max-w-none font-sans text-[13px] leading-[21px] text-muted-foreground dark:prose-invert">
-                          {String(row.message.content || '')}
-                        </Markdown>
-                      </ClampedBlock>
-                      <div className="mt-2 flex items-center text-[11px]">
-                        <MessageCopyControl
-                          content={String(row.message.content || '')}
-                          messageType="assistant"
-                        />
-                      </div>
-                    </>
+                    /* 思考是旁注不是正文:压一档字号与颜色,左侧留发丝线,
+                       太长先折 10 行左右,底下给「展开全部」。复制同样只留
+                       ClampedBlock 右上角那一枚(ej)。 */
+                    <ClampedBlock
+                      maxHeight={220}
+                      copyText={String(row.message.content || '')}
+                      contentClassName="border-l border-border pl-3"
+                    >
+                      <Markdown className="prose prose-sm max-w-none font-sans text-[13px] leading-[21px] text-muted-foreground dark:prose-invert">
+                        {String(row.message.content || '')}
+                      </Markdown>
+                    </ClampedBlock>
                   ) : (
                     <MessageComponent
                       bare

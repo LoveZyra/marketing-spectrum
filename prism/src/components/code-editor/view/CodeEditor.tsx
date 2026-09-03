@@ -14,6 +14,7 @@ import type { CodeEditorFile } from '../types/types';
 import { setEditorDirty } from '../utils/editorDirtyState';
 import { createMinimapExtension, createScrollToFirstChunkExtension, getLanguageExtensions } from '../utils/editorExtensions';
 import { getEditorStyles } from '../utils/editorStyles';
+import { resolveEditorEscapeAction } from '../utils/editorEscape';
 import { createEditorToolbarPanelExtension } from '../utils/editorToolbarPanel';
 
 import CodeEditorFooter from './subcomponents/CodeEditorFooter';
@@ -122,6 +123,23 @@ export default function CodeEditor({
   }, [file.name]);
 
   /**
+   * eh:**能渲染的文件,点开就是渲染后的样子**。
+   *
+   * notebook 早就是这个约定(上面的 notebookRaw),markdown 与 html 却还默认落在
+   * 源码上 —— 用户点开一份报告 / 一张网页,第一眼看到的是标签和井号,得再找一次
+   * 那枚眼睛。图片 / PDF / 音视频走的是另一条分支(CodeEditorMediaPreview),本来
+   * 就是渲染。现在三类文本渲染视图统一:进来先看结果,要改再切源码。
+   *
+   * 依赖里带 `file.path`:换文件时重置,不把上一份的"我切到源码了"粘过来。
+   */
+  useEffect(() => {
+    // 换文件时先归零再按类型给默认值,顺带兜掉"上一份的预览挂在新文件名下"
+    // 这件事(这也是原来那个 setHtmlPreview(false) 的职责,已合并到这里)。
+    setMarkdownPreview(isMarkdownFile);
+    setHtmlPreview(isHtmlPreviewFile);
+  }, [file.path, isMarkdownFile, isHtmlPreviewFile]);
+
+  /**
    * Project-relative path of the open file.
    *
    * The preview ticket is minted against the project root, so an absolute path
@@ -143,12 +161,6 @@ export default function CodeEditor({
     relPath: previewRelPath,
     enabled: htmlPreview && isHtmlPreviewFile,
   });
-
-  // Switching to a different file must not leave the previous file's preview
-  // showing under the new file's name.
-  useEffect(() => {
-    setHtmlPreview(false);
-  }, [file.path]);
 
   const minimapExtension = useMemo(
     () => (
@@ -176,7 +188,9 @@ export default function CodeEditor({
         isExpanded,
         onToggleDiff: () => setShowDiff((previous) => !previous),
         onPopOut,
-        onToggleExpand,
+        // ec:「最大化 / 还原」搬到了头部(所有文件形态共用),CodeMirror 工具条
+        // 上不再放第二个同款按钮;这里只剩 diff 与弹出。
+        onToggleExpand: null,
         labels: {
           changes: t('toolbar.changes'),
           previousChange: t('toolbar.previousChange'),
@@ -188,8 +202,20 @@ export default function CodeEditor({
         },
       })
     ),
-    [file, isExpanded, isSidebar, onPopOut, onToggleExpand, showDiff, t],
+    [file, isExpanded, isSidebar, onPopOut, showDiff, t],
   );
+
+  // ec:最大化时第一次 Esc 只还原,第二次才关(见 utils/editorEscape.ts)。
+  const escapeAction = resolveEditorEscapeAction({
+    isSidebar,
+    isExpanded,
+    hasToggleExpand: Boolean(onToggleExpand),
+  });
+  const handleEscape = escapeAction === 'restore' && onToggleExpand ? onToggleExpand : onClose;
+  const maximizeLabels = {
+    maximize: t('actions.maximize', '最大化'),
+    restore: t('actions.restore', '还原'),
+  };
 
   const extensions = useMemo(() => {
     const allExtensions: Extension[] = [
@@ -229,6 +255,7 @@ export default function CodeEditor({
   useEditorKeyboardShortcuts({
     onSave: handleSave,
     onClose,
+    onEscape: handleEscape,
     dependency: content,
   });
 
@@ -252,6 +279,8 @@ export default function CodeEditor({
         projectId={fileProjectId}
         isSidebar={isSidebar}
         isFullscreen={isFullscreen}
+        isExpanded={isExpanded}
+        onToggleExpand={onToggleExpand}
         onClose={onClose}
         onToggleFullscreen={() => setIsFullscreen((previous) => !previous)}
         labels={{
@@ -260,6 +289,7 @@ export default function CodeEditor({
           openInNewTab: t('filePreview.openInNewTab', 'Open in new tab'),
           fullscreen: t('actions.fullscreen', 'Fullscreen'),
           exitFullscreen: t('actions.exitFullscreen', 'Exit fullscreen'),
+          ...maximizeLabels,
           close: t('actions.close', 'Close'),
         }}
       />
@@ -273,6 +303,10 @@ export default function CodeEditor({
         file={file}
         isSidebar={isSidebar}
         isFullscreen={isFullscreen}
+        isExpanded={isExpanded}
+        onToggleExpand={onToggleExpand}
+        maximizeLabel={maximizeLabels.maximize}
+        restoreLabel={maximizeLabels.restore}
         onClose={onClose}
         onToggleFullscreen={() => setIsFullscreen((previous) => !previous)}
         title={t('binaryFile.title', 'Binary File')}
@@ -308,7 +342,8 @@ export default function CodeEditor({
             notebookRaw={notebookRaw}
             saving={saving}
             saveSuccess={saveSuccess}
-            canSave={!isDiffView}
+            // ei:会话产出通道是只读的(项目目录之外的产出),保存按钮不渲染。
+            canSave={!isDiffView && !file.outputSessionId}
             onToggleMarkdownPreview={() => setMarkdownPreview((previous) => !previous)}
             onToggleHtmlPreview={() => setHtmlPreview((previous) => !previous)}
             onToggleNotebookRaw={() => setNotebookRaw((previous) => !previous)}
@@ -317,6 +352,8 @@ export default function CodeEditor({
             onDownload={handleDownload}
             onSave={handleSave}
             onToggleFullscreen={() => setIsFullscreen((previous) => !previous)}
+            isExpanded={isExpanded}
+            onToggleExpand={onToggleExpand}
             onClose={onClose}
             labels={{
               showingChanges: t('header.showingChanges'),
@@ -334,6 +371,7 @@ export default function CodeEditor({
               saved: t('actions.saved'),
               fullscreen: t('actions.fullscreen'),
               exitFullscreen: t('actions.exitFullscreen'),
+              ...maximizeLabels,
               close: t('actions.close'),
             }}
           />

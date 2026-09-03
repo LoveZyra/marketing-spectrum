@@ -22,6 +22,41 @@ let mermaidModulePromise: Promise<typeof import('mermaid')> | null = null;
 let renderCounter = 0;
 let initializedTheme: string | null = null;
 
+/**
+ * dn-O2:渲染结果缓存(code+theme → svg,模块级,LRU 上限 50)。
+ *
+ * 同一张图在窗口进出、列表重挂载、切会话回来时都会重新走 parse+render ——
+ * 每次都是一轮异步、一次占位/放开的高度过渡。缓存命中就同步拿到 svg,
+ * 首帧即终态,占位逻辑整个短路。切主题 key 不同,天然各存一份。
+ */
+const svgCache = new Map<string, string>();
+const SVG_CACHE_MAX = 50;
+
+function cacheKey(code: string, dark: boolean): string {
+  return `${dark ? 'dark' : 'light'}::${code}`;
+}
+
+function readCachedSvg(code: string, dark: boolean): string | null {
+  const key = cacheKey(code, dark);
+  const hit = svgCache.get(key);
+  if (hit === undefined) return null;
+  // 刷新 LRU 近度
+  svgCache.delete(key);
+  svgCache.set(key, hit);
+  return hit;
+}
+
+function writeCachedSvg(code: string, dark: boolean, svg: string): void {
+  const key = cacheKey(code, dark);
+  svgCache.delete(key);
+  svgCache.set(key, svg);
+  while (svgCache.size > SVG_CACHE_MAX) {
+    const oldest = svgCache.keys().next().value;
+    if (oldest === undefined) break;
+    svgCache.delete(oldest);
+  }
+}
+
 async function loadMermaid(dark: boolean) {
   if (!mermaidModulePromise) {
     mermaidModulePromise = import('mermaid');
@@ -45,7 +80,8 @@ type MermaidDiagramProps = {
 export default function MermaidDiagram({ code, fallback }: MermaidDiagramProps) {
   const { t } = useTranslation('chat');
   const { isDarkMode } = useTheme();
-  const [svg, setSvg] = useState<string | null>(null);
+  // 缓存命中时首帧就是终态 —— 不走占位、不走异步渲染。
+  const [svg, setSvg] = useState<string | null>(() => readCachedSvg(code, isDarkMode));
   const [failed, setFailed] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   /**
@@ -81,6 +117,12 @@ export default function MermaidDiagram({ code, fallback }: MermaidDiagramProps) 
   useEffect(() => {
     let cancelled = false;
     setFailed(false);
+    // dn-O2:code/theme 变化先查缓存 —— 命中就同步落位,跳过整轮异步渲染。
+    const cached = readCachedSvg(code, isDarkMode);
+    if (cached !== null) {
+      setSvg(cached);
+      return undefined;
+    }
     (async () => {
       try {
         const mermaid = await loadMermaid(isDarkMode);
@@ -88,6 +130,7 @@ export default function MermaidDiagram({ code, fallback }: MermaidDiagramProps) 
         await mermaid.parse(code);
         renderCounter += 1;
         const { svg: rendered } = await mermaid.render(`prism-mermaid-${renderCounter}`, code);
+        writeCachedSvg(code, isDarkMode, rendered);
         if (!cancelled) setSvg(rendered);
       } catch {
         if (!cancelled) {

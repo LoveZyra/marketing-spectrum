@@ -45,6 +45,11 @@ const MAX_UNTRACKED_FILES = 2000;
 const MAX_UNTRACKED_BYTES = 200 * 1024 * 1024; // 200MB snapshot budget per checkpoint
 const DIFF_FILE_LIMIT = 80_000; // per-file unified diff cap (chars)
 const DIFF_TURN_LIMIT = 240_000; // whole-turn diff cap (chars)
+/**
+ * dv:为了数行数而整份读进内存的上限。超过这个大小的新增文件只报路径,
+ * 不报行数 —— 见 changedFilesSince 里的说明。
+ */
+const COUNT_LINES_MAX_BYTES = 2 * 1024 * 1024;
 const CHECKPOINT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // prune checkpoints older than 7 days
 const MAX_CHECKPOINTS_PER_SESSION = 40;
 const MAX_REPORTED_COMMITS = 20; // commit details listed in a COMMITS_AFTER_CHECKPOINT refusal
@@ -53,6 +58,8 @@ const REUSE_SCAN_LIMIT = 200; // newest checkpoint dirs scanned when looking for
 /** Reasons a checkpoint snapshot can be incomplete (meta.incompleteReason). */
 export const INCOMPLETE_TOO_MANY_UNTRACKED = 'too_many_untracked';
 export const INCOMPLETE_UNTRACKED_BYTES_BUDGET = 'untracked_bytes_budget';
+/** dv:个别未跟踪文件没能快照下来(被删/无权限/磁盘满)。 */
+export const INCOMPLETE_SNAPSHOT_FAILED = 'untracked_snapshot_failed';
 
 /** `cp-<base36 毫秒>-<hex>` → 毫秒时间戳;不是 checkpoint 目录名就返回 null。 */
 function checkpointIdTime(name) {
@@ -273,15 +280,27 @@ export function parseNameStatusZ(output) {
  *   every file's CONTENT was saved; a restore could not put the tree back
  *   faithfully, and per-file provenance can't be verified.
  *
- * @param {{ untrackedCount: number, budgetExhausted: boolean, maxFiles?: number }} input
+ * @param {{ untrackedCount: number, budgetExhausted: boolean, maxFiles?: number,
+ *           failedCount?: number }} input
  * @returns {{ incomplete: boolean, reason: string|null }}
  */
-export function assessSnapshotCompleteness({ untrackedCount, budgetExhausted, maxFiles = MAX_UNTRACKED_FILES }) {
+export function assessSnapshotCompleteness({
+  untrackedCount, budgetExhausted, maxFiles = MAX_UNTRACKED_FILES, failedCount = 0,
+}) {
   if (untrackedCount > maxFiles) {
     return { incomplete: true, reason: INCOMPLETE_TOO_MANY_UNTRACKED };
   }
   if (budgetExhausted) {
     return { incomplete: true, reason: INCOMPLETE_UNTRACKED_BYTES_BUDGET };
+  }
+  /**
+   * dv:哪怕只有一个文件没快照成功,keep-set 就不再可信 —— 回滚时它既不会被
+   * 删(在 keep-set 里)也不会被还原(不在 stored 里),工作区留着 agent 那
+   * 一版而接口报成功。判为 incomplete 之后,回滚走"不删未跟踪 + 需要显式
+   * force"那条更保守的路,与文件头的事务性承诺一致。
+   */
+  if (failedCount > 0) {
+    return { incomplete: true, reason: INCOMPLETE_SNAPSHOT_FAILED };
   }
   return { incomplete: false, reason: null };
 }
@@ -318,6 +337,8 @@ async function snapshotUntracked(cwd, checkpointDir, paths, { startBytes = 0, ma
   let totalBytes = startBytes;
   let budgetExhausted = false;
   let linked = 0;
+  /** dv:快照失败的文件(见下方 catch)—— 调用方据此判 incomplete。 */
+  const failed = [];
 
   for (const relPath of paths) {
     const source = path.join(cwd, relPath);
@@ -365,11 +386,18 @@ async function snapshotUntracked(cwd, checkpointDir, paths, { startBytes = 0, ma
       await fs.copyFile(source, target);
       stored.push(entry);
     } catch (error) {
+      // dv:失败的文件要**记名**。原来只 warn 一声就过,而它仍留在
+      // `meta.untracked`(keep-set)里 —— 于是 restore 时两头落空:
+      // removeUntrackedCreatedAfter 因为它在 keep-set 里不删,
+      // restoreUntrackedSnapshot 因为它不在 stored 里不还原,工作区就留着
+      // agent 改过的那一版,而接口报 ok:true。与文件头"Restore is
+      // transactional"的承诺不符。现在报上去,由调用方并入 incomplete 判定。
+      failed.push(relPath);
       console.warn(`[Checkpoint] Skipping untracked snapshot for ${relPath}:`, error.message);
     }
   }
 
-  return { stored, totalBytes, budgetExhausted, linked };
+  return { stored, totalBytes, budgetExhausted, linked, failed };
 }
 
 /**
@@ -494,6 +522,7 @@ async function createCheckpointLocked(cwd, context = {}) {
   const completeness = assessSnapshotCompleteness({
     untrackedCount: untracked.length,
     budgetExhausted: snapshot.budgetExhausted,
+    failedCount: snapshot.failed?.length ?? 0,
   });
 
   const hasSubmodules = await detectSubmodules(cwd);
@@ -718,6 +747,22 @@ export async function restoreCheckpoint(id, options = {}) {
   }
 
   return withCwdLock(cwd, async () => {
+    /**
+     * dv:**进锁之后**再确认一次"没有回合在跑"。
+     *
+     * 路由层那次检查发生在拿锁之前,而这之后还要算改动清单、做安全 checkpoint
+     * (含 200MB 预算的未跟踪快照)才真正 `reset --hard` —— 中间几秒到几分钟。
+     * 聊天回合并不走 cwd 锁,所以那段窗口里任何人 `chat.send`,都能让 CLI 与
+     * `reset --hard` 同时写同一棵树:CLI 刚写完的文件被抹掉,或者留下半新半旧
+     * 的树,而回滚接口报成功。这里复查一次把窗口压到与 reset 相邻。
+     */
+    if (typeof options.assertNotBusy === 'function') {
+      const busy = await options.assertNotBusy(meta);
+      if (busy) {
+        return { ok: false, status: 409, code: 'DIRECTORY_BUSY', ...busy };
+      }
+    }
+
     // ---- pre-flight gates (each bypassable with force, but always reported) ----
     const commitInfo = await commitsSinceCheckpoint(cwd, meta.head);
     const blockerCodes = [];
@@ -883,8 +928,21 @@ export async function changedFilesSince(id) {
     if (knownUntracked.has(relPath)) continue;
     let additions = null;
     try {
-      const content = await fs.readFile(path.join(cwd, relPath), 'utf8');
-      additions = content.split('\n').length;
+      /**
+       * dv:先 stat 看大小,超过阈值就不读。
+       *
+       * 这里原来是无上限 `readFile` + `split('\n')`,只为数一个行数 ——
+       * agent 生成一个几百 MB 的日志/CSV/dump 且没被 .gitignore 盖住的话,
+       * **此后每个回合**的改动汇总都会把它整份读进内存(一份 Buffer + 一份
+       * string + 一个百万级数组),直到它被提交或删掉;`/changes` 与
+       * `/restore` 两条路由走同一段代码,可被反复触发。行数只是展示用的
+       * 附加信息,拿不到就报 null(前端本来就按 null 处理)。
+       */
+      const stat = await fs.stat(path.join(cwd, relPath));
+      if (stat.size <= COUNT_LINES_MAX_BYTES) {
+        const content = await fs.readFile(path.join(cwd, relPath), 'utf8');
+        additions = content.split('\n').length;
+      }
     } catch { /* binary or unreadable */ }
     files.push({ path: relPath, additions, deletions: 0, status: 'added', untracked: true });
   }
@@ -946,7 +1004,7 @@ export async function changedFilesSince(id) {
  * diff. `git apply --reverse --check` validates before touching anything.
  * Serialized against restore/create on the same directory.
  */
-export async function revertFile(id, relPath) {
+export async function revertFile(id, relPath, options = {}) {
   const meta = await readCheckpoint(id);
   if (!meta) return { ok: false, error: 'Checkpoint not found' };
   const cwd = meta.cwd;
@@ -955,6 +1013,12 @@ export async function revertFile(id, relPath) {
   }
 
   return withCwdLock(cwd, async () => {
+    // dv:同 restore —— 进锁后复查一次"没有回合在跑"(见那边的说明)。
+    if (typeof options.assertNotBusy === 'function') {
+      const busy = await options.assertNotBusy(meta);
+      if (busy) return { ok: false, status: 409, code: 'DIRECTORY_BUSY', ...busy };
+    }
+
     const { files } = await changedFilesSince(id);
     const file = files.find((entry) => entry.path === relPath);
     if (!file) return { ok: false, error: 'File has no changes relative to the checkpoint' };
@@ -995,7 +1059,17 @@ export async function pruneCheckpoints() {
   const now = Date.now();
 
   for (const meta of all) {
-    const key = meta.appSessionId || meta.sessionId || 'unknown';
+    /**
+     * du:没有会话 id 的 checkpoint 按 **cwd** 分桶,不再挤进一个全局
+     * `'unknown'` 桶。
+     *
+     * `sessionId` 只在回合**成功**时由 updateCheckpointSession 回填 ——
+     * 一次性回退、回合失败或中止的那些 checkpoint 永远是 null。多人服务器上
+     * 它们此前全落进同一个桶,按全局时间倒序数到第 40 个就删:A 用户几分钟前
+     * 那次失败回合的回滚点,会被 B 用户的新 checkpoint 挤掉(还在 TTL 内就
+     * 被静默销毁)。按 cwd 分桶后,每个项目各数各的,不同用户不同项目互不影响。
+     */
+    const key = meta.appSessionId || meta.sessionId || `cwd:${meta.cwd || 'unknown'}`;
     if (!bySession.has(key)) bySession.set(key, []);
     bySession.get(key).push(meta);
   }

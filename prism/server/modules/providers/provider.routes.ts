@@ -19,6 +19,7 @@ import { providerMcpService } from '@/modules/providers/services/mcp.service.js'
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
+import { assertViewerMayCreateSessionAt } from '@/modules/providers/services/session-project-path-guard.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
 import { issueSseTicket } from '@/shared/sse-tickets.js';
 import type {
@@ -695,6 +696,10 @@ router.post(
     const body = (req.body ?? {}) as Record<string, unknown>;
     const provider = parseProvider(body.provider);
     const projectPath = typeof body.projectPath === 'string' ? body.projectPath : '';
+    // dz:路径合法(挡越界)+ 项目可见(挡越权),与任务路由同一道门。
+    // 没有它,任何登录用户 POST 一个 projectPath:"/" 就成了根目录项目的 owner
+    // (实测),文件树、聊天 cwd 随之全盘放开。见 session-project-path-guard。
+    await assertViewerMayCreateSessionAt(readRequestViewer(req), projectPath);
     // 建会话的人就是项目的 owner。不传的话项目 owner 为 NULL,而 NULL 的语义是
     // "公共项目" —— 新会话所在的目录会直接出现在所有人的侧栏里。
     const ownerUserId = typeof req.user?.id === 'number' ? req.user.id : null;
@@ -891,6 +896,26 @@ router.get(
       offset,
     });
     res.json(createApiSuccessResponse(result));
+  }),
+);
+
+/**
+ * dq:右侧工作面板的数据帧(任务清单 + 产出文件原料)。
+ * 全量历史滤出 TodoWrite/TaskCreate/TaskUpdate/Write 工具帧;折叠在前端做。
+ */
+router.get(
+  '/sessions/:sessionId/work-frames',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
+    // ec:dw 给 collectWorkFrames 加了 `truncated`(帧数触顶、较早的帧未下发),
+    // 前端 useSessionWorkFrames 也接了 —— 但这里当时只透传了两个字段,提示永远
+    // 亮不起来。三个字段一起下发。
+    // ej:多带一个 turnOutputs(助手回答 id → 这一轮写出的文件)。对话正文下面
+    // 那张产出卡直接读它 —— 由服务端从全量日志算好、随会话一次到达,不再由前端
+    // 从"当前加载到的窗口"现推(那会随历史补齐而变)。
+    const { frames, revertedPaths, truncated, turnOutputs } = await sessionsService.fetchWorkFrames(sessionId);
+    res.json(createApiSuccessResponse({ frames, revertedPaths, turnOutputs, truncated: truncated === true }));
   }),
 );
 

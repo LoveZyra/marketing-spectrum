@@ -79,7 +79,12 @@
     "conversationsPlaceholder": "Search in conversations...",
     "searching": "Searching...",
     "noResults": "No results found",
-    "tryDifferentQuery": "Try a different search query"
+    "tryDifferentQuery": "Try a different search query",
+    "modeRunning": "Running",
+    "modeArchived": "Archived",
+    "switchMode": "Switch search scope",
+    "runningPlaceholder": "Search running sessions...",
+    "archivedPlaceholder": "Search archived sessions..."
   },
   "deleteConfirmation": {
     "deleteProject": "Remove Project",

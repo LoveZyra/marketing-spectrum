@@ -824,6 +824,29 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
   let sessionCreatedSent = false;
   const stderrTail = createStderrTail();
 
+  /**
+   * dv:resume 一段对话之前,先把它**常驻着的那个 CLI 请下去**。
+   *
+   * 一次性路径此前只管把 `resume` 塞进 sdkOptions,既不查 `claudeRuntimes`
+   * 也不调 releaseClaudeSession —— 网页刚聊完(runtime 空闲常驻,默认 30 分钟
+   * 不回收、没有活跃 run),外部 API 带同一个 sessionId 打一条 oneShot 回合,
+   * 就会有**第二个 CLI 进程 resume 同一段 provider 会话**;随后网页再发一条,
+   * 常驻那个用它内存里那份不含 API 回合的历史继续往同一个 jsonl 追加,两条
+   * 历史交错,谁也修不回来。运行位只挡并发的 run,挡不住空闲常驻。
+   *
+   * 有回合正在飞就明确报错、不发 —— 让调用方看见冲突,好过静默双写。
+   */
+  if (sessionId && !options.newSessionId) {
+    const release = await releaseClaudeSession(sessionId);
+    if (!release.released && release.reason === 'turn_in_flight') {
+      const busy = new Error(
+        `会话 ${sessionId} 正在跑一个回合,一次性调用不能同时 resume 它 —— 等它结束或先停止。`,
+      );
+      busy.prismRuntimeBusy = true;
+      throw busy;
+    }
+  }
+
   const emitNotification = (event) => {
     notifyUserIfEnabled({
       userId: ws?.userId || null,
@@ -980,27 +1003,37 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
     process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = '300000';
 
     let queryInstance;
+    /**
+     * dv:恢复放进 finally。
+     *
+     * 原来是"两次 query 都成功之后"才恢复 —— 两次都抛(或 `createPrompt()`
+     * 因图片读取失败而 reject)时这几行整个跳过,`process.env` 上永久留着
+     * 300000,而每个子进程都通过 `sdkOptions.env = {...process.env}` 继承它。
+     * 这是进程级全局状态泄漏,且与同文件另一处(用了 try/finally)写法不一。
+     */
     try {
-      queryInstance = query({
-        prompt: await createPrompt(),
-        options: sdkOptions
-      });
-    } catch (hookError) {
-      // Older/newer SDK versions may not accept hook shapes yet.
-      // Keep notification behavior operational via runtime events even if hook registration fails.
-      console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
-      delete sdkOptions.hooks;
-      queryInstance = query({
-        prompt: await createPrompt(),
-        options: sdkOptions
-      });
-    }
-
-    // Restore immediately — Query constructor already captured the value
-    if (prevStreamTimeout !== undefined) {
-      process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = prevStreamTimeout;
-    } else {
-      delete process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
+      try {
+        queryInstance = query({
+          prompt: await createPrompt(),
+          options: sdkOptions
+        });
+      } catch (hookError) {
+        // Older/newer SDK versions may not accept hook shapes yet.
+        // Keep notification behavior operational via runtime events even if hook registration fails.
+        console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
+        delete sdkOptions.hooks;
+        queryInstance = query({
+          prompt: await createPrompt(),
+          options: sdkOptions
+        });
+      }
+    } finally {
+      // Query constructor already captured the value — restore right away.
+      if (prevStreamTimeout !== undefined) {
+        process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = prevStreamTimeout;
+      } else {
+        delete process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
+      }
     }
 
     // Track the query instance for abort capability — both by session id and
@@ -2211,6 +2244,9 @@ async function abortClaudeSDKRun(runId) {
  * @param {string} exceptKey 本次要用的 key,不能被自己挤掉
  * @returns {Array} 空闲 runtime,按"最该被淘汰"排在最前
  */
+/** dv:预占标记的时效(见下方 filter 的说明)。 */
+const CLAIM_STALE_MS = 30_000;
+
 export function orderRuntimesForEviction(runtimes, exceptKey) {
   const heldByOwner = new Map();
   for (const runtime of runtimes) {
@@ -2218,7 +2254,22 @@ export function orderRuntimesForEviction(runtimes, exceptKey) {
     heldByOwner.set(owner, (heldByOwner.get(owner) ?? 0) + 1);
   }
   return runtimes
-    .filter((runtime) => runtime.key !== exceptKey && !runtime.turn)
+    /**
+     * dv:`claimedAt` 也算"忙"。
+     *
+     * 只看 `!turn` 会把**已被某次发送领走、但还没开跑**的 runtime 当空闲抢掉:
+     * runtimeForSend 返回之后到 `runtime.turn = turn` 之间有真实的 await 窗口
+     * (自动压缩分支里那次 5 秒超时的 IPC 往返、带图片回合的内容构造)。池满时
+     * 另一个人的一次发送恰好落在这个窗口里,就会把它 dispose 掉 —— 本次
+     * `runtime.input.push` 抛 "runtime input is closed",错误不带 prism 标记,
+     * 一路掉到一次性回退;overflow 预算用尽时直接报"并发会话已满"。
+     * 用户的回合因为**别人**的一次发送而降级或失败。
+     */
+    .filter((runtime) => runtime.key !== exceptKey
+      && !runtime.turn
+      // 预占**有时效**:领走后若因异常没能开跑也没能清标记,超过这个窗口就
+      // 重新可淘汰,免得一个失败的发送把名额永久钉死。
+      && !(runtime.claimedAt && Date.now() - runtime.claimedAt < CLAIM_STALE_MS))
     .sort((left, right) => {
       const leftHeld = heldByOwner.get(left.ownerUserId ?? null) ?? 0;
       const rightHeld = heldByOwner.get(right.ownerUserId ?? null) ?? 0;
@@ -2343,6 +2394,18 @@ async function runtimeForSend(options) {
   const key = requestedSessionId || `pending:${createRequestId()}`;
   const signature = persistentRuntimeSignature(options, settings);
 
+  /**
+   * dv:领走的那一刻就盖上 `claimedAt`。
+   *
+   * 这个标记让淘汰排序把它当"忙"(见 orderRuntimesForEviction),覆盖
+   * "已领走但还没 `runtime.turn = turn`"那段 await 窗口。真正开跑时由
+   * runPersistentTurn 清掉;派发失败的路径由 finally 清掉。
+   */
+  const claim = (runtime) => {
+    if (runtime) runtime.claimedAt = Date.now();
+    return runtime;
+  };
+
   return withRuntimeMutation(async () => {
     let runtime = requestedSessionId ? claudeRuntimes.get(requestedSessionId) : null;
 
@@ -2454,7 +2517,7 @@ async function runtimeForSend(options) {
 
     // No live runtime: create one, resuming when the conversation exists.
     return createPersistentRuntime(key, { ...options, resumeSessionId: requestedSessionId }, settings);
-  });
+  }).then(claim);
 }
 
 /** Runs one turn on a resident runtime and resolves when its result arrives. */
@@ -2504,6 +2567,8 @@ async function runPersistentTurn(runtime, { command, images, cwd, ws, sessionSum
   });
 
   runtime.turn = turn;
+  // dv:真正开跑了,预占标记让位给 `turn`(淘汰排序两者都当忙,见 claim)。
+  runtime.claimedAt = null;
   runtime.lastUsed = Date.now();
   if (runtime.sessionId) addSession(runtime.sessionId, runtime.query, ws, runtime.abortController);
 
@@ -2770,8 +2835,13 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
   }
 
   // 压缩期间用户可能按了停止 —— 那就按中止收尾,别再发 complete。
-  const abortedDuringMaintenance = Boolean(runEntry?.aborted)
-    || (finalSessionId ? abortedSessionIds.delete(finalSessionId) : false);
+  //
+  // du:`delete` 必须放在 `||` 的**左边**(与上面 wasAborted 同一写法)。
+  // 反过来时,只要 runEntry.aborted 为真就短路,标记永远留在 abortedSessionIds
+  // 里 —— 该会话的**下一条消息**一进来就被 wasRunAborted 命中,直接按中止收尾:
+  // 不推给 CLI、不发 error、不发 complete,用户的气泡发出去石沉大海。
+  const abortedFlagConsumed = finalSessionId ? abortedSessionIds.delete(finalSessionId) : false;
+  const abortedDuringMaintenance = abortedFlagConsumed || Boolean(runEntry?.aborted);
   if (!wasAborted && !abortedDuringMaintenance) {
     ws.send(createCompleteMessage({ provider: 'claude', sessionId: finalSessionId || sessionId || null, exitCode: resultMessage?.is_error ? 1 : 0 }));
   }
@@ -3255,6 +3325,9 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
         ws.send(createNormalizedMessage({
           kind: 'changed_files',
           checkpointId: checkpoint.id,
+          // dr:带上 cwd —— 落库后工作面板要把 git 相对路径拼成绝对路径,
+          // 与 Write 帧同构(打开/下载都吃绝对路径,也便于跨通路去重)。
+          cwd: checkpoint.cwd || options.cwd || null,
           files: changes.files.map(({ diff, ...rest }) => ({
             ...rest,
             diff: diff && diff.length > 20_000 ? `${diff.slice(0, 20_000)}\n… (truncated)` : diff,
@@ -3294,6 +3367,28 @@ function getPersistentRuntime(sessionId) {
   if (!sessionId) return null;
   const runtime = claudeRuntimes.get(sessionId);
   return runtime && !runtime.disposed ? runtime : null;
+}
+
+/**
+ * REST helper:这段对话此刻**到底**有没有常驻运行时。
+ *
+ * ef:顶栏的「常驻会话」原来是前端自己猜的 —— 只认"我这一页亲眼见过它在跑",
+ * 刷新一次就忘,于是明明挂着运行时也不显示。设计稿要的是一个能看能开关的状态,
+ * 猜不出来。这里把常驻池的真实情况照实报出去:在不在、忙不忙、跑的哪个模型、
+ * 空闲了多久(空闲超过 PRISM_RUNTIME_IDLE_MS 会被看门狗收掉,所以这个数有意义)。
+ */
+function describeClaudeRuntime(sessionId) {
+  const runtime = getPersistentRuntime(sessionId);
+  if (!runtime) {
+    return { resident: false, busy: false, model: null, idleMs: null, enabled: PERSISTENT_ENABLED };
+  }
+  return {
+    resident: true,
+    busy: Boolean(runtime.turn) || runtime.pendingToolUses.size > 0,
+    model: runtime.currentModel || null,
+    idleMs: Math.max(0, Date.now() - (runtime.lastUsed || Date.now())),
+    enabled: PERSISTENT_ENABLED,
+  };
 }
 
 /** REST helper: current native context usage for a conversation. */
@@ -3453,7 +3548,9 @@ export {
   queryClaudeSDKOnce,
   abortClaudeSDKSession,
   abortClaudeSDKRun,
-  runtimeIsIdle,
+  // dv:`runtimeIsIdle` 在定义处就是 `export function`,这里再列一次是**重复
+  // 导出** —— 纯 ESM 直读这份源码会 SyntaxError。tsc 编译时静默去重了,所以
+  // 一直没露馅(线上跑的是编译产物)。
   cancelPendingApprovalsForSession,
   readMaintenanceWatchdogConfig,
   isClaudeSDKSessionActive,
@@ -3467,5 +3564,6 @@ export {
   getClaudeContextUsage,
   getClaudeSlashCommands,
   getPersistentRuntime,
+  describeClaudeRuntime,
   getRuntimePoolStats
 };

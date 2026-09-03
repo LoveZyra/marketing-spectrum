@@ -46,6 +46,10 @@ function MainContent({
   onNavigateToSession,
   onSessionEstablished,
   onShowSettings,
+  onEditorMaximizedChange,
+  recentSessions,
+  onRenameSession,
+  onDeleteSession,
   externalMessageUpdate,
   newSessionTrigger,
   jupyterTarget,
@@ -91,7 +95,16 @@ function MainContent({
   } = useEditorSidebar({
     selectedProject,
     isMobile,
+    // ei:项目目录之外的产出文件按"这段会话的产出"读取(只读)。
+    activeSessionId: selectedSession?.id ? String(selectedSession.id) : null,
   });
+
+  // ee:最大化 → 通知上层把项目侧栏也收起(还原时放回);只在状态真的变化时发。
+  useEffect(() => {
+    onEditorMaximizedChange?.(editorExpanded);
+  }, [editorExpanded, onEditorMaximizedChange]);
+  // 卸载(切项目 / 切页)时还原,别把侧栏留在"被最大化压住"的状态。
+  useEffect(() => () => onEditorMaximizedChange?.(false), [onEditorMaximizedChange]);
 
   // Resolves bare/partial file references (e.g. links inside chat messages) to
   // real project files before opening them in the in-app editor.
@@ -153,10 +166,23 @@ function MainContent({
         isMobile={isMobile}
         onMenuClick={onMenuClick}
         isPersistentSession={isPersistentSession}
+        onRenameSession={onRenameSession}
+        onDeleteSession={onDeleteSession}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className={`flex min-h-0 min-w-[200px] flex-col overflow-hidden ${editorExpanded ? 'hidden' : ''} flex-1`}>
+        {/* dy:下限交给 min-content,不再写死。
+            这一栏装的是「聊天正文 + 工作面板」两块。原来写死 200px —— 预览栏
+            一开,整栏被压到 200,而工作面板(flex-none,300/xl:320)照样占满,
+            被挤到 0 的是**聊天正文**,连面板自己都被 overflow-hidden 裁掉
+            (用户截图:文件名少首字母、收起按钮整个不见)。
+            正确的下限由两部分组成:正文的 280px(见 ChatInterface)+ 面板此刻
+            的实际宽度。后者会变(展开 300/320、折起 40、<lg 不渲染),所以**不在
+            这里写死**:CSS 只保证正文那 280,面板那部分由 EditorSidebar 实测后
+            计入预算(measureLeftFloor),两边共用同一个 280。
+            (试过 min-w-min 让浏览器自己算——正文的 min-content 实测 ~390,
+             比 280 大,预算和 CSS 对不上,反而把编辑器挤到溢出被裁。) */}
+        <div className={`flex min-h-0 min-w-[280px] flex-col overflow-hidden ${editorExpanded ? 'hidden' : ''} flex-1`}>
           <div className={`h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
             <ErrorBoundary label={t('tabs.chat')} showDetails>
               <ChatInterface
@@ -165,6 +191,7 @@ function MainContent({
                 isConnected={isConnected}
                 sendMessage={sendMessage}
                 onFileOpen={handleFileOpen}
+                isEditorOpen={Boolean(editingFile)}
                 onInputFocusChange={onInputFocusChange}
                 onSessionProcessing={onSessionProcessing}
                 onSessionIdle={onSessionIdle}
@@ -177,6 +204,7 @@ function MainContent({
                 sendByCtrlEnter={sendByCtrlEnter}
                 externalMessageUpdate={externalMessageUpdate}
                 newSessionTrigger={newSessionTrigger}
+                recentSessions={recentSessions}
               />
             </ErrorBoundary>
           </div>

@@ -67,7 +67,14 @@
     "attachUrlPrompt": "Enter a URL to fetch its readable text:",
     "removeDocument": "Remove document",
     "parsingDocument": "Parsing document…",
-    "stopDiscards": "Stop (also cancels the message you just sent)"
+    "stopDiscards": "Stop (also cancels the message you just sent)",
+    "more": "More",
+    "attachImagesHint": "Images the model can see, sent with your message",
+    "attachUrlShort": "Add a link",
+    "checkpointsHint": "Snapshots of every turn's changes — roll back any of them",
+    "showAllCommandsHint": "Typing / in the box opens this too",
+    "attach": "Add attachment",
+    "attachHint": "Images go to the model; other types are saved into the project for the agent (up to 500MB)"
   },
   "providerSelection": {
     "pressToSearch": "Press <kbd>{{shortcut}}</kbd> to search sessions, files, and commits"
@@ -365,5 +372,52 @@
     "resultLabel": "Agent report",
     "noStepsYet": "No steps yet — the agent is starting up.",
     "failed": "Agent failed:"
+  },
+  "workPanel": {
+    "title": "Work panel",
+    "checklist": "Tasks",
+    "outputs": "Output files",
+    "allDone": "All done",
+    "noChecklist": "No task list in this conversation yet.",
+    "noOutputs": "No output files in this conversation yet.",
+    "open": "Open",
+    "download": "Download this file",
+    "collapse": "Collapse work panel",
+    "expand": "Expand work panel",
+    "doneFolded": "{{count}} completed · show",
+    "doneUnfold": "Hide {{count}} completed",
+    "historyTruncated": "Long session — earlier records not loaded.",
+    "earlierFolded": "{{count}} earlier · show",
+    "earlierUnfold": "Hide {{count}} earlier",
+    "progress": "Progress",
+    "outputsShort": "Outputs"
+  },
+  "skills": {
+    "invokedBadge": "Skill"
+  },
+  "toolStatus": {
+    "running": "Running",
+    "completed": "Completed",
+    "error": "Error",
+    "denied": "Denied"
+  },
+  "home": {
+    "greeting": {
+      "morning": "Good morning",
+      "noon": "Good afternoon",
+      "afternoon": "Good afternoon",
+      "evening": "Good evening"
+    },
+    "subtitle": "Start with a question, or pick up where you left off.",
+    "recentSessions": "Recent sessions",
+    "greetingWithName": "{{greeting}}, {{name}}",
+    "tools": "Tools",
+    "toolHint": "{{name}} · opens in a new tab"
+  },
+  "externalApps": {
+    "recsys": {
+      "label": "Algorithm metrics",
+      "description": "Recommendation slot performance and experiment monitoring"
+    }
   }
 }

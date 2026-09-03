@@ -19,6 +19,8 @@
     "saving": "Saving...",
     "saved": "Saved!",
     "exitFullscreen": "Exit fullscreen",
+    "maximize": "Maximize",
+    "restore": "Restore",
     "fullscreen": "Fullscreen",
     "close": "Close",
     "previewMarkdown": "Preview markdown",

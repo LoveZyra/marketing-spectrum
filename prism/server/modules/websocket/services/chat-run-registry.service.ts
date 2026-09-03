@@ -242,10 +242,17 @@ function recordProviderSessionId(run: ChatRun, providerSessionId: string): void 
     return;
   }
 
-  run.providerSessionId = providerSessionId;
-
+  /**
+   * dv:先落库、成功了再改内存。
+   *
+   * 反过来写的话,落库抛异常时内存里已经认了这个 provider id,而 sessions 表
+   * 里还是空 —— 本轮后续的续跑/中止都按内存那份走,可刷新页面、换标签页、
+   * 重启进程之后全都查不到这段映射:这段对话再也 resume 不回去,历史(在
+   * transcript 那侧)等于失联。落库失败就保持原状,下一帧还会再来一次。
+   */
   try {
     sessionsDb.assignProviderSessionId(run.appSessionId, providerSessionId);
+    run.providerSessionId = providerSessionId;
     void broadcastCanonicalSessionUpsert(run.appSessionId).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[ChatRunRegistry] Failed to broadcast canonical session mapping', {
@@ -284,6 +291,8 @@ export const chatRunRegistry = {
     /** null = 还没有浏览器在看(外部 API 触发的回合),之后由 `attachConnection` 接上。 */
     connection: RealtimeClientConnection | null;
     userId: string | number | null;
+    /** du:false = 本轮不落显示日志(老会话 seed 失败,见 ChatSessionWriter)。 */
+    persistDisplayLog?: boolean;
   }): ChatRun | null {
     const existing = runs.get(input.appSessionId);
     if (existing && existing.status === 'running') {
@@ -313,6 +322,7 @@ export const chatRunRegistry = {
         recordProviderSessionId(run, providerSessionId);
       },
       decorateOutboundEvent: (message) => decorateAndRecordEvent(run, message),
+      persistDisplayLog: input.persistDisplayLog,
     });
 
     runs.set(input.appSessionId, run);

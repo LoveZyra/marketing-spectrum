@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -17,6 +17,8 @@ import { useQueuedMessageAutoSend } from '../../hooks/useQueuedMessageAutoSend';
 import { api } from '../../utils/api';
 import { pullAccountSettings } from '../../utils/accountSettings';
 import SettingsModalHost from '../settings/view/SettingsModalHost';
+import SessionDeleteDialog, { type SessionDeleteTarget } from '../../shared/view/SessionDeleteDialog';
+import { buildRecentSessions } from '../chat/utils/recentSessions';
 
 import AppRail from './AppRail';
 
@@ -58,6 +60,8 @@ function AppContentInner() {
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId?: string }>();
   const { t } = useTranslation('common');
+  // 会话删除确认框的文案在 sidebar 命名空间(和侧栏那一处共用同一份措辞)。
+  const { t: tSidebar } = useTranslation('sidebar');
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { sendMessage, subscribe, isConnected } = useWebSocket();
   const authUser = useAuth().user;
@@ -80,8 +84,10 @@ function AppContentInner() {
     });
   }, [authUser]);
   const { preferences: uiPreferences, setPreference } = useUiPreferences();
+  // ee:预览最大化期间,项目侧栏也收起(不写偏好,还原即回到用户自己的开合状态)。
+  const [editorMaximized, setEditorMaximized] = useState(false);
   // 折叠后只留图标轨:侧栏与它的外层边框一起不渲染
-  const isSidebarCollapsed = !isMobile && !uiPreferences.sidebarVisible;
+  const isSidebarCollapsed = !isMobile && (!uiPreferences.sidebarVisible || editorMaximized);
 
   const {
     processingSessions,
@@ -130,6 +136,55 @@ function AppContentInner() {
    *   上次存下的展开/折叠状态,而不是一进来就强行展开。
    * 移动端侧栏是抽屉(由 sidebarOpen 管),这条规则不适用。
    */
+  // ef:首页空态的「最近会话」—— 跨项目取最近 3 条,数据就是侧栏那份 projects。
+  const recentSessions = useMemo(
+    () => buildRecentSessions(
+      projects,
+      3,
+      t('sidebar:projects.newSession', { defaultValue: '新会话' }),
+      { running: processingSessions },
+    ),
+    [processingSessions, projects, t],
+  );
+
+  /**
+   * ef:顶栏的改名与删除。
+   *
+   * 侧栏折叠时 `<Sidebar/>` 整棵不渲染 —— 它那套改名 / 删除的实现和确认框
+   * 跟着一起消失,所以顶栏这两件事必须住在这一层。改完 / 删完都刷一次项目列表,
+   * 侧栏与首页的"最近会话"跟着更新。
+   */
+  const [sessionDeleteTarget, setSessionDeleteTarget] = useState<SessionDeleteTarget | null>(null);
+
+  const handleHeaderRenameSession = useCallback(async (targetSessionId: string, summary: string) => {
+    try {
+      const response = await api.renameSession(targetSessionId, summary);
+      if (!response.ok) return false;
+      await refreshProjectsSilently();
+      return true;
+    } catch {
+      return false;
+    }
+  }, [refreshProjectsSilently]);
+
+  const handleHeaderDeleteSession = useCallback((targetSessionId: string, sessionTitle: string) => {
+    setSessionDeleteTarget({ sessionId: targetSessionId, sessionTitle });
+  }, []);
+
+  const confirmHeaderDeleteSession = useCallback(async (hardDelete: boolean) => {
+    const target = sessionDeleteTarget;
+    setSessionDeleteTarget(null);
+    if (!target) return;
+    try {
+      const response = await api.deleteSession(target.sessionId, hardDelete);
+      if (!response.ok) return;
+      if (sessionId === target.sessionId) navigate('/');
+      await refreshProjectsSilently();
+    } catch {
+      // 失败不弹窗:列表下一次刷新会把真实状态带回来。
+    }
+  }, [navigate, refreshProjectsSilently, sessionDeleteTarget, sessionId]);
+
   const lastAutoCollapseTabRef = useRef(activeTab);
   useEffect(() => {
     if (isMobile) return;
@@ -302,6 +357,10 @@ function AppContentInner() {
             registerOptimisticSession({ sessionId: targetSessionId, ...context })
           }
           onShowSettings={openSettings}
+          onEditorMaximizedChange={setEditorMaximized}
+          recentSessions={recentSessions}
+          onRenameSession={handleHeaderRenameSession}
+          onDeleteSession={handleHeaderDeleteSession}
           externalMessageUpdate={externalMessageUpdate}
           newSessionTrigger={newSessionTrigger}
           jupyterTarget={jupyterTarget}
@@ -313,6 +372,13 @@ function AppContentInner() {
           命令面板、主区)都在侧栏之外 —— 弹窗跟着侧栏一起消失,表现就是
           "折叠后点设置没反应"。它本来就是 portal 到 body 的,住在侧栏子树里
           只是历史位置。 */}
+      <SessionDeleteDialog
+        target={sessionDeleteTarget}
+        onCancel={() => setSessionDeleteTarget(null)}
+        onConfirm={(hardDelete) => void confirmHeaderDeleteSession(hardDelete)}
+        t={tSidebar}
+      />
+
       <SettingsModalHost
         isOpen={showSettings}
         initialTab={settingsInitialTab}

@@ -204,7 +204,10 @@ export type MessageKind =
   | 'task_notification'
   // prism additions: per-turn git checkpoints + changed-files summaries
   | 'checkpoint_created'
-  | 'changed_files';
+  | 'changed_files'
+  // dt:回滚/单文件还原成功后落的反向帧 —— 工作面板据此把已不在盘上的
+  // "产出"撤下来(paths 为 checkpoint cwd 下的相对路径)。
+  | 'files_reverted';
 
 /**
  * Event kinds added by the chat gateway layer on top of provider message kinds.

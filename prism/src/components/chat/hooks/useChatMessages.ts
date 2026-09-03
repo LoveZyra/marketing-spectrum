@@ -8,7 +8,13 @@ import type { ChatMessage, SubagentChildTool } from '../types/types';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
 
 function formatToolResultContent(content: unknown): string {
-  const text = typeof content === 'string' ? content : JSON.stringify(content);
+  /**
+   * dv:`JSON.stringify(undefined)` 返回的是 **undefined 值**(不是字符串),
+   * 紧接着 `.trim()` 就抛 TypeError —— 而 `NormalizedMessage.content` 是可选的,
+   * transcript 解析层在 content 缺席时正好产出它。一条这样的 tool_result 就能
+   * 让整个 `normalizedToChatMessages` 在 useMemo 里抛错、聊天页白屏。
+   */
+  const text = typeof content === 'string' ? content : (JSON.stringify(content) ?? '');
   const toolUseErrorMatch = /^<tool_use_error>([\s\S]*)<\/tool_use_error>$/.exec(text.trim());
   return toolUseErrorMatch ? toolUseErrorMatch[1] : text;
 }
@@ -331,6 +337,16 @@ function convertMessage(
         ? {
             content: formatToolResultContent(tr.content),
             isError: Boolean(tr.isError),
+            /**
+             * dv:把结果帧的时间戳带上。
+             *
+             * `toolDuration`(工具行的「耗时」列)读的就是这个字段,而生产链路
+             * 上唯一的构造点就是这里,原来只写 content/isError/toolUseResult ——
+             * 于是真实会话里耗时**恒为空**;单测手搓对象所以一直是绿的。
+             * 独立 tool_result 行有自己的 timestamp;服务端预挂的那份没有,
+             * 缺席时仍返回空,行为与从前一致。
+             */
+            timestamp: (tr as { timestamp?: string | number | Date }).timestamp,
             toolUseResult: tr.toolUseResult,
           }
         : null;

@@ -2,10 +2,12 @@ import { useEffect, useRef } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 
 import type { ServerEvent } from '../../../contexts/WebSocketContext';
+import { emitToast } from '../../../shared/view/ui/toastBus';
 import { showCompletionTitleIndicator } from '../../../utils/pageTitleNotification';
 import { playChatCompletionSound, playNotificationSound } from '../../../utils/notificationSound';
 import type { MarkSessionIdle, MarkSessionProcessing } from '../../../hooks/useSessionProtection';
 import { isCompactionActivity } from '../utils/compactionProgress';
+import { createDropWarner, learnRunSession, resolveEventSid } from '../utils/eventRouting';
 import type { PendingPermissionRequest } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
@@ -59,7 +61,7 @@ interface UseChatRealtimeHandlersArgs {
   /** prism: a git checkpoint was captured before the turn started. */
   onCheckpointCreated?: (payload: { sessionId: string | null; checkpoint: Record<string, unknown> }) => void;
   /** prism: post-turn changed-files summary relative to the checkpoint. */
-  onChangedFiles?: (payload: { sessionId: string | null; checkpointId: string | null; files: unknown[]; truncated?: boolean }) => void;
+  onChangedFiles?: (payload: { sessionId: string | null; checkpointId: string | null; files: unknown[]; truncated?: boolean; cwd?: string | null }) => void;
   /**
    * F7:服务端排队状态变了(收下/撤销/续发)。
    *
@@ -118,6 +120,23 @@ export function useChatRealtimeHandlers({
   // notification sound before React finishes a rerender.
   const pendingPermissionRequestsRef = useRef(pendingPermissionRequests);
 
+  // dk:runId → sessionId 的归属映射与丢帧告警。effect 重跑(依赖变化)不清空 ——
+  // 映射跨订阅有效,正跑着的回合换个渲染周期不该失忆。
+  const runSessionMapRef = useRef(new Map<string, string>());
+  const warnDroppedRef = useRef(createDropWarner());
+  // dm:每会话上次因 seq 空洞触发 REST 补拉的时刻(节流用)。
+  const gapRefreshAtRef = useRef(new Map<string, number>());
+  /**
+   * dv:**丢帧判定**专用的 seq 水位(与补发游标 `lastSeqRef` 分开)。
+   *
+   * 服务端给**每一帧**都分配 seq(含 permission),而 `advancesReplayCursor`
+   * 故意不为审批帧推进补发游标 —— 于是紧随审批之后的那一帧必然满足
+   * `seq > known.seq + 1`,被当成丢帧:每弹一次工具审批就误触发一次全量
+   * `refreshFromServer`(5 秒节流也挡不住每次审批各来一发),重连重放时同样
+   * 必中。水位分开之后,补发语义不变,而丢帧判定按真实序号走。
+   */
+  const gapSeqRef = useRef(new Map<string, { runId: string | null; seq: number }>());
+
   useEffect(() => {
     pendingPermissionRequestsRef.current = pendingPermissionRequests;
   }, [pendingPermissionRequests]);
@@ -129,18 +148,51 @@ export function useChatRealtimeHandlers({
       }
 
       const activeViewSessionId = activeViewSessionIdRef.current;
-      const sid = (typeof msg.sessionId === 'string' && msg.sessionId) || activeViewSessionId;
+      /**
+       * dk:归属改为「自带 sessionId → 按 runId 查映射 → 查不到就是 null」。
+       * **不再兜底到"当前正在看的会话"** —— 那个兜底正是"别的会话的折叠时间轴
+       * 钉在每个页面顶端、F5 才消失"的根因:后台回合的边角帧没带会话 id,
+       * 全被记到你正看的页面头上,而服务端 transcript 不认它们,永远清不掉。
+       * 归属不明的帧只当控制帧,该丢的丢并 warn;唯一例外是 protocol_error
+       * (对本客户端刚发出的动作的直接回话),在它自己的分支里单独兜底。
+       */
+      learnRunSession(runSessionMapRef.current, msg);
+      const sid = resolveEventSid(runSessionMapRef.current, msg);
 
       // 补发游标。**必须连 runId 一起记** —— seq 是每轮从 0 重新开始的,
       // 只记 seq 的话:第 1 轮跑到 40,第 2 轮在 20 处断线重连,带着 40 去要补发,
       // `seq > 40` 一条都匹配不上,第 2 轮已发生的内容全部丢失,而且整轮游标都
       // 不会推进 —— 此后每次重连都命中同一个空洞。轮次一换,游标从头算。
-      if (sid && typeof msg.seq === 'number' && advancesReplayCursor(msg.kind)) {
+      // (dk 起 sid 一定是真实归属 —— 之前兜底到"正看的会话"时,后台帧会把
+      // 别的会话的 runId+seq 写进当前会话的游标,补发从此对不上号。)
+      if (sid && typeof msg.seq === 'number') {
         const runId = typeof msg.runId === 'string' ? msg.runId : null;
-        const known = lastSeqRef.current.get(sid);
-        const sameRun = known && known.runId === runId;
-        if (!sameRun || msg.seq > known.seq) {
-          lastSeqRef.current.set(sid, { runId, seq: msg.seq });
+
+        // dm:seq 跳号 = 中间有帧没送到(重放缓冲被字节预算裁掉,或超窗断线)。
+        // 此前这种丢失是**静默**的 —— 用户只是"感觉少了点什么"。REST 是权威
+        // 来源,拉一次尾窗把窟窿补上,把"静默丢内容"变成"多一次刷新"。
+        // 5 秒节流:一个洞后面往往跟着一串跳号帧,补一次就够。
+        // dv:按**全部帧**的水位判定(审批帧也占号,见 gapSeqRef 的说明)。
+        const seen = gapSeqRef.current.get(sid);
+        const sameSeenRun = seen && seen.runId === runId;
+        if (sameSeenRun && msg.seq > seen.seq + 1) {
+          const lastRefreshAt = gapRefreshAtRef.current.get(sid) ?? 0;
+          if (Date.now() - lastRefreshAt > 5_000) {
+            gapRefreshAtRef.current.set(sid, Date.now());
+            void sessionStore.refreshFromServer(sid);
+          }
+        }
+        if (!sameSeenRun || msg.seq > seen.seq) {
+          gapSeqRef.current.set(sid, { runId, seq: msg.seq });
+        }
+
+        // 补发游标:仍然只为**留下来的**帧推进(审批帧的例外见 advancesReplayCursor)。
+        if (advancesReplayCursor(msg.kind)) {
+          const known = lastSeqRef.current.get(sid);
+          const sameRun = known && known.runId === runId;
+          if (!sameRun || msg.seq > known.seq) {
+            lastSeqRef.current.set(sid, { runId, seq: msg.seq });
+          }
         }
       }
 
@@ -189,7 +241,10 @@ export function useChatRealtimeHandlers({
 
         case 'protocol_error': {
           console.error('[Chat] Protocol error:', msg.code, msg.error);
-          if (sid) {
+          // 直接回话类帧:没带会话 id 时归到正在看的会话**展示**是合理的 ——
+          // 它就是对这个客户端刚发出的动作的回应。只用于展示,不进游标。
+          const errorSid = sid || activeViewSessionId;
+          if (errorSid) {
             // 多数 protocol_error 意味着这一轮压根没开起来(也就不会有 complete),
             // 所以要顺手把转圈停掉。**但有两个 code 恰恰相反**:
             //   QUEUE_FULL —— 是在 startRun 返回 null(回合正跑着)且已有排队时发的;
@@ -198,11 +253,11 @@ export function useChatRealtimeHandlers({
             // (和 da 修掉的是同一类"界面进入了没有出口的状态")。
             const runStillAlive = msg.code === 'QUEUE_FULL' || msg.code === 'SESSION_HELD_BY_SHELL';
             if (!runStillAlive) {
-              onSessionIdle?.(sid);
+              onSessionIdle?.(errorSid);
             }
-            sessionStore.appendRealtime(sid, {
+            sessionStore.appendRealtime(errorSid, {
               id: `protocol_error_${Date.now()}`,
-              sessionId: sid,
+              sessionId: errorSid,
               timestamp: new Date().toISOString(),
               provider,
               kind: 'error',
@@ -269,7 +324,8 @@ export function useChatRealtimeHandlers({
       // --- Streaming: buffer for performance ---
       if (msg.kind === 'stream_delta') {
         const text = (msg.content as string) || '';
-        if (!text || !sid) return;
+        if (!text) return;
+        if (!sid) { warnDroppedRef.current(msg); return; }
         const buffers = accumulatedStreamRef.current;
         buffers.set(sid, (buffers.get(sid) || '') + text);
         const timers = streamTimerRef.current;
@@ -318,6 +374,8 @@ export function useChatRealtimeHandlers({
           checkpointId: typeof msg.checkpointId === 'string' ? msg.checkpointId : null,
           files: Array.isArray(msg.files) ? msg.files : [],
           truncated: Boolean(msg.truncated),
+          // dr:工作面板要把 git 相对路径拼绝对,与落库基线同构。
+          cwd: typeof msg.cwd === 'string' ? msg.cwd : null,
         });
         return;
       }
@@ -329,8 +387,13 @@ export function useChatRealtimeHandlers({
         && msg.kind !== 'permission_request'
         && msg.kind !== 'permission_cancelled';
 
-      if (sid && shouldPersist) {
-        sessionStore.appendRealtime(sid, msg as unknown as NormalizedMessage);
+      if (shouldPersist) {
+        if (sid) {
+          sessionStore.appendRealtime(sid, msg as unknown as NormalizedMessage);
+        } else {
+          // 归属不明:不落盘。落进"正看的会话"就是那批钉死的幽灵时间轴。
+          warnDroppedRef.current(msg);
+        }
       }
 
       // --- UI side effects for specific kinds ---
@@ -425,7 +488,20 @@ export function useChatRealtimeHandlers({
         }
 
         case 'status': {
-          if (msg.text === 'token_budget' && msg.tokenBudget) {
+          // dn-B1:「常驻进程被回收」的通知。这个帧带的是 status/content 而不是
+          // text,原来整条被静默丢弃 —— F14 的用户可见半边从没活过,用户只感到
+          // "这条会话今天特别卡"。只对正在看的会话提示;后台会话下一条消息
+          // 慢几秒本来也无从感知。
+          if (msg.status === 'runtime_evicted') {
+            if (sid && sid === activeViewSessionId && typeof msg.content === 'string' && msg.content) {
+              emitToast({ message: msg.content });
+            }
+            break;
+          }
+          // dk:只有**正在看的这条会话**的用量帧才写进顶栏 —— 之前不看 sid,
+          // 后台会话(定时任务、另一个标签页跑着的回合)的 token_budget 会把
+          // 当前页面的用量芯片刷成别的会话的数字,来回跳。
+          if (msg.text === 'token_budget' && msg.tokenBudget && sid && sid === activeViewSessionId) {
             // costUsd 只在 result 帧上出现;中途的 usage 帧没有它。整体替换会把
             // 已经拿到的费用抹掉,所以缺席时沿用上一次的值(F4)。
             setTokenBudget((previous: Record<string, unknown> | null) => {
@@ -435,6 +511,12 @@ export function useChatRealtimeHandlers({
                 ? { ...next, costUsd: previousCost }
                 : next;
             });
+          } else if (msg.text === 'token_budget') {
+            // dv:后台会话的用量帧走到这里(上面那支要求 sid === 正在看的会话)
+            // —— 原来会落进下面的兜底,把 statusText 设成字面量 "token_budget",
+            // 切进那条会话时活动指示器上明晃晃写着 "token_budget"。它不是状态
+            // 文案,丢掉即可(顶栏数字本来就只认当前会话)。
+            break;
           } else if (msg.text && sid) {
             onSessionProcessing?.(sid, {
               statusText: msg.text as string,

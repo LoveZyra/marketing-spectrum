@@ -44,11 +44,10 @@ export const PromptInput = React.forwardRef<HTMLFormElement, PromptInputProps>(
           className={cn(
             // 只过渡聚焦相关的边框 —— **不要**用 transition-all,那会把 textarea
             // 自适应高度也做成动画,表现为"打字时输入框缓慢放大"。高度瞬时生效。
-            // 输入框是这一屏的主角面板,**四角同一档圆角**:
-            // 淡色靠两层软投影从暖白画布上浮起来,深色靠一圈绿调描边 + 极淡外光。
-            // (设计稿原本把左上角切方给活动标签停靠;实测那一个直角在四个圆角里
-            //  很扎眼,改成活动标签往右让 12px,四角就能一致。)
-            'prism-raised relative overflow-hidden rounded-[var(--radius-panel)] border border-border bg-card px-3.5 py-3 transition-[border-color] duration-[120ms] focus-within:border-primary',
+            // 输入框是这一屏的主角面板,**四角同一档圆角**(panel 档)。
+            // ef:只留一层控件描边(input),不再 border + inset ring 叠两圈;
+            // 聚焦时描边换成主色,这是全库输入框统一的三态(idle / hover / focus)。
+            'relative overflow-hidden rounded-panel border border-input bg-card px-3.5 py-3 transition-[border-color] duration-[120ms] hover:border-border-strong focus-within:border-primary focus-within:hover:border-primary dark:border-primary/[0.16]',
             className
           )}
           {...props}
@@ -101,7 +100,7 @@ export const PromptInputTextarea = React.forwardRef<
     ref={ref}
     data-slot="prompt-input-textarea"
     className={cn(
-      'chat-input-placeholder block max-h-[40vh] w-full resize-none overflow-y-auto bg-transparent p-0 text-sm leading-[23px] text-foreground placeholder-muted-foreground focus:outline-none sm:max-h-[300px]',
+      'chat-input-placeholder block max-h-[40vh] w-full resize-none overflow-y-auto bg-transparent p-0 text-sm leading-[22px] text-foreground placeholder-muted-foreground focus:outline-none sm:max-h-[300px]',
       className
     )}
     {...props}
@@ -118,7 +117,17 @@ export const PromptInputFooter = React.forwardRef<
   <div
     ref={ref}
     data-slot="prompt-input-footer"
-    className={cn('flex items-center gap-2.5 pt-3', className)}
+    /**
+     * ed:单行,永不换行。
+     *
+     * dw 曾允许换行兜底(工作面板一展开,六个附件图标 + 四个芯片的固有宽度就
+     * 超了容器,不换行会把发送按钮裁掉)。用户要的是**最窄时也不折行**,所以
+     * 这轮把根源拿掉:六个图标收进「+」菜单,三个芯片按底栏实测宽度分档收缩
+     * (见 chat/utils/composerDensity.ts),最坏情况 220px 宽的底栏也放得下。
+     * 这里回到 nowrap;万一将来有人往这行塞了新东西超出预算,被裁的是工具组
+     * 的尾部(它有 overflow-hidden),发送按钮永远在右下角。
+     */
+    className={cn('flex flex-nowrap items-center gap-x-2.5 pt-3', className)}
     {...props}
   />
 ));
@@ -133,7 +142,12 @@ export const PromptInputTools = React.forwardRef<
   <div
     ref={ref}
     data-slot="prompt-input-tools"
-    className={cn('flex items-center gap-1', className)}
+    /**
+     * ed:占据剩余宽度、单行、超出即裁(见 PromptInputFooter 的说明)。
+     * min-w-0 缺一个,flex 子项就按 min-content 撑着不收缩,右边的发送按钮必被顶出去。
+     */
+    // -my-1 py-1:裁剪盒上下各多 4px,聚焦环(ring-2)不会被裁掉;布局占位不变。
+    className={cn('-my-1 flex min-w-0 flex-1 flex-nowrap items-center gap-x-1 overflow-hidden py-1', className)}
     {...props}
   />
 ));

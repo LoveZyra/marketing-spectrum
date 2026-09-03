@@ -10,6 +10,8 @@ type TooltipProps = {
   content?: ReactNode;
   position?: TooltipPosition;
   className?: string;
+  /** 挂在触发元素外层容器上的类(默认 `relative inline-block`,想让它参与 flex 收缩时传 min-w-0 之类)。 */
+  wrapperClassName?: string;
   delay?: number;
 };
 
@@ -33,6 +35,7 @@ function Tooltip({
   content,
   position = 'top',
   className = '',
+  wrapperClassName,
   delay = 350,
 }: TooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
@@ -170,7 +173,7 @@ function Tooltip({
   return (
     <div
       ref={containerRef}
-      className="relative inline-block"
+      className={cn('relative inline-block', wrapperClassName)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onTouchStart={handleTouchStart}
@@ -183,7 +186,7 @@ function Tooltip({
           ref={tooltipRef}
           style={tooltipStyle || { position: 'fixed', top: 0, left: 0, visibility: 'hidden' }}
           className={cn(
-            'pointer-events-none whitespace-nowrap rounded-sm border border-border bg-popover px-2 py-1 text-xs text-card-foreground prism-modal-shadow',
+            'pointer-events-none whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-xs text-card-foreground prism-modal-shadow',
             'tooltip-fade-in',
             className
           )}

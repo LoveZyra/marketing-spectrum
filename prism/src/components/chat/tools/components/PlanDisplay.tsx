@@ -60,6 +60,13 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
   const handleBuild = () => {
     if (pendingRequest && permissionCtx) {
       permissionCtx.handlePermissionDecision(pendingRequest.requestId, { allow: true });
+      // do:「开始实施」= 从计划模式切出来。批准后 CLI 在本回合内继续执行,
+      // 但 composer 的档位是**下一条消息**的 —— 不切的话,下一句追问又进计划
+      // 模式,agent 只出计划不动手,用户以为"点了开始却还在计划"。
+      // 用事件解耦:档位 state 住在 useChatProviderState,那边接。
+      try {
+        window.dispatchEvent(new CustomEvent('prism:plan-approved'));
+      } catch { /* 无 window 的环境(测试)忽略 */ }
     }
   };
 

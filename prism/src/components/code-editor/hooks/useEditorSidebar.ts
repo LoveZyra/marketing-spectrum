@@ -13,12 +13,18 @@ type UseEditorSidebarOptions = {
   selectedProject: Project | null;
   isMobile: boolean;
   initialWidth?: number;
+  /**
+   * ei:当前会话 id。产出文件可能落在**项目目录之外**(计划文件、/tmp 脚本…),
+   * 项目文件接口不服务那些路径 —— 这类文件改走"这段会话的产出"通道(只读)。
+   */
+  activeSessionId?: string | null;
 };
 
 export const useEditorSidebar = ({
   selectedProject,
   isMobile,
   initialWidth = 600,
+  activeSessionId = null,
 }: UseEditorSidebarOptions) => {
   const { t } = useTranslation('codeEditor');
   /**
@@ -62,12 +68,22 @@ export const useEditorSidebar = ({
 
       const normalizedPath = filePath.replace(/\\/g, '/');
       const fileName = normalizedPath.split('/').pop() || filePath;
+      /**
+       * ei:落在项目目录**之外**的绝对路径(agent 常把计划写进 ~/.claude/plans、
+       * 把临时脚本写进 /tmp)交给会话产出通道 —— 项目文件接口对它们一律 403,
+       * 而它们确实是这段对话的产出,用户理应看得到、下得下来。只读。
+       */
+      const projectRoot = (selectedProject?.fullPath || selectedProject?.path || '').replace(/\\/g, '/').replace(/\/+$/, '');
+      const isAbsolute = normalizedPath.startsWith('/') || /^[A-Za-z]:\//.test(normalizedPath);
+      const insideProject = Boolean(projectRoot) && (normalizedPath === projectRoot || normalizedPath.startsWith(`${projectRoot}/`));
+      const outputSessionId = isAbsolute && !insideProject && activeSessionId ? activeSessionId : undefined;
       const nextFile: CodeEditorFile = {
         name: fileName,
         path: filePath,
         // DB projectId is forwarded to the editor so it can read/save files
         // via `/api/projects/:projectId/file` endpoints.
         projectId: selectedProject?.projectId,
+        ...(outputSessionId ? { outputSessionId } : {}),
         diffInfo,
       };
 
@@ -86,7 +102,7 @@ export const useEditorSidebar = ({
       });
       setActiveEditorPath(filePath);
     },
-    [confirmDiscard, selectedProject?.projectId],
+    [activeSessionId, confirmDiscard, selectedProject?.fullPath, selectedProject?.path, selectedProject?.projectId],
   );
 
   /** 关掉某一个标签。不传就是关当前这个。 */

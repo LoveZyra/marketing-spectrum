@@ -28,6 +28,14 @@ export interface AttachedDoc {
    *   escapeAttachedDocumentTags() on the server exists to protect.
    */
   kind?: 'path' | 'text';
+  /**
+   * ed:落盘附件顺带抽出的正文(服务端 /land 对 ≤20MB 的 PDF / Office / 文本类型
+   * 就地抽取)。有它就在路径行之外再附一个 <attached-document> 块 —— 模型不用先
+   * 调工具就能读到内容;路径仍给智能体做工具处理。
+   */
+  extractedText?: string;
+  extractedChars?: number;
+  extractedTruncated?: boolean;
 }
 
 /** A doc whose `text` is a disk path rather than a document body. */
@@ -53,12 +61,21 @@ export function buildDocsBlock(docs: AttachedDoc[]): string {
     .map((doc) => doc.text.trim())
     .filter(Boolean);
 
-  const blocks = docs.filter((doc) => !isPathDoc(doc)).map((doc) => {
+  const envelope = (doc: AttachedDoc, body: string, truncated: boolean | undefined, pathAttr?: string) => {
     const attrs = [`name="${doc.name.replace(/"/g, "'")}"`, `source="${doc.source}"`];
     if (doc.url) attrs.push(`url="${doc.url.replace(/"/g, "'")}"`);
-    if (doc.truncated) attrs.push('truncated="true"');
-    return `<attached-document ${attrs.join(' ')}>\n${doc.text}\n</attached-document>`;
-  });
+    if (pathAttr) attrs.push(`path="${pathAttr.replace(/"/g, "'")}"`);
+    if (truncated) attrs.push('truncated="true"');
+    return `<attached-document ${attrs.join(' ')}>\n${body}\n</attached-document>`;
+  };
+
+  const blocks = docs.filter((doc) => !isPathDoc(doc)).map((doc) => envelope(doc, doc.text, doc.truncated));
+  // 落盘附件抽到了正文的,也附一个信封(带 path 属性,让模型知道正文对应盘上哪个文件)。
+  for (const doc of docs) {
+    if (isPathDoc(doc) && doc.extractedText && doc.extractedText.trim()) {
+      blocks.push(envelope(doc, doc.extractedText, doc.extractedTruncated, doc.text.trim()));
+    }
+  }
 
   let suffix = '';
   if (paths.length > 0) suffix += `\n${paths.join('\n')}`;

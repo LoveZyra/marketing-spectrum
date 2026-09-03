@@ -727,6 +727,38 @@ router.post('/parse', upload.single('document'), async (req, res) => {
 // so buffering them would pin MAX_LAND_BYTES of RSS per concurrent upload for no
 // benefit — and Buffers live outside the V8 heap, so exhausting them gets the
 // whole process OOM-killed rather than failing one request.
+/**
+ * ed:落盘之后顺手抽一份正文。
+ *
+ * 「+」菜单合并成一个「添加附件」之后,原来「附加文档」那条"只抽正文、不落盘"的路
+ * 没有入口了。抽正文的价值不能丢:模型不用先调工具就能读到内容(问"这份 PPT 讲了
+ * 什么"应当一步到位)。所以落盘之后,凡是解析器认识的类型且 ≤ MAX_DOC_BYTES(与
+ * /parse 同一个上限)的,就地再抽一份文本一并返回;客户端把它作为
+ * <attached-document> 随消息发出,磁盘路径照旧给智能体做工具处理。
+ * 抽不出来(扫描件、二进制、损坏)就静默略过 —— 文件已经在盘上,智能体还能用工具读。
+ * 只对 EXTRACTORS 登记的类型做,不对任意扩展名猜"是不是文本"(那会把 .bin 当文本抽)。
+ */
+const EXTRACT_ON_LAND_EXTENSIONS = new Set([
+  '.pdf', '.docx', '.pptx', '.xlsx', '.xlsm', '.csv', '.tsv',
+  '.txt', '.md', '.json', '.log', '.xml', '.yaml', '.yml',
+]);
+
+async function extractLandedText(diskPath, name, bytes) {
+  const ext = path.extname(name).toLowerCase();
+  if (!EXTRACT_ON_LAND_EXTENSIONS.has(ext)) return null;
+  if (!Number.isFinite(bytes) || bytes <= 0 || bytes > MAX_DOC_BYTES) return null;
+  try {
+    const buffer = await fs.promises.readFile(diskPath);
+    const extractor = EXTRACTORS[ext] || ((input) => extractPlainText(input));
+    const raw = await extractor(buffer);
+    const { text, truncated } = capText(raw);
+    if (!text) return null;
+    return { extractedText: text, extractedChars: text.length, extractedTruncated: truncated };
+  } catch {
+    return null;
+  }
+}
+
 const landUpload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => {
@@ -755,7 +787,7 @@ router.post('/land', (req, res) => {
   // Invoked manually rather than as route middleware so a limit breach becomes
   // a JSON error the composer can display, instead of falling through to
   // express's default HTML error page.
-  landUpload.single('document')(req, res, (uploadError) => {
+  landUpload.single('document')(req, res, async (uploadError) => {
     // multer unlinks what it wrote when it aborts, but discarding the temp file
     // unconditionally means a partial upload cannot survive any error path.
     const discardTempFile = () => {
@@ -798,8 +830,9 @@ router.post('/land', (req, res) => {
           : res.status(500).json({ error: '附件保存失败,请重试' });
       }
       const text = buildHtmlUploadNotice(name, landed);
+      const extracted = await extractLandedText(landed.diskPath, name, req.file.size);
       // kind:'path' — `text` is the staged disk path; see the /parse .html branch.
-      res.json({ name, chars: text.length, truncated: false, text, kind: 'path', diskPath: landed.diskPath });
+      res.json({ name, chars: text.length, truncated: false, text, kind: 'path', diskPath: landed.diskPath, ...(extracted || {}) });
     } catch (error) {
       discardTempFile();
       res.status(500).json({ error: error.message });
@@ -1043,7 +1076,7 @@ router.post('/land/abort', (req, res) => {
 });
 
 // 第三步:收尾。落盘与响应结构与 /land 逐字一致,前端两条路可以共用同一段后续逻辑。
-router.post('/land/complete', (req, res) => {
+router.post('/land/complete', async (req, res) => {
   const found = getChunkSession(req, res);
   if (!found) return;
   const { uploadId, session } = found;
@@ -1082,6 +1115,7 @@ router.post('/land/complete', (req, res) => {
         : res.status(500).json({ error: '附件保存失败,请重试' });
     }
     const text = buildHtmlUploadNotice(session.name, landed);
+    const extracted = await extractLandedText(landed.diskPath, session.name, session.received);
     res.json({
       name: session.name,
       chars: text.length,
@@ -1089,6 +1123,7 @@ router.post('/land/complete', (req, res) => {
       text,
       kind: 'path',
       diskPath: landed.diskPath,
+      ...(extracted || {}),
     });
   } catch (error) {
     dropChunkSession(uploadId);

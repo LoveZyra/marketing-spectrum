@@ -140,7 +140,7 @@ export default function ActionMenu({
           role="menu"
           tabIndex={-1}
           className={cn(
-            'absolute top-full z-50 mt-2 min-w-[220px] rounded-lg border border-border bg-popover p-1 text-popover-foreground prism-modal-shadow',
+            'absolute top-full z-50 mt-2 min-w-[220px] rounded-panel border border-border bg-popover p-1 text-popover-foreground prism-modal-shadow',
             align === 'right' ? 'right-0' : 'left-0',
           )}
         >

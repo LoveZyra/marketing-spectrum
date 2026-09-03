@@ -309,7 +309,8 @@
     "managed": {
       "badge": "托管",
       "hint": "由棱镜托管。"
-    }
+    },
+    "addServer": "添加 {{provider}} MCP 服务器"
   },
   "accounts": {
     "title": "账号审批",

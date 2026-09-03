@@ -67,7 +67,14 @@
     "attachUrlPrompt": "输入要抓取正文的网址：",
     "removeDocument": "移除文档",
     "parsingDocument": "正在解析文档…",
-    "stopDiscards": "停止(会连同刚发出的这条消息一起取消)"
+    "stopDiscards": "停止(会连同刚发出的这条消息一起取消)",
+    "more": "更多",
+    "attachImagesHint": "给模型看的图片,随消息一起发出",
+    "attachUrlShort": "添加链接",
+    "checkpointsHint": "查看每一轮改动的快照,可回滚",
+    "showAllCommandsHint": "在输入框里键入 / 也能唤起",
+    "attach": "添加附件",
+    "attachHint": "图片给模型看;其它类型存进项目交给智能体(最大 500MB)"
   },
   "providerSelection": {
     "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜索会话、文件和提交"
@@ -365,5 +372,52 @@
     "resultLabel": "子代理汇报",
     "noStepsYet": "还没有步骤 —— 子代理正在启动。",
     "failed": "子代理执行失败:"
+  },
+  "workPanel": {
+    "title": "工作面板",
+    "checklist": "任务清单",
+    "outputs": "产出文件",
+    "allDone": "全部完成",
+    "noChecklist": "本会话还没有任务清单。",
+    "noOutputs": "本会话还没有产出文件。",
+    "open": "打开",
+    "download": "下载此文件",
+    "collapse": "收起工作面板",
+    "expand": "展开工作面板",
+    "doneFolded": "已完成 {{count}} 项 · 展开",
+    "doneUnfold": "收起已完成的 {{count}} 项",
+    "historyTruncated": "会话较长,更早的记录未载入。",
+    "earlierFolded": "更早的 {{count}} 个 · 展开",
+    "earlierUnfold": "收起更早的 {{count}} 个",
+    "progress": "进度",
+    "outputsShort": "产出"
+  },
+  "skills": {
+    "invokedBadge": "技能"
+  },
+  "toolStatus": {
+    "running": "运行中",
+    "completed": "已完成",
+    "error": "出错",
+    "denied": "已拒绝"
+  },
+  "home": {
+    "greeting": {
+      "morning": "早上好",
+      "noon": "中午好",
+      "afternoon": "下午好",
+      "evening": "晚上好"
+    },
+    "subtitle": "从一个问题开始，或者接着上次的工作。",
+    "recentSessions": "最近会话",
+    "greetingWithName": "{{greeting}}，{{name}}",
+    "tools": "工具",
+    "toolHint": "{{name}} · 新标签页打开"
+  },
+  "externalApps": {
+    "recsys": {
+      "label": "算法效果查询",
+      "description": "推荐点位效果与实验监控"
+    }
   }
 }

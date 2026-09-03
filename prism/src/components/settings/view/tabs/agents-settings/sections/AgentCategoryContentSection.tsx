@@ -52,17 +52,19 @@ export default function AgentCategoryContentSection({
 
       {selectedCategory === 'mcp' && (
         <Suspense fallback={<PanelLoadingFallback />}>
-        // SettingsProject.name is populated from the DB projectId by
-        // normalizeProjectForSettings, so we can map it straight through.
-        <McpServers
-          selectedProvider="claude"
-          currentProjects={projects.map<McpProject>((project) => ({
-            projectId: project.name,
-            displayName: project.displayName,
-            fullPath: project.fullPath,
-            path: project.path,
-          }))}
-        />
+          {/* SettingsProject.name is populated from the DB projectId by
+              normalizeProjectForSettings, so we can map it straight through.
+              (dr:这两行原来是 JSX 子节点里的裸 `//` —— 那是文本节点不是注释,
+              整句被渲染在了 MCP 页顶上。) */}
+          <McpServers
+            selectedProvider="claude"
+            currentProjects={projects.map<McpProject>((project) => ({
+              projectId: project.name,
+              displayName: project.displayName,
+              fullPath: project.fullPath,
+              path: project.path,
+            }))}
+          />
         </Suspense>
       )}
 

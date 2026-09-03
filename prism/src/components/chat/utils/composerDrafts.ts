@@ -19,3 +19,17 @@ export function draftStorageKey(
   if (projectId) return `draft_input_${projectId}`;
   return null;
 }
+
+/**
+ * dn-B2:按停止时,排队内容与输入框里正在打的字**合并**,谁都不丢。
+ *
+ * 场景:排了一条纠正、又开始打新内容、然后按停止 —— 原来是无条件
+ * `setInput(排队内容)`,正在打的字被整个覆盖。合并顺序按时间:排队在前
+ * (先写的),当前输入在后;都留在输入框里,发不发由用户下一次按键决定。
+ */
+export function mergeQueuedIntoInput(queuedContent: string, currentInput: string): string {
+  const queued = (queuedContent || '').trimEnd();
+  if (!(currentInput || '').trim()) return queuedContent || '';
+  if (!queued) return currentInput;
+  return `${queued}\n${currentInput}`;
+}

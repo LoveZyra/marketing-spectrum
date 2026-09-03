@@ -111,9 +111,12 @@ describe('normalizedToChatMessages', () => {
     // tool_use, so the cache has to track it separately.
     expect(resolved).toHaveLength(1);
     expect(resolved[0]).not.toBe(pending[0]);
+    // dv:结果帧的 timestamp 现在也带过来 —— 工具行的「耗时」列读的就是它,
+    // 此前不传导致真实会话里耗时恒为空(单测因为手搓对象一直是绿的)。
     expect(resolved[0].toolResult).toEqual({
       content: 'export const a = 1;',
       isError: false,
+      timestamp: '2026-01-01T00:00:00.000Z',
       toolUseResult: undefined,
     });
   });

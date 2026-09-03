@@ -4,6 +4,12 @@ type CodeEditorBinaryFileProps = {
   file: CodeEditorFile;
   isSidebar: boolean;
   isFullscreen: boolean;
+  /** ec:侧栏形态的「最大化 / 还原」—— 二进制占位页本身没什么可放大的,但最大化
+   *  状态下切到这样一个标签时,头部必须仍有还原的入口。 */
+  isExpanded?: boolean;
+  onToggleExpand?: (() => void) | null;
+  maximizeLabel?: string;
+  restoreLabel?: string;
   onClose: () => void;
   onToggleFullscreen: () => void;
   title: string;
@@ -14,6 +20,10 @@ export default function CodeEditorBinaryFile({
   file,
   isSidebar,
   isFullscreen,
+  isExpanded = false,
+  onToggleExpand = null,
+  maximizeLabel = '最大化',
+  restoreLabel = '还原',
   onClose,
   onToggleFullscreen,
   title,
@@ -48,16 +58,43 @@ export default function CodeEditorBinaryFile({
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <h3 className="truncate text-sm font-medium text-foreground">{file.name}</h3>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex items-center justify-center rounded-md p-1.5 text-body hover:bg-muted hover:text-foreground"
-            title="Close"
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <div className="flex shrink-0 items-center gap-0.5">
+            {onToggleExpand && (
+              <button
+                type="button"
+                onClick={onToggleExpand}
+                data-editor-maximize
+                aria-pressed={isExpanded}
+                className={`flex items-center justify-center rounded-md p-1.5 transition-colors ${
+                  isExpanded
+                    ? 'bg-primary/[0.08] text-card-foreground dark:text-primary'
+                    : 'text-body hover:bg-muted hover:text-foreground'
+                }`}
+                title={isExpanded ? restoreLabel : maximizeLabel}
+                aria-label={isExpanded ? restoreLabel : maximizeLabel}
+              >
+                {isExpanded ? (
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.5 3.5M9 15v4.5M9 15H4.5M9 15l-5.5 5.5M15 9h4.5M15 9V4.5M15 9l5.5-5.5M15 15h4.5M15 15v4.5m0-4.5l5.5 5.5" />
+                  </svg>
+                ) : (
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
+                )}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex items-center justify-center rounded-md p-1.5 text-body hover:bg-muted hover:text-foreground"
+              title="Close"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
         {binaryContent}
       </div>

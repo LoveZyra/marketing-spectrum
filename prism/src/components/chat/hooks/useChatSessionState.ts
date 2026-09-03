@@ -32,6 +32,12 @@ const AUTO_FILL_MAX_WAITS = 60;
 /** 判定"真的能滚了"之前,等布局落定的时间。 */
 const AUTO_FILL_SETTLE_MS = 180;
 const INITIAL_VISIBLE_MESSAGES = 100;
+/**
+ * dl:首屏分帧。切进长会话先只渲染尾部这批(秒开),随后一个 idle 回调把窗口
+ * 放大到 INITIAL_VISIBLE_MESSAGES —— 增长发生在视口**上方**,跟底/守位控制器
+ * 都吃得住,用户看不到任何跳动,只是"再往上翻已经有了"。
+ */
+const PHASE1_VISIBLE_MESSAGES = 30;
 /** 离底部多近算"在底部"。和 isNearBottom 用同一个口径。 */
 const FOLLOW_BOTTOM_SLACK_PX = 50;
 /** 常量空数组:每次返回新的 `[]` 会让下游 useMemo 每轮都失效。 */
@@ -267,6 +273,9 @@ export function useChatSessionState({
   /* ---------------------------------------------------------------- */
 
   const activeSessionId = selectedSession?.id || currentSessionId || null;
+  /** 给搜索定位的重试循环看的"现在在看哪条会话"—— 换会话后旧循环要自行退出。 */
+  const activeSessionIdRef = useRef<string | null>(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
 
   // The activity indicator always reflects the latest status of the session
   // being viewed — never stale local UI state from the last time it was
@@ -352,7 +361,14 @@ export function useChatSessionState({
     if (pendingUserMessage && all.length === 0) {
       return [pendingUserMessage];
     }
-    if (viewHiddenCount > 0 && viewHiddenCount < all.length) return all.slice(0, -viewHiddenCount);
+    /**
+     * dv:上界从 `<` 放宽到 `<=`。
+     *
+     * `viewHiddenCount === all.length` 表示"回退到首条之前",本该一条都不显示;
+     * 严格小于时这一支不成立,直接落到 `return all` —— **一条都不隐藏**,
+     * 用户看到的是列表纹丝不动,像回退按钮失灵。
+     */
+    if (viewHiddenCount > 0 && viewHiddenCount <= all.length) return all.slice(0, -viewHiddenCount);
     return all;
   }, [storeMessages, viewHiddenCount, pendingUserMessage]);
 
@@ -683,7 +699,7 @@ export function useChatSessionState({
   // Reset scroll/pagination state on session change
   useEffect(() => {
     if (!searchScrollActiveRef.current) {
-      setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
+      setVisibleMessageCount(PHASE1_VISIBLE_MESSAGES);
     }
     wasNearTopRef.current = false;
     setIsUserScrolledUp(false);
@@ -692,6 +708,12 @@ export function useChatSessionState({
     scrollAnchorRef.current = null;
     holdAnchorRef.current = false;
     followBottomRef.current = true;
+    // dk:搜索定位的接力棒也要放下。此前换会话不清这两样,后果有两个:
+    //  1. `searchScrollActiveRef` 挂着 true → 滚动控制器整段停摆(不跟底、不守位);
+    //  2. 上一条会话的 findAndScroll 重试定时器还在跑,拿旧目标在**新会话**的
+    //     DOM 里按"最接近的时间戳"乱找一个元素滚过去。
+    searchScrollActiveRef.current = false;
+    setSearchTarget(null);
   }, [selectedProject?.projectId, selectedSession?.id]);
 
   // Main session loading effect — store-based
@@ -752,7 +774,7 @@ export function useChatSessionState({
     messagesOffsetRef.current = 0;
     setHasMoreMessages(false);
     setTotalMessages(0);
-    setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
+    setVisibleMessageCount(PHASE1_VISIBLE_MESSAGES);
     setAllMessagesLoaded(false);
     allMessagesLoadedRef.current = false;
     setIsLoadingAllMessages(false);
@@ -881,7 +903,14 @@ export function useChatSessionState({
       // visibleCountForTarget 会退回全长 —— 搜索跳转不能因为省 DOM 而跳不到。
       setVisibleMessageCount((prev) => visibleCountForTarget(chatMessagesRef.current, target, prev));
 
+      const sessionAtStart = activeSessionIdRef.current;
       const findAndScroll = (retriesLeft: number) => {
+        // 换会话了:这根接力棒作废。旧目标在新会话的 DOM 里按"最接近的时间戳"
+        // 总能"找到"点什么 —— 那是往错误的地方滚。
+        if (activeSessionIdRef.current !== sessionAtStart) {
+          searchScrollActiveRef.current = false;
+          return;
+        }
         const container = scrollContainerRef.current;
         if (!container) return;
 
@@ -957,6 +986,34 @@ export function useChatSessionState({
     if (chatMessages.length <= visibleMessageCount) return chatMessages;
     return chatMessages.slice(-visibleMessageCount);
   }, [chatMessages, visibleMessageCount]);
+
+  /**
+   * dl:首屏第二帧 —— 主线程闲下来后把窗口从 PHASE1 放大到 INITIAL。
+   * 增长的行出现在视口上方:跟底时底部纹丝不动;用户已上翻时先交锚
+   * (holdAnchor),控制器按锚守位。搜索定位期间不插手,免得改到它刚算好的窗口。
+   */
+  useEffect(() => {
+    if (isLoadingSessionMessages || !activeSessionId) return;
+    if (searchScrollActiveRef.current) return;
+    if (visibleMessageCount >= INITIAL_VISIBLE_MESSAGES) return;
+    if (chatMessages.length <= visibleMessageCount) return; // 没有被窗口藏起来的行
+
+    const grow = () => {
+      holdAnchorRef.current = true;
+      setVisibleMessageCount((prev) => Math.max(prev, INITIAL_VISIBLE_MESSAGES));
+    };
+
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      const id = idleWindow.requestIdleCallback(grow, { timeout: 2000 });
+      return () => idleWindow.cancelIdleCallback?.(id);
+    }
+    const timer = window.setTimeout(grow, 400);
+    return () => clearTimeout(timer);
+  }, [activeSessionId, chatMessages.length, isLoadingSessionMessages, visibleMessageCount]);
 
 
   /**
@@ -1105,7 +1162,18 @@ export function useChatSessionState({
         offset: 0,
       });
 
-      if (currentSessionId !== requestSessionId) return;
+      // du:换会话防护必须读 **ref**。原来比的是 `currentSessionId !==
+      // requestSessionId` —— 两个值都在这次调用的闭包里冻结着且恒相等,
+      // await 期间真的切走了也拦不住:A 的响应会把 hasMore=false /
+      // allMessagesLoaded=true / A 的 total 全写进 B 的视图,B 只剩首页,
+      // 「看更早 / 加载全部」双双消失,分页彻底死掉。
+      if (activeSessionIdRef.current !== requestSessionId) {
+        // 切走了:这次"加载全部"作废,把本地标记退回去,免得回到 A 时它以为
+        // 已经全量在手(那会让「看更早」永久失效)。
+        allMessagesLoadedRef.current = false;
+        setShowLoadAllOverlay(false);
+        return;
+      }
 
       if (slot) {
         if (container) {
@@ -1139,7 +1207,8 @@ export function useChatSessionState({
       isLoadingMoreRef.current = false;
       setIsLoadingAllMessages(false);
     }
-  }, [selectedSession, selectedProject, isLoadingAllMessages, currentSessionId, sessionStore]);
+    // currentSessionId 不再是依赖:换会话判定改读 activeSessionIdRef(见上)。
+  }, [selectedSession, selectedProject, isLoadingAllMessages, sessionStore]);
 
   /**
    * 前插内容之前先记锚点。

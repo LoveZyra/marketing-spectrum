@@ -250,7 +250,8 @@
     "actions": {
       "edit": "Sunucuyu düzenle",
       "delete": "Sunucuyu sil"
-    }
+    },
+    "addServer": "{{provider}} MCP sunucusu ekle"
   },
   "accounts": {
     "title": "Account approval",

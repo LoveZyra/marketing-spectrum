@@ -144,5 +144,31 @@
     "acceptEdits": "Edits files without asking. Still asks before running commands.",
     "auto": "Decides routine calls itself; asks about the rest.",
     "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
+  },
+  "workPanel": {
+    "title": "Рабочая панель",
+    "checklist": "Задачи",
+    "outputs": "Созданные файлы",
+    "allDone": "Всё готово",
+    "noChecklist": "В этом диалоге пока нет списка задач.",
+    "noOutputs": "В этом диалоге пока нет созданных файлов.",
+    "open": "Открыть",
+    "download": "Скачать этот файл",
+    "collapse": "Свернуть панель",
+    "expand": "Развернуть панель",
+    "doneFolded": "Завершено {{count}} · показать",
+    "doneUnfold": "Скрыть завершённые ({{count}})",
+    "historyTruncated": "Длинная сессия — ранние записи не загружены.",
+    "earlierFolded": "Ранее: {{count}} · показать",
+    "earlierUnfold": "Скрыть ранние ({{count}})"
+  },
+  "skills": {
+    "invokedBadge": "Навык"
+  },
+  "toolStatus": {
+    "running": "Выполняется",
+    "completed": "Готово",
+    "error": "Ошибка",
+    "denied": "Отклонено"
   }
 }

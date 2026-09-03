@@ -168,7 +168,25 @@ export function useSlashCommands({
   onExecuteCommand,
   sessionId,
 }: UseSlashCommandsOptions) {
-  const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
+  /**
+   * dv:静态列表与 CLI 动态列表**分开存**,读的时候再合。
+   *
+   * 原来两者共用一个 state:静态那条链(内置 + 项目自定义 + 技能,两次串行
+   * 往返)用**整体替换**写入,而动态 CLI 那条(`/compact`、`/clear`、`/init`…)
+   * 只在 `[sessionId, provider]` 变化时跑一次、用追加写入。于是两种情况都会
+   * 把 CLI 命令抹掉且再也回不来:① 首屏动态先到、静态后到;② 会话运行中
+   * 侧栏刷新让 `selectedProject` 换了对象身份,静态 effect 重跑而 sessionId
+   * 没变、动态 effect 不重跑。用户敲 `/compact` 还能靠"无 path 交给模型"那条
+   * 兜底,但菜单里看不见、补全不了。
+   */
+  const [staticCommands, setStaticCommands] = useState<SlashCommand[]>([]);
+  const [cliCommands, setCliCommands] = useState<SlashCommand[]>([]);
+  const slashCommands = useMemo(() => {
+    if (cliCommands.length === 0) return staticCommands;
+    const known = new Set(staticCommands.map((command) => command.name.toLowerCase()));
+    const additions = cliCommands.filter((command) => !known.has(command.name.toLowerCase()));
+    return additions.length > 0 ? [...staticCommands, ...additions] : staticCommands;
+  }, [staticCommands, cliCommands]);
   const [filteredCommands, setFilteredCommands] = useState<SlashCommand[]>([]);
   const [showCommandMenu, setShowCommandMenu] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
@@ -197,7 +215,7 @@ export function useSlashCommands({
 
     const fetchCommands = async () => {
       if (!selectedProject) {
-        setSlashCommands([]);
+        setStaticCommands([]);
         setFilteredCommands([]);
         return;
       }
@@ -252,12 +270,12 @@ export function useSlashCommands({
         });
 
         if (!cancelled) {
-          setSlashCommands(sortedCommands);
+          setStaticCommands(sortedCommands);
         }
       } catch (error) {
         console.error('Error fetching slash commands:', error);
         if (!cancelled) {
-          setSlashCommands([]);
+          setStaticCommands([]);
         }
       }
     };
@@ -283,20 +301,19 @@ export function useSlashCommands({
         const data = await response.json();
         if (cancelled || !data?.available || !Array.isArray(data.commands)) return;
 
-        setSlashCommands((previous) => {
-          const known = new Set(previous.map((command) => command.name.toLowerCase()));
-          const additions: SlashCommand[] = data.commands
-            .filter((entry: { name?: string }) =>
-              entry?.name && !known.has(String(entry.name).toLowerCase()))
-            .map((entry: { name: string; description?: string; argumentHint?: string }) => ({
-              name: entry.name,
+        // dv:存进自己那份 state —— 去重放到合并那一步,静态列表怎么重写都不会
+        // 再把它们抹掉。
+        setCliCommands(
+          (data.commands as Array<{ name?: string; description?: string; argumentHint?: string }>)
+            .filter((entry) => Boolean(entry?.name))
+            .map((entry) => ({
+              name: entry.name as string,
               description: entry.description || '',
               namespace: 'cli',
               type: 'cli',
               metadata: { type: 'cli', argumentHint: entry.argumentHint || '' },
-            }));
-          return additions.length ? [...previous, ...additions] : previous;
-        });
+            })),
+        );
       } catch {
         // best-effort enrichment; static list already covers common commands
       }

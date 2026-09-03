@@ -19,11 +19,27 @@ import type { LLMProvider } from '@/shared/types.js';
  * websocket → sessions.service → websocket 的循环引用:这里只依赖
  * provider 注册表和两张表。
  */
-export async function seedDisplayLogFromTranscript(sessionId: string): Promise<number> {
+/**
+ * du:抄写结果必须**可区分**。
+ *
+ * 老版本三种情况一律返回 0:全新会话(没历史要抄)、已经抄过、以及**抄失败**。
+ * 调用方无从分辨,于是失败后照样往日志里落这一轮的消息 —— 日志有了行,
+ * `fetchHistory` 立刻改走日志,老会话几百条历史一次性从界面消失,而且
+ * `countForSession > 0` 让 seed 再也不会重试,**不可恢复**。这正好打破了本
+ * 模块开头那条规矩。现在失败单独报出来,调用方据此**跳过本轮落库**:
+ * 日志维持空,这个会话继续走 transcript,下一轮还会再抄一次。
+ */
+export type SeedOutcome =
+  /** 无需抄(全新会话)或已经抄过 —— 日志可以当权威。 */
+  | { status: 'ready'; seeded: number }
+  /** 抄失败 —— 日志**不可**当权威,本轮不要往里写。 */
+  | { status: 'failed' };
+
+export async function seedDisplayLogFromTranscript(sessionId: string): Promise<SeedOutcome> {
   const session = sessionsDb.getSessionById(sessionId);
   // 没有 transcript(全新会话)就没有历史要抄 —— 它从第一条消息起天然就是日志。
-  if (!session?.provider_session_id) return 0;
-  if (sessionMessagesDb.countForSession(sessionId) > 0) return 0;
+  if (!session?.provider_session_id) return { status: 'ready', seeded: 0 };
+  if (sessionMessagesDb.countForSession(sessionId) > 0) return { status: 'ready', seeded: 0 };
 
   try {
     const provider = session.provider as LLMProvider;
@@ -36,12 +52,15 @@ export async function seedDisplayLogFromTranscript(sessionId: string): Promise<n
 
     // 整批一个事务(见 appendMany):老会话上千条历史逐条 append 会是上千次独立
     // 隐式事务,首条消息发送前明显卡顿。
-    return sessionMessagesDb.appendMany(
+    const seeded = sessionMessagesDb.appendMany(
       sessionId,
       result.messages.map((message) => ({ ...message, sessionId })),
     );
+    // 有历史却一条都没抄进去(整批被拒/全是不落库的 kind):同样不敢当权威。
+    if (result.messages.length > 0 && seeded === 0) return { status: 'failed' };
+    return { status: 'ready', seeded };
   } catch (error) {
     console.warn('[display-log] seed failed:', (error as Error)?.message || error);
-    return 0;
+    return { status: 'failed' };
   }
 }

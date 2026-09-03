@@ -107,8 +107,21 @@ export function canViewerSeeProject({ ownerUserId, viewerUserId, viewerUsername,
  */
 export function readRequestViewer(request) {
   const user = request?.user;
+  /**
+   * dv:`id` 与 `userId` **两种形状都认**。
+   *
+   * REST 中间件盖的是 `{ id, username }`,而 WebSocket 那三条路
+   * (OSS token 分支、SSE 票据分支、平台模式)盖的是 `{ userId, username }`
+   * —— 只读 `id` 的话,自建部署里**每一条 WS 连接的身份都是空的**。
+   * 后果分两半:root 用户靠 username 那条规则侥幸放行,所以一直没露馅;
+   * 非 root 用户的 viewerUserId 恒为 null,`canViewerSeeProject` 在
+   * "有主且非公共"这一支直接返回 false —— 队列广播收不到,而 du 轮给
+   * `attachSessionViewers` 加上每轮重判之后,他们会被整个踢出推流。
+   * shell 侧同理:`claimForShell` 记录的持有者恒为 null。
+   */
+  const rawId = user?.id ?? user?.userId ?? null;
   return {
-    userId: user?.id ?? null,
+    userId: rawId === undefined ? null : rawId,
     username: typeof user?.username === 'string' ? user.username : null,
   };
 }

@@ -66,7 +66,7 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
 
         if (entry.message?.role === 'assistant' && Array.isArray(entry.message?.content)) {
           for (const part of entry.message.content as AnyRecord[]) {
-            if (part.type === 'tool_use') {
+            if (part?.type === 'tool_use') {
               const tool: AnyRecord = {
                 toolId: part.id,
                 toolName: part.name,
@@ -83,7 +83,7 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
 
         if (entry.message?.role === 'user' && Array.isArray(entry.message?.content)) {
           for (const part of entry.message.content as AnyRecord[]) {
-            if (part.type !== 'tool_result') {
+            if (part?.type !== 'tool_result') {
               continue;
             }
 
@@ -265,11 +265,28 @@ type ClaudeLocalCommandPayload = {
  * normal text path continue untouched for unrelated messages.
  */
 function parseLocalCommandPayload(content: string): ClaudeLocalCommandPayload | null {
+  /**
+   * dv:只认**整条消息就是命令载荷**的情况。
+   *
+   * 原来三个标签命中任意一个就判定为本地命令,随后调用方 `return messages`
+   * 提前收尾 —— 于是用户(或工具结果回显的外部内容)在正文里粘了一段含
+   * `<command-name>` 字面量的文本,这条消息在历史里就只剩一个短命令串,
+   * 标签之外的正文**永远读不出来**(磁盘上还在)。真正的本地命令消息通体
+   * 就是这几个标签,去掉它们之后不该剩下别的正文。
+   */
   const commandName = extractTaggedContent(content, 'command-name');
   const commandMessage = extractTaggedContent(content, 'command-message');
   const commandArgs = extractTaggedContent(content, 'command-args');
 
   if (commandName === null && commandMessage === null && commandArgs === null) {
+    return null;
+  }
+
+  const withoutTags = content
+    .replace(/<command-(name|message|args)>[\s\S]*?<\/command-\1>/g, '')
+    .trim();
+  if (withoutTags.length > 0) {
+    // 标签之外还有正文 —— 这是一条普通消息,只是碰巧含了这几个字面量。
     return null;
   }
 
@@ -429,7 +446,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
 
         for (let partIndex = 0; partIndex < raw.message.content.length; partIndex++) {
           const part = raw.message.content[partIndex];
-          if (part.type === 'tool_result') {
+          // dv:`content` 数组里可能有 null(并发写截断后重拼、或上游格式变动)。
+          // 行级 JSON.parse 有 try/catch,归一化没有 —— 一个坏元素就能让
+          // fetchHistory 整段 500,实时链路上则打掉整个 runtime、废掉这一回合。
+          if (part?.type === 'tool_result') {
             messages.push(createNormalizedMessage({
               id: `${baseId}_tr_${part.tool_use_id}`,
               sessionId,
@@ -442,7 +462,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               subagentTools: raw.subagentTools,
               toolUseResult: raw.toolUseResult,
             }));
-          } else if (part.type === 'text' && !suppressUserText) {
+          } else if (part?.type === 'text' && !suppressUserText) {
             const text = stripInjectedBlocks(part.text || '');
             if (text && !isInternalContent(text)) {
               messages.push(createNormalizedMessage({
@@ -462,7 +482,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
 
         if (messages.length === 0 && !suppressUserText) {
           const textParts = stripInjectedBlocks(raw.message.content
-            .filter((part: AnyRecord) => part.type === 'text')
+            .filter((part: AnyRecord) => part?.type === 'text')
             .map((part: AnyRecord) => part.text)
             .filter(Boolean)
             .join('\n'));
@@ -636,7 +656,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       if (Array.isArray(raw.message.content)) {
         let partIndex = 0;
         for (const part of raw.message.content) {
-          if (part.type === 'text' && part.text) {
+          if (part?.type === 'text' && part.text) {
             messages.push(createNormalizedMessage({
               id: `${baseId}_${partIndex}`,
               sessionId,
@@ -647,7 +667,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               content: part.text,
               model: assistantModel,
             }));
-          } else if (part.type === 'tool_use') {
+          } else if (part?.type === 'tool_use') {
             messages.push(createNormalizedMessage({
               id: `${baseId}_${partIndex}`,
               sessionId,
@@ -725,7 +745,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     for (const raw of rawMessages) {
       if (raw.message?.role === 'user' && Array.isArray(raw.message?.content)) {
         for (const part of raw.message.content) {
-          if (part.type === 'tool_result' && part.tool_use_id) {
+          // dv:同上 —— 坏元素跳过,不要让一条脏行打掉整段历史。
+          if (part?.type === 'tool_result' && part.tool_use_id) {
             toolResultMap.set(part.tool_use_id, {
               content: part.content,
               isError: Boolean(part.is_error),
@@ -760,12 +781,16 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       }
     }
 
-    let total = 0;
-    for (const msg of normalized) {
-      if (msg.kind !== 'tool_result') {
-        total += 1;
-      }
-    }
+    /**
+     * dv:`total` 与 `messages` 必须同一口径。
+     *
+     * 原来这里刻意不数 `tool_result`,而 `buildHistoryPage` 是在**含**
+     * tool_result 的完整数组上切片的 —— 前端拿到的 total 恒小于真实可翻页
+     * 条数:靠 total 判"是否加载完"的地方(加载全部之后的 offset、翻页
+     * 上界)会提前停手或永远差一截。要么两边都排除,要么两边都算;
+     * 切片那侧是权威,所以这边跟它对齐。
+     */
+    const total = normalized.length;
 
     if (transcript) {
       historyCache.set(cacheKey, transcript.fingerprint, transcript.bytes, {

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertTriangleIcon,
+  CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   GitBranchIcon,
@@ -192,6 +193,27 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
   const [restoreBlocker, setRestoreBlocker] = useState<RestoreBlockerPayload | null>(null);
   const [metaFlags, setMetaFlags] = useState<CheckpointMetaFlags | null>(null);
 
+  /**
+   * dv:换了 checkpoint(= 新的一轮)就把卡内状态整体重置。
+   *
+   * 这张卡是**同一个组件实例**被新一轮的 state 复用的(ChatInterface 里位置
+   * 固定),而 `revertedPaths`、`notice`、`collapsed`、`expandedPath`、
+   * `restoreBlocker` 全是首渲染之后就不再跟着 props 走的本地 state。于是上一轮
+   * 还原过 `a.md`、新一轮又改了 `a.md`,它在新卡里一上来就是"已还原"的灰条,
+   * 点不动;上一轮的成功/失败提示("✅ 已回滚")也留在新卡上误导人;
+   * 折叠状态按上一轮的文件数定,新一轮文件数变了也不重算。
+   */
+  const fileCount = (state.files || []).length;
+  useEffect(() => {
+    setRevertedPaths(new Set());
+    setNotice(null);
+    setExpandedPath(null);
+    setRestoreBlocker(null);
+    setBusy(null);
+    setCollapsed(fileCount > COLLAPSE_ABOVE);
+    // checkpointId 是一轮的身份;文件数只用来决定默认折叠,一并入依赖。
+  }, [state.checkpointId, fileCount]);
+
   const files = state.files || [];
   const totalAdditions = files.reduce((sum, file) => sum + (file.additions || 0), 0);
   const totalDeletions = files.reduce((sum, file) => sum + (file.deletions || 0), 0);
@@ -322,10 +344,12 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
      * 输入框宽出一大截,两条边界对不上,看着像另一个层的东西压在上面。
      * (ar 轮只收了高度,没碰宽度,所以那轮之后依然是这样。)
      *
-     * 54.25rem 这个值在上述四处也是写死的字面量,这里保持一致而不另起变量 ——
-     * 五处形式统一比省一个数字重要。
+     * ef:消息列是 `max-w-[54.25rem] px-4`(正文 836px);输入框、待审批横幅、排队卡片
+     * 与这块面板的外壳自带 px-4,所以它们的盒子取 52.25rem(= 868 − 32),外边缘才和
+     * 正文左右两边对齐 —— 以前四处都是 54.25rem,输入框比正文每边宽出 16px。
+     * 这几处保持一致而不另起变量:形式统一比省一个数字重要。
      */
-    <div className="mx-auto mb-2 w-full max-w-[54.25rem] overflow-hidden rounded-lg border border-border">
+    <div className="mx-auto mb-2 w-full max-w-[52.25rem] overflow-hidden rounded-panel border border-border">
       {/* 标头(设计稿 2a/2b):分支图标 → 本轮改动 → 文件数 → 总增删 → ml-auto → ckpt → 回滚本轮 */}
       <div className="flex items-center gap-2.5 border-b border-border bg-card px-3.5 py-2">
         <button
@@ -356,6 +380,23 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
               {`ckpt_${state.checkpointId.slice(-6)}`}
             </span>
           )}
+        </button>
+
+        {/* dp:明确的「接受」。改动在 agent 干活时就已实时写盘,从来不存在
+            "待接受的暂存态" —— 语义上关掉这张卡就是接受。但此前"接受"只是
+            右上角一个 × 图标,与两个写着字的撤销按钮(还原/回滚本轮)摆在
+            一起,观感变成了"只能回滚"。给默认动作一个名字和主色。 */}
+        <button
+          type="button"
+          // dq:还原/回滚正在进行时禁点 —— 那一瞬把卡收掉,操作还在后台跑,
+          // 结果(成功刷新或失败提示)就没有地方显示了。
+          disabled={busy !== null}
+          onClick={onDismiss}
+          className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-md bg-primary px-2.5 py-[3px] text-[11.5px] text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          title={t('checkpoint.keepTitle', { defaultValue: '改动已实时写入磁盘;保留 = 收起这张卡,什么都不改' })}
+        >
+          <CheckIcon className="h-4 w-4" strokeWidth={2} />
+          {t('checkpoint.keep', { defaultValue: '保留改动' })}
         </button>
 
         {state.checkpointId && (

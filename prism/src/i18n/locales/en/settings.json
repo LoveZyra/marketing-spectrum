@@ -309,7 +309,8 @@
     "managed": {
       "badge": "Managed",
       "hint": "Managed by Prism."
-    }
+    },
+    "addServer": "Add {{provider}} MCP Server"
   },
   "accounts": {
     "title": "Account approval",

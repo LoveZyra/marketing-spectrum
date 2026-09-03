@@ -49,7 +49,14 @@
     "clearInput": "清空輸入",
     "scrollToBottom": "捲動到底部",
     "attachmentPath": "路徑",
-    "modelHint": "目前模型：{{model}} · 點擊切換"
+    "modelHint": "目前模型：{{model}} · 點擊切換",
+    "more": "更多",
+    "attachImagesHint": "給模型看的圖片,隨訊息一起送出",
+    "attachUrlShort": "新增連結",
+    "checkpointsHint": "查看每一輪改動的快照,可回滾",
+    "showAllCommandsHint": "在輸入框裡鍵入 / 也能喚起",
+    "attach": "新增附件",
+    "attachHint": "圖片給模型看;其它類型存進專案交給智慧體(最大 500MB)"
   },
   "thinkingMode": {
     "selector": {
@@ -239,5 +246,44 @@
   },
   "compactSummary": {
     "title": "上下文已壓縮 —— 早前的對話折成了一份摘要"
+  },
+  "workPanel": {
+    "title": "工作面板",
+    "checklist": "任務清單",
+    "outputs": "產出檔案",
+    "allDone": "全部完成",
+    "noChecklist": "本工作階段還沒有任務清單。",
+    "noOutputs": "本工作階段還沒有產出檔案。",
+    "open": "開啟",
+    "download": "下載此檔案",
+    "collapse": "收合工作面板",
+    "expand": "展開工作面板",
+    "doneFolded": "已完成 {{count}} 項 · 展開",
+    "doneUnfold": "收合已完成的 {{count}} 項",
+    "historyTruncated": "工作階段較長,更早的紀錄未載入。",
+    "earlierFolded": "更早的 {{count}} 個 · 展開",
+    "earlierUnfold": "收合更早的 {{count}} 個",
+    "progress": "進度",
+    "outputsShort": "產出"
+  },
+  "skills": {
+    "invokedBadge": "技能"
+  },
+  "toolStatus": {
+    "running": "執行中",
+    "completed": "已完成",
+    "error": "發生錯誤",
+    "denied": "已拒絕"
+  },
+  "home": {
+    "greeting": {
+      "morning": "早安",
+      "noon": "午安",
+      "afternoon": "午安",
+      "evening": "晚安"
+    },
+    "subtitle": "從一個問題開始，或者接著上次的工作。",
+    "recentSessions": "最近會話",
+    "greetingWithName": "{{greeting}}，{{name}}"
   }
 }

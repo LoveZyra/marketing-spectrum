@@ -6,11 +6,13 @@ import { useTranslation } from 'react-i18next';
 import CodeHighlighter from '../../../../shared/view/CodeHighlighter';
 import { useKatexPlugins } from '../../../../shared/markdown/katexPlugins';
 import { normalizeInlineCodeFences } from '../../utils/chatFormatting';
+import { splitStreamingMarkdown } from '../../utils/streamingSplit';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 import { usePaletteOps } from '../../../../contexts/PaletteOpsContext';
 import { useTheme } from '../../../../contexts/ThemeContext';
 
 import MermaidDiagram from './MermaidDiagram';
+import { safeLinkHref } from './markdownLinkSafety';
 
 type MarkdownProps = {
   children: React.ReactNode;
@@ -27,6 +29,7 @@ type MarkdownProps = {
 // everything else is treated as a workspace file reference.
 const isExternalHref = (href?: string): boolean =>
   !!href && (/^(https?:|mailto:|tel:|data:)/i.test(href) || href.startsWith('#'));
+
 
 // Strip a trailing `:line` / `:line:col` suffix (e.g. `src/foo.ts:130`).
 const stripLineSuffix = (value: string): string => value.replace(/:\d+(?::\d+)?$/, '');
@@ -213,6 +216,11 @@ const CodeBlock = ({ node, inline, className, children, streaming, ...props }: C
 
 const markdownComponents = {
   code: CodeBlock,
+  // dl:图片惰性解码。滚动到再取,解码不占主线程;加载完成前后由外层
+  // 滚动控制器守位,这里不做占位框 —— 猜错的 min-height 比不占位更晃。
+  img: ({ alt, ...imgProps }: { alt?: string; src?: string }) => (
+    <img alt={alt ?? ''} loading="lazy" decoding="async" {...imgProps} />
+  ),
   // CodeBlock renders its own syntax-highlighted <pre>; this passthrough stops
   // react-markdown (and Tailwind Typography) from wrapping it in a second,
   // dark-themed <pre> shell that would frame the block.
@@ -238,12 +246,10 @@ const markdownComponents = {
 };
 
 /**
- * memo 的意义:正文字符串没变就整棵跳过 —— markdown 解析(remark/rehype)
- * 是聊天列表里最重的纯计算之一,父组件因无关状态重渲时不该重新解析全部历史。
- * props 里只有 children/className/streaming 三个值类型,浅比较天然成立。
+ * 单段正文的解析与渲染(不带外层 div)。memo:content 没变就整棵跳过 ——
+ * markdown 解析(remark/rehype)是聊天列表里最重的纯计算之一。
  */
-export const Markdown = memo(function Markdown({ children, className, streaming }: MarkdownProps) {
-  const content = normalizeInlineCodeFences(String(children ?? ''));
+const MarkdownBody = memo(function MarkdownBody({ content, streaming }: { content: string; streaming?: boolean }) {
   // remark-math / rehype-katex arrive only for content that contains maths;
   // until then these are stable empty arrays and KaTeX is never fetched.
   const { remarkMathPlugins, rehypeKatexPlugins } = useKatexPlugins(content);
@@ -276,9 +282,19 @@ export const Markdown = memo(function Markdown({ children, className, streaming 
           );
         }
 
+        // dv:协议白名单外的一律不挂 href —— 只把原文显示出来。
+        const safeHref = safeLinkHref(href);
+        if (!safeHref) {
+          return (
+            <span className="text-muted-foreground underline decoration-dotted" title={href}>
+              {linkChildren}
+            </span>
+          );
+        }
+
         return (
           <a
-            href={href}
+            href={safeHref}
             className="text-foreground hover:underline dark:text-primary"
             target="_blank"
             rel="noopener noreferrer"
@@ -292,10 +308,44 @@ export const Markdown = memo(function Markdown({ children, className, streaming 
   );
 
   return (
+    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components as any}>
+      {content}
+    </ReactMarkdown>
+  );
+});
+
+/**
+ * memo 的意义:正文字符串没变就整棵跳过。props 里只有 children/className/
+ * streaming 三个值类型,浅比较天然成立。
+ */
+export const Markdown = memo(function Markdown({ children, className, streaming }: MarkdownProps) {
+  const content = normalizeInlineCodeFences(String(children ?? ''));
+  return (
     <div className={className}>
-      <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components as any}>
-        {content}
-      </ReactMarkdown>
+      <MarkdownBody content={content} streaming={streaming} />
+    </div>
+  );
+});
+
+/**
+ * 流式专用的两段式渲染(dl)。
+ *
+ * 每次 flush 全量重解析是打字机后期变卡的根源:成本随答案长度线性涨,整轮
+ * 二次方。这里按 `splitStreamingMarkdown` 切成「封版前缀 + 活动尾巴」:
+ * 前缀那份 MarkdownBody 的 content 只在又一个段落完成时才变(memo 命中,
+ * 整棵跳过),每次 flush 真正重解析的只有尾巴那几百个字符。
+ *
+ * 两个 body 放在**同一个** prose 容器里:Typography 的样式按后代选择器生效,
+ * 段间距由每个块自己的 margin 提供,拼缝处与单实例渲染一致。定稿后走回
+ * 普通 Markdown(整段一个实例),行为与 dl 之前完全相同。
+ */
+export const StreamingMarkdown = memo(function StreamingMarkdown({ children, className }: { children: React.ReactNode; className?: string }) {
+  const content = normalizeInlineCodeFences(String(children ?? ''));
+  const { stable, tail } = useMemo(() => splitStreamingMarkdown(content), [content]);
+  return (
+    <div className={className}>
+      {stable ? <MarkdownBody content={stable} streaming /> : null}
+      {tail ? <MarkdownBody content={tail} streaming /> : null}
     </div>
   );
 });

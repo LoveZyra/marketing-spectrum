@@ -27,6 +27,13 @@ const DURABLE_KINDS: ReadonlySet<MessageKind> = new Set<MessageKind>([
   'error',
   'interactive_prompt',
   'task_notification',
+  // dr:回合末的 checkpoint 改动清单。它是"这轮盘上多了哪些文件"的唯一
+  // 权威事实(与写入手段无关 —— Bash/python 写的文件 Write 帧里没有),
+  // 工作面板的产出提取靠它才能认出非 Write 写盘。落库前剥 diff(见 append)。
+  'changed_files',
+  // dt:回滚/单文件还原的反向帧 —— 不落它,产出面板就与磁盘永久漂移
+  // (文件已被回滚删掉,面板还列着,点开 404)。
+  'files_reverted',
 ]);
 
 export function isDurableDisplayMessage(message: { kind?: unknown }): boolean {
@@ -46,9 +53,10 @@ type PreparedCache = {
   append: Statement | null;
   count: Statement | null;
   list: Statement | null;
+  tailPage: Statement | null;
   fingerprint: Statement | null;
 };
-const prepared: PreparedCache = { db: null, append: null, count: null, list: null, fingerprint: null };
+const prepared: PreparedCache = { db: null, append: null, count: null, list: null, tailPage: null, fingerprint: null };
 
 function ensurePrepared() {
   const db = getConnection();
@@ -61,6 +69,8 @@ function ensurePrepared() {
     `);
     prepared.count = db.prepare('SELECT COUNT(*) AS total FROM session_display_messages WHERE session_id = ?');
     prepared.list = db.prepare('SELECT payload FROM session_display_messages WHERE session_id = ? ORDER BY id ASC');
+    // dn-O1:尾页直接在 SQL 取(倒序 LIMIT/OFFSET 再反转),分页请求不再整段读出。
+    prepared.tailPage = db.prepare('SELECT payload FROM session_display_messages WHERE session_id = ? ORDER BY id DESC LIMIT ? OFFSET ?');
     prepared.fingerprint = db.prepare('SELECT COUNT(*) AS c, MAX(id) AS m FROM session_display_messages WHERE session_id = ?');
   }
   return prepared;
@@ -115,13 +125,34 @@ export const sessionMessagesDb = {
       ? message.id
       : generateMessageId('display');
 
+    // dr:changed_files 落库前剥 diff —— 单文件 diff 可达 20KB,一回合一帧,
+    // 留着会让日志白胖几个量级;产出提取只要 path/status/untracked 这几样。
+    // 发给前端的那份(forward 的原对象)不动,卡片照常有 diff。
+    const rawFiles = (message as { files?: unknown }).files;
+    const persisted = message.kind === 'changed_files' && Array.isArray(rawFiles)
+      ? {
+        ...message,
+        files: rawFiles.map((entry) => {
+          const file = entry as Record<string, unknown>;
+          return {
+            path: file.path,
+            oldPath: file.oldPath,
+            status: file.status,
+            untracked: file.untracked,
+            additions: file.additions,
+            deletions: file.deletions,
+          };
+        }),
+      }
+      : message;
+
     try {
       const result = ensurePrepared().append!.run(
         sessionId,
         messageId,
-        String(message.kind),
-        String(message.timestamp || new Date().toISOString()),
-        JSON.stringify(message),
+        String(persisted.kind),
+        String(persisted.timestamp || new Date().toISOString()),
+        JSON.stringify(persisted),
       );
       if (result.changes > 0) invalidateParsedList(sessionId);
       return result.changes > 0;
@@ -209,6 +240,64 @@ export const sessionMessagesDb = {
     } catch (error) {
       console.warn('[display-log] read failed:', (error as Error)?.message || error);
       return [];
+    }
+  },
+
+  /**
+   * dn-O1:尾页分页,直接在 SQL 里取。
+   *
+   * 语义与 `sliceTailPage(listForSession(...), limit, offset)` 逐字节一致:
+   * `offset` 从**尾部**数(跳过最新 offset 条),再往前取 `limit` 条,按时间
+   * 正序返回;`hasMore` = 更早的行还有没有。此前分页请求也要整段读出 + 全量
+   * JSON.parse 再切片 —— 指纹缓存挡得住静止会话,挡不住活跃回合(每个 durable
+   * 帧 append 都使缓存失效,每轮 complete 刷新都是一次全量重读)。
+   *
+   * 指纹缓存命中时仍优先用它切片(纯内存,比 SQL 更便宜);未命中的分页请求
+   * 只取所需区间,**不**顺带构建全量缓存 —— 全量路径(limit=null)留给 listForSession。
+   */
+  listTailPage(sessionId: string, limit: number, offset: number): {
+    messages: NormalizedMessage[];
+    total: number;
+    hasMore: boolean;
+  } {
+    // 不用 `this`:调用方可能解构方法,直接走 prepared 语句拿行数。
+    let total = 0;
+    try {
+      const row = ensurePrepared().count!.get(sessionId) as { total?: number } | undefined;
+      total = Number(row?.total || 0);
+    } catch {
+      total = 0;
+    }
+    const normalizedOffset = Math.max(0, Math.floor(offset));
+    const normalizedLimit = Math.max(0, Math.floor(limit));
+
+    try {
+      const fingerprint = displayLogFingerprint(sessionId);
+      const cached = parsedListCache.get(sessionId);
+      if (cached && cached.fingerprint === fingerprint) {
+        const end = Math.max(0, cached.messages.length - normalizedOffset);
+        const start = Math.max(0, end - normalizedLimit);
+        return { messages: cached.messages.slice(start, end), total, hasMore: start > 0 };
+      }
+
+      const rows = ensurePrepared().tailPage!.all(sessionId, normalizedLimit, normalizedOffset) as DisplayMessageRow[];
+      const messages: NormalizedMessage[] = [];
+      for (const row of rows) {
+        try {
+          messages.push(JSON.parse(row.payload) as NormalizedMessage);
+        } catch {
+          // 单行坏了就跳过 —— 与 listForSession 同一条规则。
+        }
+      }
+      messages.reverse();
+      return {
+        messages,
+        total,
+        hasMore: total - normalizedOffset - messages.length > 0,
+      };
+    } catch (error) {
+      console.warn('[display-log] tail-page read failed:', (error as Error)?.message || error);
+      return { messages: [], total, hasMore: false };
     }
   },
 

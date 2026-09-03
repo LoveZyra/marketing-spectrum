@@ -389,9 +389,15 @@ export default function SidebarProjectItem({
           )}
           onClick={selectAndToggleProject}
         >
-          <div className="flex min-w-0 flex-1 items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            {/* ef:设计稿的项目行是「箭头 → 文件夹 → 名字 …… 会话数」。
+                箭头原来在行尾,和右侧的会话数、悬停动作挤在一起;放到最左边之后
+                展开状态一眼可见,层级也和下面缩进的会话行对得上。 */}
+            {isExpanded
+              ? <ChevronDown className="h-3 w-3 flex-none text-muted-foreground" strokeWidth={2} />
+              : <ChevronRight className="h-3 w-3 flex-none text-muted-foreground" strokeWidth={2} />}
             <Folder
-              className={cn('h-4 w-4 flex-shrink-0', isSelected ? 'text-primary' : 'text-muted-foreground')}
+              className={cn('h-3.5 w-3.5 flex-shrink-0', isSelected || isExpanded ? 'filetype-dir' : 'text-muted-foreground')}
               strokeWidth={2}
             />
             <div className="min-w-0 flex-1 text-left">
@@ -467,10 +473,14 @@ export default function SidebarProjectItem({
               <>
                 {/* 收藏星也收进悬停浮层了 —— `sortProjects` 里收藏项无条件排在最前,
                     位置本身就是状态,行里再挂一颗常驻的星是重复表达,还要占 24px。 */}
-                {isExpanded ? (
-                  <ChevronDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" strokeWidth={2} />
-                ) : (
-                  <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" strokeWidth={2} />
+                {/* ef:项目行 = 名字 + 会话数(等宽小字),悬停浮层盖上来时它让位。 */}
+                {totalSessionCount > 0 && (
+                  <span
+                    className="font-mono text-[10.5px] tabular-nums text-muted-foreground group-hover:invisible"
+                    title={sessionCountLabel}
+                  >
+                    {sessionCountDisplay}
+                  </span>
                 )}
               </>
             )}
@@ -486,7 +496,7 @@ export default function SidebarProjectItem({
             改成绝对定位之后,这些按钮悬停时盖在名字尾部,而不是挤压它。
           */}
           {!isEditing && (
-            <div className="absolute right-8 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md bg-muted pl-3 group-hover:flex">
+            <div className="absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md bg-muted pl-3 group-hover:flex">
               <div
                 className={cn(
                   'flex h-6 w-6 cursor-pointer items-center justify-center rounded-sm transition-colors',

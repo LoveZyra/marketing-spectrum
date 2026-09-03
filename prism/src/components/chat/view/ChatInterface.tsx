@@ -5,12 +5,17 @@ import { ArrowDownIcon } from 'lucide-react';
 import { useWebSocket } from '../../../contexts/WebSocketContext';
 import PermissionContext from '../../../contexts/PermissionContext';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
-import type { ChatInterfaceProps } from '../types/types';
+import type { ChatInterfaceProps, ChatMessage } from '../types/types';
 import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
+import { extractSessionChecklist } from '../utils/taskChecklist';
+import { extractSessionOutputs } from '../utils/sessionOutputs';
+import { turnOutputsFromServer } from '../utils/turnOutputs';
+import { changedFilesToMessages } from '../utils/workFrames';
+import { useSessionWorkFrames } from '../hooks/useSessionWorkFrames';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatFindBar from './subcomponents/ChatFindBar';
@@ -18,6 +23,7 @@ import ChatComposer from './subcomponents/ChatComposer';
 import ChangedFilesCard from './subcomponents/ChangedFilesCard';
 import type { ChangedFilesState, ChangedFileEntry } from './subcomponents/ChangedFilesCard';
 import CheckpointHistoryPanel from './subcomponents/CheckpointHistoryPanel';
+import ChatWorkPanel from './subcomponents/ChatWorkPanel';
 /**
  * G3:斜杠命令的结果弹窗(/models、/cost 这类)带着模型卡片、实测按钮、一整套
  * 表格渲染,而它只在用户真的敲了斜杠命令时才出现 —— 打包进聊天主块等于让每个人
@@ -31,6 +37,7 @@ function ChatInterface({
   isConnected,
   sendMessage,
   onFileOpen,
+  isEditorOpen = false,
   onInputFocusChange,
   onSessionProcessing,
   onSessionIdle,
@@ -43,6 +50,7 @@ function ChatInterface({
   sendByCtrlEnter,
   externalMessageUpdate,
   newSessionTrigger,
+  recentSessions,
 }: ChatInterfaceProps) {
   const { subscribe } = useWebSocket();
   const { t } = useTranslation('chat');
@@ -196,8 +204,7 @@ function ChatInterface({
     imageErrors,
     attachedDocs,
     removeAttachedDoc,
-    handleDocFiles,
-    handleAnyFiles,
+    handleAttachFiles,
     attachDocFromUrl,
     parsingDocs,
     docUploadProgress,
@@ -217,14 +224,12 @@ function ChatInterface({
     handleTextareaClick,
     handleTextareaInput,
     syncInputOverlayScroll,
-    handleClearInput,
     handleAbortSession,
     handlePermissionDecision,
     handleGrantToolPermission,
     handleInputFocusChange,
     commandModalPayload,
     closeCommandModal,
-    showCostModal,
     showModelsModal,
   } = useChatComposerState({
     selectedProject,
@@ -284,12 +289,17 @@ function ChatInterface({
     });
   }, [selectedProject, selectedSession, sendMessage, sessionStore]);
 
+  // dr:实时 changed_files 帧转的伪 Write 消息(本轮 Bash/python 写盘的文件
+  // 即刻进工作面板,不等落库基线 refetch)。会话切换清空;刷新后由基线接管。
+  const [liveChangedMessages, setLiveChangedMessages] = useState<ChatMessage[]>([]);
+
   // prism: reset the changed-files card when switching conversations.
   useEffect(() => {
     setChangedFiles(null);
+    setLiveChangedMessages([]);
   }, [selectedSession?.id]);
 
-  const handleChangedFiles = useCallback((payload: { sessionId: string | null; checkpointId: string | null; files: unknown[]; truncated?: boolean }) => {
+  const handleChangedFiles = useCallback((payload: { sessionId: string | null; checkpointId: string | null; files: unknown[]; truncated?: boolean; cwd?: string | null }) => {
     const activeId = selectedSession?.id || currentSessionId || null;
     if (payload.sessionId && activeId && payload.sessionId !== activeId) return;
     setChangedFiles({
@@ -297,6 +307,10 @@ function ChatInterface({
       files: payload.files as ChangedFileEntry[],
       truncated: payload.truncated,
     });
+    const converted = changedFilesToMessages(payload.cwd, payload.files);
+    if (converted.length > 0) {
+      setLiveChangedMessages((current) => [...current, ...converted]);
+    }
   }, [selectedSession?.id, currentSessionId]);
 
   /**
@@ -441,6 +455,43 @@ function ChatInterface({
   // overlapping the last message.
   const hasActivityIndicator = Boolean(sessionActivity && pendingPermissionRequests.length === 0);
 
+  // do/dq:右侧工作面板的数据。基线 = 服务端从**全量历史**滤出的工具帧
+  // (修长会话刷新后首屏只有尾 20 条、清单与产出凭空变少的问题);实时增量 =
+  // 已加载消息窗口。两段直接拼接 —— 折叠函数对重放幂等,重叠段不会算错。
+  const {
+    baseMessages: workBaseMessages,
+    revertedPaths: workRevertedPaths,
+    turnOutputs: serverTurnOutputsRaw,
+    truncated: workHistoryTruncated,
+    refresh: refreshWorkFrames,
+  } = useSessionWorkFrames(
+    selectedSession?.id || currentSessionId || null,
+    isProcessing,
+  );
+  /**
+   * ej:对话正文下面那张「产出」卡的数据,来自**服务端按全量历史算好的**回合
+   * 映射(不是从当前消息窗口现推)。展示名要项目根,所以在这里落地成卡片形状。
+   */
+  const serverTurnOutputs = useMemo(
+    () => turnOutputsFromServer(serverTurnOutputsRaw, selectedProject?.fullPath || selectedProject?.path),
+    [serverTurnOutputsRaw, selectedProject?.fullPath, selectedProject?.path],
+  );
+  const workMessages = useMemo(
+    () => (workBaseMessages.length > 0 || liveChangedMessages.length > 0
+      ? [...workBaseMessages, ...chatMessages, ...liveChangedMessages]
+      : chatMessages),
+    [workBaseMessages, chatMessages, liveChangedMessages],
+  );
+  const latestTodos = useMemo(() => extractSessionChecklist(workMessages), [workMessages]);
+  // dt:折叠完再按"已回滚"集合做减法 —— 窗口里的旧 Write 帧会把已回滚的
+  // 文件加回来,基线单删不够;回滚后重写的文件不在集合里,照常显示。
+  const sessionOutputs = useMemo(() => {
+    const outputs = extractSessionOutputs(workMessages);
+    return workRevertedPaths.size > 0
+      ? outputs.filter((file) => !workRevertedPaths.has(file.path))
+      : outputs;
+  }, [workMessages, workRevertedPaths]);
+
   if (!selectedProject) {
     // This used to be a four-way ternary over `provider`. Claude is the only
     // provider left, so the label is a single lookup.
@@ -460,9 +511,96 @@ function ChatInterface({
     );
   }
 
+  /**
+   * ef:首页空态时输入框搬到问候语下面(ChatEmptyState 的 composerSlot),
+   * 不再钉在底部;其余时候仍在消息流下方。同一个元素、两个位置 —— 切换时会重挂,
+   * 输入内容在 state 里,不丢。
+   */
+  const isHome =
+    chatMessages.length === 0
+    && !selectedSession
+    && !currentSessionId
+    && !isLoadingSessionMessages
+    && !isProcessing;
+
+  const composerElement = (
+    <ChatComposer
+      serverQueued={serverQueued && serverQueued.sessionId === (selectedSession?.id ?? currentSessionId) ? serverQueued : null}
+      onCancelServerQueued={handleCancelServerQueued}
+      pendingPermissionRequests={pendingPermissionRequests}
+      handlePermissionDecision={handlePermissionDecision}
+      handleGrantToolPermission={handleGrantToolPermission}
+      isLoading={isProcessing}
+      onAbortSession={handleAbortSession}
+      abortDiscardsPending={abortDiscardsPending}
+      activeModel={activeSessionModel ?? claudeModel}
+      activeModelReal={activeModelReal}
+      permissionMode={permissionMode}
+      onSelectMode={selectPermissionMode}
+      availablePermissionModes={availablePermissionModes}
+      effort={currentProviderEffort}
+      availableEffortOptions={currentProviderEffortOptions}
+      onSelectEffort={handleSelectEffort}
+      onShowModelPicker={showModelsModal}
+      onShowCheckpoints={handleShowCheckpoints}
+      onToggleCommandMenu={handleToggleCommandMenu}
+      onSubmit={handleSubmit}
+      isDragActive={isDragActive}
+      queuedDraft={queuedDraft}
+      onEditQueuedDraft={editQueuedDraft}
+      onDeleteQueuedDraft={deleteQueuedDraft}
+      attachedImages={attachedImages}
+      onRemoveImage={handleRemoveImage}
+      uploadingImages={uploadingImages}
+      imageErrors={imageErrors}
+      attachedDocs={attachedDocs}
+      onRemoveDoc={removeAttachedDoc}
+      onAttachFiles={handleAttachFiles}
+      onAttachUrl={attachDocFromUrl}
+      parsingDocs={parsingDocs}
+      docUploadProgress={docUploadProgress}
+      showFileDropdown={showFileDropdown}
+      filteredFiles={filteredFiles}
+      selectedFileIndex={selectedFileIndex}
+      onSelectFile={selectFile}
+      filteredCommands={filteredCommands}
+      selectedCommandIndex={selectedCommandIndex}
+      onCommandSelect={handleCommandSelect}
+      onCloseCommandMenu={resetCommandMenuState}
+      isCommandMenuOpen={showCommandMenu}
+      frequentCommands={effectiveFrequentCommands}
+      getRootProps={getRootProps as (...args: unknown[]) => Record<string, unknown>}
+      getInputProps={getInputProps as (...args: unknown[]) => Record<string, unknown>}
+      openImagePicker={openImagePicker}
+      inputHighlightRef={inputHighlightRef}
+      renderInputWithMentions={renderInputWithMentions}
+      textareaRef={textareaRef}
+      input={input}
+      onInputChange={handleInputChange}
+      onTextareaClick={handleTextareaClick}
+      onTextareaKeyDown={handleKeyDown}
+      onTextareaPaste={handlePaste}
+      onTextareaScrollSync={syncInputOverlayScroll}
+      onTextareaInput={handleTextareaInput}
+      onInputFocusChange={handleInputFocusChange}
+      placeholder={t('input.placeholder', {
+        provider: t('messageTypes.claude'),
+      })}
+      isTextareaExpanded={isTextareaExpanded}
+      sendByCtrlEnter={sendByCtrlEnter}
+    />
+  );
+
   return (
     <PermissionContext.Provider value={permissionContextValue}>
-      <div className="flex h-full min-h-0 flex-col">
+      {/* do:对话区分两栏 —— 左边消息流 + 输入框,右边 Cowork 式工作面板
+          (上任务清单、下产出文件)。面板两块都空时自己不渲染,布局即回到单栏。 */}
+      <div className="flex h-full min-h-0">
+      {/* dy:正文自己的下限 —— 低于这个数输入框就没法用了。
+          这 280 和 EditorSidebar 的 MIN_CHAT_BODY_WIDTH 是**同一个数**,必须
+          一起改:那边按它给预览栏发宽度,这边是硬约束。以前这里是 min-w-0,
+          预览栏一开正文就被压到 0(输入框塌成一条竖着堆芯片的窄条)。 */}
+      <div className="flex h-full min-h-0 min-w-[280px] flex-1 flex-col">
         <div className="relative flex min-h-0 flex-1 flex-col">
           <ChatFindBar
             open={findBarOpen}
@@ -507,6 +645,11 @@ function ChatInterface({
           selectedProject={selectedProject}
           onEditRerun={startEditRerun}
           onRetryLastTurn={handleRetryLastTurn}
+          isHome={isHome}
+          composerSlot={isHome ? composerElement : null}
+          recentSessions={recentSessions}
+          onOpenSession={onNavigateToSession}
+          serverTurnOutputs={serverTurnOutputs}
           />
         </div>
 
@@ -522,6 +665,9 @@ function ChatInterface({
               onReverted={() => {
                 const activeId = selectedSession?.id || currentSessionId;
                 if (activeId) void sessionStore.refreshFromServer(activeId);
+                // dt:回滚/还原落了 files_reverted 反向帧 —— 重拉基线,
+                // 产出面板立刻与磁盘对齐(已回滚文件撤下)。
+                refreshWorkFrames();
               }}
             />
             </div>
@@ -540,80 +686,21 @@ function ChatInterface({
             </div>
           )}
 
-          <ChatComposer
-          serverQueued={serverQueued && serverQueued.sessionId === (selectedSession?.id ?? currentSessionId) ? serverQueued : null}
-          onCancelServerQueued={handleCancelServerQueued}
-          pendingPermissionRequests={pendingPermissionRequests}
-          handlePermissionDecision={handlePermissionDecision}
-          handleGrantToolPermission={handleGrantToolPermission}
-          isLoading={isProcessing}
-          onAbortSession={handleAbortSession}
-          abortDiscardsPending={abortDiscardsPending}
-          activeModel={activeSessionModel ?? claudeModel}
-          activeModelReal={activeModelReal}
-          permissionMode={permissionMode}
-          onSelectMode={selectPermissionMode}
-          availablePermissionModes={availablePermissionModes}
-          effort={currentProviderEffort}
-          availableEffortOptions={currentProviderEffortOptions}
-          onSelectEffort={handleSelectEffort}
-          tokenBudget={tokenBudget}
-          isCompacting={sessionActivity?.statusKind === 'compacting'
-            && sessionActivity?.compaction?.phase !== 'done'
-            && sessionActivity?.compaction?.phase !== 'failed'}
-          onShowTokenUsage={showCostModal}
-          onShowModelPicker={showModelsModal}
-          onShowCheckpoints={handleShowCheckpoints}
-          onToggleCommandMenu={handleToggleCommandMenu}
-          hasInput={Boolean(input.trim())}
-          onClearInput={handleClearInput}
-          onSubmit={handleSubmit}
-          isDragActive={isDragActive}
-          queuedDraft={queuedDraft}
-          onEditQueuedDraft={editQueuedDraft}
-          onDeleteQueuedDraft={deleteQueuedDraft}
-          attachedImages={attachedImages}
-          onRemoveImage={handleRemoveImage}
-          uploadingImages={uploadingImages}
-          imageErrors={imageErrors}
-          attachedDocs={attachedDocs}
-          onRemoveDoc={removeAttachedDoc}
-          onPickDocs={handleDocFiles}
-          onPickAnyFiles={handleAnyFiles}
-          onAttachUrl={attachDocFromUrl}
-          parsingDocs={parsingDocs}
-          docUploadProgress={docUploadProgress}
-          showFileDropdown={showFileDropdown}
-          filteredFiles={filteredFiles}
-          selectedFileIndex={selectedFileIndex}
-          onSelectFile={selectFile}
-          filteredCommands={filteredCommands}
-          selectedCommandIndex={selectedCommandIndex}
-          onCommandSelect={handleCommandSelect}
-          onCloseCommandMenu={resetCommandMenuState}
-          isCommandMenuOpen={showCommandMenu}
-          frequentCommands={effectiveFrequentCommands}
-          getRootProps={getRootProps as (...args: unknown[]) => Record<string, unknown>}
-          getInputProps={getInputProps as (...args: unknown[]) => Record<string, unknown>}
-          openImagePicker={openImagePicker}
-          inputHighlightRef={inputHighlightRef}
-          renderInputWithMentions={renderInputWithMentions}
-          textareaRef={textareaRef}
-          input={input}
-          onInputChange={handleInputChange}
-          onTextareaClick={handleTextareaClick}
-          onTextareaKeyDown={handleKeyDown}
-          onTextareaPaste={handlePaste}
-          onTextareaScrollSync={syncInputOverlayScroll}
-          onTextareaInput={handleTextareaInput}
-          onInputFocusChange={handleInputFocusChange}
-          placeholder={t('input.placeholder', {
-            provider: t('messageTypes.claude'),
-          })}
-          isTextareaExpanded={isTextareaExpanded}
-          sendByCtrlEnter={sendByCtrlEnter}
-        />
+          {!isHome && composerElement}
         </div>
+      </div>
+
+      <ChatWorkPanel
+        todos={latestTodos}
+        outputs={sessionOutputs}
+        historyTruncated={workHistoryTruncated}
+        previewOpen={isEditorOpen}
+        isProcessing={isProcessing}
+        projectId={selectedProject?.projectId ?? null}
+        projectPath={selectedProject?.fullPath || selectedProject?.path || null}
+        sessionId={selectedSession?.id || currentSessionId || null}
+        onFileOpen={onFileOpen}
+      />
       </div>
 
       {showCheckpoints && (
@@ -624,6 +711,8 @@ function ChatInterface({
           onReverted={() => {
             const activeId = selectedSession?.id || currentSessionId;
             if (activeId) void sessionStore.refreshFromServer(activeId);
+            // dt:历史抽屉回滚同样落了反向帧 —— 面板一并对齐。
+            refreshWorkFrames();
           }}
         />
       )}

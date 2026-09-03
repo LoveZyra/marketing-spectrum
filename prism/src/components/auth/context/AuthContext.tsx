@@ -199,7 +199,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
   );
 
   const logout = useCallback(() => {
-    const tokenToInvalidate = token;
+    /**
+     * dv:以 **localStorage 里那张**为准,React state 只作兜底。
+     *
+     * 静默续期(`X-Refreshed-Token`)与改密都只更新 localStorage,刻意不动
+     * React state —— 于是这里捕获的 `token` 可能是好几轮之前那张。改密之后
+     * 服务端 token_version 已经 +1,旧令牌**连同本会话一起作废**,拿它去打
+     * logout 必 401 —— 登出事件依然进不了审计日志,正是上面那行注释声称
+     * 已经修掉的坑换条路径复活。
+     */
+    let tokenToInvalidate: string | null = token;
+    try {
+      const stored = localStorage.getItem('auth-token');
+      if (stored) tokenToInvalidate = stored;
+    } catch { /* 隐私模式等取不到就用 state 里那张 */ }
     clearSession();
 
     if (tokenToInvalidate) {

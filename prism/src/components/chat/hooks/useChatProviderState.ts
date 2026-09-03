@@ -88,6 +88,7 @@ type ChangeActiveModelApiResponse = {
 
 export function useChatProviderState({ selectedSession, selectedProject }: UseChatProviderStateArgs) {
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
+
   const [pendingPermissionRequests, setPendingPermissionRequests] = useState<PendingPermissionRequest[]>([]);
   const [claudeModel, setClaudeModel] = useState<string>(() => {
     return localStorage.getItem('claude-model') || FALLBACK_DEFAULT_MODEL.claude;
@@ -529,6 +530,26 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
       localStorage.setItem(`permissionMode-${selectedSession.id}`, nextMode);
     }
   }, [selectedSession?.id, getPermissionModesForProvider]);
+
+  /**
+   * do/du:计划卡点了「开始实施」→ 档位切出计划模式。批准只作用于当前回合
+   * (CLI 内部继续执行),而 composer 档位决定**下一条消息**;不切的话下一句
+   * 追问又进计划模式,"点了开始却还在计划"。
+   *
+   * du:必须走 `selectPermissionMode` —— 上面那段注释警告过的正是这个坑:
+   * do 轮直接调 setPermissionMode,**没写 localStorage**,于是切走再切回
+   * (或 capabilities 响应落地让恢复 effect 重跑)时,档位又从存档里读回
+   * `plan`,症状原样复发。只在当前正是 plan 时动作,故读 ref 判断。
+   */
+  const permissionModeRef = useRef(permissionMode);
+  permissionModeRef.current = permissionMode;
+  useEffect(() => {
+    const onPlanApproved = () => {
+      if (permissionModeRef.current === 'plan') selectPermissionMode('default');
+    };
+    window.addEventListener('prism:plan-approved', onPlanApproved);
+    return () => window.removeEventListener('prism:plan-approved', onPlanApproved);
+  }, [selectPermissionMode]);
 
   const cyclePermissionMode = useCallback(() => {
     const modes = getPermissionModesForProvider(PROVIDER);

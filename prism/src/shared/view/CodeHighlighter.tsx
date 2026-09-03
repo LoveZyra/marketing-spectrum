@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { useTheme } from '../../contexts/ThemeContext';
@@ -61,6 +61,43 @@ function PlainCodeBlock({ customStyle, codeTagProps, children }: Omit<CodeHighli
   );
 }
 
+/**
+ * 大代码块过了这个字符数才做「进视口再上色」(dl)。
+ *
+ * tokenize 是同步跑在主线程上的:几百行的块落地那一瞬能顶住几十毫秒;而长
+ * 转录里多数大块根本不在视口内。小块不值得为省一次 tokenize 养一个
+ * IntersectionObserver,直接照旧。
+ */
+const LAZY_HIGHLIGHT_MIN_CHARS = 2000;
+
+/** 一次性的进视口探测:提前 600px 预热,亮过一次就不再回头。 */
+function useInViewOnce(enabled: boolean) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [inView, setInView] = useState(!enabled);
+
+  useEffect(() => {
+    if (!enabled || inView) return;
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setInView(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '600px 0px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [enabled, inView]);
+
+  return { ref, inView };
+}
+
 export default function CodeHighlighter({
   language,
   customStyle,
@@ -68,6 +105,9 @@ export default function CodeHighlighter({
   children,
   plain = false,
 }: CodeHighlighterProps) {
+  const lazyByViewport = !plain && children.length >= LAZY_HIGHLIGHT_MIN_CHARS;
+  const { ref, inView } = useInViewOnce(lazyByViewport);
+
   if (plain) {
     return (
       <PlainCodeBlock customStyle={customStyle} codeTagProps={codeTagProps}>
@@ -76,7 +116,7 @@ export default function CodeHighlighter({
     );
   }
 
-  return (
+  const highlighted = (
     <Suspense
       fallback={
         <PlainCodeBlock customStyle={customStyle} codeTagProps={codeTagProps}>
@@ -88,5 +128,23 @@ export default function CodeHighlighter({
         {children}
       </SyntaxHighlighterImpl>
     </Suspense>
+  );
+
+  if (!lazyByViewport) {
+    return highlighted;
+  }
+
+  // 纯文本块与高亮块字号/行高/内边距完全一致(见 PlainCodeBlock 的注释),
+  // 上色只是"字换颜色",不改高度 —— 滚动锚定不受影响。
+  return (
+    <div ref={ref}>
+      {inView
+        ? highlighted
+        : (
+          <PlainCodeBlock customStyle={customStyle} codeTagProps={codeTagProps}>
+            {children}
+          </PlainCodeBlock>
+        )}
+    </div>
   );
 }

@@ -249,7 +249,8 @@
     "actions": {
       "edit": "サーバーを編集",
       "delete": "サーバーを削除"
-    }
+    },
+    "addServer": "{{provider}} MCP サーバーを追加"
   },
   "accounts": {
     "title": "Account approval",

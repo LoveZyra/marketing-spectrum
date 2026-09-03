@@ -1,22 +1,32 @@
+import { useTranslation } from 'react-i18next';
+
 import { cn } from '../../../../lib/utils';
 
 export type ToolStatus = 'running' | 'completed' | 'error' | 'denied';
 
-const STATUS_CONFIG: Record<ToolStatus, { label: string; className: string }> = {
+/**
+ * dv:标签走 i18n。这四个词此前写死英文,在全中文界面里就是四块英文补丁 ——
+ * 而同一张工具卡上其余文案都是中文的。defaultValue 保留英文原文,漏译时行为不变。
+ */
+const STATUS_CONFIG: Record<ToolStatus, { i18nKey: string; fallback: string; className: string }> = {
   running: {
-    label: 'Running',
+    i18nKey: 'toolStatus.running',
+    fallback: 'Running',
     className: 'bg-primary/[0.08] text-card-foreground dark:text-primary',
   },
   completed: {
-    label: 'Completed',
+    i18nKey: 'toolStatus.completed',
+    fallback: 'Completed',
     className: 'bg-primary/[0.08] text-card-foreground dark:text-primary',
   },
   error: {
-    label: 'Error',
+    i18nKey: 'toolStatus.error',
+    fallback: 'Error',
     className: 'bg-muted text-muted-foreground',
   },
   denied: {
-    label: 'Denied',
+    i18nKey: 'toolStatus.denied',
+    fallback: 'Denied',
     className: 'bg-muted text-muted-foreground',
   },
 };
@@ -27,6 +37,7 @@ interface ToolStatusBadgeProps {
 }
 
 export function ToolStatusBadge({ status, className }: ToolStatusBadgeProps) {
+  const { t } = useTranslation('chat');
   const config = STATUS_CONFIG[status];
   return (
     <span
@@ -36,7 +47,7 @@ export function ToolStatusBadge({ status, className }: ToolStatusBadgeProps) {
         className,
       )}
     >
-      {config.label}
+      {t(config.i18nKey, { defaultValue: config.fallback })}
     </span>
   );
 }

@@ -4,10 +4,23 @@ import { useTranslation } from 'react-i18next';
 
 import type { SessionExportFormat } from '../../utils/session-export';
 
+export type SessionMenuAction = {
+  key: string;
+  label: string;
+  onSelect: () => void;
+};
+
 type Props = {
   /** 触发按钮(导出图标)。菜单挂在它下面。 */
   children: (props: { onClick: (event: React.MouseEvent) => void; ref: React.Ref<HTMLButtonElement> }) => React.ReactNode;
   onExport: (options: { format: SessionExportFormat; includeTools: boolean }) => void;
+  /**
+   * ef:顶栏的「…」把导出和其它会话动作(复制项目路径)放进同一个面板 ——
+   * 这些附加项排在格式与开关之后,隔一条发丝线。侧栏的导出按钮不传。
+   */
+  extraActions?: SessionMenuAction[];
+  /** 面板顶部的小标题(顶栏「…」里三个格式名前面要有"导出对话"才读得通;侧栏的导出图标不需要)。 */
+  heading?: string;
 };
 
 const FORMATS: Array<{ value: SessionExportFormat; labelKey: string; fallback: string; hintKey: string; hintFallback: string }> = [
@@ -25,7 +38,7 @@ const FORMATS: Array<{ value: SessionExportFormat; labelKey: string; fallback: s
  *
  * 面板 portal 到 body:侧栏那颗按钮在 overflow-hidden 的滚动容器里,不 portal 会被裁掉。
  */
-export default function SessionExportMenu({ children, onExport }: Props) {
+export default function SessionExportMenu({ children, onExport, extraActions, heading }: Props) {
   const { t } = useTranslation('common');
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [rect, setRect] = useState<{ left: number; top: number } | null>(null);
@@ -64,9 +77,12 @@ export default function SessionExportMenu({ children, onExport }: Props) {
           <div className="fixed inset-0 z-[100]" onClick={() => setRect(null)} />
           <div
             role="menu"
-            className="prism-modal-shadow fixed z-[101] w-[232px] overflow-hidden rounded-lg border border-border bg-popover py-1"
+            className="prism-modal-shadow fixed z-[101] w-[232px] overflow-hidden rounded-panel border border-border bg-popover py-1"
             style={{ left: rect.left, top: rect.top }}
           >
+            {heading && (
+              <div className="px-3 pb-1 pt-1.5 text-[11px] font-semibold tracking-[0.4px] text-muted-foreground">{heading}</div>
+            )}
             {FORMATS.map((format) => (
               <button
                 key={format.value}
@@ -95,6 +111,25 @@ export default function SessionExportMenu({ children, onExport }: Props) {
               />
               {t('export.includeTools', { defaultValue: '含工具过程' })}
             </label>
+            {extraActions && extraActions.length > 0 && (
+              <div className="mt-1 border-t border-border pt-1">
+                {extraActions.map((action) => (
+                  <button
+                    key={action.key}
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground hover:bg-accent"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setRect(null);
+                      action.onSelect();
+                    }}
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </>,
         document.body,

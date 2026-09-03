@@ -37,8 +37,12 @@ const RAIL_BUTTON_CLASS =
 
 /**
  * 桌面端最左侧的 56px 图标轨(设计稿 2a / 2b)。
- * 从上到下:Prism 标记 → 发丝线 → 四个标签 → 发丝线 → 侧栏开合 → 弹性占位 → 快捷设置 → 设置(挂待审批计数)。
+ * 从上到下:Prism 标记 → 发丝线 → 五个标签 → 发丝线 → 侧栏开合 → 弹性占位 → 快捷设置 → 设置(挂待审批计数)。
  * 移动端不渲染 —— 小屏仍走 MainContentHeader 里的顶部标签栏。
+ *
+ * **这条轨只放 Prism 自己的标签页。** ek 一度把「算法效果查询」也挂了上来,
+ * el 撤掉 —— 轨位留给别的用途(用户定夺)。外部应用的入口只在首页的「工具」
+ * 栏目(见 config/externalApps.ts 与 HomeToolsSection)。
  */
 export default function AppRail({
   activeTab,

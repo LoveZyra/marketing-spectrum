@@ -26,7 +26,7 @@ import {
 } from '../services/git-checkpoint.js';
 import { isClaudeSDKSessionActive } from '../claude-sdk.js';
 import { chatRunRegistry } from '../modules/websocket/services/chat-run-registry.service.js';
-import { projectVisibilityInput, projectsDb, sessionsDb } from '../modules/database/index.js';
+import { projectVisibilityInput, projectsDb, sessionMessagesDb, sessionsDb } from '../modules/database/index.js';
 import { canViewerSeeProject, readRequestViewer } from '../shared/project-visibility.js';
 
 const router = express.Router();
@@ -164,6 +164,63 @@ router.get('/:id/changes', async (req, res) => {
   }
 });
 
+/**
+ * dt:回滚/还原成功后往会话显示日志落一条 `files_reverted` 反向帧。
+ *
+ * 不落它,工作面板与磁盘永久漂移:文件被回滚删掉,产出列表还挂着,点开
+ * 404。checkpoint meta 存的 sessionId 是 provider 原生 id,经 sessions 表
+ * 反查应用侧会话 id;反查不到(极端)就跳过 —— 名帧是锦上添花,不拦回滚。
+ * paths 只收**当时为新增**的文件(修改类回滚不影响"产出"语义)。
+ */
+/**
+ * dv:进锁后复查"这棵树上没有回合在跑"。
+ *
+ * 与路由入口那次检查同源,但由 checkpoint 服务在**拿到 cwd 锁之后**调用 ——
+ * 入口检查与真正的 `reset --hard` 之间隔着算改动清单、做安全快照等好几秒,
+ * 聊天回合又不走 cwd 锁,那段窗口里发一条消息就能和回滚同时写同一棵树。
+ * 返回 undefined 表示可以继续;返回对象则作为 409 的载荷。
+ */
+function makeBusyAssertion() {
+  return async (meta) => {
+    if (meta.sessionId && isClaudeSDKSessionActive(meta.sessionId)) {
+      return {
+        sessionId: meta.sessionId,
+        error: 'This session started running while the rollback was preparing. Stop it and try again.',
+      };
+    }
+    const activeRun = await findActiveRunForCwd(meta.cwd);
+    if (activeRun) {
+      return {
+        sessionId: activeRun.sessionId,
+        error: `Another session (${activeRun.sessionId}) started running in this directory while the rollback was preparing. Stop it and try again.`,
+      };
+    }
+    return undefined;
+  };
+}
+
+function appendFilesRevertedFrame(meta, relPaths) {
+  try {
+    if (!relPaths || relPaths.length === 0) return;
+    const providerSessionId = typeof meta?.sessionId === 'string' ? meta.sessionId : '';
+    if (!providerSessionId) return;
+    const row = sessionsDb.getSessionByProviderSessionId(providerSessionId);
+    if (!row?.session_id) return;
+    sessionMessagesDb.append(row.session_id, {
+      id: `files_reverted_${meta.id}_${Date.now()}`,
+      sessionId: row.session_id,
+      timestamp: new Date().toISOString(),
+      provider: 'claude',
+      kind: 'files_reverted',
+      checkpointId: meta.id,
+      cwd: meta.cwd || null,
+      paths: relPaths,
+    });
+  } catch (error) {
+    console.warn('[Checkpoint] files_reverted frame append failed:', error?.message || error);
+  }
+}
+
 router.post('/:id/restore', async (req, res) => {
   try {
     const meta = await readCheckpoint(req.params.id);
@@ -192,10 +249,21 @@ router.post('/:id/restore', async (req, res) => {
       });
     }
 
-    const result = await restoreCheckpoint(req.params.id, { force: parseForceFlag(req) });
+    // 回滚前先算"即将被撤掉的新增文件"—— 回滚之后就无从对比了。
+    let revertedNewPaths = [];
+    try {
+      const changes = await changedFilesSince(req.params.id);
+      revertedNewPaths = (changes.files || [])
+        .filter((file) => file.status === 'added' || file.untracked)
+        .map((file) => file.path)
+        .filter(Boolean);
+    } catch { /* 算不出就不落反向帧,回滚照常 */ }
+
+    const result = await restoreCheckpoint(req.params.id, { force: parseForceFlag(req), assertNotBusy: makeBusyAssertion() });
     if (!result.ok) {
       return res.status(result.status || 500).json(result);
     }
+    appendFilesRevertedFrame(meta, revertedNewPaths);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -229,8 +297,11 @@ router.post('/:id/revert-file', async (req, res) => {
       });
     }
 
-    const result = await revertFile(req.params.id, relPath);
+    const result = await revertFile(req.params.id, relPath, { assertNotBusy: makeBusyAssertion() });
     if (!result.ok) return res.status(422).json(result);
+    // 单文件还原:该文件当时若非新增,collectWorkFrames 里本没有它的产出帧,
+    // 反向帧就是空操作 —— 无需区分,统一落。
+    appendFilesRevertedFrame(meta, [relPath]);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });

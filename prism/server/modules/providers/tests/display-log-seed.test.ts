@@ -54,7 +54,7 @@ test('老会话第一次再开口:整段历史抄进日志,顺序不变', async 
     sessionsDb.createSession('s-old', 'claude', '/workspace/demo');
     const fetchHistory = stubTranscript(transcript(['a', 'b', 'c']));
 
-    assert.equal(await seedDisplayLogFromTranscript('s-old'), 3);
+    assert.deepEqual(await seedDisplayLogFromTranscript('s-old'), { status: 'ready', seeded: 3 });
     expect(fetchHistory).toHaveBeenCalledTimes(1);
     assert.deepEqual(
       sessionMessagesDb.listForSession('s-old').map((m) => m.content),
@@ -68,8 +68,8 @@ test('抄过一次就不再读 transcript —— 之后这个会话永久归日�
     sessionsDb.createSession('s-twice', 'claude', '/workspace/demo');
     const fetchHistory = stubTranscript(transcript(['a', 'b']));
 
-    assert.equal(await seedDisplayLogFromTranscript('s-twice'), 2);
-    assert.equal(await seedDisplayLogFromTranscript('s-twice'), 0);
+    assert.deepEqual(await seedDisplayLogFromTranscript('s-twice'), { status: 'ready', seeded: 2 });
+    assert.deepEqual(await seedDisplayLogFromTranscript('s-twice'), { status: 'ready', seeded: 0 });
     expect(fetchHistory).toHaveBeenCalledTimes(1);
     assert.equal(sessionMessagesDb.countForSession('s-twice'), 2);
   });
@@ -80,7 +80,7 @@ test('还没有 transcript 的新会话不抄 —— 它从第一条消息起天
     sessionsDb.createAppSession('s-fresh', 'claude', '/workspace/demo');
     const fetchHistory = stubTranscript(transcript(['a']));
 
-    assert.equal(await seedDisplayLogFromTranscript('s-fresh'), 0);
+    assert.deepEqual(await seedDisplayLogFromTranscript('s-fresh'), { status: 'ready', seeded: 0 });
     expect(fetchHistory).not.toHaveBeenCalled();
   });
 });
@@ -93,7 +93,23 @@ test('transcript 读不动也不能挡住发送', async () => {
     );
     vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    assert.equal(await seedDisplayLogFromTranscript('s-broken'), 0);
+    // du:读不动现在报 failed —— 调用方据此**跳过本轮落库**,日志维持空、
+    // 会话继续走 transcript,历史不会因为多写了一行而整段消失。
+    assert.deepEqual(await seedDisplayLogFromTranscript('s-broken'), { status: 'failed' });
     assert.equal(sessionMessagesDb.countForSession('s-broken'), 0);
+  });
+});
+
+test('du:有历史但一条都没抄进去 → failed(不敢把空日志当权威)', async () => {
+  await withIsolatedDatabase(async () => {
+    sessionsDb.createSession('s-empty-seed', 'claude', '/workspace/demo');
+    sessionsDb.assignProviderSessionId('s-empty-seed', 'prov-empty-seed');
+    // transcript 有内容,但全是不落库的 kind(白名单之外)→ appendMany 落 0 条。
+    stubTranscript([
+      { id: 'x1', kind: 'status', provider: 'claude', timestamp: '2026-08-20T10:00:00.000Z' },
+      { id: 'x2', kind: 'complete', provider: 'claude', timestamp: '2026-08-20T10:01:00.000Z' },
+    ]);
+    assert.deepEqual(await seedDisplayLogFromTranscript('s-empty-seed'), { status: 'failed' });
+    assert.equal(sessionMessagesDb.countForSession('s-empty-seed'), 0);
   });
 });

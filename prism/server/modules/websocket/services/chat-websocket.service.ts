@@ -7,6 +7,7 @@ import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.
 import { seedDisplayLogFromTranscript } from '@/modules/providers/index.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
 import { currentHolder } from '@/modules/websocket/services/conversation-ownership.service.js';
+import { ATTACHMENT_DIR_NAME } from '@/shared/attachment-storage.js';
 import { getGlobalImageAssetsDir, normalizeImageDescriptors } from '@/shared/image-attachments.js';
 import { readSocketViewer } from '@/shared/project-visibility.js';
 import type {
@@ -26,24 +27,44 @@ import { generateMessageId, parseIncomingJsonObject } from '@/shared/utils.js';
  *
  * Exported for tests; `assetsRootOverride` exists only for them.
  */
-export function filterImagesToUploadStore(images: unknown, assetsRootOverride?: string): AnyRecord[] {
-  const assetsRoot = path.resolve(assetsRootOverride ?? getGlobalImageAssetsDir());
+export function filterImagesToUploadStore(
+  images: unknown,
+  assetsRootOverride?: string,
+  /**
+   * ed:额外允许的根目录 —— 会话所属项目的 `attachments/`。
+   *
+   * cu 起,聊天图片按会话所属项目落到 `<项目>/attachments/`(配额、清理都按项目走),
+   * 全局 `~/.prism/assets` 只在拿不到项目时兜底。而这道门一直只认全局目录,结果是
+   * **每一张在项目会话里发的图都被丢掉**:runtime 收不到图(模型说"看不到图片"),
+   * 用户行落库时也没有 images —— 回合一结束、历史一刷新,乐观气泡被服务端拷贝顶掉,
+   * 图片就"过一会儿消失了"(用户实测)。项目目录是这个会话本来就有权读的,放行它的
+   * 直接子文件与放行全局目录同一个安全水位;仍然只认**直接子文件**,不认子目录与穿越。
+   */
+  extraRoots: readonly string[] = [],
+): AnyRecord[] {
+  const roots = [assetsRootOverride ?? getGlobalImageAssetsDir(), ...extraRoots]
+    .filter((root): root is string => typeof root === 'string' && root.length > 0)
+    .map((root) => path.resolve(root));
 
-  return normalizeImageDescriptors(images).filter((descriptor) => {
-    // Relative paths are anchored in the store; absolute ones must already be in it.
-    const resolved = path.resolve(assetsRoot, descriptor.path);
-    const relative = path.relative(assetsRoot, resolved);
-    const isDirectChild =
+  const isDirectChildOf = (root: string, candidate: string): boolean => {
+    // Relative paths are anchored in the root; absolute ones must already be in it.
+    const resolved = path.resolve(root, candidate);
+    const relative = path.relative(root, resolved);
+    return (
       relative.length > 0 &&
       !relative.startsWith('..') &&
       !path.isAbsolute(relative) &&
       !relative.includes(path.sep) &&
-      !relative.includes('/');
+      !relative.includes('/')
+    );
+  };
 
-    if (!isDirectChild) {
+  return normalizeImageDescriptors(images).filter((descriptor) => {
+    const allowed = roots.some((root) => isDirectChildOf(root, descriptor.path));
+    if (!allowed) {
       console.warn(`[Chat] Dropping image outside the upload store: ${descriptor.path}`);
     }
-    return isDirectChild;
+    return allowed;
   });
 }
 
@@ -187,6 +208,17 @@ type PendingSend = {
 const pendingSends = new Map<string, PendingSend>();
 
 /**
+ * dv:**已认领、正在派发中**的续发。
+ *
+ * `scheduleDrainPendingSend` 先把消息从 pendingSends 里摘掉(认领,防重发),
+ * 再走 `handleChatSend` —— 而后者在 `startRun` 之前还有几段 await(抄历史、
+ * 图片上传…)。这段窗口里:回合还没登记,排队也已经不在表里,于是用户按
+ * 停止时两头都找不到东西可撤,"刹车没刹住",那条消息照样发出去。
+ * 派发期间在这里留个可取消的令牌,中止路径据此把它拦下来。
+ */
+const drainingSends = new Map<string, { cancelled: boolean }>();
+
+/**
  * 谁**正在看**哪条会话(chat.subscribe 登记,socket 关闭时摘掉)。
  *
  * 注意和 `broadcastToSessionViewers` 的区别:那个按"能不能看见"过滤,是**权限**;
@@ -213,12 +245,24 @@ function forgetViewerEverywhere(ws: WebSocket): void {
   }
 }
 
-/** 把所有正在看这条会话的 socket 接进这一轮的推流集合。 */
+/**
+ * 把所有正在看这条会话的 socket 接进这一轮的推流集合。
+ *
+ * du:**每一轮都重判可见性**。此前只在 `chat.subscribe` 那一刻查一次,
+ * 之后这个 socket 就一直躺在 viewers 里 —— 项目被改私有 / 共享被撤销之后,
+ * 它照样能收到后续每一轮的全部帧(工具结果正文、文件内容、审批请求)。
+ * 下面的 `broadcastToSessionViewers` 本来就是每帧重判的,两条推流路径的
+ * 口径必须一致。判不过的直接从 viewers 摘掉,不再接流。
+ */
 function attachSessionViewers(sessionId: string): void {
   const viewers = sessionViewers.get(sessionId);
   if (!viewers) return;
   for (const viewer of viewers) {
     if (viewer.readyState !== WS_OPEN_STATE) {
+      viewers.delete(viewer);
+      continue;
+    }
+    if (!canViewerSeeSession(sessionId, readSocketViewer(viewer))) {
       viewers.delete(viewer);
       continue;
     }
@@ -322,7 +366,9 @@ async function handleChatSend(
   ws: WebSocket,
   userId: string | number | null,
   data: AnyRecord,
-  dependencies: ChatWebSocketDependencies
+  dependencies: ChatWebSocketDependencies,
+  /** dv:续发派发令牌 —— 中止路径可以在 startRun 之前把这一条拦下来。 */
+  drainToken?: { cancelled: boolean },
 ): Promise<void> {
   const sessionId = readRequiredSessionId(data);
   if (!sessionId) {
@@ -385,7 +431,35 @@ async function handleChatSend(
    * 放在 `startRun` 之前:抄的是"这次发送之前"的历史,顺序天然对得上,
    * 也不会和本回合正在写入的新消息抢同一批 id。
    */
-  await seedDisplayLogFromTranscript(sessionId);
+  // du:抄写结果要看。失败(读不动 transcript / 整批没落成)时**本轮整轮
+  // 不落日志** —— 落哪怕一行,fetchHistory 就改判日志为权威,老会话几百条
+  // 历史立刻从界面消失且不可恢复。这一轮继续走 transcript,下轮再抄一次。
+  const seedOutcome = await seedDisplayLogFromTranscript(sessionId);
+  const persistDisplayLog = seedOutcome.status === 'ready';
+  if (!persistDisplayLog) {
+    console.warn(
+      `[display-log] seed failed for session ${sessionId}; skipping display-log writes this turn to keep history intact.`,
+    );
+  }
+
+  // dv:抄历史那几段 await 期间用户按了停止 —— 这一条就此作废,不再开回合。
+  //
+  // dz:用 `chat_queue_cancelled` + reason:'aborted' + content,**不再**发一个
+  // 自造的 `chat_queue_dropped`。后者前端一个 case 都没有(dv 只加了服务端这半
+  // 边):排队指示器"有一条在等"会一直挂到刷新,消息正文既不退回输入框、还会
+  // 作为一条未知 kind 的行混进消息列表。复用已经接好的那条路 —— 清指示器 +
+  // 正文退回输入框(见 useChatRealtimeHandlers 的 chat_queue_cancelled 分支)。
+  if (drainToken?.cancelled) {
+    const droppedContent = typeof data.content === 'string' ? data.content : null;
+    broadcastToSessionViewers(sessionId, {
+      kind: 'chat_queue_cancelled',
+      sessionId,
+      reason: 'aborted',
+      ...(droppedContent ? { content: droppedContent } : {}),
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
 
   const run = chatRunRegistry.startRun({
     appSessionId: sessionId,
@@ -393,6 +467,7 @@ async function handleChatSend(
     providerSessionId: session.provider_session_id,
     connection: ws,
     userId,
+    persistDisplayLog,
   });
 
   if (run) {
@@ -427,7 +502,26 @@ async function handleChatSend(
 
   const clientOptions = (data.options ?? {}) as AnyRecord;
   const command = typeof data.content === 'string' ? data.content : '';
-  const sanitizedImages = filterImagesToUploadStore(clientOptions.images);
+  // ed:除全局图库外,还放行本会话项目的 attachments/(cu 起图片就落在那里)。
+  const sessionAttachmentRoots = session.project_path
+    ? [path.join(session.project_path, ATTACHMENT_DIR_NAME)]
+    : [];
+  const sanitizedImages = filterImagesToUploadStore(clientOptions.images, undefined, sessionAttachmentRoots);
+
+  /**
+   * do:会话命名闭环。客户端每次发送都带 options.sessionSummary(新会话 =
+   * 首条消息摘要;技能调用已换成「技能名:参数」),此前服务端从来没读它 ——
+   * 侧栏名字只是前端乐观行,一刷新就没。这里只在 custom_name 还空着时落一次,
+   * 用户手动改名/已有名字永远优先。
+   */
+  const sessionSummary = typeof clientOptions.sessionSummary === 'string'
+    ? clientOptions.sessionSummary.replace(/\s+/g, ' ').trim().slice(0, 80)
+    : '';
+  if (sessionSummary) {
+    try {
+      sessionsDb.setSessionCustomNameIfEmpty(sessionId, sessionSummary);
+    } catch { /* 名字是锦上添花,落不上不拦发送 */ }
+  }
 
   /**
    * 隐藏上下文(ck 轮):随消息附带、只给模型看的补充说明。
@@ -452,7 +546,9 @@ async function handleChatSend(
    * 为锚)。这里直接落库、**不**外发帧:在线端已有乐观气泡,再广播会双;
    * 刷新后前端的 local_ 乐观行会被这份服务端拷贝正常去重(hasServerEchoForLocalUser)。
    */
-  if (command.trim()) {
+  // du:`persistDisplayLog` 为 false(seed 失败)时这一行也不能写 —— 它正是
+  // 会把空日志变成"有一行"的那一笔,历史就此从界面消失。
+  if (persistDisplayLog && command.trim()) {
     sessionMessagesDb.append(sessionId, {
       id: generateMessageId('user'),
       sessionId,
@@ -532,9 +628,24 @@ function scheduleDrainPendingSend(sessionId: string, dependencies: ChatWebSocket
       sessionId,
       timestamp: new Date().toISOString(),
     });
-    void handleChatSend(pending.ws, pending.userId, pending.data, dependencies).catch((error) => {
-      console.error('[Chat] 排队消息续发失败:', error instanceof Error ? error.message : String(error));
-    });
+    // dn-O3:入队的那个 socket 可能已经关了(标签页关闭后排队仍在服务端活着,
+    // 这正是 F7 的卖点)。帧流本来就靠 attachSessionViewers 接给所有在看的人,
+    // 但 handleChatSend 的"回话对象"(协议错误、QUEUE_FULL 之类)发给死 socket
+    // 就进了黑洞 —— 换成一个还活着的 viewer;一个都没有就仍用原 socket
+    // (行为同旧,反正没人看)。
+    const liveWs = pending.ws.readyState === WS_OPEN_STATE
+      ? pending.ws
+      : [...(sessionViewers.get(sessionId) ?? [])].find((viewer) => viewer.readyState === WS_OPEN_STATE)
+        ?? pending.ws;
+    const drainToken = { cancelled: false };
+    drainingSends.set(sessionId, drainToken);
+    void handleChatSend(liveWs, pending.userId, pending.data, dependencies, drainToken)
+      .catch((error) => {
+        console.error('[Chat] 排队消息续发失败:', error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (drainingSends.get(sessionId) === drainToken) drainingSends.delete(sessionId);
+      });
   });
 }
 
@@ -579,6 +690,20 @@ async function handleChatAbort(
 
   const run = chatRunRegistry.getRun(sessionId);
   if (!run || run.status !== 'running') {
+    // dn-B4:complete → setImmediate(drain) 的空窗里按停止:没有活跃回合,
+    // 但排队那条还躺着 —— 撤掉它正是这次中止的全部意义。原来这里提前 return,
+    // 走不到下面的 dropPendingSend,排队那条随后照发("刹车没刹住"的最后残余)。
+    // 撤到了就不报 NO_ACTIVE_RUN:用户按停止得到了他想要的结果。
+    if (dropPendingSend(sessionId, 'aborted')) {
+      return;
+    }
+    // dv:排队那条刚被认领、正走在 handleChatSend 的 await 里(回合还没登记)
+    // —— 把令牌置为取消,它到 startRun 之前会自己作废。同样算"停住了"。
+    const draining = drainingSends.get(sessionId);
+    if (draining && !draining.cancelled) {
+      draining.cancelled = true;
+      return;
+    }
     sendProtocolError(ws, 'NO_ACTIVE_RUN', `Session "${sessionId}" has no active run.`, sessionId);
     return;
   }
@@ -850,12 +975,33 @@ function handlePermissionResponse(
  * (`chat_subscribed`, `session_upserted`, `loading_progress`,
  * `chat_queued`, `chat_queue_cancelled`, `chat_queue_flushed`, `protocol_error`).
  */
+/**
+ * dv:最近一次注册的依赖。给 `drainPendingSendForSession` 用 —— 外部 API
+ * 触发的回合结束时也要续发排队消息,而那条路径(routes/agent.js)拿不到
+ * 这里的 dependencies。整个进程只有一套 provider 依赖,存一份即可。
+ */
+let lastChatDependencies: ChatWebSocketDependencies | null = null;
+
+/**
+ * dv:一轮结束后把排队那条接上去 —— 供**非 WS 路径**调用。
+ *
+ * 排队(F7)是按会话存在服务端的,而外部 API(routes/agent.js)也能在同一条
+ * 会话上跑回合。此前只有 WS 的 `handleChatSend` 在 finally 里续发:用户在页面
+ * 上排了一条,恰好这时定时任务/外部 API 在同一会话跑了一轮 —— 那一轮结束后
+ * 没有人来接,排队那条就一直躺到 30 分钟 TTL 过期被丢掉,用户永远等不到回复。
+ */
+export function drainPendingSendForSession(sessionId: string): void {
+  if (!sessionId || !lastChatDependencies) return;
+  scheduleDrainPendingSend(sessionId, lastChatDependencies);
+}
+
 export function handleChatConnection(
   ws: WebSocket,
   request: AuthenticatedWebSocketRequest,
   dependencies: ChatWebSocketDependencies
 ): void {
   console.log('[INFO] Chat WebSocket connected');
+  lastChatDependencies = dependencies;
   connectedClients.add(ws);
 
   const userId = readRequestUserId(request);

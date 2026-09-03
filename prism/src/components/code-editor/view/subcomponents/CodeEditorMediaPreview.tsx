@@ -12,6 +12,9 @@ type CodeEditorMediaPreviewProps = {
   projectId?: string;
   isSidebar: boolean;
   isFullscreen: boolean;
+  /** ec:侧栏形态的「最大化 / 还原」,与 CodeEditorHeader 同一个开关。 */
+  isExpanded?: boolean;
+  onToggleExpand?: (() => void) | null;
   onClose: () => void;
   onToggleFullscreen: () => void;
   labels: {
@@ -20,6 +23,8 @@ type CodeEditorMediaPreviewProps = {
     openInNewTab: string;
     fullscreen: string;
     exitFullscreen: string;
+    maximize?: string;
+    restore?: string;
     close: string;
   };
 };
@@ -40,6 +45,8 @@ export default function CodeEditorMediaPreview({
   projectId,
   isSidebar,
   isFullscreen,
+  isExpanded = false,
+  onToggleExpand = null,
   onClose,
   onToggleFullscreen,
   labels,
@@ -218,6 +225,31 @@ export default function CodeEditorMediaPreview({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
           </svg>
         </a>
+      )}
+      {isSidebar && onToggleExpand && (
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          data-editor-maximize
+          aria-pressed={isExpanded}
+          className={`flex items-center justify-center rounded-md p-1.5 transition-colors ${
+            isExpanded
+              ? 'bg-primary/[0.08] text-card-foreground dark:text-primary'
+              : 'text-body hover:bg-muted hover:text-foreground'
+          }`}
+          aria-label={isExpanded ? (labels.restore ?? '还原') : (labels.maximize ?? '最大化')}
+          title={isExpanded ? (labels.restore ?? '还原') : (labels.maximize ?? '最大化')}
+        >
+          {isExpanded ? (
+            <svg aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.5 3.5M9 15v4.5M9 15H4.5M9 15l-5.5 5.5M15 9h4.5M15 9V4.5M15 9l5.5-5.5M15 15h4.5M15 15v4.5m0-4.5l5.5 5.5" />
+            </svg>
+          ) : (
+            <svg aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+            </svg>
+          )}
+        </button>
       )}
       {!isSidebar && (
         <button

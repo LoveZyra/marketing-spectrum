@@ -1,4 +1,5 @@
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
+import type { RecentSessionEntry } from '../utils/recentSessions';
 import type {
   MarkSessionIdle,
   MarkSessionProcessing,
@@ -126,6 +127,8 @@ export interface ChatInterfaceProps {
   /** Returns false when the socket was not open, so the caller can keep the draft. */
   sendMessage: (message: unknown) => boolean;
   onFileOpen?: (filePath: string, diffInfo?: any) => void;
+  /** dy:右侧文件预览栏是否开着 —— 开着时工作面板自动折起来让位。 */
+  isEditorOpen?: boolean;
   onInputFocusChange?: (focused: boolean) => void;
   onSessionProcessing?: MarkSessionProcessing;
   onSessionIdle?: MarkSessionIdle;
@@ -140,4 +143,6 @@ export interface ChatInterfaceProps {
   newSessionTrigger?: number;
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
+  /** ef:首页空态「最近会话」。 */
+  recentSessions?: RecentSessionEntry[];
 }

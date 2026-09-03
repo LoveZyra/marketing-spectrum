@@ -28,16 +28,47 @@ const SYNCED_KEYS = [
   'uiPreferences',          // 侧栏展开、主题外的界面开关
 ] as const;
 
+/**
+ * dl:按前缀同步的动态键 —— 输入框草稿(`draft_input_*`)。
+ *
+ * 草稿此前只活在本机:换台电脑、清一次缓存,打了一半的话就没了。排队消息
+ * (`queued_message_*`)刻意**不**同步:它和标签页互斥认领绑定,跨设备复制
+ * 等于两台机器抢着替用户发同一条。
+ *
+ * 上限挡的是键数膨胀(每条会话一个键,聊过的会话只多不少):只带最新改动
+ * 无从知晓,就按键名排序取前 N —— 排序只为两台设备取到**同一批**,
+ * 保证收敛,不保证"最新的 N 条"。
+ */
+const SYNCED_KEY_PREFIXES = ['draft_input_'] as const;
+const MAX_SYNCED_PREFIX_KEYS = 50;
+
 const UPDATED_AT_KEY = 'accountSettingsUpdatedAt';
 
 type Payload = { values: Record<string, string>; updatedAt: string };
 
+const matchesSyncedPrefix = (key: string): boolean =>
+  SYNCED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
+
+/** 本机所有命中前缀、值非空的键(排序取前 N,两台设备取同一批)。 */
+const listLocalPrefixKeys = (): string[] => {
+  try {
+    const keys: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index++) {
+      const key = window.localStorage.key(index);
+      if (key && matchesSyncedPrefix(key)) keys.push(key);
+    }
+    return keys.sort().slice(0, MAX_SYNCED_PREFIX_KEYS);
+  } catch {
+    return [];
+  }
+};
+
 const readLocal = (): Payload => {
   const values: Record<string, string> = {};
-  for (const key of SYNCED_KEYS) {
+  for (const key of [...SYNCED_KEYS, ...listLocalPrefixKeys()]) {
     try {
       const value = window.localStorage.getItem(key);
-      if (value !== null) values[key] = value;
+      if (value !== null && value !== '') values[key] = value;
     } catch {
       // 隐私模式下 localStorage 可能整个抛 —— 同步是增值功能,不该让它拖垮页面。
     }
@@ -59,6 +90,21 @@ const writeLocal = (values: Record<string, unknown>, updatedAt: string): void =>
     } catch {
       // 同上
     }
+  }
+  // 前缀键:远端那份是权威(能走到这里 = 远端更新)。写入远端有的;
+  // 删掉本机有、远端没有的 —— 否则"发出去后已清掉的草稿"会在旧设备上复活。
+  try {
+    const remotePrefixKeys = new Set(
+      Object.keys(values).filter((key) => matchesSyncedPrefix(key) && typeof values[key] === 'string'),
+    );
+    for (const key of remotePrefixKeys) {
+      window.localStorage.setItem(key, values[key] as string);
+    }
+    for (const localKey of listLocalPrefixKeys()) {
+      if (!remotePrefixKeys.has(localKey)) window.localStorage.removeItem(localKey);
+    }
+  } catch {
+    // 同上
   }
   try {
     window.localStorage.setItem(UPDATED_AT_KEY, updatedAt);
@@ -144,3 +190,30 @@ export async function pushAccountSettings(): Promise<void> {
 
 /** 供测试与调用点复用的键清单。 */
 export const ACCOUNT_SYNCED_KEYS: readonly string[] = SYNCED_KEYS;
+
+/**
+ * dl:草稿这类高频改动的**拖尾节流推送**。
+ *
+ * 设置页的开关本来就在保存动作里直接 push;草稿是每个键入都落一次 localStorage
+ * 的东西,不能每敲一个字打一次接口 —— 停笔 8 秒后推一次。页面隐藏时立刻推:
+ * "打了一半合上电脑,另一台接着打"正是这个功能存在的理由。
+ */
+const PUSH_DEBOUNCE_MS = 8_000;
+let pushTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function schedulePushAccountSettings(delayMs: number = PUSH_DEBOUNCE_MS): void {
+  if (pushTimer) clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    pushTimer = null;
+    void pushAccountSettings();
+  }, delayMs);
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden' || !pushTimer) return;
+    clearTimeout(pushTimer);
+    pushTimer = null;
+    void pushAccountSettings();
+  });
+}

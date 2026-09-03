@@ -73,7 +73,12 @@
     "conversationsPlaceholder": "搜尋對話內容...",
     "searching": "搜尋中...",
     "noResults": "找不到結果",
-    "tryDifferentQuery": "嘗試不同的搜尋詞"
+    "tryDifferentQuery": "嘗試不同的搜尋詞",
+    "modeRunning": "執行中",
+    "modeArchived": "封存",
+    "switchMode": "切換搜尋範圍",
+    "runningPlaceholder": "搜尋執行中的會話...",
+    "archivedPlaceholder": "搜尋封存會話..."
   },
   "deleteConfirmation": {
     "deleteProject": "移除專案",

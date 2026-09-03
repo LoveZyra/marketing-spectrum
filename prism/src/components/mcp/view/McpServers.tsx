@@ -93,7 +93,11 @@ export default function McpServers({ selectedProvider, currentProjects }: McpSer
   // With Claude the only provider it did exactly what this button does, except
   // it refused SSE — the transports had been narrowed to what all four had in
   // common. Two buttons, one of them quietly worse.
-  const addButtonLabel = `Add ${providerName} MCP Server`;
+  // dr:全中文界面里这颗按钮一直是英文硬拼串 —— 走 i18n,与同屏文案一致。
+  const addButtonLabel = t('mcpServers.addServer', {
+    defaultValue: '添加 {{provider}} MCP 服务器',
+    provider: providerName,
+  });
 
   return (
     <div className="space-y-4">

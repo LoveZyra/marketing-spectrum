@@ -297,7 +297,8 @@
     "actions": {
       "edit": "編輯伺服器",
       "delete": "刪除伺服器"
-    }
+    },
+    "addServer": "新增 {{provider}} MCP 伺服器"
   },
   "accounts": {
     "title": "帳號審批",

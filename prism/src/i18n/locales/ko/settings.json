@@ -249,7 +249,8 @@
     "actions": {
       "edit": "서버 편집",
       "delete": "서버 삭제"
-    }
+    },
+    "addServer": "{{provider}} MCP 서버 추가"
   },
   "accounts": {
     "title": "Account approval",

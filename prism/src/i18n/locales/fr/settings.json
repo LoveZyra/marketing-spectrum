@@ -249,7 +249,8 @@
     "actions": {
       "edit": "Modifier le serveur",
       "delete": "Supprimer le serveur"
-    }
+    },
+    "addServer": "Ajouter un serveur MCP {{provider}}"
   },
   "accounts": {
     "title": "Account approval",

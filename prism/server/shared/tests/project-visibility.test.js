@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { afterEach, describe, test } from 'vitest';
 
-import { canViewerSeeProject, isPublicWorkspacePath } from '../project-visibility.js';
+import { canViewerSeeProject, isPublicWorkspacePath, readRequestViewer } from '../project-visibility.js';
 
 const ROOT = 'tianji.chang';
 const originalRootUsers = process.env.PRISM_ROOT_USERS;
@@ -198,4 +198,25 @@ describe('项目可见性(列表与实时广播共用)', () => {
       assert.equal(canViewerSeeProject({ ...other, ownerUserId: 2, visibility: null, sharedUserIds: [] }), false);
     });
   });
+});
+
+test('dv:readRequestViewer 认 id 与 userId 两种形状(WS 三条路盖的是 userId)', () => {
+  // REST 中间件形状
+  assert.deepEqual(
+    readRequestViewer({ user: { id: 7, username: 'alice' } }),
+    { userId: 7, username: 'alice' },
+  );
+  // OSS token / SSE 票据 / 平台模式的 WebSocket 形状 —— 修前这里 userId 是 null,
+  // 非 root 用户会被自己项目的可见性判定拒之门外。
+  assert.deepEqual(
+    readRequestViewer({ user: { userId: 7, username: 'alice' } }),
+    { userId: 7, username: 'alice' },
+  );
+  // 两个都有(平台模式)时以 id 为准,取值一致
+  assert.deepEqual(
+    readRequestViewer({ user: { id: 9, userId: 9, username: 'bob' } }),
+    { userId: 9, username: 'bob' },
+  );
+  // 没有身份仍是空
+  assert.deepEqual(readRequestViewer({}), { userId: null, username: null });
 });

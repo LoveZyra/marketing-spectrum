@@ -23,6 +23,80 @@ const PRISM_API_KEY = import.meta.env.VITE_PRISM_API_KEY;
 export const apiKeyHeaders = () =>
   PRISM_API_KEY ? { 'x-prism-api-key': PRISM_API_KEY } : {};
 
+/**
+ * ea:方法隧道 —— PATCH / PUT / DELETE 一律改成 POST + `X-HTTP-Method-Override` 发出。
+ *
+ * 用户实测:同一账号、同一服务器、同一页面,定时任务的「启用/暂停」开关在 Mac
+ * 能点,在公司 Windows 机器上点了毫无反应 —— 那个开关发的是 PATCH,而只放行
+ * GET/POST 的企业代理把它拦在了半路(Prism 线上是明文 HTTP,代理看得见每个请求)。
+ * 服务端 `shared/method-override.ts` 在路由之前把 req.method 改回真实方法,
+ * 所以路由、代理转发、审计一行不用改。集合与服务端同一份,必须一起改。
+ */
+const TUNNELED_METHODS = new Set(['PATCH', 'PUT', 'DELETE']);
+
+/**
+ * 给 URL 追加 `_method=<真实方法>`。
+ *
+ * ea 上线后用户实测:只带头仍然 404,且响应体不是 JSON —— POST 到了服务端却没被
+ * 改写。安全型代理 / WAF 会**剥掉** `X-HTTP-Method-Override` 头(它是已知的方法
+ * 限制绕过手法,专门有规则盯它),查询串则不会被剥。两样都带,服务端两样都认。
+ *
+ * @param {string} url
+ * @param {string} method
+ * @returns {string}
+ */
+export const withMethodQuery = (url, method) => {
+  const separator = url.includes('?') ? '&' : '?';
+  const hash = url.indexOf('#');
+  return hash === -1
+    ? `${url}${separator}_method=${method}`
+    : `${url.slice(0, hash)}${separator}_method=${method}${url.slice(hash)}`;
+};
+
+/**
+ * @param {string} url
+ * @param {RequestInit} options
+ * @returns {{ url: string, method?: string, headers: Record<string, string>, tunneled: boolean }}
+ *   改写后的 URL / 方法 / 要追加的头;tunneled 为真表示这条请求走了隧道
+ */
+export const tunnelMethod = (url, options = {}) => {
+  const method = typeof options.method === 'string' ? options.method.toUpperCase() : undefined;
+  if (!method || !TUNNELED_METHODS.has(method)) {
+    return { url, method: options.method, headers: {}, tunneled: false };
+  }
+  return {
+    url: withMethodQuery(url, method),
+    method: 'POST',
+    headers: { 'X-HTTP-Method-Override': method },
+    tunneled: true,
+  };
+};
+
+let tunnelFailureNotifiedAt = 0;
+/**
+ * 隧道请求拿到一个**非 JSON 的 404**,说明 POST 到了服务端却没被改写回真实方法
+ * (Express 默认的 "Cannot POST …" 页)。只有两种解释,都不是页面本身的错:
+ * 服务端没重启到 ea 以上(中间件不在),或者代理把头和查询串都剥了。
+ * 把这句说出来,别让用户对着「HTTP 404」猜。5s 去抖。
+ * @param {Response} response
+ */
+const maybeExplainTunnelFailure = (response) => {
+  if (response.status !== 404) return;
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) return;
+  const now = Date.now();
+  if (now - tunnelFailureNotifiedAt < 5000) return;
+  tunnelFailureNotifiedAt = now;
+  try {
+    emitToast({
+      message: '服务端没有识别到方法隧道(HTTP 404)',
+      description: '请确认 Prism 服务已重启到 ea 或更新的版本;若已重启,说明网络代理把改写标记也拦掉了,请把这条提示发给维护者。',
+      variant: 'error',
+      durationMs: 12000,
+    });
+  } catch { /* toast 不可用不阻断 */ }
+};
+
 // Utility function for authenticated API calls
 export const authenticatedFetch = (url, options = {}) => {
   const token = localStorage.getItem('auth-token');
@@ -40,13 +114,18 @@ export const authenticatedFetch = (url, options = {}) => {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
 
-  return fetch(url, {
+  const tunneled = tunnelMethod(url, options);
+
+  return fetch(tunneled.url, {
     ...options,
+    ...(tunneled.method !== undefined ? { method: tunneled.method } : {}),
     headers: {
       ...defaultHeaders,
       ...options.headers,
+      ...tunneled.headers,
     },
   }).then((response) => {
+    if (tunneled.tunneled) maybeExplainTunnelFailure(response);
     // dj:经共享闸门落盘 —— 续期令牌必须与当前存储令牌同属一个 userId 才接受,
     // 否则丢弃。挡住两件事:HTTP 缓存 304 合并复活的旧账号续期头(no-store 之前
     // 的历史缓存),以及切换账号瞬间旧账号在途响应晚到的覆盖竞态。
@@ -64,7 +143,11 @@ export const authenticatedFetch = (url, options = {}) => {
 };
 
 let sessionExpiredNotifiedAt = 0;
-function handleSessionExpired() {
+/**
+ * dv:导出给 XHR 上传路径复用(见 uploadWithProgress) —— 401 的处置必须
+ * 只有一份,去抖也才共用得上。
+ */
+export function handleSessionExpired() {
   const now = Date.now();
   // 5s 去抖:并发请求同时 401 时只提示一次。
   if (now - sessionExpiredNotifiedAt < 5000) return;
@@ -185,6 +268,28 @@ export const api = {
   restoreSession: (sessionId) =>
     authenticatedFetch(`/api/providers/sessions/${sessionId}/restore`, {
       method: 'POST',
+    }),
+  /**
+   * ei:会话产出文件。**产出不一定落在项目目录里**(计划文件在 ~/.claude/plans、
+   * 临时脚本在 /tmp),项目文件接口只服务项目根以内,点开就是 403。这条路由按
+   * "这段会话自己写出来的文件"放行,所以产出区列出来的东西都能看、能下。
+   */
+  sessionOutputText: (sessionId, filePath) =>
+    authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/output?mode=text&path=${encodeURIComponent(filePath)}`),
+  sessionOutputBlob: (sessionId, filePath) =>
+    authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/output?path=${encodeURIComponent(filePath)}`),
+
+  // ef:常驻运行时的真实状态与释放(顶栏「常驻会话」开关)。打开走 prewarm。
+  sessionRuntime: (sessionId) =>
+    authenticatedFetch(`/api/providers/claude/sessions/${encodeURIComponent(sessionId)}/runtime`),
+  releaseSessionRuntime: (sessionId) =>
+    authenticatedFetch(`/api/providers/claude/sessions/${encodeURIComponent(sessionId)}/runtime/release`, {
+      method: 'POST',
+    }),
+  prewarmSession: (sessionId, body = {}) =>
+    authenticatedFetch(`/api/providers/claude/sessions/${encodeURIComponent(sessionId)}/prewarm`, {
+      method: 'POST',
+      body: JSON.stringify(body),
     }),
   renameSession: (sessionId, summary) =>
     authenticatedFetch(`/api/providers/sessions/${sessionId}`, {

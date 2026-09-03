@@ -219,47 +219,47 @@ export default function SidebarSessionItem({
             onSessionSelect(session, project.projectId);
           }}
         >
-          {/* 设计稿的会话行是两行:标题(运行中带 6px 绿点 / 等待授权带空心圈)+ 等宽元信息 */}
-          <div className="flex w-full min-w-0 flex-col gap-0.5">
+          {/* ef:会话行收成**一行** —— 状态点 + 标题 + 右侧相对时间。原来第二行的
+              「N 条」计数很少有人看,却让每行高 34 → 46;运行中改成标题前的实心点
+              (纸构主题下是方形制图标记)+ 时间用强调色,不再另占一行文字。 */}
+          <div className="flex w-full min-w-0 items-center gap-1.5">
+            {/* 状态点全库只此一处:空心圈=等授权,实心点=运行中/有动静。
+                以前行外还挂了一个绝对定位的同义点,于是一行冒出两颗绿点。 */}
+            {(showApprovalIndicator || isProcessing || showRecentIndicator || showAttentionIndicator) && (
+              <span
+                role="status"
+                aria-label={statusIndicatorLabel}
+                title={statusIndicatorLabel}
+                className={cn(
+                  'h-1.5 w-1.5 flex-none rounded-full',
+                  showApprovalIndicator ? 'border-[1.5px] border-primary' : 'bg-primary prism-dot',
+                )}
+              />
+            )}
             <span
               className={cn(
-                'flex min-w-0 items-center gap-1.5 truncate text-[12.5px] leading-[17px]',
+                'min-w-0 flex-1 truncate text-[12.5px] leading-[17px]',
                 isSelected ? 'text-card-foreground' : 'text-body',
               )}
+              title={sessionView.sessionName}
             >
-              {/* 状态点全库只此一处:空心圈=等授权,实心点=运行中/有动静。
-                  以前行外还挂了一个绝对定位的同义点,于是一行冒出两颗绿点。 */}
-              {(showApprovalIndicator || isProcessing || showRecentIndicator || showAttentionIndicator) && (
-                <span
-                  role="status"
-                  aria-label={statusIndicatorLabel}
-                  title={statusIndicatorLabel}
-                  className={cn(
-                    'h-1.5 w-1.5 flex-none rounded-full',
-                    showApprovalIndicator ? 'border-[1.5px] border-primary' : 'bg-primary prism-dot',
-                  )}
-                />
-              )}
-              <span className="truncate">{sessionView.sessionName}</span>
+              {sessionView.sessionName}
             </span>
-            <span
-              className={cn(
-                'truncate font-mono text-[10.5px]',
-                // 运行中那行用强调色;淡色模式下绿色不做小字,改墨色
-                isProcessing ? 'text-card-foreground dark:text-primary' : 'text-muted-foreground',
-              )}
-            >
-              {isProcessing
-                ? t('sessions.runningMeta', {
-                    defaultValue: '运行中 · {{age}}',
-                    age: compactSessionAge || '—',
-                  })
-                : [compactSessionAge, sessionView.messageCount > 0
+            {compactSessionAge && (
+              <span
+                className={cn(
+                  'flex-none font-mono text-[10.5px] tabular-nums group-hover:invisible',
+                  isProcessing ? 'text-card-foreground dark:text-primary' : 'text-muted-foreground',
+                )}
+                title={isProcessing
+                  ? t('sessions.runningMeta', { defaultValue: '运行中 · {{age}}', age: compactSessionAge })
+                  : sessionView.messageCount > 0
                     ? t('sessions.messageCount', { defaultValue: '{{count}} 条', count: sessionView.messageCount })
-                    : null]
-                    .filter(Boolean)
-                    .join(' · ')}
-            </span>
+                    : undefined}
+              >
+                {compactSessionAge}
+              </span>
+            )}
           </div>
         </a>
 

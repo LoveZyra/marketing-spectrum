@@ -198,26 +198,43 @@ export default function AccountsSettingsTab() {
                 {resetTargetId === user.id && (
                   <tr className="border-t border-border bg-muted">
                     <td colSpan={5} className="px-3 py-2">
-                      <div className="flex items-center justify-end gap-2">
+                      {/* ec:与 AccountSettingsTab 同一个坑 —— 裸露的密码框会让浏览器密码管理器
+                          去页面上找"用户名框"填,落到侧栏搜索框上。包进 form,带上被重置账号的
+                          隐藏用户名,标 new-password:既不串位,保存提示也会指向正确的账号。 */}
+                      <form
+                        className="flex items-center justify-end gap-2"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          if (resetValue.length >= 6 && busyUserId !== user.id) void submitReset(user);
+                        }}
+                      >
                         <span className="text-xs text-muted-foreground">
                           {t('accounts.resetFor', { name: user.username, defaultValue: `为 ${user.username} 设置新密码(其所有设备将被踢出):` })}
                         </span>
                         <input
+                          type="text"
+                          name="username"
+                          autoComplete="username"
+                          value={user.username}
+                          readOnly
+                          className="hidden"
+                        />
+                        <input
                           type="password"
+                          name="new-password"
+                          autoComplete="new-password"
                           value={resetValue}
                           onChange={(event) => setResetValue(event.target.value)}
                           placeholder={t('accounts.resetPlaceholder', '新密码(至少 6 位)')}
                           autoFocus
                           className="w-52 rounded-md border border-input bg-transparent px-2 py-1 text-xs transition-colors focus:border-primary focus:outline-none"
                           onKeyDown={(event) => {
-                            if (event.key === 'Enter' && resetValue.length >= 6) void submitReset(user);
                             if (event.key === 'Escape') setResetTargetId(null);
                           }}
                         />
                         <button
-                          type="button"
+                          type="submit"
                           disabled={resetValue.length < 6 || busyUserId === user.id}
-                          onClick={() => void submitReset(user)}
                           className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
                         >
                           {t('accounts.resetConfirm', '确认重置')}
@@ -229,7 +246,7 @@ export default function AccountsSettingsTab() {
                         >
                           {t('accounts.resetCancel', '取消')}
                         </button>
-                      </div>
+                      </form>
                     </td>
                   </tr>
                 )}

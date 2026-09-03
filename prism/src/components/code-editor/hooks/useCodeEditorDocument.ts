@@ -45,6 +45,8 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
   // the fallback to `projectPath` preserves older callers that didn't yet
   // propagate the identifier.
   const fileProjectId = file.projectId ?? projectPath;
+  // ei:项目目录之外的会话产出走产出通道,只读。
+  const outputSessionId = typeof file.outputSessionId === 'string' ? file.outputSessionId : undefined;
   const filePath = file.path;
   const fileName = file.name;
   const fileDiffNewString = file.diffInfo?.new_string;
@@ -88,11 +90,13 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
           return;
         }
 
-        if (!fileProjectId) {
+        if (!outputSessionId && !fileProjectId) {
           throw new Error('Missing project identifier');
         }
 
-        const response = await api.readFile(fileProjectId, filePath);
+        const response = outputSessionId
+          ? await api.sessionOutputText(outputSessionId, filePath)
+          : await api.readFile(fileProjectId, filePath);
         if (!response.ok) {
           throw new Error(`Failed to load file: ${response.status} ${response.statusText}`);
         }
@@ -117,7 +121,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
     };
 
     loadFileContent();
-  }, [file.diffInfo, file.name, fileDiffNewString, fileDiffOldString, fileName, filePath, fileProjectId]);
+  }, [file.diffInfo, file.name, fileDiffNewString, fileDiffOldString, fileName, filePath, fileProjectId, outputSessionId]);
 
   const handleSave = useCallback(async () => {
     // Preview-only and binary files have no editable text buffer; never write
@@ -129,6 +133,12 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
     // Diff 视图的缓冲区是 new_string **片段** —— 写回等于把整个文件截断成几行。
     // 头部在 diff 模式下已藏掉保存按钮,这里是对 Ctrl+S 的最后一道闸。
     if (isDiffView) {
+      return;
+    }
+
+    // ei:会话产出通道只读 —— 它按"这段会话写过这个路径"放行读取,写回不在
+    // 它的授权范围里(项目目录以内的文件仍然走项目接口,照常可编辑可保存)。
+    if (outputSessionId) {
       return;
     }
 
@@ -190,7 +200,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
     } finally {
       setSaving(false);
     }
-  }, [content, filePath, fileProjectId, previewKind, fileName, isDiffView, loadError, toast]);
+  }, [content, filePath, fileProjectId, outputSessionId, previewKind, fileName, isDiffView, loadError, toast]);
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([content], { type: 'text/plain' });

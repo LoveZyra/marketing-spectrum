@@ -31,6 +31,7 @@ export default function AccountSettingsTab() {
   const [passwordDone, setPasswordDone] = useState(false);
 
   const handleChangePassword = async () => {
+    if (passwordBusy || !currentPassword || !newPassword || !confirmPassword) return;
     setPasswordError(null);
     setPasswordDone(false);
     if (newPassword.length < 6) {
@@ -114,13 +115,39 @@ export default function AccountSettingsTab() {
             {t('account.password.title', '修改密码')}
           </h3>
         </div>
-        <div className="p-4">
+        {/*
+          ec:这三个密码框必须待在**自己的 <form> 里,并且带一个用户名字段**。
+          用户实测:点开「我的账号」,侧栏的项目搜索框里凭空出现登录名、列表被过滤成
+          「未找到匹配的项目」。这是浏览器密码管理器干的:页面一出现 current-password
+          字段,Chrome 就把保存的密码填进去,并顺手找个"用户名框"填用户名 —— 密码框
+          不在任何 form 里时,Chrome 把整页当一张表单,取密码框之前最近的文本输入框,
+          那正好是侧栏搜索框。包进 form 之后 Chrome 只在 form 内找;再放一个隐藏的
+          用户名字段(只读,值就是当前账号 —— Chromium 文档明说 display:none 的
+          autocomplete=username 字段照样认),它就有了正确的落点,保存/更新的凭据也对。
+          (SetupForm / LoginForm 就是这么写的,这里当初漏了。)
+        */}
+        <form
+          className="p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleChangePassword();
+          }}
+        >
           <p className="text-sm leading-relaxed text-muted-foreground">
             {t('account.password.help', '修改成功后,这个账号在其他设备上的登录会全部失效;当前设备保持登录。')}
           </p>
           <div className="mt-3 space-y-2">
             <input
+              type="text"
+              name="username"
+              autoComplete="username"
+              value={user?.username ?? ''}
+              readOnly
+              className="hidden"
+            />
+            <input
               type="password"
+              name="current-password"
               value={currentPassword}
               onChange={(event) => setCurrentPassword(event.target.value)}
               placeholder={t('account.password.current', '当前密码')}
@@ -129,6 +156,7 @@ export default function AccountSettingsTab() {
             />
             <input
               type="password"
+              name="new-password"
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
               placeholder={t('account.password.new', '新密码(至少 6 位)')}
@@ -137,6 +165,7 @@ export default function AccountSettingsTab() {
             />
             <input
               type="password"
+              name="confirm-password"
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
               placeholder={t('account.password.confirm', '再输一遍新密码')}
@@ -153,8 +182,7 @@ export default function AccountSettingsTab() {
             </p>
           )}
           <button
-            type="button"
-            onClick={() => void handleChangePassword()}
+            type="submit"
             disabled={passwordBusy || !currentPassword || !newPassword || !confirmPassword}
             className="mt-3 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
           >
@@ -162,7 +190,7 @@ export default function AccountSettingsTab() {
               ? t('account.password.working', '修改中…')
               : t('account.password.submit', '修改密码')}
           </button>
-        </div>
+        </form>
       </div>
 
       {/* 退出登录 / 切换账号 */}

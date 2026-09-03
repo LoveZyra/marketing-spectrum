@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import express, { type Router } from 'express';
 
 import { getConnection } from '@/modules/database/index.js';
@@ -60,10 +63,26 @@ export function createSystemPublicRouter(dependencies: SystemPublicRouterDepende
     // (no accessor injected) never blocks readiness.
     const ready = dbState === 'ok' && watcherState !== 'pending';
 
+    // dm:数据目录剩余空间(MB),给运维一个能直接看的数字 —— SQLite 写满盘
+    // 时的报错五花八门,等报错再查就晚了。statfs 不可用(老内核/容器权限)
+    // 就报 null,**只作信息,不参与 ready 判定**:磁盘阈值该由监控方定。
+    let diskFreeMb: number | null = null;
+    try {
+      const statfs = (fs as unknown as { statfsSync?: (p: string) => { bavail: number; bsize: number } }).statfsSync;
+      if (typeof statfs === 'function') {
+        const dbDir = path.dirname((getConnection() as unknown as { name?: string }).name || '.');
+        const stat = statfs(dbDir);
+        diskFreeMb = Math.round((stat.bavail * stat.bsize) / (1024 * 1024));
+      }
+    } catch {
+      diskFreeMb = null;
+    }
+
     res.status(ready ? 200 : 503).json({
       ready,
       db: dbState,
       watcher: watcherState,
+      diskFreeMb,
     });
   });
 

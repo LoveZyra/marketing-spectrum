@@ -225,6 +225,21 @@ export const sessionsDb = {
     ).run(customName, sessionId);
   },
 
+  /**
+   * do:只给**还没名字**的会话落名 —— 首条消息时客户端随 options 带来的
+   * sessionSummary(技能调用会被换成「技能名:参数」)。已有名字(用户改过、
+   * 或早前落过)一律不动,所以它永远不会覆盖人工命名。
+   */
+  setSessionCustomNameIfEmpty(sessionId: string, customName: string): void {
+    const db = getConnection();
+    db.prepare(
+      `UPDATE sessions
+       SET custom_name = ?
+       WHERE session_id = ?
+         AND (custom_name IS NULL OR custom_name = '')`
+    ).run(customName, sessionId);
+  },
+
   getSessionById(sessionId: string): SessionRow | null {
     const db = getConnection();
     const row = db

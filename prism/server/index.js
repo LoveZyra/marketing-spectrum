@@ -12,6 +12,7 @@ import compression from 'compression';
 import cors from 'cors';
 
 import { AppError, generateMessageId } from '@/shared/utils.js';
+import { methodOverrideMiddleware } from '@/shared/method-override.js';
 import { closeSessionsWatcher, initializeSessionsWatcher, markInterruptedTurnsOnStartup, sessionsService, startArchiveRetentionSweeper } from '@/modules/providers/index.js';
 import { broadcastRuntimeEvicted, createWebSocketServer } from '@/modules/websocket/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
@@ -40,6 +41,7 @@ import {
     getPendingApprovalsForSession,
     getClaudeContextUsage,
     getClaudeSlashCommands,
+    describeClaudeRuntime,
     getRuntimePoolStats,
 } from './claude-sdk.js';
 import checkpointsRoutes from './routes/checkpoints.js';
@@ -59,6 +61,7 @@ import settingsRoutes from './routes/settings.js';
 import agentRoutes from './routes/agent.js';
 import projectModuleRoutes from './modules/projects/projects.routes.js';
 import providerRoutes from './modules/providers/provider.routes.js';
+import { createSessionOutputsRouter } from './modules/providers/session-outputs.routes.js';
 import { assetsRoutes, attachmentUsageRoutes } from './modules/assets/index.js';
 import { startAttachmentSweeper } from './shared/attachment-storage.js';
 import { canViewerSeeSession, closeConnection, initializeDatabase, sessionMessagesDb, sessionsDb, stopDatabaseBackups } from './modules/database/index.js';
@@ -224,6 +227,37 @@ app.use('/api', (req, res, next) => {
     next();
 });
 
+// ea:方法隧道 —— 前端把 PATCH/PUT/DELETE 一律作为 POST + X-HTTP-Method-Override
+// 发出,这里在**任何路由之前**把 req.method 改回真实方法。只放行 GET/POST 的
+// 企业代理(用户 Windows 机器实测:定时任务的启停开关 PATCH 发不出去)从此
+// 挡不住这三种请求。见 shared/method-override.ts。必须在所有 router 之前。
+app.use('/api', methodOverrideMiddleware());
+// 启动日志留一行:线上排查"隧道到底生效没有"时 grep 这一句即可。
+console.log(`${c.info('[INFO]')} 方法隧道已启用:POST + X-HTTP-Method-Override / ?_method → PATCH/PUT/DELETE`);
+
+// dm:慢请求日志。阈值毫秒,PRISM_SLOW_REQUEST_MS 覆盖,0 关闭,默认 2000。
+// 只记一行 —— 方法、路径、状态码、耗时、用户。SSE 常开连接不算慢,跳过。
+// 单线程服务器上,一个 2s 的请求就是所有人排队 2s;这行日志让"最近变卡了"
+// 的排查从猜路由变成看日志。
+const SLOW_REQUEST_MS = (() => {
+    const parsed = parseInt(process.env.PRISM_SLOW_REQUEST_MS ?? '', 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 2000;
+})();
+if (SLOW_REQUEST_MS > 0) {
+    app.use('/api', (req, res, next) => {
+        const startedAt = process.hrtime.bigint();
+        res.on('finish', () => {
+            const contentType = String(res.getHeader('Content-Type') || '');
+            if (contentType.includes('text/event-stream')) return;
+            const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+            if (elapsedMs < SLOW_REQUEST_MS) return;
+            const user = req.user?.username || '-';
+            console.warn(`[Slow] ${req.method} ${req.originalUrl} → ${res.statusCode} ${Math.round(elapsedMs)}ms user=${user}`);
+        });
+        next();
+    });
+}
+
 // 营销诊断 API 反代(/api/ma/* -> 本机回环的诊断服务),PRISM_MA_API_TARGET 不配
 // 就完全不挂载。位置是有讲究的,三点都不能挪:
 //   * 在 express.json 之前 —— 这样请求体是原样透传的字节流,不用先解析再重新
@@ -369,6 +403,70 @@ app.post('/api/providers/:provider/sessions/:sessionId/prewarm', authenticateTok
     }
 });
 
+/**
+ * GET  /api/providers/:provider/sessions/:sessionId/runtime
+ * POST /api/providers/:provider/sessions/:sessionId/runtime/release
+ *
+ * ef:「常驻会话」从**猜**变成**可读可控**。
+ *
+ * 顶栏原来靠前端自己记"我这一页见过它在跑"来显示常驻状态 —— 刷新即忘,而且
+ * 只能显示、不能关。这两个接口把常驻池的实情交出去:GET 报在不在 / 忙不忙 /
+ * 哪个模型 / 空闲多久,POST release 释放(正在跑的回合不释放,照实回 reason)。
+ * 打开常驻走既有的 prewarm 接口,不再另开一个。
+ *
+ * 归属校验与 prewarm 同一套:能看见这段会话才能查、才能释放。
+ */
+app.get('/api/providers/:provider/sessions/:sessionId/runtime', authenticateToken, (req, res) => {
+    if (req.params.provider !== 'claude') {
+        return res.json({ success: true, resident: false, reason: 'unsupported_provider' });
+    }
+    try {
+        // 归属校验用的是**应用侧会话 id**(即路由参数)。会话行的主键列叫
+        // `session_id`,行上根本没有 `id` —— eh 之前这里写成 `session.id`,
+        // 于是永远拿 undefined 去校验、永远 404,前端把它读成"未常驻":
+        // 点开常驻成功了,菜单里那行还是显示「未开」。
+        const appSessionId = String(req.params.sessionId || '');
+        const session = sessionsDb.getSessionById(appSessionId);
+        if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
+        if (!canViewerSeeSession(appSessionId, readRequestViewer(req))) {
+            return res.status(404).json({ success: false, error: 'Session not found' });
+        }
+        if (!session.provider_session_id) {
+            return res.json({ success: true, resident: false, busy: false, reason: 'no_provider_session' });
+        }
+        return res.json({ success: true, ...describeClaudeRuntime(session.provider_session_id) });
+    } catch (error) {
+        console.warn('[Runtime] status failed:', error?.message || error);
+        return res.json({ success: true, resident: false, busy: false, reason: 'error' });
+    }
+});
+
+app.post('/api/providers/:provider/sessions/:sessionId/runtime/release', authenticateToken, async (req, res) => {
+    if (req.params.provider !== 'claude') {
+        return res.json({ success: true, released: false, reason: 'unsupported_provider' });
+    }
+    try {
+        const appSessionId = String(req.params.sessionId || '');
+        const session = sessionsDb.getSessionById(appSessionId);
+        if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
+        if (!canViewerSeeSession(appSessionId, readRequestViewer(req))) {
+            return res.status(404).json({ success: false, error: 'Session not found' });
+        }
+        // 终端接管期间的释放归终端管(它自己有一套所有权登记),这里不越界。
+        if (currentHolder(appSessionId)) {
+            return res.json({ success: true, released: false, reason: 'held_by_shell' });
+        }
+        if (!session.provider_session_id) {
+            return res.json({ success: true, released: true, reason: 'not_resident' });
+        }
+        const result = await releaseClaudeSession(session.provider_session_id);
+        return res.json({ success: true, ...result, ...describeClaudeRuntime(session.provider_session_id) });
+    } catch (error) {
+        console.warn('[Runtime] release failed:', error?.message || error);
+        return res.json({ success: true, released: false, reason: 'error' });
+    }
+});
+
 // Preview ticket endpoint. Mounted before the projects router because both
 // answer under /api/projects and the projects router has a `/:projectId/...`
 // catch-all that would otherwise swallow these paths.
@@ -459,6 +557,9 @@ app.use(createUsageRouter({ authenticateToken }));
 // protected except /api/agent (API-key auth for the external agent endpoint).
 app.use('/api/commands', authenticateToken, commandsRoutes);
 app.use('/api/settings', authenticateToken, settingsRoutes); // includes notification-preferences
+// ei:会话产出文件读取。必须排在 providerRoutes **前面** —— 那个路由器里有
+// `/sessions/:sessionId` 一类的通配段,会把 `/sessions/:id/output` 先吃掉。
+app.use('/api/providers', createSessionOutputsRouter({ authenticateToken }));
 app.use('/api/providers', authenticateToken, providerRoutes);
 app.use('/api/agent', agentRoutes);
 

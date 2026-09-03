@@ -1,6 +1,6 @@
 import { IS_PLATFORM } from '../constants/config';
 
-import { apiKeyHeaders } from './api';
+import { apiKeyHeaders, handleSessionExpired } from './api';
 import { installRefreshedToken } from './tokenRefresh';
 
 /**
@@ -93,6 +93,17 @@ export const uploadFormDataWithProgress = <T = Record<string, unknown>>(
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(payload as T);
         return;
+      }
+
+      /**
+       * dv:401 的处置也要镜像过来(本文件开头那句"authenticatedFetch 学到的
+       * 都得在这里同步一遍"此前只兑现了续期头那一半)。缺了它,令牌被撤销时
+       * 传大文件的人只看到一句 "Upload failed (401)":不弹"登录已过期"、
+       * 不派发 session-expired、也不跳登录 —— 正是 api.js 注释里描述的
+       * "点了没反应"旧病在上传路径上的残留。
+       */
+      if (xhr.status === 401) {
+        handleSessionExpired();
       }
 
       reject(new Error(readErrorMessage(payload, xhr.status)));

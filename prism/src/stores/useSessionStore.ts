@@ -616,9 +616,17 @@ export function useSessionStore() {
       const data = body?.data ?? body;
       const messages: NormalizedMessage[] = data.messages || [];
 
-      // A later-started fetch already applied: this response is stale.
+      /**
+       * A later-started fetch already applied: this response is stale.
+       *
+       * du:返回 **null**,不再原样返回 slot。丢弃与成功此前无法区分,调用方
+       * 把别人落地的窗口当成自己这次的结果:搜索跳转发起的 `limit:null` 全量
+       * 拉取被一次普通刷新挤掉后,调用方照样执行
+       * `setAllMessagesLoaded(true)` / `hasMore=false` / `offset=slot.total`
+       * —— 界面认定"全部已加载",上翻分页从此永久关死。null 让它们跳过。
+       */
       if (fetchTicket <= slot._appliedFetchSeq) {
-        return slot;
+        return null;
       }
       slot._appliedFetchSeq = fetchTicket;
 
@@ -785,6 +793,17 @@ export function useSessionStore() {
       slot._appliedFetchSeq = fetchTicket;
 
       slot.serverMessages = data.messages || [];
+      /**
+       * du:分页游标必须跟着窗口一起改写。
+       *
+       * `limit` 是在 await **之前**按当时的 loadedCount 算的,而这中间
+       * 用户可能刚上翻了一页(fetchMore 先落地:serverMessages=40、offset=40)。
+       * 这次刷新随后落地,把窗口换回尾部 20 条,却把 offset 留在 40 ——
+       * 下一次「看更早」按 offset=40 去取,服务端的尾部偏移语义直接跳过了
+       * 倒数 20~40 那一段,**20 条消息永久缺失**且毫无提示。
+       * 游标与本地窗口是同一个不变量(见 fetchFromServer 的同名赋值)。
+       */
+      slot.offset = slot.serverMessages.length;
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.fetchedAt = Date.now();

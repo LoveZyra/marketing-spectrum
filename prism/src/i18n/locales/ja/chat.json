@@ -136,5 +136,31 @@
     "acceptEdits": "Edits files without asking. Still asks before running commands.",
     "auto": "Decides routine calls itself; asks about the rest.",
     "bypassPermissions": "Runs everything without asking. Use on throwaway work only."
+  },
+  "workPanel": {
+    "title": "作業パネル",
+    "checklist": "タスク",
+    "outputs": "成果物ファイル",
+    "allDone": "すべて完了",
+    "noChecklist": "この会話にはまだタスクリストがありません。",
+    "noOutputs": "この会話にはまだ成果物ファイルがありません。",
+    "open": "開く",
+    "download": "このファイルをダウンロード",
+    "collapse": "作業パネルを閉じる",
+    "expand": "作業パネルを開く",
+    "doneFolded": "完了 {{count}} 件 · 表示",
+    "doneUnfold": "完了した {{count}} 件を隠す",
+    "historyTruncated": "セッションが長いため、以前の記録は読み込まれていません。",
+    "earlierFolded": "以前の {{count}} 件 · 表示",
+    "earlierUnfold": "以前の {{count}} 件を隠す"
+  },
+  "skills": {
+    "invokedBadge": "スキル"
+  },
+  "toolStatus": {
+    "running": "実行中",
+    "completed": "完了",
+    "error": "エラー",
+    "denied": "拒否"
   }
 }

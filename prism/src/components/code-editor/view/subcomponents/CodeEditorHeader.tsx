@@ -24,6 +24,14 @@ type CodeEditorHeaderProps = {
   onDownload: () => void;
   onSave: () => void;
   onToggleFullscreen: () => void;
+  /**
+   * ec:侧栏形态下的「最大化 / 还原」。最大化 = 预览栏占满整个主内容区(对话列与
+   * 工作面板只是被隐藏,不卸载),Esc 或再点一次还原。以前这个开关只挂在 CodeMirror
+   * 的工具条上 —— 渲染出来的 HTML / Markdown / notebook / 图片 / PDF 根本不经过
+   * CodeMirror,于是"可展示的文件"反而没有任何放大的办法。现在统一放在头部。
+   */
+  isExpanded?: boolean;
+  onToggleExpand?: (() => void) | null;
   onClose: () => void;
   labels: {
     showingChanges: string;
@@ -41,6 +49,8 @@ type CodeEditorHeaderProps = {
     saved: string;
     fullscreen: string;
     exitFullscreen: string;
+    maximize?: string;
+    restore?: string;
     close: string;
   };
 };
@@ -66,10 +76,13 @@ export default function CodeEditorHeader({
   onDownload,
   onSave,
   onToggleFullscreen,
+  isExpanded = false,
+  onToggleExpand = null,
   onClose,
   labels,
 }: CodeEditorHeaderProps) {
   const saveTitle = saveSuccess ? labels.saved : saving ? labels.saving : labels.save;
+  const maximizeTitle = isExpanded ? (labels.restore ?? '还原') : (labels.maximize ?? '最大化');
 
   return (
     <div className="flex min-w-0 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1.5">
@@ -182,6 +195,24 @@ export default function CodeEditorHeader({
             ) : (
               <Save className="h-4 w-4" />
             )}
+          </button>
+        )}
+
+        {isSidebar && onToggleExpand && (
+          <button
+            type="button"
+            onClick={onToggleExpand}
+            data-editor-maximize
+            aria-pressed={isExpanded}
+            className={`flex items-center justify-center rounded-md p-1.5 transition-colors ${
+              isExpanded
+                ? 'bg-primary/[0.08] text-card-foreground dark:text-primary'
+                : 'text-body hover:bg-muted hover:text-foreground'
+            }`}
+            title={maximizeTitle}
+            aria-label={maximizeTitle}
+          >
+            {isExpanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </button>
         )}
 

@@ -78,7 +78,16 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
       const isOther = otherActive.get(idx) || false;
       const otherText = (otherTexts.get(idx) || '').trim();
       if (isOther && otherText) selected.push(otherText);
-      if (selected.length > 0) answers[q.question] = selected.join(', ');
+      if (selected.length === 0) return;
+      /**
+       * dv:多选答案里若有选项**自带逗号**,`, ` 连接就再也拆不回来 ——
+       * 模型看到的是一串分不清边界的文本(用户自填的"其他"尤其容易带逗号)。
+       * 有冲突时改用换行加点号,边界明确且照样好读;没冲突时保持原样,
+       * 免得改变模型早已习惯的输入形状。
+       */
+      answers[q.question] = selected.some((value) => value.includes(','))
+        ? selected.map((value) => `- ${value}`).join('\n')
+        : selected.join(', ');
     });
     return answers;
   }, [questions, selections, otherActive, otherTexts]);

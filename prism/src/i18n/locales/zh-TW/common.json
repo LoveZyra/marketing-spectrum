@@ -30,7 +30,21 @@
     "persistentSession": "常駐工作階段",
     "persistentSessionHint": "這段對話在伺服器端掛著常駐執行環境，下一輪無需重建行程",
     "exporting": "匯出中…",
-    "tabNeedsProject": "「{{tab}}」需要先選一個專案 —— 從左側選一個就會開啟。"
+    "tabNeedsProject": "「{{tab}}」需要先選一個專案 —— 從左側選一個就會開啟。",
+    "more": "更多",
+    "copyProjectPath": "複製專案路徑",
+    "pathCopied": "已複製專案路徑",
+    "pathCopyFailed": "複製失敗，請手動複製",
+    "exportSession": "匯出對話",
+    "renameSession": "重新命名會話",
+    "deleteSession": "刪除會話",
+    "persistentOn": "已開",
+    "persistentOff": "未開",
+    "persistentOnDone": "已掛起常駐執行時，下一輪不用重建行程",
+    "persistentOnFailed": "暫時掛不上常駐執行時（可能是常駐池已滿或本輪正忙）",
+    "persistentOffDone": "已釋放常駐執行時，下一輪會重建行程",
+    "persistentOffBusy": "這一輪還在跑，跑完再釋放",
+    "persistentFailed": "常駐開關沒生效，請重試"
   },
   "fileTree": {
     "loading": "正在載入檔案...",

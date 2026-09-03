@@ -73,6 +73,10 @@ export default {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
+        // ef:圆角三档的另外两档(第一档就是 md)。值按主题在 index.css 里给。
+        panel: "var(--radius-panel)",
+        bubble: "var(--radius-bubble)",
+        dialog: "var(--radius-dialog)",
       },
       spacing: {
         'safe-area-inset-bottom': 'env(safe-area-inset-bottom)',

@@ -1,3 +1,6 @@
+import { FilePenLine, ListChecks, ShieldCheck, ShieldOff, WandSparkles } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
 import type { PermissionMode } from '../types/types';
 
 /**
@@ -24,6 +27,13 @@ export type ExecutionModeMeta = {
   chipClassName: string;
   /** Tailwind classes for the status dot. */
   dotClassName: string;
+  /**
+   * ee:每档一个图标,替掉芯片上的色点 —— 底栏最窄时芯片只剩图标,色点分不清
+   * 五档,图标能。与「默认」的盾形成一对的是「无限制」的划掉的盾。
+   */
+  Icon: LucideIcon;
+  /** 图标颜色(与 dotClassName 同一套语义:默认灰、有授权绿、无限制前景色)。 */
+  iconClassName: string;
 };
 
 /**
@@ -38,6 +48,8 @@ export const EXECUTION_MODES: ExecutionModeMeta[] = [
     descriptionKey: 'executionModes.default',
     chipClassName: 'border-border text-card-foreground hover:border-border-strong',
     dotClassName: 'bg-muted-foreground',
+    Icon: ShieldCheck,
+    iconClassName: 'text-muted-foreground',
   },
   {
     mode: 'plan',
@@ -45,6 +57,8 @@ export const EXECUTION_MODES: ExecutionModeMeta[] = [
     descriptionKey: 'executionModes.plan',
     chipClassName: 'border-primary/30 text-foreground hover:bg-primary/8 dark:text-primary',
     dotClassName: 'bg-primary',
+    Icon: ListChecks,
+    iconClassName: 'text-primary',
   },
   {
     mode: 'acceptEdits',
@@ -52,6 +66,8 @@ export const EXECUTION_MODES: ExecutionModeMeta[] = [
     descriptionKey: 'executionModes.acceptEdits',
     chipClassName: 'border-primary/30 text-foreground hover:bg-primary/8 dark:text-primary',
     dotClassName: 'bg-primary',
+    Icon: FilePenLine,
+    iconClassName: 'text-primary',
   },
   {
     mode: 'auto',
@@ -59,6 +75,8 @@ export const EXECUTION_MODES: ExecutionModeMeta[] = [
     descriptionKey: 'executionModes.auto',
     chipClassName: 'border-primary/30 text-foreground hover:bg-primary/8 dark:text-primary',
     dotClassName: 'bg-primary',
+    Icon: WandSparkles,
+    iconClassName: 'text-primary',
   },
   {
     mode: 'bypassPermissions',
@@ -66,6 +84,8 @@ export const EXECUTION_MODES: ExecutionModeMeta[] = [
     descriptionKey: 'executionModes.bypassPermissions',
     chipClassName: 'border-border-strong font-semibold text-foreground hover:bg-card',
     dotClassName: 'bg-foreground',
+    Icon: ShieldOff,
+    iconClassName: 'text-foreground',
   },
 ];
 
