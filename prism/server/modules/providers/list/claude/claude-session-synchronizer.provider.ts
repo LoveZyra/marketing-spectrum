@@ -3,6 +3,7 @@ import path from 'node:path';
 import { open, readFile, stat } from 'node:fs/promises';
 
 import { sessionsDb } from '@/modules/database/index.js';
+import { isPrismInternalTranscript } from '@/shared/prism-internal-transcripts.js';
 import {
   buildLookupMap,
   extractFirstValidJsonlData,
@@ -99,6 +100,12 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     let processed = 0;
     for (const filePath of files) {
       if (this.isSubagentTranscript(filePath)) {
+        continue;
+      }
+      // Prism 自己跑 CLI 留下的 transcript(模型探测)不是用户
+      // 的会话。**watcher 那边挡住了还不够** —— 全量同步是另一条路,漏在这儿的
+      // 表现是"运行时清清爽爽,重启之后侧栏里冒出几十个幽灵项目"。
+      if (isPrismInternalTranscript(filePath)) {
         continue;
       }
 

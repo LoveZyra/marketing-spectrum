@@ -18,6 +18,7 @@ import { broadcastRuntimeEvicted, createWebSocketServer } from '@/modules/websoc
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { createTasksRouter, startTaskScheduler, stopTaskScheduler } from '@/modules/tasks/index.js';
 import { createFilesRouter } from '@/modules/files/index.js';
+import { pruneInternalProjects } from '@/modules/projects/services/project-prune.service.js';
 import {
     createSystemPublicRouter,
     createUsageRouter,
@@ -797,6 +798,20 @@ async function startServer() {
             // 定时任务调度器:服务就绪即装载(执行走与网页聊天同一条 run 通道)。
             try { startTaskScheduler(queryClaudeSDK); } catch (error) {
                 console.warn('[Tasks] 调度器启动失败:', error?.message || error);
+            }
+            /**
+             * 清掉 Prism 自己跑 CLI 留下的幽灵项目行(目前只剩模型探测那一种)。
+             *
+             * 忽略判据只挡住"新的进不来",挡不住**已经在库里的** —— 侧栏是直接
+             * 读表的。这一步按真实路径清账,每次启动跑一次(判据很窄,平时是空转)。
+             */
+            try {
+                const { removed } = pruneInternalProjects();
+                if (removed.length > 0) {
+                    console.log(`${c.info('[INFO]')} 清理了 ${removed.length} 个 Prism 自己跑出来的幽灵项目`);
+                }
+            } catch (error) {
+                console.warn('[Projects] 幽灵项目清理失败:', error?.message || error);
             }
             await writeLocalServerMarker(LOCAL_SERVER_MARKER_PATH, buildLocalServerMarker()).catch((error) => {
                 console.warn('[WARN] Could not write local server marker:', error.message);

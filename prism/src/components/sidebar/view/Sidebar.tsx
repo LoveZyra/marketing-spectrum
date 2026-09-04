@@ -2,9 +2,11 @@ import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { usePendingApprovalCount } from '../../../hooks/usePendingApprovalCount';
+import { useToast } from '../../../shared/view/ui';
 import { useAuth } from '../../auth/context/AuthContext';
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
+import { useProjectBulkSelection } from '../hooks/useProjectBulkSelection';
 import { useSidebarController } from '../hooks/useSidebarController';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
 import type { LLMProvider } from '../../../types/app';
@@ -35,6 +37,7 @@ function Sidebar({
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
+  const { toast } = useToast();
   const { preferences, setPreference } = useUiPreferences();
 
   // 设置入口上的红色未读计数。事件开关本身在设置页里,所以计数挂在设置入口上,
@@ -140,6 +143,15 @@ function Sidebar({
     void paletteOps.refreshProjects();
   };
 
+  /**
+   * eo:项目多选。状态放在这一层而不是 useSidebarController 里 —— 那个 hook
+   * 已经 1100 多行,多选是自成一体的一小块,单独一个 hook 更好读也更好测。
+   */
+  const projectBulk = useProjectBulkSelection({
+    onRefresh: () => { void refreshProjects(); },
+    onError: (message) => { toast({ message, variant: 'error' }); },
+  });
+
   const projectListProps: SidebarProjectListProps = {
     projects,
     filteredProjects,
@@ -190,6 +202,9 @@ function Sidebar({
     },
     // 权限修改保存后拉一次项目列表 —— 徽标(公共/已共享·N)和可见范围立即刷新。
     onProjectsRefresh: onRefresh,
+    selectionMode: projectBulk.selectionMode,
+    selectedProjectIds: projectBulk.selectedIds,
+    onToggleProjectSelection: projectBulk.toggleSelection,
     t,
   };
 
@@ -288,6 +303,7 @@ function Sidebar({
             onShowSettings={onShowSettings}
           notificationCount={pendingApprovalCount}
             projectListProps={projectListProps}
+            projectBulk={projectBulk}
             t={t}
           />
         </>

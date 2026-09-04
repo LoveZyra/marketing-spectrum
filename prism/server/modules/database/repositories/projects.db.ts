@@ -359,6 +359,19 @@ export const projectsDb = {
         `).run(normalizedProjectPath);
     },
 
+    /**
+     * 所有项目行(含归档),只取清理要用的两列。
+     *
+     * ep:给「清掉 Prism 自己跑出来的幽灵项目」用 —— 那种行必须**按真实路径**判,
+     * 而按路径判就得把全表过一遍(路径形状不是前缀相等,判据在
+     * `isPrismInternalProjectPath` 里)。项目表是几十到几百行的量级,全表扫没问题。
+     */
+    listAllProjectPaths(): Array<{ project_id: string; project_path: string }> {
+        return getConnection()
+            .prepare('SELECT project_id, project_path FROM projects')
+            .all() as Array<{ project_id: string; project_path: string }>;
+    },
+
     deleteProjectById(projectId: string): void {
         const db = getConnection();
         db.prepare(`

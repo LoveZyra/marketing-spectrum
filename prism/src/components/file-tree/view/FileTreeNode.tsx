@@ -200,7 +200,13 @@ function FileTreeNode({
       onDragOver={isDirectory && onItemDragOver ? (event) => onItemDragOver(event, item.path) : undefined}
       onDrop={isDirectory && onItemDrop ? (event) => onItemDrop(event, item.path) : undefined}
     >
-      {selectionMode && onToggleSelect && (
+      {/*
+        eo:表格视图下复选框必须**长在"名称"这一格里面**,不能作为兄弟节点插在前面。
+        这一行是 `grid grid-cols-12`,四格加起来正好 12(5+2+3+2);在它们前面多插
+        一个网格子项就变成 13 个,最后那格「权限」被挤到第二行 —— 用户实测:
+        「点了多选以后就出现换行,界面乱了」。放进名称格里,列宽和表头照旧对齐。
+      */}
+      {selectionMode && onToggleSelect && viewMode !== 'detailed' && (
         <input
           type="checkbox"
           checked={Boolean(isSelected)}
@@ -213,6 +219,16 @@ function FileTreeNode({
       {viewMode === 'detailed' ? (
         <>
           <div className="col-span-5 flex min-w-0 items-center gap-1.5">
+            {selectionMode && onToggleSelect && (
+              <input
+                type="checkbox"
+                checked={Boolean(isSelected)}
+                onClick={(event) => event.stopPropagation()}
+                onChange={() => onToggleSelect(item, { ctrlKey: true } as React.MouseEvent)}
+                aria-label={item.name}
+                className="h-3.5 w-3.5 flex-shrink-0"
+              />
+            )}
             <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
             <span className={nameClassName}>{item.name}</span>
           </div>

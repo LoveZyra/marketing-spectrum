@@ -32,7 +32,10 @@ export type AuditEvent =
   | 'user_approved'
   | 'user_rejected'
   | 'project_owner_changed'
-  | 'attachment_quota_changed';
+  | 'attachment_quota_changed'
+  // eo:项目的批量删除/归档。不可逆,事后"谁把那批项目删了"要查得到
+  | 'projects_bulk_deleted'
+  | 'projects_bulk_archived';
 
 export type AuditOutcome = 'success' | 'failure';
 

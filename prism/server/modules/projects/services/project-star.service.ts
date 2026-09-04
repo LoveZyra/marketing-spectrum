@@ -88,14 +88,44 @@ export function toggleProjectStar(projectId: string, userId: number | null = nul
     });
   }
 
-  if (userId != null) {
-    const nextStarredState = !projectsDb.isProjectStarredByUser(normalizedProjectId, userId);
-    projectsDb.setProjectStarForUser(normalizedProjectId, userId, nextStarredState);
-    return { isStarred: nextStarredState };
+  const nextStarredState = userId != null
+    ? !projectsDb.isProjectStarredByUser(normalizedProjectId, userId)
+    : !Boolean(project.isStarred);
+  return setProjectStarForActor(normalizedProjectId, userId, nextStarredState);
+}
+
+/**
+ * eo:**设成**某个状态(而不是翻转)。批量收藏/取消收藏要的就是这个。
+ *
+ * 批量场景下翻转是错的:选中的一批里有的已收藏、有的没有,逐个翻转的结果是
+ * 「一半收藏一半取消」—— 点了「收藏」却看到一半被取消,没有人会认为这是对的。
+ *
+ * 与 `toggleProjectStar` 共用同一套落库路径(有 userId 走 project_stars 那一行,
+ * 平台模式退回旧的全局列),所以两条入口不会在"收藏到底存哪儿"上分叉。
+ */
+export function setProjectStarForActor(
+  projectId: string,
+  userId: number | null,
+  starred: boolean,
+): ToggleProjectStarResult {
+  const normalizedProjectId = normalizeProjectId(projectId);
+  if (!normalizedProjectId) {
+    throw new AppError('projectId is required', {
+      code: 'PROJECT_ID_REQUIRED',
+      statusCode: 400,
+    });
+  }
+  if (!projectsDb.getProjectById(normalizedProjectId)) {
+    throw new AppError('Project not found', {
+      code: 'PROJECT_NOT_FOUND',
+      statusCode: 404,
+    });
   }
 
-  const nextStarredState = !Boolean(project.isStarred);
-  projectsDb.updateProjectIsStarredById(normalizedProjectId, nextStarredState);
-
-  return { isStarred: nextStarredState };
+  if (userId != null) {
+    projectsDb.setProjectStarForUser(normalizedProjectId, userId, starred);
+  } else {
+    projectsDb.updateProjectIsStarredById(normalizedProjectId, starred);
+  }
+  return { isStarred: starred };
 }

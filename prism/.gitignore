@@ -128,18 +128,23 @@ dev-debug.log
 *.sw?
 # OS specific
 
-# TaskMaster's own state, which lives at .taskmaster/tasks/tasks.json.
-tasks.json
-tasks/
-
-# ...but the `tasks` translation namespace happens to share that filename, and
-# this pattern matches at every depth. What stood here was a negation listed per
-# locale, seven of the ten — so ko, zh-CN and zh-TW had their tasks.json
-# silently ignored. zh-TW's was translated in full and never committed: anyone
-# cloning the repo got the entire TaskMaster UI in English for that locale, with
-# nothing anywhere reporting a problem. One glob over the tree instead of a list
-# to keep in sync, so adding a locale cannot reintroduce this.
-!src/i18n/locales/*/tasks.json
+# 不要再把 `tasks.json` / `tasks/` 加回来。
+#
+# 它们当初是为了忽略 TaskMaster 的状态（`.taskmaster/tasks/tasks.json`），
+# 而那东西上面那条 `.taskmaster/` 已经全覆盖了 —— 所以这两条对它们
+# 本来的目的**一点用也没有**，只剩下副作用：不带前导斜杠的模式在
+# **任意深度**命中。
+#
+# 同一个坑踩过两次：
+#   1. `tasks.json` 吞掉了 i18n 的 `tasks` 翻译命名空间，zh-TW 整篇翻译从没
+#      提交进去，clone 的人拿到的是英文 UI；当时补了一条负向规则。
+#   2. `tasks/` 吞掉了**整个定时任务功能实现** —— `server/modules/tasks/`
+#      五个文件加 `src/components/tasks/TasksPage.tsx`，从头到尾没进过任何一次
+#      提交。clone 下来就是一个没有定时任务、而且构建不过的 Prism，全程
+#      没有任何东西报错。
+#
+# 第一次的负向规则只堆上了已知的那一个洞，拦不住第二个。真正的修法是
+# 把规则本身去掉：没有这两行，就永远不会有第三个。
 
 # Git worktrees
 .worktrees/

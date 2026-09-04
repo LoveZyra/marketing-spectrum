@@ -3,10 +3,17 @@ import express from 'express';
 import { auditLogDb, projectsDb, resolveVisibleProjectRoot, userDb } from '@/modules/database/index.js';
 import { createProject, updateProjectDisplayName } from '@/modules/projects/services/project-management.service.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
-import { isPublicWorkspacePath, readRequestViewer } from '@/shared/project-visibility.js';
+import { readRequestViewer } from '@/shared/project-visibility.js';
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
 import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projects/services/project-delete.service.js';
 import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/projects/services/project-star.service.js';
+import {
+  BULK_PROJECT_LIMIT, bulkProjectAction, type BulkProjectAction,
+} from '@/modules/projects/services/project-bulk.service.js';
+import {
+  applyProjectPermissions, canManageProject as canActorManageProject, parsePermissionsInput,
+  readProjectPermissionsView,
+} from '@/modules/projects/services/project-permissions.service.js';
 
 const router = express.Router();
 
@@ -138,39 +145,14 @@ router.get(
 
 // ----------------- 项目权限管理(改存量项目) -----------------
 
-/** 当前权限档位(与创建向导同一三选)+ 授权名单。 */
-const readProjectPermissionsView = (projectId: string) => {
-  const row = projectsDb.getProjectById(projectId);
-  if (!row) return null;
-  const sharedUserIds = projectsDb.getProjectSharedUserIds(projectId);
-  // 「个人」不能只看 visibility 列和授权名单 —— 一个**无主**项目若落在公共目录
-  // (PRISM_PUBLIC_WORKSPACE)下,对所有人可见,那其实是「公共」。此前这里把它
-  // 显示成「个人」,于是用户选「个人」保存后看着没变、实际一直是公共。所以
-  // "有效公共"要把这种无主+公共目录的情况也算进去,对话框才显示真实状态。
-  const unowned = row.owner_user_id === null || row.owner_user_id === undefined;
-  const effectivelyPublic = row.visibility === 'public'
-    || (unowned && isPublicWorkspacePath(row.project_path));
-  return {
-    visibility: effectivelyPublic
-      ? ('public' as const)
-      : sharedUserIds.length > 0
-        ? ('shared' as const)
-        : ('personal' as const),
-    sharedUserIds,
-  };
-};
-
 /**
- * 只有 root 或 owner 能改权限 —— 共享接收方"可见不可管",公共项目的路人同理。
+ * 只有 root 或 owner 能改权限 —— 共享接收方「可见不可管」,公共项目的路人同理。
  * (可见性由 assertVisibleProject 先挡:看不见的人拿到 404,看得见但非管理者 403。)
+ *
+ * 实现在 project-permissions.service 里 —— 批量权限设置走同一份,不许分叉。
  */
-const canManageProject = (req: express.Request, projectId: string): boolean => {
-  const user = readUser(req);
-  if (user?.isRoot === true) return true;
-  const owner = projectsDb.getProjectOwner(projectId);
-  return owner !== undefined && owner !== null
-    && typeof user?.id === 'number' && owner === user.id;
-};
+const canManageProject = (req: express.Request, projectId: string): boolean =>
+  canActorManageProject(projectId, readUser(req));
 
 router.get(
   '/:projectId/permissions',
@@ -199,60 +181,57 @@ router.put(
       });
     }
 
+    const input = parsePermissionsInput((req.body ?? {}) as Record<string, unknown>);
+    const view = applyProjectPermissions(projectId, input, readUser(req)?.id ?? null);
+    res.json(createApiSuccessResponse(view));
+  }),
+);
+
+/**
+ * eo:项目的批量操作(归档 / 彻底删 / 收藏 / 取消收藏 / 权限 / 改所有者)。
+ *
+ * 放在 `/:projectId` 那一组**之前**注册 —— 否则 `bulk` 会被当成一个 projectId
+ * 吞掉(`shareable-users` 当初也是为这个才提前注册的)。
+ *
+ * 鉴权全在服务层逐条做,这里只负责把入参问清楚:action 认不认、id 数量合不合规、
+ * 权限入参是否成立。**在动第一个项目之前**报错,而不是改了三个之后才抛。
+ */
+router.post(
+  '/bulk',
+  asyncHandler(async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const choice = typeof body.visibility === 'string' ? body.visibility : '';
-    if (!['personal', 'public', 'shared'].includes(choice)) {
-      throw new AppError('visibility must be one of personal | public | shared', {
-        code: 'INVALID_PROJECT_VISIBILITY',
+    const action = typeof body.action === 'string' ? body.action : '';
+    const known: BulkProjectAction[] = ['archive', 'delete', 'star', 'unstar', 'permissions', 'owner'];
+    if (!known.includes(action as BulkProjectAction)) {
+      throw new AppError(`action must be one of ${known.join(' | ')}`, {
+        code: 'INVALID_BULK_ACTION',
         statusCode: 400,
       });
     }
 
-    let sharedUserIds: number[] = [];
-    if (choice === 'shared') {
-      const ownerId = projectsDb.getProjectOwner(projectId) ?? null;
-      const rawIds = Array.isArray(body.sharedUserIds) ? body.sharedUserIds : [];
-      const parsedIds = [...new Set(
-        rawIds
-          .map((value) => (typeof value === 'number' ? value : Number.parseInt(String(value), 10)))
-          .filter((value) => Number.isInteger(value) && value > 0),
-      )].filter((id) => id !== ownerId); // owner 本来就可见,不必授权给自己
-      if (parsedIds.length === 0) {
-        throw new AppError('选择「指定用户」时至少要选一位用户', {
-          code: 'SHARED_USERS_REQUIRED',
-          statusCode: 400,
-        });
-      }
-      const knownIds = new Set(userDb.listBasicUsers().map((entry) => entry.id));
-      const unknown = parsedIds.filter((id) => !knownIds.has(id));
-      if (unknown.length > 0) {
-        throw new AppError(`未知用户 id: ${unknown.join(', ')}`, {
-          code: 'UNKNOWN_SHARED_USER',
-          statusCode: 400,
-        });
-      }
-      sharedUserIds = parsedIds;
+    const projectIds = Array.isArray(body.projectIds)
+      ? body.projectIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [];
+    if (projectIds.length === 0 || projectIds.length > BULK_PROJECT_LIMIT) {
+      throw new AppError(`projectIds must contain 1 to ${BULK_PROJECT_LIMIT} ids`, {
+        code: 'INVALID_BULK_IDS',
+        statusCode: 400,
+      });
     }
 
-    // 三档互斥。关键:personal / shared 必须让项目**有主**。
-    // 只把 visibility 列清成 null 是不够的 —— 一个无主项目若在公共目录下,
-    // 对所有人可见,清 visibility 也还是公共(用户报的"改回个人还是公共"就是这个)。
-    // 所以当前无主时,把归属认领给操作者(对话框「个人 = 仅自己和 root 可见」
-    // 里的"自己");已有主则不动,避免 root 帮别人改权限时顺手夺走归属。
-    const actingUserId = readUser(req)?.id ?? null;
-    if (choice === 'public') {
-      projectsDb.setProjectVisibility(projectId, 'public');
-      projectsDb.setProjectShares(projectId, [], actingUserId);
-    } else {
-      projectsDb.setProjectVisibility(projectId, null);
-      const currentOwner = projectsDb.getProjectOwner(projectId);
-      if ((currentOwner === null || currentOwner === undefined) && actingUserId != null) {
-        projectsDb.setProjectOwner(projectId, actingUserId);
-      }
-      projectsDb.setProjectShares(projectId, choice === 'shared' ? sharedUserIds : [], actingUserId);
-    }
-
-    res.json(createApiSuccessResponse(readProjectPermissionsView(projectId)));
+    const result = await bulkProjectAction(
+      {
+        action: action as BulkProjectAction,
+        projectIds,
+        permissions: action === 'permissions' ? parsePermissionsInput(body) : undefined,
+        ownerUserId: action === 'owner'
+          ? (body.ownerUserId === null ? null : Number(body.ownerUserId))
+          : undefined,
+      },
+      readRequestViewer(req),
+      readUser(req) ?? {},
+    );
+    res.json(createApiSuccessResponse(result));
   }),
 );
 

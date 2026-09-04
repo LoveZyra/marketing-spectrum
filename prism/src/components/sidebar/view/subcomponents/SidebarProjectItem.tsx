@@ -54,6 +54,10 @@ type SidebarProjectItemProps = {
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
   /** 权限保存成功后刷新项目列表,让徽标(公共/已共享·N)立即跟上。 */
   onProjectsRefresh?: () => void;
+  /** eo:多选态。为真时行首出现复选框,整行点击变成勾选。 */
+  selectionMode?: boolean;
+  isSelectedForBulk?: boolean;
+  onToggleSelection?: (projectId: string) => void;
   t: TFunction;
 };
 
@@ -181,6 +185,9 @@ export default function SidebarProjectItem({
   onCancelEditingSession,
   onSaveEditingSession,
   onProjectsRefresh,
+  selectionMode = false,
+  isSelectedForBulk = false,
+  onToggleSelection,
   t,
 }: SidebarProjectItemProps) {
   const { user } = useAuth();
@@ -219,7 +226,17 @@ export default function SidebarProjectItem({
     onSaveProjectName(project.projectId);
   };
 
+  /**
+   * 行的默认动作:选中项目并展开会话。
+   *
+   * **多选态下改成勾选** —— 但这只在用户显式点过「多选」之后才生效。
+   * 悄悄把"打开"改成"选中"是删错东西的开始(文件树那边同样的取舍)。
+   */
   const selectAndToggleProject = () => {
+    if (selectionMode) {
+      onToggleSelection?.(project.projectId);
+      return;
+    }
     if (selectedProject?.projectId !== project.projectId) {
       onProjectSelect(project);
     }
@@ -234,15 +251,30 @@ export default function SidebarProjectItem({
           <div
             className={cn(
               'p-3 mx-3 my-1 rounded-md border border-border active:translate-y-px',
-              isSelected && 'bg-muted',
+              isSelected && !selectionMode && 'bg-muted',
+              selectionMode && isSelectedForBulk && 'bg-accent',
               isStarred &&
                 !isSelected &&
                 'border-border',
             )}
-            onClick={toggleProject}
+            onClick={selectionMode ? () => onToggleSelection?.(project.projectId) : toggleProject}
           >
             <div className="flex items-center justify-between">
               <div className="flex min-w-0 flex-1 items-center gap-3">
+                {/* eo:多选态下这一格是复选框 —— 手机上收藏星那个 32px 的按钮
+                    正好是最顺手的位置,不必再挤出一格。 */}
+                {selectionMode ? (
+                  <span className="flex h-8 w-8 flex-none items-center justify-center">
+                    <input
+                      type="checkbox"
+                      checked={isSelectedForBulk}
+                      onChange={() => onToggleSelection?.(project.projectId)}
+                      onClick={(event) => event.stopPropagation()}
+                      aria-label={t('project.bulk.select', { defaultValue: '选中项目' })}
+                      className="h-4 w-4"
+                    />
+                  </span>
+                ) : (
                 <button
                   className={cn(
                     'w-8 h-8 rounded-md flex items-center justify-center active:translate-y-px border',
@@ -265,6 +297,7 @@ export default function SidebarProjectItem({
                     )}
                   />
                 </button>
+                )}
 
                 <div className="min-w-0 flex-1">
                   {isEditing ? (
@@ -310,7 +343,8 @@ export default function SidebarProjectItem({
                 </div>
               </div>
 
-              <div className="flex items-center gap-1">
+              {/* eo:多选态下收起这排单条动作 —— 单条与批量混在一起最容易点错。 */}
+              <div className={cn('flex items-center gap-1', selectionMode && 'hidden')}>
                 {isEditing ? (
                   <>
                     <button
@@ -385,15 +419,29 @@ export default function SidebarProjectItem({
           variant="ghost"
           className={cn(
             'relative hidden md:flex w-full justify-between rounded-md px-2.5 py-2 h-auto font-normal hover:bg-muted',
-            isSelected && 'prism-panel bg-card dark:bg-muted',
+            isSelected && !selectionMode && 'prism-panel bg-card dark:bg-muted',
+            selectionMode && isSelectedForBulk && 'bg-accent',
           )}
           onClick={selectAndToggleProject}
         >
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
             {/* ef:设计稿的项目行是「箭头 → 文件夹 → 名字 …… 会话数」。
                 箭头原来在行尾,和右侧的会话数、悬停动作挤在一起;放到最左边之后
-                展开状态一眼可见,层级也和下面缩进的会话行对得上。 */}
-            {isExpanded
+                展开状态一眼可见,层级也和下面缩进的会话行对得上。
+
+                eo:多选态下复选框**顶掉箭头**,而不是再挤进去一格 —— 侧栏内宽
+                只有 ~210px,多一格就少 16px 项目名(这行被挤没过一次了)。
+                多选时也不需要展开:要选的是项目,不是会话。 */}
+            {selectionMode ? (
+              <input
+                type="checkbox"
+                checked={isSelectedForBulk}
+                onChange={() => onToggleSelection?.(project.projectId)}
+                onClick={(event) => event.stopPropagation()}
+                aria-label={t('project.bulk.select', { defaultValue: '选中项目' })}
+                className="h-3.5 w-3.5 flex-none"
+              />
+            ) : isExpanded
               ? <ChevronDown className="h-3 w-3 flex-none text-muted-foreground" strokeWidth={2} />
               : <ChevronRight className="h-3 w-3 flex-none text-muted-foreground" strokeWidth={2} />}
             <Folder
@@ -495,7 +543,7 @@ export default function SidebarProjectItem({
             (线上截图里那行只剩徽标,项目名整个不见了)。
             改成绝对定位之后,这些按钮悬停时盖在名字尾部,而不是挤压它。
           */}
-          {!isEditing && (
+          {!isEditing && !selectionMode && (
             <div className="absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md bg-muted pl-3 group-hover:flex">
               <div
                 className={cn(

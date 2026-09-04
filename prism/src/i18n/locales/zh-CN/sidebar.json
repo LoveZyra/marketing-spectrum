@@ -44,7 +44,9 @@
     "approvalPendingIndicator": "等待你确认工具权限",
     "exportSession": "导出会话",
     "processingSessionIndicator": "会话运行中",
-    "exportSessionFailed": "导出会话失败,请重试。"
+    "exportSessionFailed": "导出会话失败,请重试。",
+    "selectProjects": "多选项目",
+    "exitSelection": "退出多选"
   },
   "actions": {
     "settings": "设置",
@@ -111,7 +113,29 @@
     "rootOnlyHint": "仅 root 可见 —— 无主且不在公共目录下",
     "sharedHint": "他人共享给你的项目",
     "sharedOutHint": "已共享给 {{count}} 人",
-    "sharedOutRootOnlyHint": "已共享给 {{count}} 人 —— 此外仅 root 可见"
+    "sharedOutRootOnlyHint": "已共享给 {{count}} 人 —— 此外仅 root 可见",
+    "bulk": {
+      "select": "选中项目",
+      "deleteTitle": "批量删除项目",
+      "permissionsTitle": "批量设置权限",
+      "ownerTitle": "批量改所有者",
+      "willAffect": "将要操作的项目",
+      "newOwner": "新的所有者",
+      "archive": "归档",
+      "deleteAll": "彻底删除",
+      "apply": "应用到选中项目",
+      "working": "处理中…",
+      "cancel": "取消",
+      "selectAll": "全选",
+      "clearAll": "取消全选",
+      "selectedOf": "已选 {{count}}/{{total}}",
+      "star": "收藏",
+      "unstar": "取消收藏",
+      "permissions": "设置权限",
+      "owner": "改所有者",
+      "delete": "归档或删除",
+      "exit": "退出多选"
+    }
   },
   "archived": {
     "loadMore": "加载更多(共 {{total}} 条)",

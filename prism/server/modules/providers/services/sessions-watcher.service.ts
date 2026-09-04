@@ -10,6 +10,13 @@ import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import { canViewerSeeProject } from '@/shared/project-visibility.js';
 import type { LLMProvider } from '@/shared/types.js';
 import { generateDisplayName } from '@/modules/projects/index.js';
+import {
+  PRISM_INTERNAL_CWD_MARKERS, isPrismInternalTranscript,
+} from '@/shared/prism-internal-transcripts.js';
+
+// 判据本身住在 shared/ 的叶子模块里(那边的注释说明了为什么);这里转出去,
+// 是为了让既有的 import 路径继续成立 —— 换 import 路径不是这次要改的事。
+export { PRISM_INTERNAL_CWD_MARKERS, isPrismInternalTranscript };
 
 type WatcherEventType = 'add' | 'change';
 
@@ -104,12 +111,7 @@ export function shouldIgnoreWatchPath(
   if (segments.includes('subagents')) {
     return true;
   }
-  // 模型探测(/models 弹窗的"实测真实模型")留下的 transcript。探测的 cwd 名字里
-  // 带这个标记,编码进 ~/.claude/projects 的目录名后仍然可辨认。不忽略的话,
-  // 每次探测都会往所有人的侧栏里广播一个叫 "prism-model-probe" 的幽灵项目 ——
-  // 这正是 claude-models.provider.ts 里 getSupportedModels() 被禁用的原因,
-  // 别让同一个坑换个入口再踩一次。探测完那些目录会被删掉,这里挡的是删掉之前的窗口。
-  if (segments.some((segment) => segment.includes('prism-model-probe'))) {
+  if (isPrismInternalTranscript(watchedPath)) {
     return true;
   }
   if (!stats || stats.isDirectory()) {

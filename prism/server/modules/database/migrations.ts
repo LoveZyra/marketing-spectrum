@@ -602,6 +602,92 @@ const relaxLegacyApiKeyNotNull = (db: Database): void => {
  * because that rebuild only fires on pre-project_id schemas; installs that
  * already migrated would never see the column otherwise.
  */
+/**
+ * eu:把技能训练(SkillOpt 接入)留在库里的东西清干净。**只跑一次。**
+ *
+ * ## 为什么要有"只跑一次"这件事
+ *
+ * 直接写一句无条件的 `DROP TABLE IF EXISTS skillopt_runs` 是个坑:哪天把这个
+ * 功能重新接回来,建表语句刚建好,下一次启动这句又把它删了 —— 而且删得悄无声息。
+ * 所以在 `app_config` 里记一个标记,做过就不再做。重新接回来时新表不会被误伤。
+ *
+ * ## 清三样
+ *
+ * 1. `skillopt_runs` 整张表(训练记录;真正的产物在磁盘上,不在库里);
+ * 2. `skillopt_*` 的审计行 —— 功能都没了,留着这几条追责记录没有意义;
+ * 3. **训练留下的幽灵项目行**:rollout 与 optimizer 各自的临时工作目录曾被
+ *    当成项目登记进来。这些路径的形状写在这里而不是运行时判据里,是因为
+ *    它们描述的是**历史数据**,不是以后还要执行的规则 —— 功能已经删了,
+ *    运行时不会再产生这种路径。
+ */
+const SKILLOPT_CLEANUP_KEY = 'cleanup.skillopt.v1';
+
+const removeSkillOptLeftovers = (db: Database): void => {
+  const done = db
+    .prepare('SELECT value FROM app_config WHERE key = ?')
+    .get(SKILLOPT_CLEANUP_KEY) as { value?: string } | undefined;
+  if (done) return;
+
+  let removedProjects = 0;
+  if (tableExists(db, 'projects')) {
+    const rows = db
+      .prepare('SELECT project_id, project_path FROM projects')
+      .all() as Array<{ project_id: string; project_path: string }>;
+    /**
+     * 训练期间被登记进来的两种目录:
+     *   - 我们自己的 rollout 工作区:`<PRISM_SKILLOPT_HOME>/…/work/<任务名>`,
+     *     默认 home 是 `~/.prism/skillopt`,路径里一定有 `.prism/skillopt`;
+     *   - SkillOpt 自己开的临时目录:`skillopt_claude_*` / `skillopt_codex_*` /
+     *     `skillopt-generated-*`(它 `tempfile.TemporaryDirectory` 的几个前缀)。
+     *
+     * 判据写窄 —— 删错一行就是删掉用户真实的项目。名字里带 skillopt 的正常项目
+     * (`~/projects/skillopt-notes`)不会命中:第一条要求路径里有 `.prism/skillopt`
+     * **并且**有 `work` 段,第二条要求**目录名本身**以那几个前缀开头。
+     */
+    const isLeftover = (projectPath: string): boolean => {
+      if (!projectPath) return false;
+      const normalized = projectPath.replace(/\\/g, '/');
+      const segments = normalized.split('/');
+      if (normalized.includes('/.prism/skillopt/') && segments.includes('work')) return true;
+      return segments.some((segment) => {
+        const value = segment.replace(/_/g, '-');
+        return value.startsWith('skillopt-claude-')
+          || value.startsWith('skillopt-codex-')
+          || value.startsWith('skillopt-generated-');
+      });
+    };
+
+    const deleteSessions = tableExists(db, 'sessions')
+      ? db.prepare('DELETE FROM sessions WHERE project_path = ?')
+      : null;
+    const deleteProject = db.prepare('DELETE FROM projects WHERE project_id = ?');
+    for (const row of rows) {
+      if (!isLeftover(row.project_path)) continue;
+      deleteSessions?.run(row.project_path);
+      deleteProject.run(row.project_id);
+      removedProjects += 1;
+    }
+  }
+
+  let removedAudit = 0;
+  if (tableExists(db, 'audit_log')) {
+    removedAudit = db.prepare("DELETE FROM audit_log WHERE event LIKE 'skillopt%'").run().changes;
+  }
+
+  const hadTable = tableExists(db, 'skillopt_runs');
+  if (hadTable) db.exec('DROP TABLE skillopt_runs');
+
+  db.prepare('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)')
+    .run(SKILLOPT_CLEANUP_KEY, new Date().toISOString());
+
+  if (hadTable || removedProjects > 0 || removedAudit > 0) {
+    console.log(
+      `Running migration: removed SkillOpt leftovers (table=${hadTable ? 'dropped' : 'absent'}, `
+      + `projects=${removedProjects}, audit=${removedAudit})`,
+    );
+  }
+};
+
 const addProjectOwnerColumn = (db: Database): void => {
   const projectsTableInfo = db.prepare('PRAGMA table_info(projects)').all() as TableInfoRow[];
   const columnNames = projectsTableInfo.map((column) => column.name);
@@ -741,6 +827,9 @@ export const runMigrations = (db: Database) => {
       console.log('Running migration: Dropping legacy workspace_original_paths table');
       db.exec('DROP TABLE workspace_original_paths');
     }
+
+    // eu:技能训练撤掉之后的一次性清账(做过就不再做,见函数注释)
+    removeSkillOptLeftovers(db);
 
     db.exec(LAST_SCANNED_AT_SQL);
     console.log('Database migrations completed successfully');

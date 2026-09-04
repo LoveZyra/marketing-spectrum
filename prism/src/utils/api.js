@@ -347,6 +347,14 @@ export const api = {
     authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/toggle-star`, {
       method: 'POST',
     }),
+  // eo:项目批量操作。action = archive | delete | star | unstar | permissions | owner。
+  // 服务端逐条鉴权,看不见/管不了的会被跳过并在结果里计数 —— 调用方要如实报账。
+  bulkProjects: (action, projectIds, extra = {}) =>
+    authenticatedFetch('/api/projects/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, projectIds, ...extra }),
+    }),
   readFile: (projectId, filePath) =>
     authenticatedFetch(`/api/projects/${projectId}/file?filePath=${encodeURIComponent(filePath)}`),
   readFileBlob: (projectId, filePath) =>

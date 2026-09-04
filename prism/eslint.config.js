@@ -199,6 +199,7 @@ export default tseslint.config(
             "server/shared/attachment-storage.ts", // 聊天附件落盘目录、配额与过期清理
             "server/shared/sse-tickets.js", // HTTP SSE 的短命票据(搜索 SSE 用,替代 URL 里的 JWT)
             "server/shared/ripgrep-path.ts", // 找到真实存在的 rg(自带二进制可能没下载下来)
+            "server/shared/prism-internal-transcripts.ts", // Prism 自产 transcript 的忽略判据:watcher 与全量同步共用,放叶子上防循环依赖
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },

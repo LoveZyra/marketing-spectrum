@@ -4,6 +4,7 @@ import type { TFunction } from 'i18next';
 
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project } from '../../../../types/app';
+import type { ProjectBulkSelection } from '../../hooks/useProjectBulkSelection';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
 import type { ArchivedProjectListItem, ArchivedSessionListItem, SidebarSearchMode } from '../../types/types';
 import ClaudeLogo from '../../../llm-logo-provider/ClaudeLogo';
@@ -11,6 +12,7 @@ import { getAllSessions } from '../../utils/utils';
 
 import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
+import ProjectBulkPanel from './ProjectBulkPanel';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
 
 function HighlightedSnippet({ snippet, highlights }: { snippet: string; highlights: { start: number; end: number }[] }) {
@@ -153,6 +155,8 @@ type SidebarContentProps = {
   onShowSettings: () => void;
   notificationCount?: number;
   projectListProps: SidebarProjectListProps;
+  /** eo:项目多选。工具条与三个确认框都在 ProjectBulkPanel 里,这里只转交状态。 */
+  projectBulk: ProjectBulkSelection;
   t: TFunction;
 };
 
@@ -195,6 +199,7 @@ export default function SidebarContent({
   onShowSettings,
   notificationCount,
   projectListProps,
+  projectBulk,
   t,
 }: SidebarContentProps) {
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
@@ -222,6 +227,9 @@ export default function SidebarContent({
         onRefresh={onRefresh}
         isRefreshing={isRefreshing}
         onCreateProject={onCreateProject}
+        selectionMode={projectBulk.selectionMode}
+        canSelectProjects={searchMode === 'projects' && projects.length > 0}
+        onToggleSelectionMode={projectBulk.toggleSelectionMode}
         t={t}
       />
 
@@ -626,7 +634,12 @@ export default function SidebarContent({
             </div>
           )
         ) : (
-          <SidebarProjectList {...projectListProps} />
+          <>
+            {projectBulk.selectionMode && (
+              <ProjectBulkPanel bulk={projectBulk} projects={projectListProps.filteredProjects} />
+            )}
+            <SidebarProjectList {...projectListProps} />
+          </>
         )}
       </ScrollArea>
 

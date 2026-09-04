@@ -53,6 +53,13 @@ export type SidebarProjectListProps = {
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
   /** 项目权限保存成功后刷新列表(徽标跟上)。 */
   onProjectsRefresh?: () => void;
+  /**
+   * eo:多选态。为真时每行前面出现复选框,点行 = 勾选而不是打开项目。
+   * 只在显式点了「多选」之后才为真 —— 默认动作被偷偷改掉是删错东西的开始。
+   */
+  selectionMode?: boolean;
+  selectedProjectIds?: ReadonlySet<string>;
+  onToggleProjectSelection?: (projectId: string) => void;
   t: TFunction;
 };
 
@@ -95,6 +102,9 @@ export default function SidebarProjectList({
   onCancelEditingSession,
   onSaveEditingSession,
   onProjectsRefresh,
+  selectionMode,
+  selectedProjectIds,
+  onToggleProjectSelection,
   t,
 }: SidebarProjectListProps) {
   const state = (
@@ -161,6 +171,9 @@ export default function SidebarProjectList({
               onCancelEditingSession={onCancelEditingSession}
               onSaveEditingSession={onSaveEditingSession}
               onProjectsRefresh={onProjectsRefresh}
+              selectionMode={selectionMode === true}
+              isSelectedForBulk={selectedProjectIds?.has(project.projectId) === true}
+              onToggleSelection={onToggleProjectSelection}
               t={t}
             />
           ))}

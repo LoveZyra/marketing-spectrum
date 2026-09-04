@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, Archive, ChevronDown, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, X, type LucideIcon } from 'lucide-react';
+import { Activity, Archive, ChevronDown, Folder, FolderPlus, ListChecks, MessageSquare, Plus, RefreshCw, X, type LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Input, Tooltip } from '../../../../shared/view/ui';
@@ -30,6 +30,10 @@ type SidebarHeaderProps = {
   onRefresh: () => void;
   isRefreshing: boolean;
   onCreateProject: () => void;
+  /** eo:项目多选开关。只在「项目」这一档、并且确实有项目时才画。 */
+  selectionMode?: boolean;
+  canSelectProjects?: boolean;
+  onToggleSelectionMode?: () => void;
   t: TFunction;
 };
 
@@ -58,6 +62,9 @@ export default function SidebarHeader({
   onRefresh,
   isRefreshing,
   onCreateProject,
+  selectionMode = false,
+  canSelectProjects = false,
+  onToggleSelectionMode,
   t,
 }: SidebarHeaderProps) {
   const paletteOps = usePaletteOps();
@@ -353,6 +360,26 @@ export default function SidebarHeader({
               <span className="font-mono text-[11px] font-normal tabular-nums">{sectionCount > 99 ? '99+' : sectionCount}</span>
             )}
           </span>
+          {/* eo:多选开关。**显式进入**才让点击变成勾选 —— 默认动作(打开项目)
+              被悄悄改掉,是人删错东西的开始。 */}
+          {canSelectProjects && onToggleSelectionMode && (
+            <button
+              type="button"
+              data-sidebar-select-projects
+              onClick={onToggleSelectionMode}
+              title={selectionMode
+                ? t('tooltips.exitSelection', { defaultValue: '退出多选' })
+                : t('tooltips.selectProjects', { defaultValue: '多选项目' })}
+              aria-pressed={selectionMode}
+              className={`grid h-6 w-6 flex-none place-items-center rounded-md border transition-colors active:translate-y-px ${
+                selectionMode
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-border bg-card text-body hover:border-border-strong hover:text-foreground'
+              }`}
+            >
+              <ListChecks className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
             type="button"
             data-sidebar-create-project
@@ -390,6 +417,20 @@ export default function SidebarHeader({
           </div>
 
           <div className="flex flex-shrink-0 gap-1.5">
+            {canSelectProjects && onToggleSelectionMode && (
+              <button
+                className={`flex h-8 w-8 items-center justify-center rounded-md active:translate-y-px ${
+                  selectionMode ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
+                }`}
+                onClick={onToggleSelectionMode}
+                aria-pressed={selectionMode}
+                title={selectionMode
+                  ? t('tooltips.exitSelection', { defaultValue: '退出多选' })
+                  : t('tooltips.selectProjects', { defaultValue: '多选项目' })}
+              >
+                <ListChecks className="h-4 w-4" strokeWidth={2} />
+              </button>
+            )}
             <button
               className="flex h-8 w-8 items-center justify-center rounded-md bg-muted active:translate-y-px"
               onClick={onRefresh}

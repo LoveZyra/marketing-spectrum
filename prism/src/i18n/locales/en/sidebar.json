@@ -44,7 +44,9 @@
     "approvalPendingIndicator": "Waiting for you to approve a tool",
     "exportSession": "Export session",
     "processingSessionIndicator": "Session running",
-    "exportSessionFailed": "Failed to export session. Please retry."
+    "exportSessionFailed": "Failed to export session. Please retry.",
+    "selectProjects": "Select projects",
+    "exitSelection": "Exit selection"
   },
   "actions": {
     "settings": "Settings",
@@ -111,7 +113,29 @@
     "rootOnlyHint": "Visible to root only — unowned and outside the public directory",
     "sharedHint": "Shared with you by someone else",
     "sharedOutHint": "Shared with {{count}} people",
-    "sharedOutRootOnlyHint": "Shared with {{count}} user(s) — otherwise visible to root only"
+    "sharedOutRootOnlyHint": "Shared with {{count}} user(s) — otherwise visible to root only",
+    "bulk": {
+      "select": "Select project",
+      "deleteTitle": "Delete projects",
+      "permissionsTitle": "Set permissions",
+      "ownerTitle": "Change owner",
+      "willAffect": "Projects to be affected",
+      "newOwner": "New owner",
+      "archive": "Archive",
+      "deleteAll": "Delete all data",
+      "apply": "Apply to selected",
+      "working": "Working…",
+      "cancel": "Cancel",
+      "selectAll": "Select all",
+      "clearAll": "Clear selection",
+      "selectedOf": "{{count}}/{{total}} selected",
+      "star": "Favorite",
+      "unstar": "Unfavorite",
+      "permissions": "Permissions",
+      "owner": "Change owner",
+      "delete": "Archive or delete",
+      "exit": "Exit selection"
+    }
   },
   "archived": {
     "loadMore": "Load more ({{total}} total)",
