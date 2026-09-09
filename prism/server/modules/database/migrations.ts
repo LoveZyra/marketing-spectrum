@@ -6,7 +6,9 @@ import { Database } from 'better-sqlite3';
 import {
   APP_CONFIG_TABLE_SCHEMA_SQL,
   AUDIT_LOG_TABLE_SCHEMA_SQL,
+  INDEX_SCHEMA_SQL,
   LAST_SCANNED_AT_SQL,
+  RETIRED_INDEXES,
   PROJECTS_TABLE_SCHEMA_SQL,
   PROJECT_SHARES_TABLE_SCHEMA_SQL,
   PROJECT_STARS_TABLE_SCHEMA_SQL,
@@ -15,6 +17,8 @@ import {
   USER_UI_SETTINGS_TABLE_SCHEMA_SQL,
 } from '@/modules/database/schema.js';
 import { listRootUsernames } from '@/shared/root-users.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('db');
 
 const SQLITE_UUID_SQL = `
 lower(hex(randomblob(4))) || '-' ||
@@ -39,7 +43,7 @@ const addColumnToTableIfNotExists = (
   columnType: string
 ) => {
   if (!columnNames.includes(columnName)) {
-    console.log(`Running migration: Adding ${columnName} column to ${tableName} table`);
+    log.info(`Running migration: Adding ${columnName} column to ${tableName} table`);
     db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
   }
 };
@@ -63,7 +67,7 @@ const migrateLegacySessionNames = (db: Database): void => {
   }
 
   if (hasSessionsTable) {
-    console.log('Running migration: Merging session_names into sessions');
+    log.info('Running migration: Merging session_names into sessions');
     db.exec(`
       INSERT INTO sessions (session_id, provider, custom_name, created_at, updated_at)
       SELECT
@@ -84,7 +88,7 @@ const migrateLegacySessionNames = (db: Database): void => {
     return;
   }
 
-  console.log('Running migration: Renaming session_names table to sessions');
+  log.info('Running migration: Renaming session_names table to sessions');
   db.exec('ALTER TABLE session_names RENAME TO sessions');
 };
 
@@ -95,7 +99,7 @@ const migrateLegacyWorkspaceTableIntoProjects = (db: Database): void => {
     return;
   }
 
-  console.log('Running migration: Migrating workspace_original_paths data into projects');
+  log.info('Running migration: Migrating workspace_original_paths data into projects');
   db.exec(`
     INSERT INTO projects (project_id, project_path, custom_project_name, isStarred, isArchived)
     SELECT
@@ -141,7 +145,7 @@ const rebuildProjectsTableWithPrimaryKeySchema = (db: Database): void => {
     return;
   }
 
-  console.log('Running migration: Rebuilding projects table to enforce project_id primary key');
+  log.info('Running migration: Rebuilding projects table to enforce project_id primary key');
 
   const projectPathExpression = columnNames.includes('project_path')
     ? 'project_path'
@@ -274,7 +278,7 @@ const rebuildSessionsTableWithProjectSchema = (db: Database): void => {
     return;
   }
 
-  console.log('Running migration: Rebuilding sessions table to project-based schema');
+  log.info('Running migration: Rebuilding sessions table to project-based schema');
 
   const projectPathExpression = columnNames.includes('project_path')
     ? 'project_path'
@@ -397,6 +401,38 @@ const rebuildSessionsTableWithProjectSchema = (db: Database): void => {
  * provider-native session id, so backfilling `provider_session_id` with
  * `session_id` keeps every legacy row resolvable through the new mapping.
  */
+/**
+ * fj:用量台账的会话键从 provider 原生 id 迁到 app 会话 id。
+ *
+ * 落库那两处原来存的是 provider 原生 id,而 `/cost` 按前端的 app 会话 id 查 ——
+ * 网页会话两个 id 必然不同,那一行台账因此**恒为空**。改成落 app id 之后,
+ * 已有的历史行仍然挂在旧键上,不迁就等于把过去的账丢掉。
+ *
+ * 只迁能一一对上的行(`sessions` 里有对应映射、且两个 id 确实不同)。
+ * 迁不动的(会话行已删)原样留着 —— 台账是账本,宁可留一条查不到主的行,
+ * 也不删。做过就不会再动:第二次跑时 `session_id` 已经是 app id,匹配不上。
+ */
+const remapUsageRecordsToAppSessionIds = (db: Database): void => {
+  if (!tableExists(db, 'usage_records')) return;
+  const result = db.prepare(`
+    UPDATE usage_records
+    SET session_id = (
+      SELECT s.session_id FROM sessions s
+      WHERE s.provider_session_id = usage_records.session_id
+        AND s.session_id <> s.provider_session_id
+      LIMIT 1
+    )
+    WHERE EXISTS (
+      SELECT 1 FROM sessions s
+      WHERE s.provider_session_id = usage_records.session_id
+        AND s.session_id <> s.provider_session_id
+    )
+  `).run();
+  if (result.changes > 0) {
+    log.info(`Running migration: 用量台账会话键迁到 app 会话 id(${result.changes} 行)`);
+  }
+};
+
 const addProviderSessionIdMapping = (db: Database): void => {
   const sessionsTableInfo = getTableInfo(db, 'sessions');
   const columnNames = sessionsTableInfo.map((column) => column.name);
@@ -420,7 +456,7 @@ const dropWebPushAndDesktopNotificationTables = (db: Database): void => {
   const legacyTables = ['push_subscriptions', 'vapid_keys', 'notification_channel_endpoints'];
   const hasAnyLegacyTable = legacyTables.some((tableName) => tableExists(db, tableName));
   if (hasAnyLegacyTable) {
-    console.log('Running migration: Dropping legacy Web Push / desktop notification tables');
+    log.info('Running migration: Dropping legacy Web Push / desktop notification tables');
   }
 
   db.exec('DROP INDEX IF EXISTS idx_push_subscriptions_user_id');
@@ -442,7 +478,7 @@ const dropWebPushAndDesktopNotificationTables = (db: Database): void => {
  */
 const dropPublishedPagesTable = (db: Database): void => {
   if (tableExists(db, 'published_pages')) {
-    console.log('Running migration: Dropping published_pages (publishing feature removed)');
+    log.info('Running migration: Dropping published_pages (publishing feature removed)');
   }
   db.exec('DROP INDEX IF EXISTS idx_published_pages_project');
   db.exec('DROP TABLE IF EXISTS published_pages');
@@ -498,7 +534,7 @@ const migrateApiKeysToHashed = (db: Database): void => {
     .all() as { id: number; api_key: string }[];
 
   if (legacyRows.length > 0) {
-    console.log(`Running migration: Hashing ${legacyRows.length} stored API key(s)`);
+    log.info(`Running migration: Hashing ${legacyRows.length} stored API key(s)`);
     const update = db.prepare(
       'UPDATE api_keys SET api_key_hash = ?, api_key_prefix = ?, api_key = NULL WHERE id = ?'
     );
@@ -528,7 +564,7 @@ const migrateApiKeysToHashed = (db: Database): void => {
  * 全新安装不会有这个问题(建表用的是新形状),所以它只在**升级上来的库**上出现,
  * 而且**一把密钥都没建过的库最隐蔽**:上面那段哈希迁移只 UPDATE
  * `api_key IS NOT NULL` 的行,一行都没有就什么也没做,约束原样留着。
- * 界面那边失败只 `console.error`,于是表现成"点了创建没反应"。
+ * 界面那边失败只打一行 error,于是表现成"点了创建没反应"。
  *
  * SQLite 改不了列约束,只能重建表。照搬 projects / sessions 两处的做法。
  */
@@ -538,7 +574,7 @@ const relaxLegacyApiKeyNotNull = (db: Database): void => {
   // notnull === 0 就是已经可空,什么都不用做(全新安装走这条)。
   if (!apiKeyColumn || Number(apiKeyColumn.notnull) === 0) return;
 
-  console.log('Running migration: Relaxing legacy NOT NULL on api_keys.api_key');
+  log.info('Running migration: Relaxing legacy NOT NULL on api_keys.api_key');
 
   const columnNames = info.map((column) => column.name);
   const pick = (name: string, fallback: string) =>
@@ -681,10 +717,161 @@ const removeSkillOptLeftovers = (db: Database): void => {
     .run(SKILLOPT_CLEANUP_KEY, new Date().toISOString());
 
   if (hadTable || removedProjects > 0 || removedAudit > 0) {
-    console.log(
+    log.info(
       `Running migration: removed SkillOpt leftovers (table=${hadTable ? 'dropped' : 'absent'}, `
       + `projects=${removedProjects}, audit=${removedAudit})`,
     );
+  }
+};
+
+/**
+ * 用户名改成**大小写不敏感**(`COLLATE NOCASE UNIQUE`)。
+ *
+ * ## 这修的是一个未登录即可利用的提权
+ *
+ * `isRootUser()` 拿 `username.trim().toLowerCase()` 去和 `PRISM_ROOT_USERS` 比对,
+ * 而 `users.username` 是 SQLite 默认 BINARY 排序的 `UNIQUE`,注册时又不做任何归一化。
+ * 于是 `PRISM_ROOT_USERS=alice` 时,任何人注册 `Alice`:
+ *
+ *   - UNIQUE 不冲突(BINARY 下 `Alice` != `alice`),插入成功;
+ *   - `isRootUser("Alice")` 为真 -> **绕过注册审批**,当场发 JWT;
+ *   - 之后每个请求 `withRootFlag` 都判定 `isRoot=true` -> 重置任意账号密码、
+ *     读全站审计日志、改任意项目属主。
+ *
+ * 实测打穿过:`Alice` 打 `/api/admin/users` 拿到 200,而正常非 root 账号是 403。
+ * 攻击者不需要任何凭据 —— root 用户名根本不是秘密(审计页、项目属主、共享名单里到处都是)。
+ * 带前后空格的 `" alice "` 同样成立。
+ *
+ * ## 为什么是改排序规则,而不是在注册处 lower 一下
+ *
+ * 注册只是**其中一个**入口。库里的口径本来就已经不一致了:`findIdByUsername`
+ * 是大小写不敏感的(注释还写明了),而登录走的 `getUserByUsername` 是敏感的。
+ * 在某一处补归一化,等于再加一份会漂的判据。
+ *
+ * 把 `COLLATE NOCASE` 放到**列**上,`UNIQUE` 和所有 `WHERE username = ?` 一次性
+ * 全部变成大小写不敏感 —— 真源只有一个,以后新增查询也不会漏。
+ *
+ * ## 存量撞车怎么处置
+ *
+ * 老库里可能已经躺着 `alice` / `Alice` 两行(可能就是这个攻击留下的)。直接建
+ * NOCASE 唯一索引会失败,而**删账号或合并账号都是不可逆的**,不能替用户做主。
+ *
+ * 做法:同一组里**保留 id 最小的那行**(最早注册的,几乎必然是本人),其余重命名成
+ * `<名字>~dup<id>`。重命名本身就解除了冒充:`isRootUser("Alice~dup4")` 为 false,
+ * 提权当场失效;账号数据一行不删,root 可以在管理页看到并自行处置。
+ * 顺带把所有用户名 `trim()` 一遍 —— 前后空格是同一个洞的变体。
+ *
+ * 幂等:库里已经是 NOCASE 就直接返回,不重复重建。
+ */
+const rebuildUsersTableWithCaseInsensitiveUsername = (db: Database): void => {
+  if (!tableExists(db, 'users')) return;
+
+  const ddl = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'")
+    .get() as { sql?: string } | undefined;
+  // 已经做过就不再做。判据放宽到不区分大小写,免得被 DDL 里的书写差异骗过。
+  if (ddl?.sql && /username[^,]*collate\s+nocase/i.test(ddl.sql)) return;
+
+  const columns = db.prepare('PRAGMA table_info(users)').all() as TableInfoRow[];
+  if (columns.length === 0) return;
+  const columnNames = new Set(columns.map((column) => column.name));
+  const has = (name: string): boolean => columnNames.has(name);
+  // 老库可能缺后加的列;缺了就用与建表默认值一致的字面量补齐。
+  const pick = (name: string, fallback: string): string => (has(name) ? name : fallback);
+
+  // 撞车检测按「trim + 小写」分组 —— 这正是新唯一索引将要使用的口径。
+  const collisions = db
+    .prepare(`
+      SELECT id, username
+      FROM users
+      WHERE lower(trim(username)) IN (
+        SELECT lower(trim(username)) FROM users
+        GROUP BY lower(trim(username))
+        HAVING COUNT(*) > 1
+      )
+      ORDER BY lower(trim(username)), id
+    `)
+    .all() as Array<{ id: number; username: string }>;
+
+  const renamed: Array<{ id: number; from: string; to: string }> = [];
+  if (collisions.length > 0) {
+    const seen = new Set<string>();
+    const rename = db.prepare('UPDATE users SET username = ? WHERE id = ?');
+    for (const row of collisions) {
+      const key = String(row.username ?? '').trim().toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key); // 每组第一条(id 最小)保留原名
+        continue;
+      }
+      const next = `${String(row.username ?? '').trim()}~dup${row.id}`;
+      rename.run(next, row.id);
+      renamed.push({ id: row.id, from: row.username, to: next });
+    }
+  }
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec('BEGIN TRANSACTION');
+    db.exec('DROP TABLE IF EXISTS users__new');
+    db.exec(`
+      CREATE TABLE users__new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+        password_hash TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_login DATETIME,
+        is_active BOOLEAN DEFAULT 1,
+        git_name TEXT,
+        git_email TEXT,
+        has_completed_onboarding BOOLEAN DEFAULT 0,
+        token_version INTEGER NOT NULL DEFAULT 0,
+        approval_status TEXT NOT NULL DEFAULT 'approved',
+        approved_at DATETIME,
+        reviewed_by INTEGER
+      )
+    `);
+    db.exec(`
+      INSERT INTO users__new (
+        id, username, password_hash, created_at, last_login, is_active,
+        git_name, git_email, has_completed_onboarding, token_version,
+        approval_status, approved_at, reviewed_by
+      )
+      SELECT
+        id,
+        trim(username),
+        password_hash,
+        ${pick('created_at', 'CURRENT_TIMESTAMP')},
+        ${pick('last_login', 'NULL')},
+        ${pick('is_active', '1')},
+        ${pick('git_name', 'NULL')},
+        ${pick('git_email', 'NULL')},
+        ${pick('has_completed_onboarding', '0')},
+        ${has('token_version') ? 'COALESCE(token_version, 0)' : '0'},
+        ${has('approval_status') ? "COALESCE(approval_status, 'approved')" : "'approved'"},
+        ${pick('approved_at', 'NULL')},
+        ${pick('reviewed_by', 'NULL')}
+      FROM users
+      WHERE username IS NOT NULL AND trim(username) <> ''
+    `);
+    db.exec('DROP TABLE users');
+    db.exec('ALTER TABLE users__new RENAME TO users');
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+
+  log.info('Running migration: users.username 改为 COLLATE NOCASE UNIQUE(大小写不敏感)');
+  if (renamed.length > 0) {
+    log.warn(
+      `[MIGRATION] 检测到 ${renamed.length} 个大小写撞车的用户名,已重命名(账号数据未删):`,
+    );
+    for (const item of renamed) {
+      log.warn(`  #${item.id} "${item.from}" -> "${item.to}"`);
+    }
+    log.warn('  这些账号需要用新名字登录。若其中有冒充 root 的账号,重命名已使其失去 root。');
   }
 };
 
@@ -795,46 +982,94 @@ export const runMigrations = (db: Database) => {
     dropWebPushAndDesktopNotificationTables(db);
     dropPublishedPagesTable(db);
 
+    // 用户名大小写不敏感 —— 修一个未登录即可利用的提权,详见函数注释。
+    // 放在前面:它重建 users 表,而后面的迁移可能读用户行。
+    rebuildUsersTableWithCaseInsensitiveUsername(db);
+
     db.exec(PROJECTS_TABLE_SCHEMA_SQL);
     rebuildProjectsTableWithPrimaryKeySchema(db);
     addProjectOwnerColumn(db);
     addProjectVisibilityAndShares(db);
-    addProjectStarsTable(db);
-
+    // 顺序**要紧**:`addProjectStarsTable` 的搬迁读 `SELECT … FROM projects WHERE
+    // isStarred = 1`,而 workspace 时代的数据这时还在 `workspace_original_paths` 里。
+    // 原来这两行是反的 —— 搬迁读到空表、什么都没搬,而它又是严格一次性的
+    // (`if (existing) return`),下次启动永不重试。结果是老库升上来之后**收藏全丢**:
+    // 旧的 isStarred 列还在,但有登录用户时侧栏只认 project_stars,界面上一个收藏都没有。
     migrateLegacyWorkspaceTableIntoProjects(db);
+
+    addProjectStarsTable(db);
     rebuildSessionsTableWithProjectSchema(db);
     migrateLegacySessionNames(db);
     addProviderSessionIdMapping(db);
+    remapUsageRecordsToAppSessionIds(db);
     ensureProjectsForSessionPaths(db);
 
-    db.exec('CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id)');
-    db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_provider_session_id ON sessions(provider_session_id)');
-    db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_project_path ON sessions(project_path)');
-    db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_is_archived ON sessions(isArchived)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_projects_is_starred ON projects(isStarred)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_projects_is_archived ON projects(isArchived)');
-    // 项目列表热路径 getProjectPaths(visibleTo) 按 owner_user_id / visibility 过滤
-    // (owner 本人 OR 公共 OR 被授权),此前这两列都没索引、随项目数线性扫。
-    db.exec('CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_user_id)');
-    db.exec('CREATE INDEX IF NOT EXISTS idx_projects_visibility ON projects(visibility)');
 
     db.exec('DROP INDEX IF EXISTS idx_session_names_lookup');
     db.exec('DROP INDEX IF EXISTS idx_sessions_workspace_path');
     db.exec('DROP INDEX IF EXISTS idx_workspace_original_paths_is_starred');
     db.exec('DROP INDEX IF EXISTS idx_workspace_original_paths_workspace_id');
 
+    /**
+     * 退役索引:`CREATE INDEX IF NOT EXISTS` 只管建不管删,从清单里去掉之后
+     * 老库里那几条会一直留着白吃写开销(sessions 上实测约 15%)。
+     * 名单与理由见 schema.ts 的 `RETIRED_INDEXES`。
+     */
+    for (const name of RETIRED_INDEXES) {
+      db.exec(`DROP INDEX IF EXISTS ${name}`);
+    }
+
     if (tableExists(db, 'workspace_original_paths')) {
-      console.log('Running migration: Dropping legacy workspace_original_paths table');
+      log.info('Running migration: Dropping legacy workspace_original_paths table');
       db.exec('DROP TABLE workspace_original_paths');
     }
 
     // eu:技能训练撤掉之后的一次性清账(做过就不再做,见函数注释)
     removeSkillOptLeftovers(db);
 
+    /**
+     * 显示日志的孤儿行 —— 每次启动收一次。
+     *
+     * `session_display_messages` 没有外键,而它指向的会话行有好几条路径会消失:
+     * 迁移里删幽灵项目的会话时没连带删日志;`projects` 行被删时 FK 是
+     * `ON DELETE SET NULL`,会话行留下、`project_path` 变 NULL —— 那些会话此后只有
+     * root 看得到,它们的日志再也没有任何入口能删。孤儿只增不减,而这是全库行数
+     * 最大的表(实测 8 万行 ≈ 108 MB)。
+     *
+     * 放在启动而不是写入时:孤儿是**别处删东西**产生的,写入路径上判不出来;
+     * 而这条 DELETE 走 `(session_id, id)` 索引 + `sessions` 主键,正常安装上是毫秒级。
+     */
+    if (tableExists(db, 'session_display_messages') && tableExists(db, 'sessions')) {
+      const orphans = db
+        .prepare(`
+          DELETE FROM session_display_messages
+          WHERE session_id NOT IN (SELECT session_id FROM sessions)
+        `)
+        .run();
+      if (orphans.changes > 0) {
+        log.info(`Running migration: 清掉 ${orphans.changes} 条没有归属会话的显示日志`);
+      }
+    }
+
+    /**
+     * **所有索引统一在这里建** —— 迁移的最后一步,那时每张表的列一定齐了。
+     *
+     * 它们原来散落在 `INIT_SCHEMA_SQL` 的建表语句旁边,而 INIT 跑在迁移**之前**:
+     * `CREATE TABLE IF NOT EXISTS` 对老库是空操作,于是索引可能引用一个迁移才补上的列,
+     * 整句 `db.exec` 抛 → 服务起不来,而且 exec 非原子,前面的 DDL 已经落库。
+     * projects / sessions / api_keys 三处各自踩过一次,当时是逐个挪进来、留一行 NOTE。
+     *
+     * 逐个挪治不了这个病:只要建索引还允许写在建表旁边,下一个人还会那么写。
+     * 现在 `INIT_SCHEMA_SQL` 里**不许出现 CREATE INDEX**,有测试钉着。
+     */
+    db.exec(INDEX_SCHEMA_SQL);
+
     db.exec(LAST_SCANNED_AT_SQL);
-    console.log('Database migrations completed successfully');
+    log.info('Database migrations completed successfully');
   } catch (error: any) {
-    console.error('Error running migrations:', error.message);
+    log.error('Error running migrations:', error.message);
     throw error;
   }
 };

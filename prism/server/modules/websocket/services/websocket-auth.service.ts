@@ -2,6 +2,8 @@ import type { VerifyClientCallbackSync } from 'ws';
 
 import { userDb } from '@/modules/database/index.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('ws-auth');
 
 type WebSocketAuthDependencies = {
   isPlatform: boolean;
@@ -45,18 +47,19 @@ export function verifyWebSocketClient(
     }
   }
 
-  console.log('WebSocket connection attempt to:', `${loggedUrl.pathname}${loggedUrl.search}`);
+  // 每次连接都打;真正要紧的是**失败**那三条(下面都是 warn),成功的进 debug。
+  log.debug('WebSocket 连接请求:', `${loggedUrl.pathname}${loggedUrl.search}`);
 
   // Platform mode: use the first DB user and skip token checks.
   if (dependencies.isPlatform) {
     const user = dependencies.authenticateWebSocket(null);
     if (!user) {
-      console.log('[WARN] Platform mode: No user found in database');
+      log.warn('Platform mode: No user found in database');
       return false;
     }
 
     request.user = user;
-    console.log('[OK] Platform mode WebSocket authenticated for user:', user.username);
+    log.debug('平台模式 WebSocket 认证通过:', user.username);
     return true;
   }
 
@@ -72,16 +75,28 @@ export function verifyWebSocketClient(
           : Number.parseInt(String(consumed.userId), 10);
     const user = Number.isFinite(numericUserId) ? userDb.getUserById(numericUserId) : undefined;
 
-    if (user) {
+    /**
+     * fj:票据也要校 `token_version` —— REST 与 JWT-WS 两条路都校,唯独这里没校。
+     * 不校的后果:用户「退出所有设备」之后,已签发的那张 60 秒票据仍能开新连接。
+     */
+    const ticketTokenVersion = (consumed as { tokenVersion?: unknown } | null)?.tokenVersion;
+    const tokenVersionMatches = ticketTokenVersion === null
+      || ticketTokenVersion === undefined
+      || Number(ticketTokenVersion) === Number((user as { token_version?: number })?.token_version ?? 0);
+
+    if (user && tokenVersionMatches) {
       // Same user shape authenticateWebSocket produces in OSS mode.
       request.user = { userId: user.id, username: user.username };
-      console.log('[OK] WebSocket authenticated via ticket for user:', user.username);
+      log.debug('WebSocket 票据认证通过:', user.username);
       return true;
+    }
+    if (user && !tokenVersionMatches) {
+      log.warn('WebSocket ticket rejected (token_version 已失效 —— 用户登出过所有设备)');
     }
 
     // Invalid/expired/replayed ticket: fall through to the header (and, when
     // explicitly enabled, legacy query token) mechanisms below.
-    console.log('[WARN] WebSocket ticket rejected (invalid, expired, or already used)');
+    log.warn('WebSocket ticket rejected (invalid, expired, or already used)');
   }
 
   // OSS mode, mechanisms 2+3: legacy JWT from the query string is accepted
@@ -98,11 +113,11 @@ export function verifyWebSocketClient(
 
   const user = dependencies.authenticateWebSocket(token);
   if (!user) {
-    console.log('[WARN] WebSocket authentication failed');
+    log.warn('WebSocket authentication failed');
     return false;
   }
 
   request.user = user;
-  console.log('[OK] WebSocket authenticated for user:', user.username);
+  log.debug('WebSocket 认证通过:', user.username);
   return true;
 }

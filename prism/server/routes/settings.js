@@ -1,5 +1,7 @@
 import express from 'express';
 
+import { createLogger } from '@/shared/logger.js';
+
 import {
   apiKeysDb,
   auditLogDb,
@@ -8,6 +10,8 @@ import {
   uiSettingsDb,
 } from '../modules/database/index.js';
 import { clientIp } from '../middleware/rate-limit.js';
+
+const log = createLogger('settings');
 
 const router = express.Router();
 
@@ -35,7 +39,7 @@ router.get('/api-keys', async (req, res) => {
     }));
     res.json({ apiKeys: sanitizedKeys });
   } catch (error) {
-    console.error('Error fetching API keys:', error);
+    log.error('Error fetching API keys:', error);
     res.status(500).json({ error: 'Failed to fetch API keys' });
   }
 });
@@ -61,7 +65,7 @@ router.post('/api-keys', async (req, res) => {
       apiKey: result
     });
   } catch (error) {
-    console.error('Error creating API key:', error);
+    log.error('Error creating API key:', error);
     res.status(500).json({ error: 'Failed to create API key' });
   }
 });
@@ -79,7 +83,7 @@ router.delete('/api-keys/:keyId', async (req, res) => {
       res.status(404).json({ error: 'API key not found' });
     }
   } catch (error) {
-    console.error('Error deleting API key:', error);
+    log.error('Error deleting API key:', error);
     res.status(500).json({ error: 'Failed to delete API key' });
   }
 });
@@ -107,7 +111,7 @@ router.patch('/api-keys/:keyId/toggle', async (req, res) => {
       res.status(404).json({ error: 'API key not found' });
     }
   } catch (error) {
-    console.error('Error toggling API key:', error);
+    log.error('Error toggling API key:', error);
     res.status(500).json({ error: 'Failed to toggle API key' });
   }
 });
@@ -124,7 +128,7 @@ router.get('/credentials', async (req, res) => {
     // Don't send the actual credential values for security
     res.json({ credentials });
   } catch (error) {
-    console.error('Error fetching credentials:', error);
+    log.error('Error fetching credentials:', error);
     res.status(500).json({ error: 'Failed to fetch credentials' });
   }
 });
@@ -165,7 +169,7 @@ router.post('/credentials', async (req, res) => {
       credential: result
     });
   } catch (error) {
-    console.error('Error creating credential:', error);
+    log.error('Error creating credential:', error);
     res.status(500).json({ error: 'Failed to create credential' });
   }
 });
@@ -187,7 +191,7 @@ router.delete('/credentials/:credentialId', async (req, res) => {
       res.status(404).json({ error: 'Credential not found' });
     }
   } catch (error) {
-    console.error('Error deleting credential:', error);
+    log.error('Error deleting credential:', error);
     res.status(500).json({ error: 'Failed to delete credential' });
   }
 });
@@ -210,7 +214,7 @@ router.patch('/credentials/:credentialId/toggle', async (req, res) => {
       res.status(404).json({ error: 'Credential not found' });
     }
   } catch (error) {
-    console.error('Error toggling credential:', error);
+    log.error('Error toggling credential:', error);
     res.status(500).json({ error: 'Failed to toggle credential' });
   }
 });
@@ -224,7 +228,7 @@ router.get('/notification-preferences', async (req, res) => {
     const preferences = notificationPreferencesDb.getPreferences(req.user.id);
     res.json({ success: true, preferences });
   } catch (error) {
-    console.error('Error fetching notification preferences:', error);
+    log.error('Error fetching notification preferences:', error);
     res.status(500).json({ error: 'Failed to fetch notification preferences' });
   }
 });
@@ -234,7 +238,7 @@ router.put('/notification-preferences', async (req, res) => {
     const preferences = notificationPreferencesDb.updatePreferences(req.user.id, req.body || {});
     res.json({ success: true, preferences });
   } catch (error) {
-    console.error('Error saving notification preferences:', error);
+    log.error('Error saving notification preferences:', error);
     res.status(500).json({ error: 'Failed to save notification preferences' });
   }
 });
@@ -257,7 +261,7 @@ router.get('/ui', async (req, res) => {
     const record = uiSettingsDb.get(req.user.id);
     res.json({ success: true, settings: record?.settings ?? null, clientUpdatedAt: record?.clientUpdatedAt ?? null });
   } catch (error) {
-    console.error('Error fetching UI settings:', error);
+    log.error('Error fetching UI settings:', error);
     res.status(500).json({ error: 'Failed to fetch UI settings' });
   }
 });
@@ -278,7 +282,7 @@ router.put('/ui', async (req, res) => {
     const record = uiSettingsDb.put(req.user.id, settings, clientUpdatedAt);
     res.json({ success: true, settings: record.settings, clientUpdatedAt: record.clientUpdatedAt });
   } catch (error) {
-    console.error('Error saving UI settings:', error);
+    log.error('Error saving UI settings:', error);
     res.status(500).json({ error: 'Failed to save UI settings' });
   }
 });

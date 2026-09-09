@@ -6,10 +6,16 @@ import chokidar, { type ChokidarOptions, type FSWatcher } from 'chokidar';
 
 import { projectVisibilityInput, projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
-import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
+// 叶子直取:走 websocket barrel 会把 websocket → providers → projects 连成环
+// (madge 实测)。见 shared/websocket-state.ts 的注释。
+import { WS_OPEN_STATE, connectedClients } from '@/shared/websocket-state.js';
 import { canViewerSeeProject } from '@/shared/project-visibility.js';
 import type { LLMProvider } from '@/shared/types.js';
-import { generateDisplayName } from '@/modules/projects/index.js';
+// 叶子模块直取 —— 走 projects barrel 会把 projects → providers → websocket 连成环
+// (madge 实测 4 个,全部以那条边为骨)。同 prism-internal-transcripts 的处理。
+import { generateDisplayName } from '@/shared/project-display-name.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('watcher');
 import {
   PRISM_INTERNAL_CWD_MARKERS, isPrismInternalTranscript,
 } from '@/shared/prism-internal-transcripts.js';
@@ -316,7 +322,7 @@ async function flushPendingWatcherUpdate(): Promise<void> {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error('Session watcher refresh failed while broadcasting session_upserted', { error: message });
+    log.error('Session watcher refresh failed while broadcasting session_upserted', { error: message });
   } finally {
     watcherRefreshInFlight = false;
 
@@ -341,14 +347,14 @@ async function syncWatchedFile(
       return;
     }
 
-    console.log(`Session synchronization triggered by ${eventType} event for provider "${provider}"`, {
+    log.info(`Session synchronization triggered by ${eventType} event for provider "${provider}"`, {
       filePath,
       sessionId: result.sessionId,
     });
     queuePendingWatcherUpdate(result.sessionId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Session watcher sync failed for provider "${provider}"`, {
+    log.error(`Session watcher sync failed for provider "${provider}"`, {
       eventType,
       filePath,
       error: message,
@@ -413,10 +419,10 @@ function onWatcherEvent(
  * Starts provider filesystem watchers and performs initial DB synchronization.
  */
 export async function initializeSessionsWatcher(): Promise<void> {
-  console.log('Setting up session watchers');
+  log.info('Setting up session watchers');
 
   const initialSync = await sessionSynchronizerService.synchronizeSessions();
-  console.log('Initial session synchronization complete', {
+  log.info('Initial session synchronization complete', {
     processedByProvider: initialSync.processedByProvider,
     failures: initialSync.failures,
   });
@@ -436,13 +442,13 @@ export async function initializeSessionsWatcher(): Promise<void> {
         })
         .on('error', (error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
-          console.error(`Session watcher error for provider "${provider}"`, { error: message });
+          log.error(`Session watcher error for provider "${provider}"`, { error: message });
         });
 
       watchers.push(watcher);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to initialize session watcher for provider "${provider}"`, {
+      log.error(`Failed to initialize session watcher for provider "${provider}"`, {
         rootPath,
         error: message,
       });
@@ -470,7 +476,7 @@ export async function closeSessionsWatcher(): Promise<void> {
         await watcher.close();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error('Failed to close session watcher', { error: message });
+        log.error('Failed to close session watcher', { error: message });
       }
     })
   );

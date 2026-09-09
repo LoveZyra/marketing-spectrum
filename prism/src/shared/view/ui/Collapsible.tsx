@@ -76,9 +76,27 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, React.ButtonHTMLA
 );
 CollapsibleTrigger.displayName = 'CollapsibleTrigger';
 
-const CollapsibleContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, children, ...props }, ref) => {
+type CollapsibleContentProps = React.HTMLAttributes<HTMLDivElement> & {
+  /**
+   * fj:收起时**不渲染** children(默认 false —— 保持原有的高度过渡)。
+   *
+   * 收起本来只是 `grid-rows-[0fr]` + `overflow-hidden` 的视觉技巧,children
+   * 一直在 DOM 里。对绝大多数内容这没关系,但工具详情区(几千行的 diff、
+   * 大 JSON)会因此在"折叠着"的时候就把几万个节点挂上去 —— `defaultOpen: false`
+   * 看着像懒加载,其实一点都不懒。
+   *
+   * 需要惰性挂载的地方显式打开这个开关;第一次展开之后就一直保持挂载
+   * (再收起时用回高度过渡,不会因为卸载而丢掉滚动位置)。
+   */
+  mountOnOpen?: boolean;
+};
+
+const CollapsibleContent = React.forwardRef<HTMLDivElement, CollapsibleContentProps>(
+  ({ className, children, mountOnOpen = false, ...props }, ref) => {
     const { open } = useCollapsible();
+    const hasOpenedRef = React.useRef(open);
+    if (open) hasOpenedRef.current = true;
+    const shouldRenderChildren = !mountOnOpen || hasOpenedRef.current;
 
     return (
       <div
@@ -92,7 +110,7 @@ const CollapsibleContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes
         {...props}
       >
         <div className="overflow-hidden">
-          {children}
+          {shouldRenderChildren ? children : null}
         </div>
       </div>
     );

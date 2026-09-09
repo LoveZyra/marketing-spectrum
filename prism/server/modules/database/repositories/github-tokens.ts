@@ -9,6 +9,8 @@ import { getConnection } from '@/modules/database/connection.js';
 import { appConfigDb } from '@/modules/database/repositories/app-config.js';
 import { credentialsDb } from '@/modules/database/repositories/credentials.js';
 import { decrypt, getEncryptionKey } from '@/shared/crypto-box.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('db');
 import type {
   CredentialPublicRow,
   CreateCredentialResult,
@@ -95,7 +97,7 @@ export const githubTokensDb = {
       plaintext = decryptCredentialValue(row.credential_value);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error('Could not decrypt stored GitHub token', { tokenId, error: message });
+      log.error('Could not decrypt stored GitHub token', { tokenId, error: message });
       return null;
     }
 

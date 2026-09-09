@@ -47,7 +47,6 @@ function MainContent({
   onSessionEstablished,
   onShowSettings,
   onEditorMaximizedChange,
-  recentSessions,
   onRenameSession,
   onDeleteSession,
   externalMessageUpdate,
@@ -204,7 +203,6 @@ function MainContent({
                 sendByCtrlEnter={sendByCtrlEnter}
                 externalMessageUpdate={externalMessageUpdate}
                 newSessionTrigger={newSessionTrigger}
-                recentSessions={recentSessions}
               />
             </ErrorBoundary>
           </div>

@@ -102,6 +102,8 @@ interface ChatComposerProps {
   onAttachFiles?: (files: File[]) => void;
   onAttachUrl?: (url: string) => void;
   parsingDocs?: boolean;
+  /** fj:提交在飞(图片上传 / 建会话 POST 还没回来)—— 发送按钮变灰,防重复提交。 */
+  isSubmitting?: boolean;
   /** prism: transfer progress for the generic attach path (files up to 500MB). */
   docUploadProgress?: DocUploadProgress | null;
   /** Prism: open the checkpoint history drawer. */
@@ -112,6 +114,8 @@ interface ChatComposerProps {
   onSelectFile: (file: MentionableFile) => void;
   filteredCommands: SlashCommand[];
   selectedCommandIndex: number;
+  /** fj:悬停项 —— 只高亮,不影响回车。 */
+  hoveredCommandIndex?: number;
   onCommandSelect: (command: SlashCommand, index: number, isHover: boolean) => void;
   onCloseCommandMenu: () => void;
   isCommandMenuOpen: boolean;
@@ -180,6 +184,7 @@ function ChatComposer({
   onAttachFiles,
   onAttachUrl,
   parsingDocs = false,
+  isSubmitting = false,
   docUploadProgress = null,
   onShowCheckpoints,
   showFileDropdown,
@@ -188,6 +193,7 @@ function ChatComposer({
   onSelectFile,
   filteredCommands,
   selectedCommandIndex,
+  hoveredCommandIndex = -1,
   onCommandSelect,
   onCloseCommandMenu,
   isCommandMenuOpen,
@@ -517,6 +523,7 @@ function ChatComposer({
         <CommandMenu
           commands={filteredCommands}
           selectedIndex={selectedCommandIndex}
+          hoveredIndex={hoveredCommandIndex}
           onSelect={onCommandSelect}
           onClose={onCloseCommandMenu}
           position={commandMenuPosition}
@@ -967,7 +974,14 @@ function ChatComposer({
                       }
                     : undefined
                 }
-                disabled={!input.trim()}
+                /**
+                 * fj:附件还在上传时也要禁用。
+                 *
+                 * 此前 `parsingDocs` 一路传进来只画进度条,按钮照旧可点 ——
+                 * 于是大文件传到一半按回车,消息**不带那个附件**就发出去了,
+                 * 附件随后挂到已清空的输入框上、跟着下一条发出。
+                 */
+                disabled={!input.trim() || parsingDocs || isSubmitting}
                 aria-label={submitAriaLabel}
                 // 悬停提示带上完整快捷键说明(底栏那段长文案删了,信息收到这里)。
                 title={`${submitAriaLabel} · ${submitHint}`}

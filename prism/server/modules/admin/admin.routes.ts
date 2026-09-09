@@ -7,6 +7,8 @@ import { collectServerStatus } from '@/modules/admin/services/server-status.serv
 import { collectRuntimeStats, type RuntimePoolSnapshot } from '@/modules/admin/services/runtime-stats.service.js';
 import { formatBytes, getAttachmentQuotaBytes } from '@/shared/attachment-storage.js';
 import { broadcastPendingApprovalCount } from '@/modules/websocket/index.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('admin');
 
 // bcrypt 不带类型声明(auth.js 是纯 JS 无所谓,这里是 TS)。只用到 hash 一个
 // 方法,自己给个最小签名,别为一个函数引 @types 依赖。
@@ -167,7 +169,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): Router
     try {
       res.json({ success: true, stats: collectRuntimeStats({ runtimePool: dependencies.runtimePool }) });
     } catch (error) {
-      console.error('[admin] 运行时统计失败:', (error as Error).message);
+      log.error('[admin] 运行时统计失败:', (error as Error).message);
       res.status(500).json({ error: 'Failed to collect runtime stats' });
     }
   });
@@ -207,7 +209,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): Router
 
       res.json({ success: true, users, defaultQuotaBytes: getAttachmentQuotaBytes(null) });
     } catch (error) {
-      console.error('[admin] 附件用量汇总失败:', (error as Error).message);
+      log.error('[admin] 附件用量汇总失败:', (error as Error).message);
       res.status(500).json({ error: 'Failed to collect attachment usage' });
     }
   });

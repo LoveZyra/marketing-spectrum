@@ -115,6 +115,27 @@ export function useShellConnection({
     [handleProcessCompletion, onOutputRef, terminalRef],
   );
 
+  /**
+   * 组件是否已经卸载。
+   *
+   * `connectWebSocket` 在 `new WebSocket()` **之前**有一次 await(取一次性票据,
+   * 一个网络往返)。用户在这几百毫秒里切走页签的话:effect 的清理函数跑完了
+   * (那时 `wsRef.current` 还是 null,没什么可关的),await 才落地,然后照样
+   * `new WebSocket(...)` —— 开出来的这条连接**没有任何人持有引用**,清理函数
+   * 已经错过了它,`closeSocket` 也找不到它。它会一直连着,直到服务端心跳判死。
+   *
+   * `WebSocketContext` 专门用 `attemptRef` 挡的就是这一族问题,终端这条没实现。
+   *
+   * 判据放 ref 而不是 state:清理函数要能立刻改它,而 state 更新是异步的。
+   */
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
+
   const connectWebSocket = useCallback(
     async (isConnectionLocked = false) => {
       if ((connectingRef.current && !isConnectionLocked) || isConnecting || isConnected) {
@@ -129,6 +150,12 @@ export function useShellConnection({
       try {
         // Fetched per attempt — the ticket is single-use and expires in 60s.
         const wsUrl = await getShellWebSocketUrl();
+        // 取票期间卸载了:**别开这条连接**。开出来就没人持有它了(见 unmountedRef)。
+        // 票据是一次性的,不用它自己会在 60 秒后过期,不需要额外归还。
+        if (unmountedRef.current) {
+          connectingRef.current = false;
+          return;
+        }
         if (!wsUrl) {
           connectingRef.current = false;
           setIsConnecting(false);

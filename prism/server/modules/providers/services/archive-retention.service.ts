@@ -14,6 +14,8 @@
  */
 
 import { sessionsDb } from '@/modules/database/index.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('providers');
 
 /** 每轮最多删多少 —— 首次开启时回收站里可能有几千条,不要一口气占住事件循环。 */
 const SWEEP_BATCH = 200;
@@ -30,16 +32,20 @@ export function getArchiveRetentionDays(): number {
  */
 export function findExpiredArchivedSessions(retentionDays: number, limit = SWEEP_BATCH): string[] {
   if (retentionDays <= 0) return [];
-  // scope=all:清扫是系统行为,不属于任何访问者,不能按谁的可见性过滤。
-  const page = sessionsDb.getArchivedSessionsPage({ kind: 'all' }, limit, 0);
-  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-
-  return page.rows
-    .filter((row) => {
-      const stamp = Date.parse(row.updated_at ?? row.created_at ?? '');
-      return Number.isFinite(stamp) && stamp < cutoff;
-    })
-    .map((row) => row.session_id);
+  /**
+   * fj:cutoff 下推到 SQL,不再"取一页回来再过滤"。
+   *
+   * 原来是 `getArchivedSessionsPage({kind:'all'}, limit, 0)` —— 那个查询
+   * `ORDER BY updated_at DESC`(**最新在前**),而"超期"的定义就是"最旧",
+   * 它们排在整张表的**最后**。归档超过 200 条、且最新的 200 条还在保留期内时,
+   * 清扫**一条都删不到**;归档不改 `updated_at`,所以排序看的是最后活动时间,
+   * 一个持续在用的部署很容易满足这个条件。
+   *
+   * 部署方配了 `PRISM_ARCHIVE_RETENTION_DAYS=30` 以为回收站会自己清,实际上库
+   * 一直在涨,日志里也没有任何提示(`removed > 0` 才打日志)。
+   */
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  return sessionsDb.getExpiredArchivedSessions(cutoff, limit);
 }
 
 type SweepDependencies = {
@@ -62,7 +68,7 @@ export async function sweepExpiredArchives(dependencies: SweepDependencies): Pro
     }
   }
   if (removed > 0) {
-    console.log(`[archive] 清理了 ${removed} 条超过 ${retentionDays} 天的归档会话`);
+    log.info(`[archive] 清理了 ${removed} 条超过 ${retentionDays} 天的归档会话`);
   }
   return removed;
 }

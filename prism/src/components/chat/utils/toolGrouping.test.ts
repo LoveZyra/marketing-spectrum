@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'vitest';
+import { describe, it, test, expect } from 'vitest';
 
 import type { ChatMessage } from '../types/types';
 
@@ -268,5 +268,45 @@ describe('stabilizeGroupIdentity 的 _key', () => {
     const second = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), first.next);
     expect(second.items[0]).toBe(group);
     expect((second.items[0] as ToolGroupItem)._key).toBe(group._key);
+  });
+});
+
+/**
+ * fj:一个旧组被中间插入的消息劈成两段时,两段不能共用同一个 `_key`。
+ *
+ * 共用的后果是同层两个相同的 React key:控制台报重复 key,至少一段时间轴每次
+ * 渲染被卸载重建 —— 用户展开过的步骤自己收回去、整段高度突变。
+ *
+ * 中间插入不是罕见情形:`computeMerged` 把 `[...server, ...extra]` 按时间重排,
+ * 服务端刷新只要带回一条时间戳夹在两个工具调用之间的行(压缩摘要、error 行、
+ * 任务通知、ExitPlanMode)就会造成。
+ */
+describe('fj:分组身份不许撞 key', () => {
+  it('一段工具流被中间插入的消息劈成两段 → 两段拿到不同的 _key', () => {
+    const a = tool('Read');
+    const b = tool('Bash');
+
+    const first = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), createGroupIdentityState());
+    const firstKeys = first.items.filter(isToolGroupItem).map((group) => group._key);
+    expect(firstKeys.length).toBe(1);
+
+    // 中间插进一条不可入组的消息 → 同一段被劈成两组
+    const second = stabilizeGroupIdentity(
+      groupConsecutiveTools([a, { type: 'user', content: '再改一下', timestamp: new Date('2026-08-26T00:00:00Z').toISOString() } as ChatMessage, b]),
+      first.next,
+    );
+    const secondKeys = second.items.filter(isToolGroupItem).map((group) => group._key);
+
+    expect(secondKeys.length).toBe(2);
+    expect(new Set(secondKeys).size, '两段共用同一个 _key 会造成 React 重复 key').toBe(2);
+  });
+
+  it('内容没变时仍然复用同一个 _key —— 稳定身份的本意不能被这次修改破坏', () => {
+    const a = tool('Read');
+    const b = tool('Bash');
+    const first = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), createGroupIdentityState());
+    const second = stabilizeGroupIdentity(groupConsecutiveTools([a, b]), first.next);
+    expect(second.items.filter(isToolGroupItem)[0]?._key)
+      .toBe(first.items.filter(isToolGroupItem)[0]?._key);
   });
 });

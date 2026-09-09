@@ -1,8 +1,7 @@
 {
   "buttons": {
     "save": "Save",
-    "cancel": "Cancel",
-    "create": "Create"
+    "cancel": "Cancel"
   },
   "tabs": {
     "chat": "Chat",
@@ -13,9 +12,6 @@
   },
   "status": {
     "completed": "Completed"
-  },
-  "common": {
-    "version": "Version"
   },
   "mainContent": {
     "loading": "Loading Prism",
@@ -30,7 +26,6 @@
     "export": "Export",
     "persistentSession": "Resident session",
     "persistentSessionHint": "A resident runtime is held for this conversation on the server — the next turn skips process startup",
-    "exporting": "Exporting…",
     "tabNeedsProject": "Pick a project first and “{{tab}}” will open here.",
     "more": "More",
     "copyProjectPath": "Copy project path",
@@ -158,6 +153,12 @@
     "errors": {
       "providePath": "Please provide a workspace path",
       "failedToCreate": "Failed to create workspace"
+    },
+    "template": {
+      "label": "Create from template",
+      "none": "No template (empty folder)",
+      "help": "A template copies a ready-made directory tree into the new project (CLAUDE.md, folder structure). Files that already exist in the target are never overwritten.",
+      "stats": "{{count}} files · {{size}}"
     }
   },
   "notifications": {

@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 import { authenticatedFetch } from '../../../../utils/api';
 import type { ChatImage } from '../../types/types';
 import { chatImageSrcCache, ImageSrcCache } from '../../utils/imageSrcCache';
+import { useModalKeyboard } from '../../../../shared/view/hooks/useModalKeyboard';
 
 type ChatMessageImagesProps = {
   images: ChatImage[];
@@ -83,6 +84,20 @@ function useChatImageSrc(
       : [globalUrl, projectUrl]
     ).filter((url): url is string => Boolean(url));
 
+    /**
+     * fj:`cancelled` 而不是 `acquiredKey`。
+     *
+     * cleanup 是同步跑的,而 `acquiredKey` 要等 `await response.blob()` 之后才
+     * 赋值。卸载正好发生在 blob 已 resolve、`put()` 还没执行的那一瞬时,cleanup
+     * 读到的仍是 null → **不 release**;紧接着 `put()` 把 refs 加到 1 并写进缓存,
+     * 这个条目从此永远 `refs >= 1`。`evict()` 里 `if (entry.refs > 0) continue`,
+     * 于是它永不淘汰、objectURL 永不 revoke —— 缓存无上限增长,长时间开着的
+     * 标签页内存持续爬升。
+     *
+     * 而这个窗口恰恰是 `imageSrcCache` 顶部注释描述的那个场景:发图后乐观行被
+     * 服务端拷贝换掉、React key 变化导致组件卸载重挂。
+     */
+    let cancelled = false;
     let acquiredKey: string | null = null;
     const controller = new AbortController();
 
@@ -100,6 +115,11 @@ function useChatImageSrc(
           const key = cacheKey ?? ImageSrcCache.key(projectId, imagePath);
           const owned = chatImageSrcCache.put(key, objectUrl, blob.size);
           acquiredKey = key;
+          // cleanup 已经跑过了 —— 这次 put 的引用没人会来 release,当场归还。
+          if (cancelled) {
+            chatImageSrcCache.release(key);
+            return;
+          }
           setSrc(owned);
           return;
         } catch (error) {
@@ -115,6 +135,7 @@ function useChatImageSrc(
     void load();
 
     return () => {
+      cancelled = true;
       controller.abort();
       // 不再在这里 revoke:URL 归缓存所有,由 LRU 在没人引用时回收。
       if (acquiredKey) chatImageSrcCache.release(acquiredKey);
@@ -132,7 +153,15 @@ function useNearViewport<T extends Element>(): { ref: (node: T | null) => void; 
   const [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined');
   const observerRef = useRef<IntersectionObserver | null>(null);
 
-  const ref = (node: T | null) => {
+  /**
+   * fj:`useCallback` 包一层。
+   *
+   * 内联的回调 ref 每次渲染都是新函数,React 会先 `ref(null)` 再 `ref(node)` ——
+   * 于是每渲染一次就销毁并重建一个 IntersectionObserver。叠加上面那条
+   * (`turnOutputs={[]}` 让 `MessageComponent` 在流式期间约 10Hz 重渲),
+   * 带图的用户消息在整轮回答期间会持续抖,极端情况下图片一直停在灰色占位块上。
+   */
+  const ref = useCallback((node: T | null) => {
     if (observerRef.current) {
       observerRef.current.disconnect();
       observerRef.current = null;
@@ -149,7 +178,7 @@ function useNearViewport<T extends Element>(): { ref: (node: T | null) => void; 
     );
     observer.observe(node);
     observerRef.current = observer;
-  };
+  }, [visible]);
 
   useEffect(() => () => observerRef.current?.disconnect(), []);
 
@@ -161,19 +190,17 @@ function useNearViewport<T extends Element>(): { ref: (node: T | null) => void; 
  * image, closes on backdrop click, close button, or Escape.
  */
 function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
-  useEffect(() => {
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown, true);
-    return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, [onClose]);
+  /**
+   * 这里原来只有 Esc,没有焦点陷阱 —— 而它声明了 `aria-modal="true"`。
+   * 全屏看图时 Tab 会一路跑到背后的对话流里去,而读屏软件被告知"背后不存在"。
+   * 换成共用 hook 之后 Esc / Tab / 滚动锁三件事一次到位。
+   */
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalKeyboard(modalRef, { onClose });
 
   return createPortal(
     <div
+      ref={modalRef}
       className="fixed inset-0 z-[100] flex items-center justify-center bg-[rgba(16,16,16,0.72)]"
       onClick={onClose}
       role="dialog"

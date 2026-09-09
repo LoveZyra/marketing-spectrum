@@ -11,6 +11,8 @@ import { pushReplayChunk } from '@/modules/websocket/services/shell-replay-buffe
 import { readSocketViewer, stampSocketViewer } from '@/shared/project-visibility.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('ws-shell');
 
 type ShellIncomingMessage = {
   type?: string;
@@ -50,6 +52,8 @@ type PtySessionEntry = {
   isTakeover: boolean;
   /** 被接管的 app 会话 id,断开时用它释放占用。 */
   claimedSessionId: string | null;
+  /** fj:接管令牌 —— 释放时出示,防止把别人刚建立的那把锁删掉(见 conversation-ownership)。 */
+  claimToken?: string | null;
 };
 
 const ptySessionsMap = new Map<string, PtySessionEntry>();
@@ -142,7 +146,7 @@ function resolveResumeSessionId(
   try {
     resumeSessionId = dependencies.resolveProviderSessionId(sessionId, provider);
   } catch (error) {
-    console.error('Failed to resolve provider session ID:', error);
+    log.error('Failed to resolve provider session ID:', error);
     resumeSessionId = undefined;
   }
 
@@ -298,7 +302,7 @@ export function handleShellConnection(
   request: AuthenticatedWebSocketRequest,
   dependencies: ShellWebSocketDependencies
 ): void {
-  console.log('[INFO] Shell websocket connected');
+  log.debug('终端 WebSocket 已连接');
 
   // 必须和 chat 连接一样盖上身份。少了这一步会同时坏两件事:PTY 复用键分不出
   // 用户(两个人在同一路径开终端会连到同一个 PTY 上),而 `claimForShell` 记下的
@@ -378,7 +382,7 @@ export function handleShellConnection(
               clearTimeout(oldSession.timeoutId);
             }
             if (oldSession.claimedSessionId) {
-              releaseShellClaim(oldSession.claimedSessionId);
+              releaseShellClaim(oldSession.claimedSessionId, oldSession.claimToken ?? undefined);
             }
             oldSession.pty.kill();
             ptySessionsMap.delete(ptySessionKey);
@@ -440,7 +444,7 @@ export function handleShellConnection(
               projectsDb.createProjectPath(resolvedProjectPath, null, ownerUserId);
             } catch (error) {
               // 登记失败不该挡住开终端 —— 最坏情况退回到监视器建行的旧行为。
-              console.error('[Shell] 预登记项目归属失败:', error);
+              log.error('[Shell] 预登记项目归属失败:', error);
             }
           }
         }
@@ -462,6 +466,8 @@ export function handleShellConnection(
         // 那一小段就是两个进程同时写同一份 transcript,正是要消掉的东西。
         let takeoverNote = '';
         let takeoverGranted = false;
+        // fj:接管令牌 —— 释放时出示(见 conversation-ownership 的说明)。
+        let claimToken: string | null = null;
         if (wantsTakeover) {
           if (!resume.ok) {
             takeoverNote = resume.reason === 'not_recorded'
@@ -470,7 +476,7 @@ export function handleShellConnection(
           } else if (dependencies.releaseConversation) {
             const released = await dependencies.releaseConversation(resume.sessionId);
             if (released.released) {
-              claimForShell(appSessionId || resume.sessionId, viewer);
+              claimToken = claimForShell(appSessionId || resume.sessionId, viewer).token ?? null;
               takeoverGranted = true;
             } else {
               takeoverNote = released.reason === 'turn_in_flight'
@@ -478,7 +484,7 @@ export function handleShellConnection(
                 : '\x1b[33m释放 chat 侧运行时失败,没有接管。已为你打开普通终端。\x1b[0m\r\n';
             }
           } else {
-            claimForShell(appSessionId || resume.sessionId, viewer);
+            claimToken = claimForShell(appSessionId || resume.sessionId, viewer).token ?? null;
             takeoverGranted = true;
           }
         }
@@ -516,6 +522,7 @@ export function handleShellConnection(
           sessionId,
           isTakeover: takeoverGranted,
           claimedSessionId: takeoverGranted ? (appSessionId || (resume.ok ? resume.sessionId : null)) : null,
+          claimToken,
         });
 
         shellProcess.onData((chunk) => {
@@ -629,7 +636,7 @@ export function handleShellConnection(
           // 用条目上记的 id,不用闭包里的 appSessionId —— 重连之后 onExit 仍然
           // 挂在最初那次 init 的闭包上,那里的变量未必还对得上。
           if (claimed) {
-            releaseShellClaim(claimed);
+            releaseShellClaim(claimed, session?.claimToken ?? undefined);
           }
         });
 
@@ -665,7 +672,7 @@ export function handleShellConnection(
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[ERROR] Shell WebSocket error:', message);
+      log.error('Shell WebSocket error:', message);
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(
           JSON.stringify({
@@ -705,7 +712,7 @@ export function handleShellConnection(
     // 关了,没有任何办法把对话要回来。接管是前台动作,关掉它就该交还。
     if (session.isTakeover) {
       if (session.claimedSessionId) {
-        releaseShellClaim(session.claimedSessionId);
+        releaseShellClaim(session.claimedSessionId, session.claimToken ?? undefined);
       }
       try {
         session.pty.kill();
@@ -727,6 +734,6 @@ export function handleShellConnection(
   });
 
   ws.on('error', (error) => {
-    console.error('[ERROR] Shell WebSocket error:', error);
+    log.error('Shell WebSocket error:', error);
   });
 }

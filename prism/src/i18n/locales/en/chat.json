@@ -16,9 +16,6 @@
     "tool": "Tool",
     "claude": "AI"
   },
-  "tools": {
-    "settings": "Tool Settings"
-  },
   "interactive": {
     "title": "Interactive Prompt",
     "waiting": "Waiting for your response in the CLI",
@@ -36,7 +33,6 @@
   },
   "input": {
     "placeholder": "Type / for commands, @ for files, or ask {{provider}} anything...",
-    "attachFiles": "Attach files",
     "attachImages": "Attach images",
     "send": "Send",
     "stop": "Stop",
@@ -48,7 +44,6 @@
     },
     "clickToChangeMode": "Click to change permission mode (or press Tab in input)",
     "showAllCommands": "Show all commands",
-    "clearInput": "Clear input",
     "scrollToBottom": "Scroll to bottom",
     "queue": {
       "sendNext": "Queue next message",
@@ -62,7 +57,6 @@
     },
     "attachmentPath": "path",
     "modelHint": "Current model: {{model}} · click to switch",
-    "attachDocuments": "Attach documents (PDF, Word, Excel, PPT…)",
     "attachUrl": "Fetch a URL as context",
     "attachUrlPrompt": "Enter a URL to fetch its readable text:",
     "removeDocument": "Remove document",
@@ -97,9 +91,6 @@
       "expandAll": "Expand all in view",
       "loadingAll": "Loading all messages...",
       "allLoaded": "All messages loaded"
-    },
-    "tokens": {
-      "compacting": "compacting"
     }
   },
   "shell": {
@@ -144,7 +135,6 @@
       "seconds": "{{count}}s",
       "minutesSeconds": "{{minutes}}m {{seconds}}s"
     },
-    "stop": "Stop",
     "compacting": "Compacting context",
     "compaction": {
       "blocking": "Context is full — compacting before continuing this turn",
@@ -310,7 +300,6 @@
     "breakdown": "Breakdown",
     "unavailable": "Unavailable",
     "contextWindow": "Context window",
-    "package": "Package",
     "help": {
       "eyebrow": "Command center",
       "title": "Help & Shortcuts",
@@ -324,9 +313,7 @@
     "cost": {
       "eyebrow": "Session telemetry",
       "title": "Token Usage",
-      "subtitle": "Input, output, and total token counts for this session.",
-      "model": "Model",
-      "provider": "Provider"
+      "subtitle": "Input, output, and total token counts for this session."
     },
     "status": {
       "eyebrow": "Runtime health",
@@ -347,7 +334,8 @@
     "fallbackTitle": "Command Result",
     "closeAria": "Close command result modal",
     "escHint": "Esc closes the modal.",
-    "sessionCost": "Session cost"
+    "sessionCost": "Session cost",
+    "ledgerCost": "Ledger total (all time)"
   },
   "retry": {
     "lastTurn": "Resend last message"
@@ -402,17 +390,8 @@
     "denied": "Denied"
   },
   "home": {
-    "greeting": {
-      "morning": "Good morning",
-      "noon": "Good afternoon",
-      "afternoon": "Good afternoon",
-      "evening": "Good evening"
-    },
-    "subtitle": "Start with a question, or pick up where you left off.",
-    "recentSessions": "Recent sessions",
-    "greetingWithName": "{{greeting}}, {{name}}",
-    "tools": "Tools",
-    "toolHint": "{{name}} · opens in a new tab"
+    "toolHint": "{{name}} · opens in a new tab",
+    "starters": "Try one of these"
   },
   "externalApps": {
     "recsys": {

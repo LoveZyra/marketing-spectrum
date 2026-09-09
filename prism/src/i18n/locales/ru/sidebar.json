@@ -30,7 +30,6 @@
     "addToFavorites": "Добавить в избранное",
     "removeFromFavorites": "Удалить из избранного",
     "editSessionName": "Вручную редактировать имя сеанса",
-    "deleteSession": "Удалить этот сеанс навсегда",
     "activeSessionIndicator": "Недавно активный сеанс (последние 10 минут)",
     "save": "Сохранить",
     "cancel": "Отмена",
@@ -42,8 +41,7 @@
   "actions": {
     "settings": "Настройки",
     "cancel": "Отмена",
-    "save": "Сохранить",
-    "delete": "Удалить"
+    "save": "Сохранить"
   },
   "status": {
     "active": "Активен",
@@ -82,8 +80,5 @@
     "sessionCount_few": "Этот проект содержит {{count}} разговора.",
     "sessionCount_many": "Этот проект содержит {{count}} разговоров.",
     "deleteAllData": "Удалить все данные навсегда"
-  },
-  "project": {
-    "public": "Public"
   }
 }

@@ -16,9 +16,6 @@
     "tool": "Werkzeug",
     "claude": "AI"
   },
-  "tools": {
-    "settings": "Werkzeugeinstellungen"
-  },
   "interactive": {
     "title": "Interaktive Eingabeaufforderung",
     "waiting": "Warte auf deine Antwort in der CLI",
@@ -36,7 +33,6 @@
   },
   "input": {
     "placeholder": "/ für Befehle, @ für Dateien eingeben oder {{provider}} etwas fragen...",
-    "attachFiles": "Dateien anhängen",
     "attachImages": "Bilder anhängen",
     "send": "Senden",
     "stop": "Stoppen",
@@ -46,7 +42,6 @@
     },
     "clickToChangeMode": "Klicken, um den Berechtigungsmodus zu ändern (oder Tab in der Eingabe drücken)",
     "showAllCommands": "Alle Befehle anzeigen",
-    "clearInput": "Eingabe leeren",
     "scrollToBottom": "Nach unten scrollen",
     "attachmentPath": "Pfad",
     "modelHint": "Aktuelles Modell: {{model}} · zum Wechseln klicken"
@@ -72,9 +67,6 @@
       "expandAll": "Alle im Verlauf anzeigen",
       "loadingAll": "Alle Nachrichten werden geladen...",
       "allLoaded": "Alle Nachrichten geladen"
-    },
-    "tokens": {
-      "compacting": "komprimiert"
     }
   },
   "shell": {

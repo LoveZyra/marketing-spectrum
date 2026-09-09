@@ -1,6 +1,8 @@
 import { sessionMessagesDb, sessionsDb } from '@/modules/database/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import type { LLMProvider } from '@/shared/types.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('providers');
 
 /**
  * 老会话第一次再开口时,把它已有的历史**一次性抄进显示日志**。
@@ -35,7 +37,31 @@ export type SeedOutcome =
   /** 抄失败 —— 日志**不可**当权威,本轮不要往里写。 */
   | { status: 'failed' };
 
-export async function seedDisplayLogFromTranscript(sessionId: string): Promise<SeedOutcome> {
+/**
+ * fj:同一会话的并发 seed 去重。
+ *
+ * 此前没有互斥:两条 `chat.send` 落在同一个 `fetchHistory` 窗口里,两个调用都能
+ * 通过 `countForSession === 0`,都去读 transcript。先回来的 `appendMany` 成功;
+ * 后回来的写同一批 `message_id`,被 `INSERT OR IGNORE` **全部吞掉** → `seeded === 0`
+ * 且历史非空 → 判成 `failed` → 调用方把 `persistDisplayLog` 设 false →
+ * **那一整轮的用户消息和全部助手输出都不落库**,刷新后从界面消失且不可恢复。
+ *
+ * 共用同一个 promise 之后,后到的那个拿到的是先到那个的结果(`ready`),整轮正常落库。
+ */
+const inFlightSeeds = new Map<string, Promise<SeedOutcome>>();
+
+export function seedDisplayLogFromTranscript(sessionId: string): Promise<SeedOutcome> {
+  const running = inFlightSeeds.get(sessionId);
+  if (running) return running;
+
+  const attempt = runSeed(sessionId).finally(() => {
+    inFlightSeeds.delete(sessionId);
+  });
+  inFlightSeeds.set(sessionId, attempt);
+  return attempt;
+}
+
+async function runSeed(sessionId: string): Promise<SeedOutcome> {
   const session = sessionsDb.getSessionById(sessionId);
   // 没有 transcript(全新会话)就没有历史要抄 —— 它从第一条消息起天然就是日志。
   if (!session?.provider_session_id) return { status: 'ready', seeded: 0 };
@@ -56,11 +82,18 @@ export async function seedDisplayLogFromTranscript(sessionId: string): Promise<S
       sessionId,
       result.messages.map((message) => ({ ...message, sessionId })),
     );
-    // 有历史却一条都没抄进去(整批被拒/全是不落库的 kind):同样不敢当权威。
-    if (result.messages.length > 0 && seeded === 0) return { status: 'failed' };
+    /**
+     * fj:判据从「本次插入了几行」改成「抄完之后库里到底有没有行」。
+     *
+     * 前者把"别人已经抄好了"和"整批被拒"混为一谈 —— 而这两件事的正确处置完全相反。
+     * 后者直接问要害:日志现在能不能当权威。
+     */
+    if (result.messages.length > 0 && sessionMessagesDb.countForSession(sessionId) === 0) {
+      return { status: 'failed' };
+    }
     return { status: 'ready', seeded };
   } catch (error) {
-    console.warn('[display-log] seed failed:', (error as Error)?.message || error);
+    log.warn('[display-log] seed failed:', (error as Error)?.message || error);
     return { status: 'failed' };
   }
 }

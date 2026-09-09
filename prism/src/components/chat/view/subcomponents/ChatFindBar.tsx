@@ -100,6 +100,8 @@ export default function ChatFindBar({ open, onClose, scrollContainerRef, content
   const [query, setQuery] = useState('');
   const [matchCount, setMatchCount] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(-1);
+  /** fj:当前命中下标的同步副本 —— 算下一位置时读它,不再靠 setState 的更新函数。 */
+  const currentIndexRef = useRef(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const matchesRef = useRef<DomMatch[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -110,11 +112,24 @@ export default function ChatFindBar({ open, onClose, scrollContainerRef, content
     const matches = collectMatches(container, nextQuery);
     matchesRef.current = matches;
     setMatchCount(matches.length);
-    setCurrentIndex((previous) => {
-      const next = matches.length === 0 ? -1 : keepIndex && previous >= 0 && previous < matches.length ? previous : 0;
-      applyHighlights(matches, next);
-      return next;
-    });
+    /**
+     * fj:更新函数必须是纯的 —— DOM 副作用挪到外面。
+     *
+     * React 在重放更新队列时(严格模式,或这次更新被处理前又发生了一次渲染)
+     * 会**再次调用**这个函数,于是 `CSS.highlights.set` / `scrollIntoView` 跟着
+     * 重复执行:偶发的滚过头、跳两下、高亮闪一下 —— 而"下一个偶尔跳错位置"
+     * 这类反馈极难查。
+     *
+     * 这里的下一位置只依赖 `matchesRef` 和当前 index,读 ref 即可,不需要
+     * 更新函数的入参。
+     */
+    const previous = currentIndexRef.current;
+    const next = matches.length === 0
+      ? -1
+      : keepIndex && previous >= 0 && previous < matches.length ? previous : 0;
+    currentIndexRef.current = next;
+    setCurrentIndex(next);
+    applyHighlights(matches, next);
   }, [scrollContainerRef]);
 
   const scrollToMatch = useCallback((index: number) => {
@@ -134,15 +149,15 @@ export default function ChatFindBar({ open, onClose, scrollContainerRef, content
   }, []);
 
   const step = useCallback((direction: 'next' | 'prev') => {
+    // fj:同上 —— 算好再 set,副作用不放在更新函数里(那里可能被重放)。
     const total = matchesRef.current.length;
-    setCurrentIndex((previous) => {
-      const next = stepMatchIndex(previous, total, direction);
-      if (next >= 0) {
-        applyHighlights(matchesRef.current, next);
-        scrollToMatch(next);
-      }
-      return next;
-    });
+    const next = stepMatchIndex(currentIndexRef.current, total, direction);
+    currentIndexRef.current = next;
+    setCurrentIndex(next);
+    if (next >= 0) {
+      applyHighlights(matchesRef.current, next);
+      scrollToMatch(next);
+    }
   }, [scrollToMatch]);
 
   // 打开即聚焦;关闭清空高亮与状态。
@@ -157,6 +172,7 @@ export default function ChatFindBar({ open, onClose, scrollContainerRef, content
     matchesRef.current = [];
     setMatchCount(0);
     setCurrentIndex(-1);
+    currentIndexRef.current = -1;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 

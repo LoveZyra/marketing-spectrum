@@ -34,6 +34,7 @@ import type {
   SkillsProvider,
   SkillsScope,
 } from '../types';
+import { formatBytes } from '../../../utils/formatBytes';
 
 type ProviderSkillsProps = {
   selectedProvider: SkillsProvider;
@@ -83,17 +84,8 @@ const groupSkillsByScope = (skills: ProviderSkill[]): Array<{ scope: SkillsScope
     .filter((group) => group.skills.length > 0)
 );
 
-const formatFileSize = (size: number): string => {
-  if (size < 1024) {
-    return `${size} B`;
-  }
-
-  if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} KB`;
-  }
-
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-};
+// 口径见 utils/formatBytes —— 这份原本没有 GB 档,超过 1GB 会印出「1024.0 MB」。
+const formatFileSize = formatBytes;
 
 const getBrowserRelativePath = (file: File): string => {
   const fileWithRelativePath = file as File & {
@@ -806,6 +798,17 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
             {t('skills.removeBody', {
               name: pendingRemoval?.name ?? '',
               defaultValue: `将删除「${pendingRemoval?.name ?? ''}」的整个技能目录,不可撤销。`,
+            })}
+          </p>
+          {/*
+            fd:这一句不是客套话。技能目录是**服务进程自己的 home**,一台机器上所有
+            用户共用同一份 —— 卸载不是"从我的列表里移除",是把这台机器上所有人的
+            那个 `/xxx` 命令一起删掉,而且对方不会收到任何通知。确认框里不写清楚,
+            点的人根本意识不到自己在替别人做决定。
+          */}
+          <p className="mt-2 text-sm font-medium text-amber-600 dark:text-amber-400">
+            {t('skills.removeShared', {
+              defaultValue: '技能库是这台服务器上所有人共用的 —— 卸载会影响全部用户的会话行为,不只是你自己。',
             })}
           </p>
           <code className="mt-3 block whitespace-normal break-all rounded-md border border-border bg-card px-3 py-2 text-xs text-foreground">

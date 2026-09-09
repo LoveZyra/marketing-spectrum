@@ -4,6 +4,9 @@ import path from 'node:path';
 import { attachmentsDb, userDb, type AttachmentKind } from '@/modules/database/index.js';
 import { getGlobalImageAssetsDir } from '@/shared/image-attachments.js';
 
+import { createLogger } from './logger.js';
+const log = createLogger('shared');
+
 /**
  * 聊天附件落在哪、能占多少、留多久。
  *
@@ -188,7 +191,7 @@ export function startAttachmentSweeper(): NodeJS.Timeout {
     const ttlDays = getAttachmentTtlDays();
     const { removed, bytes } = attachmentsDb.sweepExpired(ttlDays);
     if (removed > 0) {
-      console.log(`[attachments] 清理了 ${removed} 个超过 ${ttlDays} 天的附件,释放 ${formatBytes(bytes)}`);
+      log.info(`[attachments] 清理了 ${removed} 个超过 ${ttlDays} 天的附件,释放 ${formatBytes(bytes)}`);
     }
   };
 

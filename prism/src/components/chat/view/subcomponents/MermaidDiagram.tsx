@@ -130,8 +130,20 @@ export default function MermaidDiagram({ code, fallback }: MermaidDiagramProps) 
         await mermaid.parse(code);
         renderCounter += 1;
         const { svg: rendered } = await mermaid.render(`prism-mermaid-${renderCounter}`, code);
+        /**
+         * fj:被取消的这一遍**不许写缓存**。
+         *
+         * `mermaid.render` 是异步的,而主题是**全局**初始化的:图 A 在浅色下发起
+         * render 之后用户切到深色 → A 的 cleanup 只置 `cancelled`,在飞的 render
+         * 不会停;此时另一个 effect 已经 `initialize({theme:'dark'})`,于是 A 产出
+         * 的是**深色** SVG,却被写进了浅色那个 key(`cacheKey(code, false)`)。
+         *
+         * `cancelled` 原来只挡 `setSvg`、挡不住写缓存,而这是个模块级 LRU ——
+         * 切回浅色后命中那份深色 SVG,图以深色配色画在浅色页面上,刷新前一直是错的。
+         */
+        if (cancelled) return;
         writeCachedSvg(code, isDarkMode, rendered);
-        if (!cancelled) setSvg(rendered);
+        setSvg(rendered);
       } catch {
         if (!cancelled) {
           setSvg(null);

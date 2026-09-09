@@ -35,6 +35,9 @@ try {
     }
   });
 } catch (e) {
+  // 这一行**刻意不走 logger**:load-env.js 是整个进程的第一个 import,
+  // 它跑完之前 `PRISM_LOG_LEVEL` 还没进 process.env —— 用 logger 的话,
+  // 部署方把档位设在 .env 里时这条永远按默认档位判定,行为反而不可预期。
   console.error('No .env file found or error reading it:', e.message);
 }
 

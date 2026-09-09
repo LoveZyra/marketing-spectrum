@@ -33,9 +33,6 @@
     "languageLabel": "語言選擇",
     "languageDescription": "介面顯示用哪種語言"
   },
-  "appearance": {
-    "theme": "佈景主題"
-  },
   "quickSettings": {
     "title": "快速設定",
     "sections": {
@@ -87,10 +84,6 @@
     }
   },
   "appearanceSettings": {
-    "darkMode": {
-      "label": "深色模式",
-      "description": "切換淺色和深色佈景主題"
-    },
     "projectSorting": {
       "label": "專案排序",
       "description": "專案在側邊欄中的排列方式",
@@ -118,7 +111,6 @@
     },
     "uiTheme": {
       "label": "介面主題",
-      "description": "選擇整套介面的材質與配色",
       "options": {
         "blueprint": {
           "name": "紙構藍圖",

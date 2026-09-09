@@ -1088,17 +1088,35 @@ export async function buildLookupMap(
 ): Promise<Map<string, string>> {
   const lookup = new Map<string, string>();
 
+  /**
+   * `finally` 里既 close 又 destroy,**两个都要**。
+   *
+   * 异步迭代器被 throw 或 break 打断时(abrupt completion),只 `rl.close()` 不销毁
+   * 底层流,fd 就既不会被 autoClose 收(流没走到 'end'),也不会被 GC 回收 —— 是永久泄漏。
+   *
+   * 这条路径极其容易踩:`~/.claude/history.jsonl` 只要有一行坏 JSON(CLI 崩在 append
+   * 中途、盘满,都会留下一行永久截断),下面的 JSON.parse 就抛,而这个文件**每来一条
+   * prompt 就重读一次**。实测 30 次带坏行的调用 = +30 fd,强制 GC 三轮也不掉。
+   * 到 `ulimit -n` 之后服务表现为"活着但什么都干不了"。
+   *
+   * 顺带把 JSON.parse 单独兜住:一行坏行不该让整份文件白读(claude-sessions.provider
+   * 早就是这么写的,注释也说明了并发写会产生半行)。
+   */
+  const fileStream = fs.createReadStream(filePath);
+  const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
   try {
-    const fileStream = fs.createReadStream(filePath);
-    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
     for await (const line of lineReader) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
       }
 
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        continue; // 半行 / 坏行:跳过这一行,别丢掉整份文件
+      }
       const key = parsed[keyField];
       const value = parsed[valueField];
 
@@ -1108,6 +1126,9 @@ export async function buildLookupMap(
     }
   } catch {
     // Missing or unreadable lookup files should not block session sync.
+  } finally {
+    lineReader.close();
+    fileStream.destroy();
   }
 
   return lookup;
@@ -1124,26 +1145,34 @@ export async function extractFirstValidJsonlData<T>(
   filePath: string,
   extractor: (parsedJson: unknown) => T | null | undefined
 ): Promise<T | null> {
+  // 同 buildLookupMap:命中即停是 break 语义,异常也是 —— 两条 abrupt completion
+  // 都必须走到 finally 才关得掉 fd。原来只在**成功**路径上显式关了两个,
+  // 说明作者知道要关,只是漏了另外两条出口。
+  const fileStream = fs.createReadStream(filePath);
+  const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
   try {
-    const fileStream = fs.createReadStream(filePath);
-    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
     for await (const line of lineReader) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
       }
 
-      const parsed = JSON.parse(trimmed);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue; // 半行 / 坏行:跳过,继续找下一行
+      }
       const extracted = extractor(parsed);
       if (extracted) {
-        lineReader.close();
-        fileStream.close();
         return extracted;
       }
     }
   } catch {
     // Ignore malformed or missing artifacts so full scans keep progressing.
+  } finally {
+    lineReader.close();
+    fileStream.destroy();
   }
 
   return null;

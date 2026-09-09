@@ -669,6 +669,22 @@ function CostContent({ data }: { data: CostCommandData }) {
           icon: Coins,
         }]
       : []),
+    /*
+     * fh:台账里的累计花销。和上面那行的区别值得说清楚 ——
+     *
+     * 上面那个来自**浏览器内存**:只有你这次打开页面之后跑过回合才有,刷新就没。
+     * 这一行来自服务端台账(`usage_records`),**跨重启、跨设备都在**。
+     *
+     * 两个并列而不是合并:它们口径不同,对不上的时候正好说明"你这次打开之前
+     * 它还花过钱"。合成一个数会把这层信息抹掉。
+     */
+    ...(data.ledger && Number(data.ledger.costUsd) > 0
+      ? [{
+          label: t('commandResult.ledgerCost', { defaultValue: '台账累计(含历史)' }),
+          value: `$${Number(data.ledger.costUsd).toFixed(4)} · ${Number(data.ledger.runs) || 0} 轮`,
+          icon: Coins,
+        }]
+      : []),
   ];
 
   return (

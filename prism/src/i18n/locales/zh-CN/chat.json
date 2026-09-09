@@ -16,9 +16,6 @@
     "tool": "工具",
     "claude": "AI"
   },
-  "tools": {
-    "settings": "工具设置"
-  },
   "interactive": {
     "title": "交互式提示",
     "waiting": "等待您在 CLI 中响应",
@@ -36,7 +33,6 @@
   },
   "input": {
     "placeholder": "输入 / 调用命令，@ 选择文件，或向 {{provider}} 提问...",
-    "attachFiles": "附加文件",
     "attachImages": "附加图片",
     "send": "发送",
     "stop": "停止",
@@ -48,7 +44,6 @@
     },
     "clickToChangeMode": "点击更改权限模式（或在输入框中按 Tab）",
     "showAllCommands": "显示所有命令",
-    "clearInput": "清空输入",
     "scrollToBottom": "滚动到底部",
     "queue": {
       "sendNext": "将下一条消息加入队列",
@@ -62,7 +57,6 @@
     },
     "attachmentPath": "路径",
     "modelHint": "当前模型：{{model}} · 点击切换",
-    "attachDocuments": "附加文档（PDF、Word、Excel、PPT…）",
     "attachUrl": "抓取网页作为上下文",
     "attachUrlPrompt": "输入要抓取正文的网址：",
     "removeDocument": "移除文档",
@@ -97,9 +91,6 @@
       "expandAll": "全部展开",
       "loadingAll": "正在加载全部消息...",
       "allLoaded": "全部消息已加载"
-    },
-    "tokens": {
-      "compacting": "压缩中"
     }
   },
   "shell": {
@@ -144,7 +135,6 @@
       "seconds": "{{count}}s",
       "minutesSeconds": "{{minutes}}m {{seconds}}s"
     },
-    "stop": "停止",
     "compacting": "正在压缩上下文",
     "compaction": {
       "blocking": "上下文已满,正在压缩后继续这一轮",
@@ -310,7 +300,6 @@
     "breakdown": "明细",
     "unavailable": "不可用",
     "contextWindow": "上下文窗口",
-    "package": "软件包",
     "help": {
       "eyebrow": "命令中心",
       "title": "帮助与快捷键",
@@ -324,9 +313,7 @@
     "cost": {
       "eyebrow": "会话统计",
       "title": "Token 用量",
-      "subtitle": "本会话的输入、输出与总 token 数。",
-      "model": "模型",
-      "provider": "提供方"
+      "subtitle": "本会话的输入、输出与总 token 数。"
     },
     "status": {
       "eyebrow": "运行状态",
@@ -347,7 +334,8 @@
     "fallbackTitle": "命令结果",
     "closeAria": "关闭命令结果弹窗",
     "escHint": "按 Esc 关闭。",
-    "sessionCost": "本会话累计费用"
+    "sessionCost": "本会话累计费用",
+    "ledgerCost": "台账累计(含历史)"
   },
   "retry": {
     "lastTurn": "重发上一条消息"
@@ -402,17 +390,8 @@
     "denied": "已拒绝"
   },
   "home": {
-    "greeting": {
-      "morning": "早上好",
-      "noon": "中午好",
-      "afternoon": "下午好",
-      "evening": "晚上好"
-    },
-    "subtitle": "从一个问题开始，或者接着上次的工作。",
-    "recentSessions": "最近会话",
-    "greetingWithName": "{{greeting}}，{{name}}",
-    "tools": "工具",
-    "toolHint": "{{name}} · 新标签页打开"
+    "toolHint": "{{name}} · 新标签页打开",
+    "starters": "试试这些开始"
   },
   "externalApps": {
     "recsys": {

@@ -13,7 +13,7 @@ import {
   type TaskSessionMode,
 } from '@/modules/database/index.js';
 import { isRootUser } from '@/shared/root-users.js';
-import { validateWorkspacePath } from '@/shared/utils.js';
+import { assertViewerMayCreateSessionAt } from '@/modules/providers/index.js';
 import { computeNextRunAt, runTaskNow, toDbUtc } from '@/modules/tasks/services/scheduled-tasks.service.js';
 
 /**
@@ -62,21 +62,37 @@ const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions',
 /**
  * 任务的 `projectPath` 必须**既是合法工作区路径,又对这个人可见**。
  *
- * 在此之前这里只查了非空字符串 —— 项目路由和文件路由都走 `validateWorkspacePath`
- * (解符号链接、强制 WORKSPACES_ROOT 包含、挡系统目录),唯独任务这条没有。
- * 于是任何登录用户都能建一个 `projectPath: "/"` 的任务,到点以那个 cwd 跑 agent。
+ * 权限模式默认跳过确认、且可见者全权可改 —— 这条校验因此是**唯一的边界**。
  *
- * 权限模式默认跳过确认、且可见者全权可改 —— 这条校验因此是**唯一的边界**,
- * 两道都必须过:路径合法(挡越界)+ 项目可见(挡越权)。
+ * ## 这里原来是第二份实现,而且已经漂了
+ *
+ * 会话路由有同样的两道门,抽成了 `assertViewerMayCreateSessionAt`(有 100% 覆盖的
+ * 测试)。任务路由这边是**内联的另一份**,两份已经不一样了,而且不一样的正是判据:
+ *
+ * 1. **已登记项目的处理**。service 那份显式跳过对已登记项目的工作区重验,注释写明了
+ *    理由:免得 `WORKSPACES_ROOT` 后来改过时把 root 自己的老项目也拦住。这份则无条件
+ *    先跑 `validateWorkspacePath` —— 同一个项目**开会话可以、建定时任务被 400 挡掉**。
+ * 2. **反探针性质丢了**。service 那份对两种失败一律返回同形的 404;这份把
+ *    `validateWorkspacePath` 的**原始错误串**直接回给客户端,而那个串可能是
+ *    「Workspace path must be within the allowed workspace root: <WORKSPACES_ROOT>」
+ *    —— 任意登录用户提交 `projectPath:"/"` 就能把服务端配置的工作区根读回来。
+ *
+ * 这个仓库在 eo 轮为项目权限总结过一句:"三档语义里有两条不是一眼能看出来的,
+ * 写两遍必然漂,而漂出来的那条缝就是权限洞"。这里就是又漂了一次。
+ *
+ * 所以现在**直接调那份 service**,不再自己判。返回值语义保持不变(null = 通过,
+ * 字符串 = 拒绝原因),调用点不用改;但拒绝时统一成同形文案,不再回显服务端配置。
  */
 async function checkProjectPath(projectPath: string, user: RequestUser): Promise<string | null> {
-  const workspace = await validateWorkspacePath(projectPath);
-  if (!workspace.valid) return workspace.error || '项目路径不合法';
-  if (!canViewerSeeProjectPath({ userId: user.id, username: user.username }, projectPath)) {
-    // 与"项目不存在"同形:不给一个"这个路径存不存在"的探针。
-    return '项目不存在或你没有权限';
+  try {
+    await assertViewerMayCreateSessionAt({ userId: user.id, username: user.username }, projectPath);
+    return null;
+  } catch (error) {
+    // service 抛的是 AppError(404「项目不存在或你没有权限」/ 400「projectPath is required」)。
+    // 这里不透传 statusCode:任务路由的三个调用点历史上一律回 400,改状态码会动到
+    // 前端的错误分支,而这一轮只想修判据,不想动协议。
+    return error instanceof Error ? error.message : '项目不存在或你没有权限';
   }
-  return null;
 }
 
 const FREQUENCIES: TaskFrequency[] = ['manual', 'hourly', 'daily', 'weekdays', 'weekly', 'monthly'];

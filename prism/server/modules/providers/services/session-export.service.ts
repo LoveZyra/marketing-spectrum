@@ -22,7 +22,18 @@ export type ExportableMessage = {
   /** 工具调用/结果才有;`includeTools` 打开时进导出。 */
   toolName?: string;
   toolInput?: unknown;
-  toolUseId?: string;
+  /**
+   * fj:字段名对齐 `NormalizedMessage` 的 `toolId`。
+   *
+   * 这里原来叫 `toolUseId`,而全仓的归一化消息上根本没有这个名字;导出路由又用
+   * `history.messages as ExportableMessage[]` 强转,**类型系统因此不报错**,
+   * 运行时恒为 `undefined` —— JSON 导出里每个 `tool_call`/`tool_result` 的
+   * `toolUseId` 都是 null,消费方没法把结果连回调用。而 JSON 导出的自述目标
+   * 就是"喂给别的工具做二次分析"。
+   *
+   * 对外的字段名保持 `toolUseId` 不变(见 renderJsonExport)。
+   */
+  toolId?: string;
   isError?: boolean;
 };
 
@@ -75,9 +86,28 @@ export function selectExportMessages(
     isBodyMessage(message) || (options.includeTools === true && isToolMessage(message)));
 }
 
-/** 工具消息的一行摘要(md/html 用)。 */
-function toolSummary(message: ExportableMessage): string {
-  const name = message.toolName || (message.kind === 'tool_result' ? '结果' : '工具');
+/** fj:`tool_use` 的 id → 工具名,给 `tool_result` 反查用。 */
+function buildToolNameIndex(messages: ExportableMessage[]): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const message of messages) {
+    if (message.kind === 'tool_use' && message.toolId && message.toolName) {
+      index.set(message.toolId, message.toolName);
+    }
+  }
+  return index;
+}
+
+/**
+ * 工具消息的一行摘要(md/html 用)。
+ *
+ * fj:`tool_result` 上没有 `toolName`(归一化消息只给 `toolId`/`content`/`isError`),
+ * 所以此前所有结果块都退回字面量「结果」,渲染成"结果 · 结果"。改成按 `toolId`
+ * 反查同 id 的 `tool_use` 拿工具名。
+ */
+function toolSummary(message: ExportableMessage, byToolId?: Map<string, string>): string {
+  const resolvedName = message.toolName
+    || (message.kind === 'tool_result' && message.toolId ? byToolId?.get(message.toolId) : undefined);
+  const name = resolvedName || (message.kind === 'tool_result' ? '结果' : '工具');
   if (message.kind === 'tool_result') {
     return `${name}${message.isError ? '(失败)' : ''}`;
   }
@@ -101,10 +131,11 @@ export function renderMarkdownExport(input: SessionExportInput, options: ExportO
     `> 会话 ${input.sessionId} · 导出于 ${formatTimestamp(input.exportedAt)}`,
     '',
   ];
+  const toolNamesById = buildToolNameIndex(input.messages);
   for (const message of selectExportMessages(input.messages, options)) {
     if (isToolMessage(message)) {
       // 工具用引用块 + 代码块:视觉上明显低于正文一档,扫读时能整块跳过。
-      lines.push(`> **${message.kind === 'tool_use' ? '调用' : '结果'} · ${toolSummary(message)}**`, '');
+      lines.push(`> **${message.kind === 'tool_use' ? '调用' : '结果'} · ${toolSummary(message, toolNamesById)}**`, '');
       const body = toolBody(message);
       if (body) lines.push('```', body, '```', '');
       continue;
@@ -137,7 +168,8 @@ export function renderJsonExport(input: SessionExportInput, options: ExportOptio
           type: message.kind === 'tool_use' ? 'tool_call' : 'tool_result',
           timestamp: message.timestamp ?? null,
           tool: message.toolName ?? null,
-          toolUseId: message.toolUseId ?? null,
+          // 对外契约不变,取值改成真实存在的那个字段。
+          toolUseId: message.toolId ?? null,
           ...(message.kind === 'tool_use'
             ? { input: message.toolInput ?? null }
             : { output: message.content ?? '', isError: Boolean(message.isError) }),
@@ -163,12 +195,13 @@ const escapeHtml = (text: string): string =>
     .replace(/"/g, '&quot;');
 
 export function renderHtmlExport(input: SessionExportInput, options: ExportOptions = {}): string {
+  const toolNamesById = buildToolNameIndex(input.messages);
   const bubbles = selectExportMessages(input.messages, options)
     .map((message) => {
       if (isToolMessage(message)) {
         const body = toolBody(message);
         return `<div class="tool">
-  <div class="who">${message.kind === 'tool_use' ? '调用' : '结果'} · ${escapeHtml(toolSummary(message))}</div>
+  <div class="who">${message.kind === 'tool_use' ? '调用' : '结果'} · ${escapeHtml(toolSummary(message, toolNamesById))}</div>
   ${body ? `<pre>${escapeHtml(body)}</pre>` : ''}
 </div>`;
       }

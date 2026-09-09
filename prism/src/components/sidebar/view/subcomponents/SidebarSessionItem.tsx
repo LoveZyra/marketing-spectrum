@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { Check, Edit2, FileDown, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -71,7 +71,11 @@ const formatCompactSessionAge = (dateString: string, currentTime: Date): string 
   return `${diffInDays}d`;
 };
 
-export default function SidebarSessionItem({
+/**
+ * 一行会话。同样 memo —— 一个项目展开后可能有几十行,
+ * 而它们在"别的项目被展开""搜索框敲了一个字"时完全不需要重渲染。
+ */
+function SidebarSessionItem({
   project,
   session,
   selectedSession,
@@ -360,3 +364,5 @@ export default function SidebarSessionItem({
     </div>
   );
 }
+
+export default memo(SidebarSessionItem);

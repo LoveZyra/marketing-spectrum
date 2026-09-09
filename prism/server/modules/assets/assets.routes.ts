@@ -18,6 +18,9 @@ import {
   quotaExceededMessage,
 } from '@/shared/attachment-storage.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
+import { isRootUser } from '@/shared/root-users.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('assets');
 
 const router = express.Router();
 
@@ -138,6 +141,27 @@ router.get('/images/:filename', async (req, res) => {
     return res.status(400).json({ error: 'Invalid asset filename' });
   }
 
+  /**
+   * fj:归属校验。
+   *
+   * 这条路由只挂了 `authenticateToken` —— 任何登录用户拿到文件名就能读到图片,
+   * 而图片是别人聊天里贴的截图。文件名是 multer 生成的随机串、枚举不出来,
+   * 但"猜不到"不是访问控制。
+   *
+   * 判据用现成的附件台账(`attachments` 表本来就记了 user_id):
+   *   - 台账里有、且是自己的 → 放行;
+   *   - 台账里有、是别人的 → 404(与"不存在"同形,不给存在性探针);
+   *   - **台账里没有 → 放行**。本次加固之前落盘的历史文件没有记账行,
+   *     一刀切会让老会话里的图全变裂图。root 一律放行。
+   */
+  const owner = attachmentsDb.ownerOf(resolved);
+  const viewer = readRequestViewer(req);
+  if (owner && owner.userId !== null && !isRootUser(viewer.username ?? undefined)) {
+    if (Number(owner.userId) !== Number(viewer.userId)) {
+      return res.status(404).json({ error: 'Asset not found' });
+    }
+  }
+
   try {
     await fs.access(resolved);
   } catch {
@@ -164,7 +188,7 @@ router.get('/images/:filename', async (req, res) => {
   const fileStream = fsSync.createReadStream(resolved);
   fileStream.pipe(res);
   fileStream.on('error', (error) => {
-    console.error('Error streaming image asset:', error);
+    log.error('Error streaming image asset:', error);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Error reading asset' });
     }

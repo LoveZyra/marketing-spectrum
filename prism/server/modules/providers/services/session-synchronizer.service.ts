@@ -1,6 +1,8 @@
 import { scanStateDb } from '@/modules/database/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import type { LLMProvider } from '@/shared/types.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('providers');
 
 type SessionSynchronizeResult = {
   processedByProvider: Record<LLMProvider, number>;
@@ -42,7 +44,7 @@ export const sessionSynchronizerService = {
     if (failures.length === 0) {
       scanStateDb.updateLastScannedAt(scanBoundary);
     } else {
-      console.warn(
+      log.warn(
         `[Sessions] Skipping scan_state cursor advance because ${failures.length} provider sync(s) failed.`,
       );
     }

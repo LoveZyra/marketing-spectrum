@@ -10,9 +10,6 @@
     "languageLabel": "Anzeigesprache",
     "languageDescription": "Wähl deine bevorzugte Sprache für die Oberfläche"
   },
-  "appearance": {
-    "theme": "Design"
-  },
   "quickSettings": {
     "title": "Schnelleinstellungen",
     "sections": {
@@ -60,10 +57,6 @@
     }
   },
   "appearanceSettings": {
-    "darkMode": {
-      "label": "Darkmode",
-      "description": "Zwischen hellem und dunklem Design wechseln"
-    },
     "projectSorting": {
       "label": "Projektsortierung",
       "description": "Wie Projekte in der Seitenleiste angeordnet werden",

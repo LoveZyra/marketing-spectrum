@@ -7,6 +7,8 @@ import {
   getAttachmentTtlDays,
 } from '@/shared/attachment-storage.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('assets');
 
 const router = express.Router();
 
@@ -81,7 +83,7 @@ router.get('/usage', (req, res) => {
       })),
     });
   } catch (error) {
-    console.error('[attachments] 用量查询失败:', (error as Error).message);
+    log.error('[attachments] 用量查询失败:', (error as Error).message);
     res.status(500).json({ error: '读取附件用量失败' });
   }
 });

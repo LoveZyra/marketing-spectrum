@@ -114,3 +114,39 @@ describe('归档保留期', () => {
     assert.equal(called, 0);
   });
 });
+
+/**
+ * fj:清扫必须够得到**最旧**的那些。
+ *
+ * 原来是 `getArchivedSessionsPage(..., limit, 0)` 取第一页再按 cutoff 过滤,
+ * 而那个查询 `ORDER BY updated_at DESC`(最新在前)—— 超期的排在整张表最后。
+ * 归档数超过一页(SWEEP_BATCH = 200)、且最新的那一页都还在保留期内时,
+ * **一条都删不到**,而且日志里没有任何提示(`removed > 0` 才打日志)。
+ *
+ * 现有用例只造了 3 条数据,覆盖不到这个分支。
+ */
+describe('fj:保留期清扫的取数方向', () => {
+  test('归档超过一页时,仍然挑得出最旧的那些超期会话', async () => {
+    process.env.PRISM_ARCHIVE_RETENTION_DAYS = '30';
+    await freshDb();
+    const { getConnection } = await import('@/modules/database/index.js');
+    const db = getConnection();
+
+    // 250 条"新"的(1 天前)—— 它们会占满按 DESC 排序的第一页
+    for (let index = 0; index < 250; index += 1) {
+      seedArchived(`fresh-${index}`, 1);
+      db.prepare('UPDATE sessions SET updated_at = ? WHERE session_id = ?').run(daysAgo(1), `fresh-${index}`);
+    }
+    // 3 条"旧"的(90 天前)—— 排在整张表最后
+    for (let index = 0; index < 3; index += 1) {
+      seedArchived(`stale-${index}`, 90);
+      db.prepare('UPDATE sessions SET updated_at = ? WHERE session_id = ?').run(daysAgo(90), `stale-${index}`);
+    }
+
+    const expired = findExpiredArchivedSessions(30);
+    for (let index = 0; index < 3; index += 1) {
+      assert.ok(expired.includes(`stale-${index}`), `最旧的 stale-${index} 必须被挑出来`);
+    }
+    assert.ok(!expired.some((id) => id.startsWith('fresh-')), '保留期内的不该被挑出来');
+  });
+});

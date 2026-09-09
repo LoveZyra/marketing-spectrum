@@ -8,6 +8,8 @@ import mime from 'mime-types';
 import { canViewerSeeSession, sessionMessagesDb } from '@/modules/database/index.js';
 import { isInlineSafeContentType } from '@/modules/files/index.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('providers');
 
 /**
  * 会话产出文件的读取通道(ei)。
@@ -130,7 +132,7 @@ export function createSessionOutputsRouter({ authenticateToken }: Deps): Router 
     try {
       allowed = collectSessionWritePaths(sessionMessagesDb.listForSession(sessionId));
     } catch (error) {
-      console.warn('[SessionOutput] failed to read display log:', (error as Error)?.message || error);
+      log.warn('[SessionOutput] failed to read display log:', (error as Error)?.message || error);
       return res.status(500).json({ error: 'Failed to resolve session outputs' });
     }
 
@@ -161,7 +163,23 @@ export function createSessionOutputsRouter({ authenticateToken }: Deps): Router 
       if (!isInlineSafeContentType(mimeType)) {
         res.setHeader('Content-Disposition', 'attachment');
       }
-      return fs.createReadStream(resolved).pipe(res);
+      /**
+       * **必须给 source 挂 error**。`pipe()` 只给 dest 挂,ReadStream 自己的
+       * 'error' 无监听就是 EventEmitter 抛 → uncaughtException → **整个进程退出**,
+       * 外层这圈 try/catch 抓不到异步流事件。
+       *
+       * 触发不需要攻击:`stat()` 成功之后、流 open 之前文件消失就够 —— agent 在
+       * 回合里重写产出文件、checkpoint 回滚、EIO,都会命中。一个用户点一次下载,
+       * 所有人的会话、终端、定时任务一起没。
+       *
+       * 写法与 assets.routes.ts / files.routes.ts 的下载口一致。
+       */
+      const fileStream = fs.createReadStream(resolved);
+      fileStream.on('error', () => {
+        if (!res.headersSent) res.status(500).end();
+        else res.destroy();
+      });
+      return fileStream.pipe(res);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') return res.status(404).json({ error: 'File not found' });

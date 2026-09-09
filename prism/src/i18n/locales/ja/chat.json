@@ -16,9 +16,6 @@
     "tool": "ツール",
     "claude": "AI"
   },
-  "tools": {
-    "settings": "ツール設定"
-  },
   "interactive": {
     "title": "インタラクティブプロンプト",
     "waiting": "CLIでの応答を待っています",
@@ -36,7 +33,6 @@
   },
   "input": {
     "placeholder": "/ でコマンド、@ でファイル指定、または {{provider}} に何でも聞いてください...",
-    "attachFiles": "ファイルを添付",
     "attachImages": "画像を添付",
     "send": "送信",
     "stop": "停止",
@@ -67,9 +63,6 @@
       "showingLast": "最新{{count}}件を表示（全{{total}}件）",
       "loadEarlier": "過去のメッセージを読み込む",
       "expandAll": "すべて表示"
-    },
-    "tokens": {
-      "compacting": "圧縮中"
     }
   },
   "shell": {

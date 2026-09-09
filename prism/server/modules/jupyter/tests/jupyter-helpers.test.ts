@@ -1,5 +1,6 @@
-import { describe, expect, it, afterEach } from 'vitest';
 import type { IncomingMessage } from 'node:http';
+
+import { describe, expect, it, afterEach } from 'vitest';
 
 import {
   __resetJupyterAuthForTest,

@@ -30,7 +30,6 @@
     "addToFavorites": "즐겨찾기에 추가",
     "removeFromFavorites": "즐겨찾기에서 제거",
     "editSessionName": "세션 이름 직접 편집",
-    "deleteSession": "이 세션 영구 삭제",
     "activeSessionIndicator": "최근 활성 세션 (지난 10분)",
     "save": "저장",
     "cancel": "취소",
@@ -41,8 +40,7 @@
   "actions": {
     "settings": "설정",
     "cancel": "취소",
-    "save": "저장",
-    "delete": "삭제"
+    "save": "저장"
   },
   "status": {
     "active": "활성",
@@ -67,8 +65,5 @@
     "deleteSession": "세션 삭제",
     "confirmDelete": "이 프로젝트를 어떻게 하시겠습니까:",
     "deleteAllData": "모든 데이터 영구 삭제"
-  },
-  "project": {
-    "public": "Public"
   }
 }

@@ -16,6 +16,7 @@ import {
 } from '../../hooks/useTaskLikeOptions';
 import FolderBrowserModal from '../project-creation-wizard/components/FolderBrowserModal';
 import type { AppTab, Project } from '../../types/app';
+import { useModalKeyboard } from '../../shared/view/hooks/useModalKeyboard';
 
 /**
  * 定时任务页(cj 轮起,版式对照用户给的 Scheduled tasks 参考图)。
@@ -191,8 +192,18 @@ function TaskFormModal({
   const label = 'mb-1.5 block text-[13px] font-medium text-foreground';
   const req = <span className="ml-0.5 text-primary">*</span>;
 
+  // Esc 关闭 + Tab 焦点陷阱 —— 这个弹层声明了 aria-modal 却没有模态行为,
+  // 键盘用户 Tab 会跑到背后的页面上去。判据见 useModalKeyboard。
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalKeyboard(modalRef, { onClose });
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+    <div
+      ref={modalRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+    >
       <div className="prism-modal-shadow max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-xl border border-border bg-card p-5">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-base font-semibold text-foreground">

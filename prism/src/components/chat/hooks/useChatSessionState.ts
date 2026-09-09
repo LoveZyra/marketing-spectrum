@@ -12,6 +12,7 @@ import {
   visibleCountForTarget,
 } from '../utils/messageWindow';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
+import { shouldKeepOrphanedSessionView } from '../utils/sessionViewGuard';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
@@ -52,7 +53,7 @@ interface UseChatSessionStateArgs {
   newSessionTrigger?: number;
   processingSessions?: SessionActivityMap;
   onSessionIdle?: MarkSessionIdle;
-  resetStreamingState: () => void;
+  resetStreamingState: (sessionId?: string | null) => void;
   /** When each session's `chat.subscribe` was last sent; guards stale idle acks. */
   statusCheckSentAtRef: MutableRefObject<Map<string, number>>;
   /** Highest live seq observed per session; sent as `lastSeq` on subscribe. */
@@ -162,6 +163,29 @@ export function useChatSessionState({
   sessionStore,
 }: UseChatSessionStateArgs) {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(selectedSession?.id || null);
+  /**
+   * fi:`currentSessionId` 是不是**本视图自己刚建立的**(新会话页上发第一条消息、
+   * 会话网关分配了 id、路由还没跟上)。只有这种来源的 id,在 `selectedSession`
+   * 为空时才允许继续撑着正文;从别的会话切走时留下的 id 一律不算。
+   *
+   * ## 这个 ref 存在的原因(线上截图)
+   *
+   * 正文渲染看的是 `activeSessionId = selectedSession?.id || currentSessionId`。
+   * 下面那个 effect 在 `selectedSession` 变空时本该把 `currentSessionId` 清掉,
+   * 但它有一条例外:"这条会话还在跑就别清"—— 本意是保护刚建的会话(路由跟上之前
+   * 不能把正文清空)。可它的判据是**在不在跑**,不是**从哪来的**:
+   *
+   *   用户在会话 A 上(A 正在跑)→ 点项目行 / 切项目 → `handleProjectSelect`
+   *   把 selectedSession 置空、navigate('/'),**但不 bump newSessionTrigger**
+   *   → effect 进 `!selectedSession` 分支 → 例外看到 A 在跑 → 不清
+   *   → 标题按 selectedSession 显示「新会话」,正文按 currentSessionId 继续渲染 A,
+   *     而且随 A 的流式一直更新。
+   *
+   * 三个条件缺一不可(A 正在跑、从 A 切走、走的是不 bump trigger 的那条路),
+   * 所以只有那个用户的浏览器里出现,root 新开页面看不到。判据换成"是不是本视图
+   * 建立的",刚建的会话照旧保护,切走留下的残留一律清。
+   */
+  const establishedHereRef = useRef<string | null>(null);
   const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
   const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
@@ -237,8 +261,10 @@ export function useChatSessionState({
      * - No dependence on route/tab/session-object identity changes.
      * - No coupling to unrelated external update signals.
      */
-    resetStreamingState();
+    // fj:只清**这一条**会话的缓冲 —— 全清会把后台正在流的会话拦腰截断。
+    resetStreamingState(currentSessionIdRef.current);
     setCurrentSessionId(null);
+    establishedHereRef.current = null;
     setPendingUserMessage(null);
     messagesOffsetRef.current = 0;
     setHasMoreMessages(false);
@@ -254,6 +280,8 @@ export function useChatSessionState({
     setLoadAllStuck(false);
     setViewHiddenCount(0);
     setSearchTarget(null);
+    // fj:显式新建也要把加载标志放下(见主加载 effect 里的同一句)。
+    setIsLoadingSessionMessages(false);
     wasNearTopRef.current = false;
     searchScrollActiveRef.current = false;
     lastLoadedSessionKeyRef.current = null;
@@ -272,10 +300,29 @@ export function useChatSessionState({
   /*  Derive processing state for the viewed session                  */
   /* ---------------------------------------------------------------- */
 
+  /**
+   * 新会话页上第一条消息发出、网关分配了 id 之后由 ChatInterface 调用。
+   * 和裸 `setCurrentSessionId` 的区别只有一个:记下"这个 id 是本视图建立的",
+   * 见 establishedHereRef。
+   */
+  const markSessionEstablished = useCallback((sessionId: string) => {
+    establishedHereRef.current = sessionId;
+    setCurrentSessionId(sessionId);
+  }, []);
+
   const activeSessionId = selectedSession?.id || currentSessionId || null;
   /** 给搜索定位的重试循环看的"现在在看哪条会话"—— 换会话后旧循环要自行退出。 */
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
+  /** fj:同上 —— 主加载 effect 要读它,但它不该让 effect 重跑。 */
+  const currentSessionIdRef = useRef<string | null>(currentSessionId);
+  currentSessionIdRef.current = currentSessionId;
+  /**
+   * fj:`pendingUserMessage` 暂存时路由选中的是哪条会话(新会话页为 null)。
+   * 冲队时靠它判归属 —— 否则那条消息会被灌进用户接下来打开的**任意**一条会话,
+   * 而且 `kind: 'error'` 那种永远清不掉。
+   */
+  const pendingUserMessageOriginRef = useRef<string | null>(null);
 
   // The activity indicator always reflects the latest status of the session
   // being viewed — never stale local UI state from the last time it was
@@ -283,6 +330,21 @@ export function useChatSessionState({
   // placeholder entry exists anymore.
   const sessionActivity = (activeSessionId && processingSessions?.get(activeSessionId)) || null;
   const isProcessing = sessionActivity !== null;
+  /**
+   * fj:给那些"要读当前处理态、但不该因它重跑"的 effect 用。
+   * 放依赖数组里会让 effect 每轮翻两次(开始一次、结束一次)。
+   */
+  const isProcessingRef = useRef(isProcessing);
+  isProcessingRef.current = isProcessing;
+
+  /**
+   * fj:两个 effect 只该在 **id 变了**的时候重跑,但体内要用完整对象。
+   * 对象走 ref、id 进依赖数组 —— 这是这里唯一能同时满足两件事的写法。
+   */
+  const selectedProjectRef = useRef(selectedProject);
+  selectedProjectRef.current = selectedProject;
+  const selectedSessionRef = useRef(selectedSession);
+  selectedSessionRef.current = selectedSession;
   /**
    * 只要在跑就能中止 —— **不看 `canInterrupt`**。
    *
@@ -331,6 +393,35 @@ export function useChatSessionState({
       return;
     }
 
+    /**
+     * fj:只把它交给**本视图刚建立的那条会话**。
+     *
+     * `pendingUserMessage` 是"新会话页上还没有会话 id 时暂存的一条消息",而
+     * 这个 effect 的唯一条件此前是"pending 非空 且 activeSessionId 非空" ——
+     * **不记录它原本属于谁**,拿到什么 id 就往哪儿写;换会话的重置 effect 也不
+     * 清它(只有显式新建那条清)。
+     *
+     * 于是:在新会话页上做任何会报错的事(拖一个超大的 PDF、抓一个抓不到的
+     * URL、建会话失败),屏幕上出现红色错误行 —— 此时**不点新建**、直接在侧栏
+     * 打开一条已有会话 B,那条错误行就被写进 B 的实时列表,还带着**原始时间戳**
+     * 插在 B 历史的正中间。而 `pruneRealtimeSupersededByServer` 对 `kind: 'error'`
+     * 没有任何规则(落到兜底 `return true`),**任何刷新都清不掉**。
+     *
+     * `establishedHereRef` 正是"这条 id 是本视图自己建立的"这个判据(fi 轮引入),
+     * 这里复用它:对不上就把这条 pending 丢掉,而不是塞给一条无关的会话。
+     */
+    const bornOnNewSessionPage = pendingUserMessageOriginRef.current === null;
+    const belongsHere = bornOnNewSessionPage
+      && (establishedHereRef.current === activeSessionId
+        // 路由先于 markSessionEstablished 落地的那一帧:此时 currentSessionId 还没
+        // 被设过(本视图没建立过任何 id),这条 pending 仍然属于当下这条新会话。
+        || establishedHereRef.current === null);
+    if (!belongsHere) {
+      setPendingUserMessage(null);
+      pendingUserMessageOriginRef.current = null;
+      return;
+    }
+
     const prov = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
     const normalized = chatMessageToNormalized(pendingUserMessage, activeSessionId, prov);
     if (normalized) {
@@ -338,6 +429,7 @@ export function useChatSessionState({
     }
 
     flushedPendingUserMessageRef.current = pendingUserMessage;
+    pendingUserMessageOriginRef.current = null;
     setPendingUserMessage(null);
   }, [activeSessionId, pendingUserMessage, sessionStore]);
 
@@ -383,7 +475,10 @@ export function useChatSessionState({
 
   const addMessage = useCallback((msg: ChatMessage) => {
     if (!activeSessionId) {
-      // No session yet — show as pending until the backend creates one
+      // No session yet — show as pending until the backend creates one.
+      // fj:同时记下"暂存时路由选中的是谁"(新会话页为 null)。冲队时据此判断
+      // 这条 pending 到底属不属于当下这个视图,见 flush effect。
+      pendingUserMessageOriginRef.current = selectedSessionRef.current?.id ?? null;
       setPendingUserMessage(msg);
       return;
     }
@@ -440,9 +535,14 @@ export function useChatSessionState({
       setIsLoadingMoreMessages(true);
 
       try {
+        // 同首屏拉取:await 期间可能切走。这里写的是 hasMore / total /
+        // allMessagesLoaded —— 全是分页状态,盖到另一条会话上就是把它的
+        // 「看更早」按死。判据读 ref,闭包里的 id 恒等于自己、守不住东西。
+        const olderRequestSessionId = selectedSession.id;
         const slot = await sessionStore.fetchMore(selectedSession.id, {
           limit: MESSAGES_PER_PAGE,
         });
+        if (activeSessionIdRef.current !== olderRequestSessionId) return false;
         if (!slot) {
           // fetchMore 现在会在失败时返回 null(以前是原样返回旧 slot,于是断网
           // 被当成"加载成功、只是没有新内容",这条会话从此不再自动跟底)。
@@ -696,8 +796,17 @@ export function useChatSessionState({
     }
   }, [hasMoreMessages, isNearBottom, loadOlderMessages]);
 
-  // Reset scroll/pagination state on session change
-  useEffect(() => {
+  /**
+   * 换会话时重置滚动/分页状态。
+   *
+   * fj:`useLayoutEffect` —— 这一段必须在**浏览器绘制之前**跑完。
+   *
+   * 被动 effect 里跑的话,换会话之后的**第一次布局**用的还是上一条会话的锚点
+   * (`scrollAnchorRef`)和跟底状态,滚动控制器(它是 layout 阶段的)会先按
+   * 旧锚把视口钉到一个毫无关系的位置,下一帧才被这里清掉 —— 用户看到的是
+   * 打开会话时先闪一下再跳回去。
+   */
+  useLayoutEffect(() => {
     if (!searchScrollActiveRef.current) {
       setVisibleMessageCount(PHASE1_VISIBLE_MESSAGES);
     }
@@ -718,15 +827,40 @@ export function useChatSessionState({
 
   // Main session loading effect — store-based
   useEffect(() => {
+    // fj:对象走 ref、只有 id 进依赖数组 —— 见 selectedProjectRef 的说明。
+    const selectedSession = selectedSessionRef.current;
+    const selectedProject = selectedProjectRef.current;
+    const currentSessionId = currentSessionIdRef.current;
     if (!selectedSession || !selectedProject) {
       // A freshly created session can be mid-run before the router has a
       // canonical selectedSession (the URL effect synthesizes one on the
       // next render). Keep the active view intact instead of wiping it.
-      if (currentSessionId && processingSessionsRef.current?.has(currentSessionId)) {
+      //
+      // fi:多一道"必须是本视图自己建立的"。原来只看"在不在跑",于是从一条
+      // 正在跑的会话切走(点项目行 / 切项目,那条路不 bump newSessionTrigger)
+      // 也会走进这里,把别的会话的正文钉在「新会话」页面上。见 establishedHereRef。
+      if (shouldKeepOrphanedSessionView({
+        currentSessionId,
+        establishedHere: establishedHereRef.current,
+        isProcessing: Boolean(currentSessionId && processingSessionsRef.current?.has(currentSessionId)),
+      })) {
         return;
       }
+      establishedHereRef.current = null;
 
-      resetStreamingState();
+      // fj:只清**这一条**会话的缓冲 —— 全清会把后台正在流的会话拦腰截断。
+      resetStreamingState(currentSessionIdRef.current);
+      /**
+       * fj:离开会话时把加载标志放下。
+       *
+       * `setIsLoadingSessionMessages(false)` 只在下面那次拉取的 then/catch 里,
+       * 而那两处都在换会话守卫**之内** —— 守卫是为了防"A 的响应盖到 B 的视图上",
+       * 但它连 loading 标志一起挡住了。注释里说的"那是新会话自己那次拉取在管的"
+       * 只在切到**另一条会话**时成立;切到**没有会话**的页面时没有接手方,
+       * 于是新会话页永久渲染成「正在加载会话消息…」,起始卡片再也不出现,
+       * 自动补页与首屏第二帧一并停摆。
+       */
+      setIsLoadingSessionMessages(false);
       setCurrentSessionId(null);
       messagesOffsetRef.current = 0;
       setHasMoreMessages(false);
@@ -736,6 +870,7 @@ export function useChatSessionState({
       return;
     }
 
+    // fj:对象走 ref,只有 id 进依赖数组(见 selectedProjectRef 的说明)。
     const selectedSessionId = selectedSession.id;
     const sessionKey = `${selectedSessionId}:${selectedProject.projectId}`;
 
@@ -790,6 +925,9 @@ export function useChatSessionState({
     }
 
     setCurrentSessionId(selectedSessionId);
+    // 路由已经给出正式的 selectedSession —— 不管是刚建的那条跟上了,还是用户
+    // 切去了别的会话,"本视图建立的临时 id"这个保护都该结束。
+    establishedHereRef.current = null;
 
     // Subscribe to the session's live run (if any): the ack reconciles the
     // processing indicator, re-attaches a mid-flight stream to this socket,
@@ -802,10 +940,28 @@ export function useChatSessionState({
 
     // Fetch from server → store updates → chatMessages re-derives automatically
     setIsLoadingSessionMessages(true);
+    /**
+     * 首屏消息拉取。**必须带换会话守卫** —— 同一个文件里的 `loadAllMessages` 有
+     * (第 910 行,还写了注释),`loadOlderMessages` 和这里都漏了。
+     *
+     * 没有它的后果:点开 5000 条的老会话 A(慢)→ 一秒内改点 30 条的 B(快)→
+     * B 先落地 → A 的响应**盖上去**。若 A 的 `hasMore === false`,B 的
+     * 「加载更多 / 看更早 / 加载全部」三个入口一起消失,B 永久只能看最后 20 条,
+     * 直到 30 秒后重新切进来才自愈。
+     *
+     * 判据读 ref 而不是闭包里的 `selectedSessionId` —— 后者是发起时的值,
+     * 恒等于自己,守不住任何东西。
+     */
+    const requestSessionId = selectedSessionId;
     sessionStore.fetchFromServer(selectedSessionId, {
       limit: MESSAGES_PER_PAGE,
       offset: 0,
     }).then(slot => {
+      if (activeSessionIdRef.current !== requestSessionId) {
+        // 切走了:这份分页信息属于另一条会话,一个字段都不许写。
+        // loading 标志也不动 —— 那是新会话自己那次拉取在管的。
+        return;
+      }
       if (slot) {
         setHasMoreMessages(slot.hasMore);
         setTotalMessages(slot.total);
@@ -813,11 +969,28 @@ export function useChatSessionState({
       }
       setIsLoadingSessionMessages(false);
     }).catch(() => {
+      if (activeSessionIdRef.current !== requestSessionId) return;
       setIsLoadingSessionMessages(false);
     });
   }, [
     resetStreamingState,
-    selectedProject,
+    /**
+     * fj:依赖是 **projectId**,不是 `selectedProject` 对象。
+     *
+     * `useProjectsState` 在每条 `session_upserted` 上都会 `setSelectedProject(...)`
+     * 返回新对象(watcher 合并窗口 500ms),于是项目里任何一条会话写盘,这个
+     * effect 就重跑一次。而短路条件里的 `!isStale` 是 30 秒,长回合中
+     * `externalMessageUpdate` 又刻意跳过 refresh(`isProcessing` 为真时) ——
+     * `fetchedAt` 会真的老化过 30 秒。
+     *
+     * 于是落到下面那段**无条件重置**:可见窗口砍回 30 行、`allMessagesLoaded`
+     * 清成 false、`fetchFromServer(limit:20, offset:0)` **整体替换** serverMessages。
+     * 看着一条正在跑长回合的会话,**每 30 秒**正文缩水回最后 20 条、
+     * 「加载全部」的结果被丢弃、滚动锚点被删掉、视口跳走。
+     *
+     * 同一文件的重置 effect 用的就是 `projectId`,这里是漏了。
+     */
+    selectedProject?.projectId,
     selectedSession?.id,
     sendMessage,
     statusCheckSentAtRef,
@@ -828,16 +1001,18 @@ export function useChatSessionState({
 
   // External message update (e.g. WebSocket reconnect, background refresh)
   useEffect(() => {
-    if (!externalMessageUpdate || !selectedSession || !selectedProject) return;
+    const currentSession = selectedSessionRef.current;
+    if (!externalMessageUpdate || !currentSession || !selectedProjectRef.current) return;
 
     const reloadExternalMessages = async () => {
       try {
         // Skip store refresh during active streaming
-        if (!isProcessing) {
+        // fj:读 ref —— `isProcessing` 进依赖会让这个 effect 每轮翻两次。
+        if (!isProcessingRef.current) {
           // 刷新完不再自己排一发跟底:那个 200ms 定时器**没有 cleanup**,
           // 用户在这 200ms 内滚上去照样被拽回底部。跟底交给滚动控制器 ——
           // 它每次 commit 都跑,而且用户一滚就立刻交出控制权。
-          await sessionStore.refreshFromServer(selectedSession.id);
+          await sessionStore.refreshFromServer(currentSession.id);
         }
       } catch (error) {
         console.error('Error reloading messages from external update:', error);
@@ -847,12 +1022,21 @@ export function useChatSessionState({
     reloadExternalMessages();
   }, [
     externalMessageUpdate,
-    isNearBottom,
-    scrollToBottom,
-    selectedProject,
-    selectedSession,
+    /**
+     * fj:同样收敛到 id。
+     *
+     * 依赖里放 `selectedSession` / `selectedProject` 两个对象 + `isProcessing`,
+     * 等于"同项目任何会话每有动静就整窗 `refreshFromServer` 一次" ——
+     * 用户点过「加载全部」的长会话每次就是几十 MB 的响应,而
+     * `refreshFromServer` 的注释描述的正是要避免的这件事。
+     *
+     * `isNearBottom` / `scrollToBottom` 也不该在这里:effect 体内根本没用它们
+     * (跟底早就交给滚动控制器了,见上面的注释)。
+     */
+    selectedProject?.projectId,
+    selectedSession?.id,
     sessionStore,
-    isProcessing,
+    isProcessingRef,
   ]);
 
   // Search navigation target
@@ -1246,6 +1430,7 @@ export function useChatSessionState({
     abortDiscardsPending,
     currentSessionId,
     setCurrentSessionId,
+    markSessionEstablished,
     isLoadingSessionMessages,
     isLoadingMoreMessages,
     hasMoreMessages,

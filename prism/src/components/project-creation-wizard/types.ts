@@ -32,6 +32,17 @@ export type CreateProjectPayload = {
   customName?: string;
   visibility?: ProjectVisibilityChoice;
   sharedUserIds?: number[];
+  /** fh:从模板创建。空字符串/不传 = 空目录(原来的行为)。 */
+  templateId?: string;
+};
+
+/** fh:服务器上的一个项目模板(`PRISM_PROJECT_TEMPLATES_DIR` 下的一棵目录树)。 */
+export type ProjectTemplate = {
+  id: string;
+  name: string;
+  description: string | null;
+  fileCount: number;
+  totalBytes: number;
 };
 
 export type CreateProjectApiError = {
@@ -52,4 +63,6 @@ export type WizardFormState = {
   workspacePath: string;
   visibility: ProjectVisibilityChoice;
   sharedUserIds: number[];
+  /** 空串 = 不用模板。 */
+  templateId: string;
 };

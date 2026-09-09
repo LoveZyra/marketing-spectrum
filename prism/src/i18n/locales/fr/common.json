@@ -1,8 +1,7 @@
 {
   "buttons": {
     "save": "Enregistrer",
-    "cancel": "Annuler",
-    "create": "Créer"
+    "cancel": "Annuler"
   },
   "tabs": {
     "chat": "Chat",
@@ -11,9 +10,6 @@
   },
   "status": {
     "completed": "Terminé"
-  },
-  "common": {
-    "version": "Version"
   },
   "mainContent": {
     "loading": "Chargement de Prism",

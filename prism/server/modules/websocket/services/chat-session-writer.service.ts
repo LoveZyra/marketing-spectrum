@@ -1,14 +1,17 @@
 import {
   WS_CONNECTING_STATE,
   WS_OPEN_STATE,
-} from '@/modules/websocket/services/websocket-state.service.js';
+} from '@/shared/websocket-state.js';
 import type {
   LLMProvider,
   NormalizedMessage,
   RealtimeClientConnection,
 } from '@/shared/types.js';
 import { createCompleteMessage, readObjectRecord } from '@/shared/utils.js';
-import { sessionMessagesDb } from '@/modules/database/index.js';
+import { canViewerSeeSession, sessionMessagesDb } from '@/modules/database/index.js';
+import { readSocketViewer } from '@/shared/project-visibility.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('ws');
 
 type ChatSessionWriterOptions = {
   /**
@@ -61,6 +64,12 @@ type ChatSessionWriterOptions = {
  * - `setSessionId(...)` calls (used by runtimes to label captured ids) are
  *   intercepted and recorded as the provider-id mapping as well.
  */
+/** fj:可见性复检的缓存窗口。撤权最多再多收这么久的帧(此前是整整一轮)。 */
+const VISIBILITY_CACHE_MS = 2000;
+
+/** fj:单个订阅者的出站积压上限。超过就摘掉,让它重连走补发。 */
+const MAX_OUTBOUND_BUFFER_BYTES = 8 * 1024 * 1024;
+
 export class ChatSessionWriter {
   userId: string | number | null;
   /**
@@ -84,6 +93,16 @@ export class ChatSessionWriter {
    * 决定(`assertSocketMaySeeSession`),这里只负责发。
    */
   private readonly connections = new Set<RealtimeClientConnection>();
+
+  /**
+   * fj:每帧可见性复检的结果缓存(见 canDeliverToConnection)。
+   *
+   * WeakMap 按 socket 记:连接一断,条目跟着连接一起被回收,不需要额外清扫。
+   */
+  private readonly visibilityCache = new WeakMap<
+    RealtimeClientConnection,
+    { sessionId: string; visible: boolean; checkedAt: number }
+  >();
 
   private readonly options: ChatSessionWriterOptions;
   /**
@@ -109,7 +128,7 @@ export class ChatSessionWriter {
       // Provider runtimes only emit kind-based normalized messages. Anything
       // else indicates a programming error; drop it rather than leaking an
       // un-remapped payload to the client.
-      console.error('[ChatSessionWriter] Dropping non-normalized outbound payload', data);
+      log.error('[ChatSessionWriter] Dropping non-normalized outbound payload', data);
       return;
     }
 
@@ -221,6 +240,7 @@ export class ChatSessionWriter {
 
     const payload = JSON.stringify(message);
     let delivered = 0;
+    const sessionId = typeof message.sessionId === 'string' ? message.sessionId : '';
 
     for (const connection of this.connections) {
       if (connection.readyState !== WS_OPEN_STATE) {
@@ -228,16 +248,81 @@ export class ChatSessionWriter {
         if (connection.readyState !== WS_CONNECTING_STATE) this.connections.delete(connection);
         continue;
       }
+      /**
+       * fj:每帧复检可见性。
+       *
+       * 进这个集合时是过了检查的,但**进来之后整轮都不再复检** —— 于是 A 撤销
+       * 共享后,B 会继续完整收完这一轮剩下的全部内容:工具参数、`tool_result`
+       * 正文(含被读文件的内容)、`changed_files` 的 diff、审批请求。一轮可以跑
+       * 几十分钟。
+       *
+       * `attachSessionViewers` 早就是每轮重判、`broadcastToSessionViewers` 更是
+       * 每帧重判,唯独 run 的**主内容流**漏了 —— 而它恰恰是内容最多的那条。
+       *
+       * 成本靠 2 秒 TTL 的结果缓存摊平(见 canDeliverToConnection)。
+       */
+      if (sessionId && !this.canDeliverToConnection(connection, sessionId)) {
+        this.connections.delete(connection);
+        continue;
+      }
+      /**
+       * fj:背压闸。
+       *
+       * 出站帧此前只判 `readyState` 就 `send`,全仓一处 `bufferedAmount` 都没有;
+       * 而 `tool_result` / `changed_files` 单帧可达几百 KB 到 MB 级。一个订阅者的
+       * TCP 读端停住(手机切后台、网络劣化、代理挂起)但连接没断时,每一帧都在
+       * Node 侧排队 —— 心跳兜得晚(ping 排在积压后面,要 30~60 秒才判死),
+       * 也就是说单个卡住的订阅者最多能让服务端替它缓冲一整分钟的完整帧流。
+       *
+       * 摘掉之后客户端重连,靠 `chat.subscribe` 的补发游标 + 前端的 seq 空洞检测
+       * 回到正轨,语义上是安全的。
+       */
+      const buffered = (connection as { bufferedAmount?: number }).bufferedAmount ?? 0;
+      if (buffered > MAX_OUTBOUND_BUFFER_BYTES) {
+        log.warn(`[ChatSessionWriter] 订阅者积压 ${buffered} 字节,摘掉这条连接(重连后靠补发游标补齐)`);
+        this.connections.delete(connection);
+        try { (connection as { terminate?: () => void }).terminate?.(); } catch { /* best effort */ }
+        continue;
+      }
       try {
         connection.send(payload);
         delivered += 1;
       } catch (error) {
-        console.warn('[ChatSessionWriter] send failed, dropping connection:', error);
+        log.warn('[ChatSessionWriter] send failed, dropping connection:', error);
         this.connections.delete(connection);
       }
     }
 
     return delivered;
+  }
+
+  /**
+   * 这个连接现在还能看这条会话吗 —— 带 2 秒 TTL 的缓存。
+   *
+   * 不缓存的话,一条工具密集的回合里每帧每连接都要跑三次 SQLite 查询;
+   * 缓存 2 秒意味着撤权最多再多收两秒的帧,而那是可以接受的窗口
+   * (对照:此前是**整整一轮**)。
+   */
+  private canDeliverToConnection(connection: RealtimeClientConnection, sessionId: string): boolean {
+    /**
+     * 没有身份戳的连接**不参与**这道复检。
+     *
+     * 浏览器过来的 chat socket 在握手完成时无条件盖戳(`handleChatConnection`),
+     * 所以"没戳"只可能是服务端自己造的写入方 —— 外部 API 的无浏览器回合、
+     * 定时任务那条 run。拿访问者可见性去判它们没有意义,判了只会把这类回合的
+     * 输出整个掐掉。真正需要复检的那一群(真人开的标签页)一个都跑不掉。
+     */
+    const viewer = readSocketViewer(connection);
+    if (viewer.userId === null || viewer.userId === undefined) return true;
+
+    const now = Date.now();
+    const cached = this.visibilityCache.get(connection);
+    if (cached && cached.sessionId === sessionId && now - cached.checkedAt < VISIBILITY_CACHE_MS) {
+      return cached.visible;
+    }
+    const visible = canViewerSeeSession(sessionId, viewer);
+    this.visibilityCache.set(connection, { sessionId, visible, checkedAt: now });
+    return visible;
   }
 
   /**

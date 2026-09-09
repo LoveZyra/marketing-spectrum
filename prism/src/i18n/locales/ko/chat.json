@@ -16,9 +16,6 @@
     "tool": "도구",
     "claude": "AI"
   },
-  "tools": {
-    "settings": "도구 설정"
-  },
   "interactive": {
     "title": "대화형 프롬프트",
     "waiting": "CLI에서 응답을 기다리는 중",
@@ -36,7 +33,6 @@
   },
   "input": {
     "placeholder": "/를 입력하여 명령어, @를 입력하여 파일, 또는 {{provider}}에게 무엇이든 물어보세요...",
-    "attachFiles": "파일 첨부",
     "attachImages": "이미지 첨부",
     "send": "전송",
     "stop": "중지",
@@ -46,7 +42,6 @@
     },
     "clickToChangeMode": "클릭하여 권한 모드 변경 (또는 입력창에서 Tab)",
     "showAllCommands": "모든 명령어 보기",
-    "clearInput": "입력 지우기",
     "scrollToBottom": "맨 아래로 스크롤",
     "attachmentPath": "경로",
     "modelHint": "현재 모델: {{model}} · 클릭하여 전환"
@@ -72,9 +67,6 @@
       "expandAll": "전체 펼치기",
       "loadingAll": "모든 메시지 로딩 중...",
       "allLoaded": "모든 메시지 로드 완료"
-    },
-    "tokens": {
-      "compacting": "압축 중"
     }
   },
   "shell": {

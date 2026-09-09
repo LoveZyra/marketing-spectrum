@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import {
+  userDb as usersDb,
   scheduledTasksDb,
   sessionsDb,
   sessionMessagesDb,
@@ -9,6 +10,8 @@ import {
 } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import { generateMessageId } from '@/shared/utils.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('tasks');
 
 /**
  * 定时任务调度与执行(cj 轮,B 方案)。
@@ -82,8 +85,23 @@ export function computeRetryAt(recentStatuses: string[], now: Date, regularNext:
 }
 
 type QueryClaudeSDK = (message: string, options: Record<string, unknown>, writer: unknown) => Promise<unknown>;
+/**
+ * 中止一条回合。与 `queryClaudeSDK` 一样由 composition root 注入 ——
+ * 这个模块不能直接 import claude-sdk(eslint 的模块边界不让,而且会形成环)。
+ */
+type AbortClaudeRun = (runId: string) => Promise<unknown> | unknown;
 
 let queryClaudeSDKRef: QueryClaudeSDK | null = null;
+let abortClaudeRunRef: AbortClaudeRun | null = null;
+/** 回合结束后放行这条会话上排队的网页消息。同样由 composition root 注入。 */
+let drainPendingSendRef: ((sessionId: string) => void) | null = null;
+/**
+ * 任务失败时发通知。同样由 composition root 注入 —— tasks 不直接引 notifications
+ * (模块边界),而且这样测试里也能塞个假的。
+ */
+let notifyTaskFailedRef:
+  | ((input: { userId: number | null; sessionId: string | null; taskName: string; error: string }) => void)
+  | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
 
 /* ── next_run_at 纯函数 ─────────────────────────────────────────────── */
@@ -247,15 +265,51 @@ async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual
       runId: sessionId,
       model: task.model || undefined,
       permissionMode: task.permission_mode || 'bypassPermissions',
+      // 任务是"以主人的身份"跑的,bypass 白名单要认的就是这个人。
+      // 定时任务默认档位正好是 bypassPermissions,所以这条尤其要带上。
+      actorUsername: task.owner_user_id != null
+        ? usersDb.getUserById(task.owner_user_id)?.username ?? null
+        : null,
+      // fg:这笔账记在「定时任务」名下。无人值守跑出来的钱和人点出来的钱,
+      // 在"这个月花哪了"里是完全不同的两件事 —— 前者能靠改调度频率降,
+      // 后者只能靠改用法。混在一起就两个都看不出来。
+      usageSource: 'task',
       oneShot: true,
     }, run.writer).finally(() => {
       chatRunRegistry.completeRunIfCurrent(run, { exitCode: 0 });
+      // 回合结束要把这条会话上排队的网页消息放出去 —— 用户在任务跑着的时候发的那条
+      // 会进 pendingSends,没人来接就得躺满 30 分钟 TTL。外部 API 那条路(routes/agent.js)
+      // 在 dv 轮补过同样的一句,定时任务这条同类路径漏了。
+      if (sessionId) drainPendingSendRef?.(sessionId);
     });
 
     try {
       await promiseWithTimeout(runPromise, TASK_RUN_TIMEOUT_MS);
     } catch (error) {
       if (error instanceof TaskRunTimeoutError) {
+        /**
+         * **先真的把回合掐掉,再放开调度位。**
+         *
+         * 原来这里只做了下面那两件"记账"的事:给浏览器补一个终止帧、把注册表这一轮标
+         * completed。底下那个 CLI 子进程**还活着、还在往 transcript 追加**。而
+         * `finishRun` 随后把 `running` 置 0,下一拍 `listDue` 立刻又能捞到这个任务
+         * (`claimRun` 也不再被挡,旧 run 已 completed),于是第二个 `queryClaudeSDK`
+         * 带着**同一个 providerSessionId** 起来。
+         *
+         * 两条历史交错写进同一份 `.jsonl` —— 正是 claude-sdk 里那段 `dv:` 注释描述的
+         * "谁也修不回来"的状态。session_mode 为 fixed(路由的默认值)时必然如此。
+         *
+         * 中止本身可能失败(子进程已经僵死),所以 catch 住只记日志:**放开调度位这件事
+         * 不能被它挡住**,否则任务会永远卡在 running。
+         */
+        try {
+          if (sessionId) await abortClaudeRunRef?.(sessionId);
+        } catch (abortError) {
+          log.warn(
+            `[Tasks] 「${task.name}」超时后中止回合失败(子进程可能已僵死):`,
+            abortError instanceof Error ? abortError.message : abortError,
+          );
+        }
         // 悬死的回合可能还开着流 —— 给订阅的浏览器一个终止帧,别让它们转圈到天明。
         chatRunRegistry.completeRunIfCurrent(run, { exitCode: 1, aborted: true });
       }
@@ -264,7 +318,26 @@ async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual
   } catch (error) {
     status = 'failed';
     detail = error instanceof Error ? error.message : String(error);
-    console.error(`[Tasks] 「${task.name}」(${trigger}) 执行失败:`, detail);
+    log.error(`[Tasks] 「${task.name}」(${trigger}) 执行失败:`, detail);
+    /**
+     * 失败要有人知道。
+     *
+     * **无人值守正是定时任务存在的理由** —— 而在此之前失败只进 console 和运行记录表,
+     * 也就是说周一早六点的批量回归连炸三次,团队十点打开页面才发现。
+     *
+     * 通知是尽力而为的旁路:不 await、不抛。投递失败绝不能反过来影响
+     * "这一轮到底算成功还是失败"的记账,那才是调用方关心的事。
+     */
+    try {
+      notifyTaskFailedRef?.({
+        userId: task.owner_user_id ?? null,
+        sessionId,
+        taskName: task.name,
+        error: detail,
+      });
+    } catch (notifyError) {
+      log.warn('[Tasks] 失败通知发不出去(不影响任务记账):', notifyError);
+    }
   }
 
   const durationMs = Date.now() - startedAt;
@@ -305,22 +378,39 @@ async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual
 
 /* ── 调度器 ───────────────────────────────────────────────────────── */
 
-export function startTaskScheduler(queryClaudeSDK: QueryClaudeSDK): void {
+export function startTaskScheduler(
+  queryClaudeSDK: QueryClaudeSDK,
+  deps: {
+    abortClaudeRun?: AbortClaudeRun;
+    drainPendingSend?: (sessionId: string) => void;
+    notifyTaskFailed?: (input: {
+      userId: number | null; sessionId: string | null; taskName: string; error: string;
+    }) => void;
+  } = {},
+): void {
   queryClaudeSDKRef = queryClaudeSDK;
+  abortClaudeRunRef = deps.abortClaudeRun ?? null;
+  drainPendingSendRef = deps.drainPendingSend ?? null;
+  notifyTaskFailedRef = deps.notifyTaskFailed ?? null;
   const released = scheduledTasksDb.releaseStaleRunning();
-  if (released > 0) console.log(`[Tasks] 松开 ${released} 个上次进程遗留的 running 标记`);
+  if (released > 0) log.info(`[Tasks] 松开 ${released} 个上次进程遗留的 running 标记`);
 
   timer = setInterval(() => {
     try {
       const due = scheduledTasksDb.listDue(nowDbUtc());
       for (const task of due) {
-        void executeTask(task, 'schedule');
+        // executeTask 的 finishRun / listRuns / claimRun 都在它自己的 try 之外,
+        // 任何一处抛(库被重入、磁盘错误)就是一个没人接的 rejection —— 在
+        // Node 22 下等于整机退出。这里必须自己接住。
+        void executeTask(task, 'schedule').catch((error) => {
+          log.error(`[Tasks] 任务 ${task.id} 调度执行抛错:`, error);
+        });
       }
     } catch (error) {
-      console.error('[Tasks] 调度 tick 失败:', error);
+      log.error('[Tasks] 调度 tick 失败:', error);
     }
   }, TICK_MS);
-  console.log('[Tasks] 定时任务调度器已启动(30s 一拍)');
+  log.info('[Tasks] 定时任务调度器已启动(30s 一拍)');
 }
 
 export function stopTaskScheduler(): void {
@@ -332,6 +422,8 @@ export function runTaskNow(taskId: string): { ok: boolean; error?: string } {
   const task = scheduledTasksDb.getById(taskId);
   if (!task) return { ok: false, error: 'not_found' };
   if (task.running) return { ok: false, error: 'already_running' };
-  void executeTask(task, 'manual');
+  void executeTask(task, 'manual').catch((error) => {
+    log.error(`[Tasks] 任务 ${taskId} 手动执行抛错:`, error);
+  });
   return { ok: true };
 }

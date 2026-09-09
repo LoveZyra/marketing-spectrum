@@ -1,9 +1,11 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { projectsDb, scanStateDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/index.js';
-import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
+// 叶子直取:走 websocket barrel 会把 websocket → providers → projects 连成环
+// (madge 实测)。见 shared/websocket-state.ts 的注释。
+import { WS_OPEN_STATE, connectedClients } from '@/shared/websocket-state.js';
+import { generateDisplayName } from '@/shared/project-display-name.js';
 import { canViewerSeeProject, isPublicWorkspacePath } from '@/shared/project-visibility.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError, normalizeProjectPath } from '@/shared/utils.js';
@@ -108,76 +110,6 @@ const MAX_PROJECT_SESSIONS_PAGE_SIZE = 200;
 /**
  * Generate better display name from path.
  */
-/**
- * `package.json` 里的 name,按 mtime+size 缓存。
- *
- * 项目列表接口会对**每个项目**调一次 generateDisplayName,即 N 次磁盘 IO;
- * 会话监视器每次构建 `session_upserted` 广播也调一次(运行中大约每 2–3 秒一回)。
- * 而 package.json 的 name 基本不变。缓存 null 表示"读过,没有可用的 name",
- * 免得对没有 package.json 的项目反复 ENOENT。
- */
-const packageNameCache = new Map<string, { fingerprint: string; name: string | null }>();
-
-async function readPackageNameCached(packageJsonPath: string): Promise<string | null> {
-  let fingerprint = 'missing';
-  try {
-    const stats = await fs.stat(packageJsonPath);
-    fingerprint = `${stats.mtimeMs}:${stats.size}`;
-  } catch {
-    // 不存在:下面缓存 null。
-  }
-
-  const cached = packageNameCache.get(packageJsonPath);
-  if (cached && cached.fingerprint === fingerprint) {
-    return cached.name;
-  }
-
-  let name: string | null = null;
-  if (fingerprint !== 'missing') {
-    try {
-      const packageData = await fs.readFile(packageJsonPath, 'utf8');
-      const parsed = JSON.parse(packageData) as { name?: string };
-      name = typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name : null;
-    } catch {
-      name = null;
-    }
-  }
-
-  packageNameCache.set(packageJsonPath, { fingerprint, name });
-  return name;
-}
-
-export async function generateDisplayName(projectName: string, actualProjectDir: string | null = null): Promise<string> {
-  // Use actual project directory if provided, otherwise decode from project name.
-  const projectPath = actualProjectDir || projectName.replace(/-/g, '/');
-
-  // Try to read package.json from the project path.
-  try {
-    const packageJsonPath = path.join(projectPath, 'package.json');
-    const cachedName = await readPackageNameCached(packageJsonPath);
-    if (cachedName) {
-      return cachedName;
-    }
-    const packageData = await fs.readFile(packageJsonPath, 'utf8');
-    const packageJson = JSON.parse(packageData) as { name?: string };
-
-    // Return the name from package.json if it exists.
-    if (packageJson.name) {
-      return packageJson.name;
-    }
-  } catch {
-    // Fall back to path-based naming if package.json doesn't exist or can't be read.
-  }
-
-  // If it starts with /, it's an absolute path.
-  if (projectPath.startsWith('/')) {
-    const parts = projectPath.split('/').filter(Boolean);
-    // Return only the last folder name.
-    return parts[parts.length - 1] || projectPath;
-  }
-
-  return projectPath;
-}
 
 function normalizeSessionPagination(options: SessionPaginationOptions = {}): { limit: number; offset: number } {
   const rawLimit = Number.isFinite(options.limit) ? Math.floor(Number(options.limit)) : DEFAULT_PROJECT_SESSIONS_PAGE_SIZE;
@@ -196,16 +128,6 @@ function mapSessionRowToSummary(row: SessionRepositoryRow): SessionSummary {
     summary: row.custom_name || '',
     messageCount: 0,
     lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
-  };
-}
-
-function readProjectSessionsIncludingArchived(projectPath: string): ProjectSessionsPageResult {
-  const rows = sessionsDb.getSessionsByProjectPathIncludingArchived(projectPath) as SessionRepositoryRow[];
-
-  return {
-    sessions: rows.map(mapSessionRowToSummary),
-    total: rows.length,
-    hasMore: false,
   };
 }
 
@@ -431,14 +353,44 @@ export async function getArchivedProjectsWithSessions(
     ? new Set(projectsDb.getStarredProjectIdsForUser(options.starsFor))
     : null;
 
+  /*
+   * ff:归档列表补上 E7 那轮漏掉的批量化。
+   *
+   * 之前循环里两次按项目查库(会话 + 授权名单),240 个归档项目 = **480 次查询**,
+   * 全在同一次 HTTP 请求里、而 better-sqlite3 是同步的 —— 事件循环整段停住。
+   * 活跃列表在 E7 已经改成"三次固定查询顶掉 3N 次"了,归档这条当时没跟上。
+   *
+   * 顺带修不分页:原来 `readProjectSessionsIncludingArchived` 把每个项目的**全部**
+   * 会话读进内存,`hasMore` 恒为 false —— 归档一个跑了半年、几千条会话的项目,
+   * 光这一个响应就能有几十兆,而界面只显示前几条。现在和活跃列表用同一个页大小,
+   * `total` / `hasMore` 如实上报。
+   */
+  const pagination = normalizeSessionPagination({});
+  const projectPaths = projectRows.map((row) => row.project_path);
+  const batchedSessions = projectRows.length > 0
+    ? sessionsDb.getFirstSessionsForProjectPaths(projectPaths, pagination.limit, { includeArchived: true })
+    : new Map<string, SessionRepositoryRow[]>();
+  const batchedCounts = projectRows.length > 0
+    ? sessionsDb.countSessionsByProjectPaths(projectPaths, { includeArchived: true })
+    : new Map<string, number>();
+  const batchedShares = projectRows.length > 0
+    ? projectsDb.getSharedUserIdsForProjects(projectRows.map((row) => row.project_id))
+    : new Map<string, number[]>();
+
   for (const row of projectRows) {
     const displayName =
       row.custom_project_name && row.custom_project_name.trim().length > 0
         ? row.custom_project_name
         : await generateDisplayName(path.basename(row.project_path) || row.project_path, row.project_path);
 
-    const sessionsPage = readProjectSessionsIncludingArchived(row.project_path);
-    const sharedUserIds = projectsDb.getProjectSharedUserIds(row.project_id);
+    const sessionRows = (batchedSessions.get(row.project_path) ?? []) as SessionRepositoryRow[];
+    const total = batchedCounts.get(row.project_path) ?? sessionRows.length;
+    const sessionsPage: ProjectSessionsPageResult = {
+      sessions: sessionRows.map(mapSessionRowToSummary),
+      total,
+      hasMore: total > sessionRows.length,
+    };
+    const sharedUserIds = batchedShares.get(row.project_id) ?? [];
 
     archivedProjects.push({
       projectId: row.project_id,

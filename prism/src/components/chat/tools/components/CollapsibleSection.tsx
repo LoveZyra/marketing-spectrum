@@ -79,7 +79,12 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
         </CollapsibleTrigger>
       )}
 
-      <CollapsibleContent>
+      {/*
+              fj:`mountOnOpen` —— 折叠着的时候不挂 children。
+              工具详情里可能是几千行的 diff 或一大坨 JSON,而"收起"本来只是
+              CSS 技巧,不打开这个开关的话它们在没人看的时候就已经进 DOM 了。
+            */}
+            <CollapsibleContent mountOnOpen>
         <div className="mt-1.5 pl-[18px]">
           {children}
         </div>

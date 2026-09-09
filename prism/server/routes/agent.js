@@ -8,12 +8,18 @@ import spawn from 'cross-spawn';
 import express from 'express';
 import { Octokit } from '@octokit/rest';
 
+import { createLogger } from '@/shared/logger.js';
+
 import { userDb, apiKeysDb, githubTokensDb, projectsDb, sessionsDb, sessionMessagesDb, canViewerSeeSession } from '../modules/database/index.js';
 import { chatRunRegistry, drainPendingSendForSession } from '../modules/websocket/index.js';
+import { sessionsService } from '../modules/providers/index.js';
+import { assertViewerMayCreateSessionAt } from '../modules/providers/services/session-project-path-guard.service.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
 import { IS_PLATFORM } from '../constants/config.js';
 import { readRequestViewer } from '../shared/project-visibility.js';
 import { normalizeProjectPath, WORKSPACES_ROOT, generateMessageId } from '../shared/utils.js';
+
+const log = createLogger('agent');
 
 const router = express.Router();
 
@@ -76,7 +82,7 @@ const validateExternalApiKey = (req, res, next) => {
       req.user = user;
       return next();
     } catch (error) {
-      console.error('Platform mode error:', error);
+      log.error('Platform mode error:', error);
       return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
     }
   }
@@ -337,10 +343,10 @@ async function createGitHubBranch(octokit, owner, repo, branchName, baseBranch =
       sha: baseSha
     });
 
-    console.log(`✅ Created branch '${branchName}' on GitHub`);
+    log.info(`✅ Created branch '${branchName}' on GitHub`);
   } catch (error) {
     if (error.status === 422 && error.message.includes('Reference already exists')) {
-      console.log(`ℹ️ Branch '${branchName}' already exists on GitHub`);
+      log.info(`ℹ️ Branch '${branchName}' already exists on GitHub`);
     } else {
       throw error;
     }
@@ -368,7 +374,7 @@ async function createGitHubPR(octokit, owner, repo, branchName, title, body, bas
     body
   });
 
-  console.log(`✅ Created pull request #${pr.number}: ${pr.html_url}`);
+  log.info(`✅ Created pull request #${pr.number}: ${pr.html_url}`);
 
   return {
     number: pr.number,
@@ -417,7 +423,7 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
           const normalizedRequested = normalizeGitHubUrl(githubUrl);
 
           if (normalizedExisting === normalizedRequested) {
-            console.log('✅ Repository already exists at path with correct URL');
+            log.info('✅ Repository already exists at path with correct URL');
             return resolve(cloneDir);
           } else {
             throw new Error(`Directory ${cloneDir} already exists with a different repository (${existingUrl}). Expected: ${githubUrl}`);
@@ -433,7 +439,7 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
       await fs.mkdir(path.dirname(cloneDir), { recursive: true });
 
       // 凭据不进 URL、不进 argv:老写法把 token 拼成 https://<token>@github.com,
-      // 它会随 git 的报错原样出现在 stderr(下面还 console.log)、落进服务日志,
+      // 它会随 git 的报错原样出现在 stderr(下面还 log.debug)、落进服务日志,
       // 还会被写进克隆产物的 .git/config(origin URL)。改走环境变量注入的
       // http.extraHeader(GIT_CONFIG_* 是 git 2.31+ 的正路),token 全程不落
       // URL / argv / 磁盘;远端 URL 保持干净的 githubUrl。
@@ -451,8 +457,8 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
       // 日志与报错也不放行。
       const scrubSecrets = (text) => String(text ?? '').replace(/(https?:\/\/)[^\s/@]+@/gi, '$1***@');
 
-      console.log('🔄 Cloning repository:', scrubSecrets(githubUrl));
-      console.log('📁 Destination:', cloneDir);
+      log.info('🔄 Cloning repository:', scrubSecrets(githubUrl));
+      log.info('📁 Destination:', cloneDir);
 
       // Execute git clone
       const gitProcess = spawn('git', ['clone', '--depth', '1', githubUrl, cloneDir], {
@@ -469,16 +475,18 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
 
       gitProcess.stderr.on('data', (data) => {
         stderr += data.toString();
-        console.log('Git stderr:', scrubSecrets(data.toString()));
+        // 按块回调,一次 clone 能刷十几行 —— 默认档位下不打。
+        // 真失败时下面的 log.error 会把完整 stderr 一次性带出来。
+        log.debug('git stderr:', scrubSecrets(data.toString()));
       });
 
       gitProcess.on('close', (code) => {
         if (code === 0) {
-          console.log('✅ Repository cloned successfully');
+          log.info('✅ Repository cloned successfully');
           resolve(cloneDir);
         } else {
           const cleanStderr = scrubSecrets(stderr);
-          console.error('❌ Git clone failed:', cleanStderr);
+          log.error('❌ Git clone failed:', cleanStderr);
           reject(new Error(`Git clone failed: ${cleanStderr}`));
         }
       });
@@ -510,27 +518,27 @@ async function cleanupProject(projectPath, sessionId = null) {
   try {
     // Only clean up projects in the external-projects directory
     if (!projectPath.includes('.claude/external-projects')) {
-      console.warn('⚠️ Refusing to clean up non-external project:', projectPath);
+      log.warn('⚠️ Refusing to clean up non-external project:', projectPath);
       return;
     }
 
-    console.log('🧹 Cleaning up project:', projectPath);
+    log.info('🧹 Cleaning up project:', projectPath);
     await fs.rm(projectPath, { recursive: true, force: true });
-    console.log('✅ Project cleaned up');
+    log.info('✅ Project cleaned up');
 
     // Also clean up the Claude session directory if sessionId provided
     if (sessionId) {
       try {
         const sessionPath = path.join(os.homedir(), '.claude', 'sessions', sessionId);
-        console.log('🧹 Cleaning up session directory:', sessionPath);
+        log.info('🧹 Cleaning up session directory:', sessionPath);
         await fs.rm(sessionPath, { recursive: true, force: true });
-        console.log('✅ Session directory cleaned up');
+        log.info('✅ Session directory cleaned up');
       } catch (error) {
-        console.error('⚠️ Failed to clean up session directory:', error.message);
+        log.error('⚠️ Failed to clean up session directory:', error.message);
       }
     }
   } catch (error) {
-    console.error('❌ Failed to clean up project:', error);
+    log.error('❌ Failed to clean up project:', error);
   }
 }
 
@@ -579,11 +587,37 @@ class ResponseCollector {
     this.messages = [];
     this.sessionId = null;
     this.userId = userId;
+    /**
+     * 已缓冲字节数与是否已经截断过。
+     *
+     * 原来这里是无上限的 `push`,注释写着 "Store ALL messages for now" —— 而
+     * 缓冲的是完整帧:`tool_result` 是整份文件内容、`tool_use` 是整份写入内容、
+     * `changed_files` 带 20KB diff。`stream:false` 跑一个读几十个大文件的长任务,
+     * 单请求就是几十到几百 MB 常驻,并发几个直接 OOM;而且回合结束才释放,
+     * 一次性路径悬死时(见 claude-sdk 的看门狗)**永不释放**。
+     *
+     * 上限之外的帧直接丢:非流式的返回值本来就只用得上 assistant 文本和用量汇总,
+     * 中间过程帧在这条路上没有消费者。丢弃时留一条 `truncated` 标记,免得调用方
+     * 以为自己拿到的是完整过程。
+     */
+    this.bufferedBytes = 0;
+    this.truncated = false;
   }
 
   send(data) {
-    // Store ALL messages for now - we'll filter when returning
-    this.messages.push(data);
+    // 无上限缓冲会 OOM(见构造函数注释)。超限之后只更新 sessionId,不再囤帧。
+    const size = ResponseCollector.approximateBytes(data);
+    if (this.bufferedBytes + size > ResponseCollector.MAX_BUFFERED_BYTES) {
+      if (!this.truncated) {
+        this.truncated = true;
+        log.warn(
+          `[Agent] 非流式响应缓冲超过 ${ResponseCollector.MAX_BUFFERED_BYTES} 字节,后续过程帧不再囤积`,
+        );
+      }
+    } else {
+      this.bufferedBytes += size;
+      this.messages.push(data);
+    }
 
     // Extract sessionId if present
     if (typeof data === 'string') {
@@ -614,6 +648,27 @@ class ResponseCollector {
 
   getMessages() {
     return this.messages;
+  }
+
+  /** 缓冲被截断过吗(调用方据此知道 messages 不是完整过程)。 */
+  wasTruncated() {
+    return this.truncated;
+  }
+
+  /**
+   * 一帧的近似字节数。
+   *
+   * 用 stringify 而不是逐字段累加:帧的形状由 provider 决定,逐字段等于在这里
+   * 复刻一份 provider 的数据结构,那份复刻迟早漂开 —— 而漂开的表现是"上限又不准了",
+   * 没人会发现。失败时给个下限,别让一条畸形帧打断整轮。
+   */
+  static approximateBytes(data) {
+    if (typeof data === 'string') return data.length;
+    try {
+      return JSON.stringify(data)?.length ?? 256;
+    } catch {
+      return 256;
+    }
   }
 
   /**
@@ -719,6 +774,15 @@ class ResponseCollector {
   }
 }
 
+/**
+ * 非流式缓冲的字节上限。
+ *
+ * 16 MB:非流式的返回值只用得上 assistant 文本和用量汇总,这个量级对正常回合
+ * 绰绰有余;真正会撑爆的是"读几十个大文件"那种任务,而它们的过程帧在这条路上
+ * 本来就没有消费者。
+ */
+ResponseCollector.MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
+
 // ===============================
 // External API Endpoint
 // ===============================
@@ -778,7 +842,7 @@ router.post('/sessions', validateExternalApiKey, async (req, res) => {
       projectPath: finalProjectPath,
     });
   } catch (error) {
-    console.error('[Agent API] 领会话号失败:', error);
+    log.error('[Agent API] 领会话号失败:', error);
     return res.status(400).json({ error: error.message });
   }
 });
@@ -797,14 +861,24 @@ router.get('/sessions', validateExternalApiKey, (req, res) => {
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     const includeArchived = req.query.includeArchived === '1' || req.query.includeArchived === 'true';
 
-    const rows = [
-      ...sessionsDb.getAllSessions(),
-      ...(includeArchived ? sessionsDb.getArchivedSessions() : []),
-    ]
-      .filter((row) => canViewerSeeSession(row.session_id, viewer))
-      .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+    /**
+     * 可见性、排序、分页**全在 SQL 里做**。
+     *
+     * 这里原来是 `getAllSessions()` 整表捞出来,再 `.filter(canViewerSeeSession)` ——
+     * 而那个函数每行要查库。better-sqlite3 是**同步**的,于是 4000 条会话就是
+     * 4000+ 次同步查询把**事件循环整个按住**:实测 219ms 内所有人的 WebSocket 帧、
+     * 所有 HTTP 请求全部停摆,而这只是别人调了一次列表接口。
+     *
+     * 而且"先捞后过滤"根本没法分页(先分页再过滤,每页剩几条全看运气),
+     * 所以连 total 都得靠捞全表才算得出来。下推之后同数据量 2.18ms,total 由 COUNT 给。
+     *
+     * 归档面板在 E10 轮做过同一件事,当时只改了那一处。
+     */
+    const { rows, total } = sessionsService.listVisibleSessionsPage(viewer, limit, offset, {
+      includeArchived,
+    });
 
-    const page = rows.slice(offset, offset + limit).map((row) => ({
+    const page = rows.map((row) => ({
       sessionId: row.session_id,
       provider: row.provider,
       projectPath: row.project_path,
@@ -816,9 +890,9 @@ router.get('/sessions', validateExternalApiKey, (req, res) => {
       sessionPath: `/session/${row.session_id}`,
     }));
 
-    return res.json({ success: true, total: rows.length, offset, limit, sessions: page });
+    return res.json({ success: true, total, offset, limit, sessions: page });
   } catch (error) {
-    console.error('[Agent API] 列会话失败:', error);
+    log.error('[Agent API] 列会话失败:', error);
     return res.status(500).json({ error: 'Failed to list sessions' });
   }
 });
@@ -885,7 +959,7 @@ router.post('/sessions/:sessionId/abort', validateExternalApiKey, async (req, re
     chatRunRegistry.completeRun(sessionId, { exitCode: success ? 0 : 1, aborted: true });
     return res.json({ success: true, aborted: success, sessionId });
   } catch (error) {
-    console.error('[Agent API] 中止失败:', error);
+    log.error('[Agent API] 中止失败:', error);
     return res.status(500).json({ error: 'Failed to abort run' });
   }
 });
@@ -1241,6 +1315,18 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       // 根目录可用 WORKSPACES_ROOT 环境变量改。
       await assertInsideWorkspaceRoot(finalProjectPath);
 
+      /**
+       * fj:根目录包含判定只回答"这条路径在不在工作区里",**不回答"这个项目归谁"**。
+       *
+       * 于是任何持自助 API key 的用户,只要知道路径就能往**别人的项目**里以
+       * bypassPermissions 起 Claude —— 会话归属这道门(下面那段 `sessionId` 的
+       * 判定)守住了"续别人的会话",却守不住"在别人的项目里新开一条"。
+       *
+       * 复用与 MCP、`/api/commands` 同一道现成的门:已登记项目查可见性,
+       * 未登记路径按新建判定。失败统一 404,不给存在性探针。
+       */
+      await assertViewerMayCreateSessionAt(readRequestViewer(req), finalProjectPath);
+
       // Verify the path exists
       try {
         await fs.access(finalProjectPath);
@@ -1260,9 +1346,9 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     // 恰在公共目录下则对全服务器公开。两个方向都不是"归调用者所有"的本意。
     const registrationResult = projectsDb.createProjectPath(finalProjectPath, null, req.user.id);
     if (registrationResult.outcome === 'active_conflict') {
-      console.log('Project registration already exists for:', finalProjectPath);
+      log.info('Project registration already exists for:', finalProjectPath);
     } else {
-      console.log('Project registered:', registrationResult.project);
+      log.info('Project registered:', registrationResult.project);
     }
 
     /**
@@ -1372,9 +1458,14 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         model,
         effort,
         permissionMode: 'bypassPermissions',
+        // fj:异步这条漏了 actorUsername(同文件的同步路径有)。漏了的后果是
+        // 配了 PRISM_ALLOW_BYPASS_USERS 之后,异步 API **恒定**被降级成
+        // acceptEdits —— 而它背后没有人看审批框,只会一路挂到 1 小时审批兜底。
+        actorUsername: req.user?.username ?? null,
+        usageSource: 'api',   // fg:外部接口跑的账单独一档
         oneShot: true,
       }, run.writer).catch((error) => {
-        console.error('[Agent API] 异步回合失败', {
+        log.error('[Agent API] 异步回合失败', {
           sessionId: appSessionId,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -1413,6 +1504,27 @@ router.post('/', validateExternalApiKey, async (req, res) => {
           sessionId: appSessionId,
         });
       }
+      /**
+       * 客户端断开就中止这一轮。
+       *
+       * 之前这个文件里一处 `req.on('close')` 都没有。SSE 客户端断开(超时、反代掐、
+       * 用户关页)之后 `res.write()` 往已 destroy 的 socket 写是**静默丢弃** ——
+       * 不崩,也不报错,于是回合会一路跑到底:CLI 子进程继续几十分钟,`syncRun`
+       * 一直占着运行位,该会话对网页端表现为"有回合在跑"(消息只能排队),
+       * 调用方重试同一会话拿到 409。
+       *
+       * `once` 而不是 `on`:'close' 只会来一次,但 Express 的 res 在某些
+       * 反代组合下会转发多次,重复 abort 是无谓的噪声。
+       *
+       * 中止失败不抛 —— 断开时已经没人接这条错误了,记一行就够。
+       */
+      req.once('close', () => {
+        if (res.writableEnded) return; // 正常收尾,不是断开
+        log.warn(`[Agent] 客户端断开,中止会话 ${appSessionId} 的同步回合`);
+        void Promise.resolve(abortClaudeSDKSession('', { runId: appSessionId }))
+          .catch((error) => log.warn('[Agent] 断开后中止失败:', error?.message ?? error));
+      });
+
       // 同上:同步路径的用户指令也落显示日志。
       sessionMessagesDb.append(appSessionId, {
         id: generateMessageId('user'),
@@ -1455,7 +1567,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
     // Start the session (Claude is the only provider)
     if (provider === 'claude') {
-      console.log('🤖 Starting Claude SDK session');
+      log.info('🤖 Starting Claude SDK session');
 
       try {
         await queryClaudeSDK(message.trim(), {
@@ -1469,6 +1581,9 @@ router.post('/', validateExternalApiKey, async (req, res) => {
           model: model,
           effort,
           permissionMode: 'bypassPermissions', // Bypass all permissions for API calls
+          // 服务端 bypass 白名单要认人(见 claude-sdk 的 readBypassAllowlist)
+          actorUsername: req.user?.username ?? null,
+          usageSource: 'api',   // fg:外部接口跑的账单独一档
           oneShot: true // API turns stay on the per-turn path (no resident runtime)
         }, writer);
       } finally {
@@ -1494,7 +1609,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         try {
           sessionsDb.assignProviderSessionId(createWithSessionId, writer.getSessionId() || createWithSessionId);
         } catch (error) {
-          console.warn('[Agent API] 回填 provider session id 失败:', error?.message || error);
+          log.warn('[Agent API] 回填 provider session id 失败:', error?.message || error);
         }
       }
     }
@@ -1505,7 +1620,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
     if (createBranch || createPR) {
       try {
-        console.log('🔄 Starting GitHub branch/PR creation workflow...');
+        log.info('🔄 Starting GitHub branch/PR creation workflow...');
 
         // Get GitHub token
         const tokenToUse = githubToken || githubTokensDb.getActiveGithubToken(req.user.id);
@@ -1520,13 +1635,13 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         // Get GitHub URL - either from parameter or from git remote
         let repoUrl = githubUrl;
         if (!repoUrl) {
-          console.log('🔍 Getting GitHub URL from git remote...');
+          log.info('🔍 Getting GitHub URL from git remote...');
           try {
             repoUrl = await getGitRemoteUrl(finalProjectPath);
             if (!repoUrl.includes('github.com')) {
               throw new Error('Project does not have a GitHub remote configured');
             }
-            console.log(`✅ Found GitHub remote: ${repoUrl}`);
+            log.info(`✅ Found GitHub remote: ${repoUrl}`);
           } catch (error) {
             throw new Error(`Failed to get GitHub remote URL: ${error.message}`);
           }
@@ -1534,12 +1649,12 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
         // Parse GitHub URL to get owner and repo
         const { owner, repo } = parseGitHubUrl(repoUrl);
-        console.log(`📦 Repository: ${owner}/${repo}`);
+        log.info(`📦 Repository: ${owner}/${repo}`);
 
         // Use provided branch name or auto-generate from message
         const finalBranchName = branchName || autogenerateBranchName(message);
         if (branchName) {
-          console.log(`🌿 Using provided branch name: ${finalBranchName}`);
+          log.info(`🌿 Using provided branch name: ${finalBranchName}`);
 
           // Validate custom branch name
           const validation = validateBranchName(finalBranchName);
@@ -1547,12 +1662,12 @@ router.post('/', validateExternalApiKey, async (req, res) => {
             throw new Error(`Invalid branch name: ${validation.error}`);
           }
         } else {
-          console.log(`🌿 Auto-generated branch name: ${finalBranchName}`);
+          log.info(`🌿 Auto-generated branch name: ${finalBranchName}`);
         }
 
         if (createBranch) {
           // Create and checkout the new branch locally
-          console.log('🔄 Creating local branch...');
+          log.info('🔄 Creating local branch...');
           const checkoutProcess = spawn('git', ['checkout', '-b', finalBranchName], {
             cwd: finalProjectPath,
             stdio: 'pipe'
@@ -1563,19 +1678,19 @@ router.post('/', validateExternalApiKey, async (req, res) => {
             checkoutProcess.stderr.on('data', (data) => { stderr += data.toString(); });
             checkoutProcess.on('close', (code) => {
               if (code === 0) {
-                console.log(`✅ Created and checked out local branch '${finalBranchName}'`);
+                log.info(`✅ Created and checked out local branch '${finalBranchName}'`);
                 resolve();
               } else {
                 // Branch might already exist locally, try to checkout
                 if (stderr.includes('already exists')) {
-                  console.log(`ℹ️ Branch '${finalBranchName}' already exists locally, checking out...`);
+                  log.info(`ℹ️ Branch '${finalBranchName}' already exists locally, checking out...`);
                   const checkoutExisting = spawn('git', ['checkout', finalBranchName], {
                     cwd: finalProjectPath,
                     stdio: 'pipe'
                   });
                   checkoutExisting.on('close', (checkoutCode) => {
                     if (checkoutCode === 0) {
-                      console.log(`✅ Checked out existing branch '${finalBranchName}'`);
+                      log.info(`✅ Checked out existing branch '${finalBranchName}'`);
                       resolve();
                     } else {
                       reject(new Error(`Failed to checkout existing branch: ${stderr}`));
@@ -1589,7 +1704,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
           });
 
           // Push the branch to remote
-          console.log('🔄 Pushing branch to remote...');
+          log.info('🔄 Pushing branch to remote...');
           const pushProcess = spawn('git', ['push', '-u', 'origin', finalBranchName], {
             cwd: finalProjectPath,
             stdio: 'pipe'
@@ -1602,12 +1717,12 @@ router.post('/', validateExternalApiKey, async (req, res) => {
             pushProcess.stderr.on('data', (data) => { stderr += data.toString(); });
             pushProcess.on('close', (code) => {
               if (code === 0) {
-                console.log(`✅ Pushed branch '${finalBranchName}' to remote`);
+                log.info(`✅ Pushed branch '${finalBranchName}' to remote`);
                 resolve();
               } else {
                 // Check if branch exists on remote but has different commits
                 if (stderr.includes('already exists') || stderr.includes('up-to-date')) {
-                  console.log(`ℹ️ Branch '${finalBranchName}' already exists on remote, using existing branch`);
+                  log.info(`ℹ️ Branch '${finalBranchName}' already exists on remote, using existing branch`);
                   resolve();
                 } else {
                   reject(new Error(`Failed to push branch: ${stderr}`));
@@ -1624,7 +1739,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
         if (createPR) {
           // Get commit messages to generate PR description
-          console.log('🔄 Generating PR title and description...');
+          log.info('🔄 Generating PR title and description...');
           const commitMessages = await getCommitMessages(finalProjectPath, 5);
 
           // Use the first commit message as the PR title, or fallback to the agent message
@@ -1639,10 +1754,10 @@ router.post('/', validateExternalApiKey, async (req, res) => {
           }
           prBody += '\n\n---\n*This pull request was automatically created by Prism.ai Agent.*';
 
-          console.log(`📝 PR Title: ${prTitle}`);
+          log.info(`📝 PR Title: ${prTitle}`);
 
           // Create the pull request
-          console.log('🔄 Creating pull request...');
+          log.info('🔄 Creating pull request...');
           prInfo = await createGitHubPR(octokit, owner, repo, finalBranchName, prTitle, prBody, 'main');
         }
 
@@ -1663,7 +1778,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         }
 
       } catch (error) {
-        console.error('❌ GitHub branch/PR creation error:', error);
+        log.error('❌ GitHub branch/PR creation error:', error);
 
         // Send error but don't fail the entire request
         if (stream) {
@@ -1718,7 +1833,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     }
 
   } catch (error) {
-    console.error('❌ External session error:', error);
+    log.error('❌ External session error:', error);
 
     // Clean up on error
     if (finalProjectPath && cleanup && githubUrl) {

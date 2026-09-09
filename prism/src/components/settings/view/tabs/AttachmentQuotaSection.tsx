@@ -3,6 +3,7 @@ import { HardDrive } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { authenticatedFetch } from '../../../../utils/api';
+import { formatBytes } from '../../../../utils/formatBytes';
 
 type QuotaRow = {
   userId: number;
@@ -76,7 +77,7 @@ export default function AttachmentQuotaSection() {
         <HardDrive className="h-4 w-4 text-muted-foreground" />
         <span className="text-sm font-medium">{t('server.quotaTitle', '附件配额')}</span>
         <span className="ml-auto font-mono text-[11px] text-muted-foreground">
-          {t('server.quotaDefault', '全局默认')} {(defaultQuotaBytes / 1024 ** 3).toFixed(1)} GB
+          {t('server.quotaDefault', '全局默认')} {formatBytes(defaultQuotaBytes)}
         </span>
       </div>
 

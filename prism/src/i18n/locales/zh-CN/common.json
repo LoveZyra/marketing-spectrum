@@ -1,8 +1,7 @@
 {
   "buttons": {
     "save": "保存",
-    "cancel": "取消",
-    "create": "创建"
+    "cancel": "取消"
   },
   "tabs": {
     "chat": "聊天",
@@ -13,9 +12,6 @@
   },
   "status": {
     "completed": "已完成"
-  },
-  "common": {
-    "version": "版本"
   },
   "mainContent": {
     "loading": "正在加载棱镜",
@@ -30,7 +26,6 @@
     "export": "导出",
     "persistentSession": "常驻会话",
     "persistentSessionHint": "这段对话在服务端挂着常驻运行时，下一轮无需重建进程",
-    "exporting": "导出中…",
     "tabNeedsProject": "「{{tab}}」需要先选一个项目 —— 从左侧选一个就会打开。",
     "more": "更多",
     "copyProjectPath": "复制项目路径",
@@ -158,6 +153,12 @@
     "errors": {
       "providePath": "请提供工作区路径",
       "failedToCreate": "创建工作区失败"
+    },
+    "template": {
+      "label": "从模板创建",
+      "none": "不使用模板(空目录)",
+      "help": "模板会把一棵现成的目录树复制进新项目(CLAUDE.md、目录结构等)。目标目录里已存在的同名文件不会被覆盖。",
+      "stats": "{{count}} 个文件 · {{size}}"
     }
   },
   "notifications": {

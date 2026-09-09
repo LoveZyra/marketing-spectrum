@@ -38,7 +38,11 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { createLogger } from '@/shared/logger.js';
+
 import { getDataDir } from '../utils/runtime-paths.js';
+
+const log = createLogger('git');
 
 const CHECKPOINT_TYPE = 'git-v2';
 const MAX_UNTRACKED_FILES = 2000;
@@ -393,7 +397,7 @@ async function snapshotUntracked(cwd, checkpointDir, paths, { startBytes = 0, ma
       // agent 改过的那一版,而接口报 ok:true。与文件头"Restore is
       // transactional"的承诺不符。现在报上去,由调用方并入 incomplete 判定。
       failed.push(relPath);
-      console.warn(`[Checkpoint] Skipping untracked snapshot for ${relPath}:`, error.message);
+      log.warn(`[Checkpoint] Skipping untracked snapshot for ${relPath}:`, error.message);
     }
   }
 
@@ -479,7 +483,7 @@ async function createCheckpointLocked(cwd, context = {}) {
     // 2. Pin the commit with a dedicated ref so GC cannot collect it.
     const refResult = await run(cwd, ['update-ref', `refs/prism/checkpoints/${id}`, stash]);
     if (!refResult.ok) {
-      console.warn('[Checkpoint] Failed to pin stash ref:', refResult.stderr);
+      log.warn('[Checkpoint] Failed to pin stash ref:', refResult.stderr);
     }
   }
 
@@ -574,7 +578,7 @@ export async function updateCheckpointSession(id, sessionId) {
       JSON.stringify(meta, null, 2)
     );
   } catch (error) {
-    console.warn(`[Checkpoint] Failed to update session id for ${id}:`, error.message);
+    log.warn(`[Checkpoint] Failed to update session id for ${id}:`, error.message);
   }
   return meta;
 }
@@ -653,7 +657,7 @@ async function removeUntrackedCreatedAfter(cwd, meta) {
     try {
       await fs.rm(path.join(cwd, relPath), { force: true });
     } catch (error) {
-      console.warn(`[Checkpoint] Failed to remove new untracked file ${relPath}:`, error.message);
+      log.warn(`[Checkpoint] Failed to remove new untracked file ${relPath}:`, error.message);
     }
   }
 }
@@ -673,7 +677,7 @@ async function restoreUntrackedSnapshot(cwd, meta) {
         await fs.copyFile(source, target);
       }
     } catch (error) {
-      console.warn(`[Checkpoint] Failed to restore untracked file ${entry.path}:`, error.message);
+      log.warn(`[Checkpoint] Failed to restore untracked file ${entry.path}:`, error.message);
     }
   }
 }
@@ -817,6 +821,31 @@ export async function restoreCheckpoint(id, options = {}) {
       }
     }
 
+    /**
+     * fj:**紧贴 `applyCheckpoint` 再复查一次。**
+     *
+     * 上面那次复查已经把窗口从"路由层"压到了"进锁之后",但它和真正动树之间
+     * 还夹着两件耗时的事:`commitsSinceCheckpoint`(要跑 git log)和
+     * **安全 checkpoint**(含 200MB 预算的未跟踪快照,大仓库能到几十秒)。
+     * 聊天回合不走 cwd 锁,所以这段窗口里任何人 `chat.send`,CLI 就会和
+     * `reset --hard` 同时写同一棵树。
+     *
+     * 这一次复查之后就只剩 `applyCheckpoint` 本身了 —— 窗口压到最小。
+     * 复查失败时安全 checkpoint 已经建好,不会丢东西(它就是一个多余的还原点)。
+     */
+    if (typeof options.assertNotBusy === 'function') {
+      const busyNow = await options.assertNotBusy(meta);
+      if (busyNow) {
+        return {
+          ok: false,
+          status: 409,
+          code: 'DIRECTORY_BUSY',
+          ...busyNow,
+          safetyCheckpointId: safety?.id || null,
+        };
+      }
+    }
+
     try {
       const applyInfo = await applyCheckpoint(cwd, meta);
       const result = {
@@ -835,7 +864,7 @@ export async function restoreCheckpoint(id, options = {}) {
       }
       return result;
     } catch (error) {
-      console.error('[Checkpoint] Restore failed, rolling back to safety checkpoint:', error.message);
+      log.error('[Checkpoint] Restore failed, rolling back to safety checkpoint:', error.message);
       if (safety) {
         try {
           await applyCheckpoint(cwd, safety);
@@ -1085,7 +1114,7 @@ export async function pruneCheckpoints() {
           }
           await fs.rm(path.join(getCheckpointRoot(), meta.id), { recursive: true, force: true });
         } catch (error) {
-          console.warn(`[Checkpoint] Prune failed for ${meta.id}:`, error.message);
+          log.warn(`[Checkpoint] Prune failed for ${meta.id}:`, error.message);
         }
       }
     }

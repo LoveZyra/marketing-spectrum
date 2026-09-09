@@ -141,3 +141,35 @@ describe('F12 · includeTools', () => {
     assert.ok(md.length < 12_000);
   });
 });
+
+/**
+ * fj:导出里工具调用与结果必须能配对。
+ *
+ * 字段名原来写成 `toolUseId`,而归一化消息上的真名是 `toolId`;路由又用
+ * `as ExportableMessage[]` 强转,类型系统因此完全静默 —— 运行时恒为 undefined,
+ * JSON 导出里每个 tool_call / tool_result 的 `toolUseId` 都是 null,
+ * 而 JSON 导出的自述目标就是"喂给别的工具做二次分析"。
+ */
+describe('fj:导出的工具关联 id', () => {
+  const messages = [
+    { kind: 'tool_use', toolName: 'Read', toolId: 'tu_1', toolInput: { path: '/a' }, timestamp: 'T1' },
+    { kind: 'tool_result', toolId: 'tu_1', content: 'ok', timestamp: 'T2' },
+  ] as never[];
+
+  test('JSON 导出把 toolId 输出成对外的 toolUseId', () => {
+    const json = JSON.parse(renderJsonExport(
+      { title: 't', sessionId: 's', exportedAt: 'X', messages },
+      { includeTools: true },
+    ));
+    assert.equal(json.messages[0].toolUseId, 'tu_1');
+    assert.equal(json.messages[1].toolUseId, 'tu_1', '结果必须带着同一个 id,否则连不回调用');
+  });
+
+  test('结果块的摘要按 toolId 反查工具名 —— 不再是"结果 · 结果"', () => {
+    const md = renderMarkdownExport(
+      { title: 't', sessionId: 's', exportedAt: 'X', messages },
+      { includeTools: true },
+    );
+    assert.ok(md.includes('结果 · Read'), `结果块该显示工具名,实际:\n${md}`);
+  });
+});

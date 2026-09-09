@@ -1,8 +1,7 @@
 {
   "buttons": {
     "save": "Salva",
-    "cancel": "Annulla",
-    "create": "Crea"
+    "cancel": "Annulla"
   },
   "tabs": {
     "chat": "Chat",
@@ -11,9 +10,6 @@
   },
   "status": {
     "completed": "Completato"
-  },
-  "common": {
-    "version": "Versione"
   },
   "mainContent": {
     "loading": "Caricamento Prism",

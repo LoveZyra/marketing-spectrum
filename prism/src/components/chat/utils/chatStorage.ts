@@ -16,18 +16,37 @@ export const safeLocalStorage = {
       localStorage.setItem(key, value);
     } catch (error: any) {
       if (error?.name === 'QuotaExceededError') {
-        console.warn('localStorage quota exceeded, clearing old data');
+        console.warn('localStorage quota exceeded, clearing old drafts');
 
-        const keys = Object.keys(localStorage);
-        const draftKeys = keys.filter((k) => k.startsWith('draft_input_') || k.startsWith('queued_message_'));
-        draftKeys.forEach((k) => {
+        /**
+         * fj:配额兜底**只清草稿**,绝不碰 `queued_message_*`。
+         *
+         * 那不是缓存,是**还没发出去、正等着自动重发的消息**。原来两类一起删,
+         * 于是任意一次写入撞上配额,所有会话里排队的消息就静默消失 ——
+         * `useQueuedMessageAutoSend` 与输入框的 flush 都读不到键,用户既不会
+         * 收到提示,也不会看到那条消息发出去。
+         *
+         * 而且草稿键本身**只增不减**(会话删除时没有任何清理调用点),
+         * 所以配额撞线是迟早的事,不是异常路径。清的时候按 key 顺序删一半,
+         * 不是全删 —— 用户当前正在打的那条草稿也在这堆里。
+         */
+        const draftKeys = Object.keys(localStorage).filter((k) => k.startsWith('draft_input_'));
+        // 保守起见留下最后写入的那一批(key 顺序不保证时间序,但删一半足够腾地方)
+        const toDrop = draftKeys.slice(0, Math.max(1, Math.ceil(draftKeys.length / 2)));
+        toDrop.forEach((k) => {
           localStorage.removeItem(k);
         });
 
         try {
           localStorage.setItem(key, value);
-        } catch (retryError) {
-          console.error('Failed to save to localStorage even after cleanup:', retryError);
+        } catch {
+          // 还是不够 —— 这时才把剩下的草稿也清掉,但排队消息仍然留着。
+          draftKeys.forEach((k) => localStorage.removeItem(k));
+          try {
+            localStorage.setItem(key, value);
+          } catch (retryError) {
+            console.error('Failed to save to localStorage even after cleanup:', retryError);
+          }
         }
       } else {
         console.error('localStorage error:', error);

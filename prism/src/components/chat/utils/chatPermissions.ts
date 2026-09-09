@@ -11,7 +11,18 @@ export function buildClaudeToolPermissionEntry(toolName?: string, toolInput?: un
   const command = typeof parsed?.command === 'string' ? parsed.command.trim() : '';
   if (!command) return toolName;
 
-  const tokens = command.split(/\s+/);
+  /**
+   * fj:只按**第一段**子命令生成条目。
+   *
+   * 服务端现在要求每一段都命中前缀(见 claude-sdk 的 `matchesToolPermission`),
+   * 所以从 `git status; rm -rf x` 生成 `Bash(git status:*)` 是对的 —— 下次再来
+   * 一条带 `rm` 的复合命令,它那一段不命中,确认框照样弹。
+   *
+   * 反过来,如果这里按整串生成,条目会长成 `Bash(git:*)` 之类过宽的形状,
+   * 用户以为自己只批准了一条命令。
+   */
+  const firstSegment = command.split(/[;&|\n]/)[0]?.trim() || command;
+  const tokens = firstSegment.split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return toolName;
 
   if (tokens[0] === 'git' && tokens[1]) {

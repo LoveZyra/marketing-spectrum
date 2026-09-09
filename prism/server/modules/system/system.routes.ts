@@ -4,6 +4,8 @@ import path from 'node:path';
 import express, { type Router } from 'express';
 
 import { getConnection } from '@/modules/database/index.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('system');
 
 type SystemPublicRouterDependencies = {
   /** 安装方式,固定为 'npm'(tar 包部署)。 */
@@ -52,7 +54,7 @@ export function createSystemPublicRouter(dependencies: SystemPublicRouterDepende
       getConnection().prepare('SELECT 1').get();
       dbState = 'ok';
     } catch (error) {
-      console.error('[Ready] Database check failed:', (error as Error).message);
+      log.error('[Ready] Database check failed:', (error as Error).message);
     }
 
     const watcherState: 'ok' | 'pending' | 'unknown' = isWatcherReady

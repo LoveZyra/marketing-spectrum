@@ -260,8 +260,19 @@ export type CostCommandData = {
     input?: number;
     output?: number;
   };
-  /** 会话累计费用(美元),来自 SDK result 帧;拿不到时缺席。 */
+  /** 会话累计费用(美元),来自 SDK result 帧;拿不到时缺席。**只活在本次页面里。** */
   costUsd?: number;
+  /**
+   * fh:服务端台账(`usage_records`)里这条会话的累计花销。
+   * 和上面那个 `costUsd` 并列而不是替代 —— 那个刷新就没,这个跨重启跨设备都在,
+   * 口径也不同(那个是最后一个累计值,这个是历次回合的增量之和)。
+   */
+  ledger?: {
+    runs?: number;
+    costUsd?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+  };
   provider?: string;
   model?: string;
 };
@@ -414,6 +425,27 @@ export function useChatComposerState({
   // to currentSessionId for a just-established session that hasn't been
   // handed back to the parent's `selectedSession` prop yet.
   const sessionKey = selectedSession?.id || currentSessionId || null;
+  /**
+   * fj:上传是异步的,回来时用户可能已经切走了 —— 结果必须比对归属再落地。
+   *
+   * ref 而不是闭包里的 `sessionKey`:上传函数是 `useCallback` 出去的,闭包里那个
+   * 是**发起时**的值,恒等于自己,守不住任何东西。
+   */
+  const sessionKeyRef = useRef<string | null>(sessionKey);
+  sessionKeyRef.current = sessionKey;
+
+  /**
+   * fj:提交重入闸。
+   *
+   * `handleSubmit` 里有两处 await(图片上传、建会话 POST),而清空输入框和
+   * `onSessionProcessing`(它才让 `isLoading` 变真)都在 await **之后** ——
+   * 等待期间输入框里还是原文、按钮 `disabled` 也只看 `!input.trim()`。
+   * 于是"觉得没反应又按一次回车"会完整重跑一遍:图片重复上传、同一条消息发两遍;
+   * 新会话的第一条更糟 —— **建出两个会话**,页面只跳到后一个,前一个在后台
+   * 跑着一整轮(acceptEdits/bypassPermissions 档下会真的改文件),用户看不到它。
+   */
+  const submittingRef = useRef(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   // 输入草稿的当前存储键(会话优先,新建会话页退回项目键)。
   const activeDraftKey = draftStorageKey(sessionKey, selectedProjectId);
   // ↑/↓ 历史回看状态;打字/发送/切会话都会清掉它。
@@ -425,6 +457,9 @@ export function useChatComposerState({
     }
     return restoreQueuedDraft(sessionKey);
   });
+  /** fj:同步副本 —— 离线入队时要读当前有没有一条在排,而闭包里那个可能是旧的。 */
+  const queuedDraftRef = useRef(queuedDraft);
+  queuedDraftRef.current = queuedDraft;
   // Which session the in-memory `queuedDraft` belongs to. On a session switch
   // there is one commit where `sessionKey` already points at the new session
   // while `queuedDraft` still holds the old session's draft; the persistence
@@ -655,6 +690,7 @@ export function useChatComposerState({
     commandQuery,
     showCommandMenu,
     selectedCommandIndex,
+    hoveredCommandIndex,
     resetCommandMenuState,
     handleCommandSelect,
     handleToggleCommandMenu,
@@ -762,7 +798,27 @@ export function useChatComposerState({
    * prism: parse document files server-side (PDF/DOCX/PPTX/XLSX/CSV/…)
    * and attach the extracted text to the next send.
    */
+  /**
+   * fj:异步上传结果的**归属守卫**。
+   *
+   * 三个上传入口(选文件、拖拽、抓链接)都是 await 之后无条件
+   * `setAttachedDocs([...previous, doc])`,没有任何会话/项目归属校验;而
+   * `ChatInterface` 在 `MainContent` 上没有 `key`,切会话不会重挂载 —— 所以这些
+   * setState 一定落在**新会话**的 composer 上。
+   *
+   * 后果不是"多一个 chip"那么轻:`/land` 回来的 `text` 是**旧项目** attachments
+   * 目录下的磁盘路径,用户在新会话里一发送,提示词里就带着一条跨项目路径交给
+   * 智能体去读 —— 这一层清理 effect 的注释里管它叫"一条跨项目的信息泄漏",
+   * 而那个 effect 只在切会话的那一刻清一次,拦不住之后才回来的上传。
+   */
+  const isStillSameSession = useCallback(
+    (owner: string | null) => sessionKeyRef.current === owner,
+    [],
+  );
+
   const handleDocFiles = useCallback(async (files: File[] | FileList) => {
+    // fj:发起时的归属快照(见 isStillSameSession)。
+    const uploadOwner = sessionKeyRef.current;
     const list = Array.from(files || []).slice(0, 5);
     for (const file of list) {
       if (!file || !file.size) continue;
@@ -786,6 +842,7 @@ export function useChatComposerState({
         if (!response.ok) {
           throw new Error(payload?.error || `解析失败(HTTP ${response.status})`);
         }
+        if (!isStillSameSession(uploadOwner)) return;
         setAttachedDocs((previous) => [...previous, {
           name: payload.name || file.name,
           text: payload.text || '',
@@ -814,7 +871,7 @@ export function useChatComposerState({
         setParsingDocsCount((count) => Math.max(0, count - 1));
       }
     }
-  }, [addMessage, selectedProjectId, currentSessionId]);
+  }, [addMessage, selectedProjectId, currentSessionId, isStillSameSession]);
 
   /** prism: land any attached file to disk and attach its disk path (generic
    * attach-any-file button). Routes to /api/documents/land, which writes the
@@ -822,6 +879,8 @@ export function useChatComposerState({
    * then rides with the prompt so the agent can publish (/upload-html) or
    * analyze (Read) it based on the user's message. */
   const handleAnyFiles = useCallback(async (files: File[] | FileList) => {
+    // fj:发起时的归属快照(见 isStillSameSession)。
+    const uploadOwner = sessionKeyRef.current;
     const list = Array.from(files || []).slice(0, 5);
     for (const [index, file] of list.entries()) {
       if (!file || !file.size) continue;
@@ -865,6 +924,7 @@ export function useChatComposerState({
             formData, reportPercent,
           );
         }
+        if (!isStillSameSession(uploadOwner)) return;
         setAttachedDocs((previous) => [...previous, {
           name: payload.name || file.name,
           text: payload.text || '',
@@ -894,10 +954,12 @@ export function useChatComposerState({
         setDocUploadProgress((current) => (current && current.fileName === file.name ? null : current));
       }
     }
-  }, [addMessage, selectedProjectId, currentSessionId]);
+  }, [addMessage, selectedProjectId, currentSessionId, isStillSameSession]);
 
   /** prism: fetch a public URL's readable text and attach it. */
   const attachDocFromUrl = useCallback(async (url: string) => {
+    // fj:发起时的归属快照(见 isStillSameSession)。
+    const uploadOwner = sessionKeyRef.current;
     const trimmed = (url || '').trim();
     if (!trimmed) return;
     setParsingDocsCount((count) => count + 1);
@@ -910,6 +972,7 @@ export function useChatComposerState({
       if (!response.ok) {
         throw new Error(payload?.error || `Fetch failed (${response.status})`);
       }
+      if (!isStillSameSession(uploadOwner)) return;
       setAttachedDocs((previous) => [...previous, {
         name: payload.title || payload.url || trimmed,
         text: payload.text || '',
@@ -929,7 +992,7 @@ export function useChatComposerState({
     } finally {
       setParsingDocsCount((count) => Math.max(0, count - 1));
     }
-  }, [addMessage]);
+  }, [addMessage, isStillSameSession]);
 
   const removeAttachedDoc = useCallback((index: number) => {
     setAttachedDocs((previous) => previous.filter((_, currentIndex) => currentIndex !== index));
@@ -1080,15 +1143,55 @@ export function useChatComposerState({
     slashCommands,
   ]);
 
-  const handleSubmit = useCallback(
+  const runSubmit = useCallback(
     async (
       event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>,
     ) => {
       event.preventDefault();
       const currentInput = inputValueRef.current;
-      if (!currentInput.trim() || !selectedProject) {
+      /**
+       * fj:只挂附件、不打字也该能发。
+       *
+       * 原来判据只有 `!currentInput.trim()`:粘一张截图或拖一个 PDF 进来直接
+       * 按回车,按钮是灰的、回车毫无反应、也没有任何文案说明要先写字 ——
+       * 用户只能猜。
+       */
+      const hasAttachments = attachedImages.length > 0 || attachedDocs.length > 0;
+      if ((!currentInput.trim() && !hasAttachments) || !selectedProject) {
         return;
       }
+
+      /**
+       * fj:附件还在上传时不能发。
+       *
+       * 此前 `handleSubmit` 只读当前的 `attachedDocs`,全程不看 `parsingDocsCount`;
+       * 而 `parsingDocs` 一路传到 `ChatComposer` **只用来画进度条**,发送按钮的
+       * `disabled` 只有 `!input.trim()`。大文件走分片上传要几十秒到几分钟,于是
+       * 消息**不带那个附件**就发出去了,附件随后挂到已清空的输入框上、跟着
+       * **下一条**消息发出 —— 而用户以为"文件已经给它了"。
+       */
+      if (parsingDocsCount > 0) {
+        emitToast({ message: '附件还在上传,等它传完再发送。', variant: 'error' });
+        return;
+      }
+
+
+      /**
+       * 发起这一次提交时**所在的会话**。
+       *
+       * 下面有网络等待(建会话、上传附件),等待期间用户完全可能切到别的会话去。
+       * 而收尾那段("清空输入框、清附件、收起展开态")用的是闭包里捕获的
+       * setter,它们作用在**当前**这个 composer 上 —— 也就是新会话的输入框。
+       *
+       * 实际序列:在 A 里附几张图 + 打字 → 点发送(上传要几秒)→ 切到 B →
+       * 在 B 里接着打字 → A 的上传完成 → **B 的输入框当场清空,刚打的字消失**;
+       * 紧接着草稿持久化 effect 以 B 的 key + 空字符串跑一遍,
+       * `removeItem(B_key)` 把 B 存着的草稿也删掉 —— 刷新都找不回来。
+       *
+       * 所以收尾前要比对:会话变了就只做与"那条会话"有关的事(清它的草稿),
+       * 不碰 composer。
+       */
+      const submitSessionKey = sessionKey;
 
       // prism: attached documents ride along as tagged text blocks.
       const docsBlock = buildDocsBlock(attachedDocs);
@@ -1107,6 +1210,9 @@ export function useChatComposerState({
         setInput('');
         inputValueRef.current = '';
         setAttachedImages([]);
+      // fj:文档附件也要一起清。原来只清图片,PDF 留在输入框上、跟着**下一条**
+      // 消息一起发出去 —— 两类附件行为不一致,而且都不是用户预期的。
+      setAttachedDocs([]);
         setUploadingImages(new Map());
         setImageErrors(new Map());
         resetCommandMenuState();
@@ -1177,10 +1283,24 @@ export function useChatComposerState({
       // 断网不再报错让用户自己重试:走排队通道(和"回合进行中"同一条路),
       // 排队卡立刻可见、可编辑可删除;连接恢复后自动重放 handleSubmit 发出。
       if (!isConnected) {
+        /**
+         * fj:已经有一条在排队时,**接上去而不是覆盖掉**。
+         *
+         * 服务端只收一条排队消息,前端这条离线通道也是"一个槽位"。原来直接
+         * `setQueuedDraft(...)` 覆盖,于是断网期间连发两条,第一条静默消失 ——
+         * 而排队卡上只显示一条,用户看不出少了什么。
+         *
+         * 接起来(排队那条在前)与「停止」时 `mergeQueuedIntoInput` 的取舍一致:
+         * 宁可让用户删一句,也不能替他丢一句。
+         */
         queuedDraftSessionRef.current = sessionKey;
+        const existingQueued = queuedDraftRef.current;
+        const sameSession = existingQueued && queuedDraftSessionRef.current === sessionKey;
         setQueuedDraft({
-          content: messageContent,
-          images: attachedImages,
+          content: sameSession && existingQueued.content.trim()
+            ? `${existingQueued.content}\n\n${messageContent}`
+            : messageContent,
+          images: sameSession ? [...existingQueued.images, ...attachedImages] : attachedImages,
           options: buildSendOptions(currentInput),
         });
         setAttachedDocs([]);
@@ -1241,8 +1361,18 @@ export function useChatComposerState({
       // Prism edit-and-rerun: a pending fork forces a brand-new session that
       // branches off the parent's native conversation (truncated at the forked
       // message), so the original thread is preserved untouched.
+      /**
+       * fj:分叉点**不在这里清**。
+       *
+       * 原来是取出即清空,而下面建会话的 POST 可能失败(网络抖动 / 5xx)——
+       * 那时 `pendingForkRef` 已经是 null、输入框里的字还在,用户看到
+       * 「新建会话失败」后再按一次回车,`targetSessionId` 就变成当前会话 id,
+       * 编辑后的消息被**追加进原会话**并在那里开跑一整轮,与"另起一支、
+       * 原线程不动"的意图正好相反,而且没有任何提示说分叉已经失效。
+       *
+       * 现在等到确认发出去了才清(见下面 sendMessage 之后)。
+       */
       const forkInfo = pendingForkRef.current;
-      pendingForkRef.current = null;
 
       // The conversation always has a stable backend-allocated session id
       // BEFORE the first websocket send: brand-new chats allocate one here
@@ -1320,6 +1450,9 @@ export function useChatComposerState({
         },
       });
 
+      // fj:确认发出去了才把分叉点清掉(失败时留着,用户重按一次仍然是分叉)。
+      if (sent) pendingForkRef.current = null;
+
       if (!sent) {
         // 连通性检查之后、真正 send 之前的一瞬掉线:同样入队,恢复后自动发。
         queuedDraftSessionRef.current = sessionKey || targetSessionId;
@@ -1371,17 +1504,22 @@ export function useChatComposerState({
       setIsUserScrolledUp(false);
       setTimeout(() => scrollToBottom(), 100);
 
-      setInput('');
-      inputValueRef.current = '';
-      resetCommandMenuState();
-      setAttachedImages([]);
-      setAttachedDocs([]);
-      setUploadingImages(new Map());
-      setImageErrors(new Map());
-      setIsTextareaExpanded(false);
+      // 等待期间用户切走了:composer 现在属于**另一条**会话,一个字都不许动。
+      // 这条会话自己的草稿仍然要清(它确实发出去了)—— activeDraftKey 是闭包里
+      // 捕获的旧 key,指的正是它,所以下面那段照常跑。
+      if (sessionKey === submitSessionKey) {
+        setInput('');
+        inputValueRef.current = '';
+        resetCommandMenuState();
+        setAttachedImages([]);
+        setAttachedDocs([]);
+        setUploadingImages(new Map());
+        setImageErrors(new Map());
+        setIsTextareaExpanded(false);
 
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
       }
 
       // 发送成功即清历史回看状态与草稿。
@@ -1412,7 +1550,34 @@ export function useChatComposerState({
       addMessage,
       setIsUserScrolledUp,
       slashCommands,
+      parsingDocsCount,
     ],
+  );
+
+  /**
+   * fj:对外的提交入口 —— 重入闸包在最外层。
+   *
+   * 单独一层包装,而不是给 `runSubmit` 整个函数体套 try/finally:那要给三百多行
+   * 重新缩进,改动面远大于修复本身,而每一行缩进变化都是一次 review 噪音。
+   */
+  const handleSubmit = useCallback(
+    async (
+      event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>,
+    ) => {
+      if (submittingRef.current) {
+        event.preventDefault();
+        return;
+      }
+      submittingRef.current = true;
+      setIsSubmitting(true);
+      try {
+        await runSubmit(event);
+      } finally {
+        submittingRef.current = false;
+        setIsSubmitting(false);
+      }
+    },
+    [runSubmit],
   );
 
   useEffect(() => {
@@ -1449,9 +1614,23 @@ export function useChatComposerState({
     const delay = wasLoading ? 0 : 750;
     const timer = setTimeout(() => {
       const dispatch = () => {
+        /**
+         * fj:**不覆盖用户正在打的字。**
+         *
+         * 冲队是把排队那条重新灌进输入框再走一遍提交路径,而这段时间里用户
+         * 完全可能已经在打下一句了(回合刚结束、输入框刚解锁,正是他会开始打字
+         * 的那一刻)。原来无条件 `setInput(queuedDraft.content)`,那句话当场没了。
+         *
+         * 有正在打的字就把两段按"排队那条在前"合起来 —— 与「停止」时
+         * `mergeQueuedIntoInput` 的取舍一致:宁可让用户删一句,也不能替他丢一句。
+         */
+        const typing = inputValueRef.current.trim();
+        const merged = typing
+          ? `${queuedDraft.content}\n\n${inputValueRef.current}`
+          : queuedDraft.content;
         setQueuedDraft(null);
-        setInput(queuedDraft.content);
-        inputValueRef.current = queuedDraft.content;
+        setInput(merged);
+        inputValueRef.current = merged;
         setAttachedImages(queuedDraft.images);
         setTimeout(() => {
           handleSubmitRef.current?.(createFakeSubmitEvent());
@@ -1600,7 +1779,21 @@ export function useChatComposerState({
       return;
     }
     if (queuedDraft?.content) {
-      writeQueuedMessage(sessionKey, { content: queuedDraft.content, options: queuedDraft.options });
+      /**
+       * fj:图片进不了 localStorage(`File` 序列化不了),而落盘的这份就是
+       * 刷新/换会话之后**唯一**还在的那份 —— 于是"我排了一条带图的消息"
+       * 会静默变成一条纯文本消息发出去,模型看不到图,用户也不知道。
+       *
+       * 在正文里补一行说明:发出去的内容如实反映"图没跟上",而不是假装
+       * 什么都没发生。图本身仍然留在内存里,不刷新就照常带走。
+       */
+      const hasImages = queuedDraft.images.length > 0;
+      writeQueuedMessage(sessionKey, {
+        content: hasImages
+          ? `${queuedDraft.content}\n\n(排队时附的 ${queuedDraft.images.length} 张图片没能一起保存 —— 刷新页面后需要重新添加)`
+          : queuedDraft.content,
+        options: queuedDraft.options,
+      });
     } else {
       clearQueuedMessage(sessionKey);
     }
@@ -1615,6 +1808,30 @@ export function useChatComposerState({
       return;
     }
     setQueuedDraft(restoreQueuedDraft(sessionKey));
+  }, [sessionKey]);
+
+  /**
+   * 换会话时把附件清掉。
+   *
+   * 文本草稿是**按会话存的**(`draftStorageKey(sessionKey, projectId)`),切过去会换成
+   * 那条会话自己的。但 `attachedImages` / `attachedDocs` 是**跨会话共用的一份 state** ——
+   * 在 A 里挂了三个文件、还没发,切到 B,那三个文件仍然挂在输入框上,下一次在 B 里
+   * 发送就把它们一起发出去了。用户完全看不出这是 A 的东西。
+   *
+   * 更要紧的是**附件已经落盘在 A 的项目目录下**(见 attachment-storage:附件按
+   * projectPath 归档并计入配额)。在 B 里发出去,提示词里就带着一条指向另一个项目的
+   * 路径 —— 这违反了这个文件顶部立的不变量,也是一条跨项目的信息泄漏。
+   *
+   * 所以切会话就清空。不做"按会话保存附件"是有意的:文件对象活不过刷新,
+   * 存了也只是半个功能,而半个功能比没有更让人困惑(草稿注释里已经解释过同一件事)。
+   * 上传中的进度与错误一并清 —— 它们描述的是被丢弃的那批文件。
+   */
+  useEffect(() => {
+    setAttachedImages([]);
+    setAttachedDocs([]);
+    setUploadingImages(new Map());
+    setImageErrors(new Map());
+    setDocUploadProgress(null);
   }, [sessionKey]);
 
   useEffect(() => {
@@ -1663,6 +1880,17 @@ export function useChatComposerState({
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      /**
+       * fj:输入法组合期不让菜单/提及抢键。
+       *
+       * 这两个 handler 排在 `isComposing` 判据**之前**,而 ↑/↓ 历史回看
+       * (第 1859 行)和发送(第 1885 行)都带了保护。中文/日文输入法按回车
+       * 确认候选时,若命令菜单恰好开着且有高亮项,那一下回车就被截胡去插入命令了。
+       */
+      if (event.nativeEvent.isComposing) {
+        return;
+      }
+
       if (handleCommandMenuKeyDown(event)) {
         return;
       }
@@ -1936,6 +2164,7 @@ export function useChatComposerState({
     commandQuery,
     showCommandMenu,
     selectedCommandIndex,
+    hoveredCommandIndex,
     resetCommandMenuState,
     handleCommandSelect,
     handleToggleCommandMenu,
@@ -1956,6 +2185,8 @@ export function useChatComposerState({
     handleAttachFiles: acceptDroppedFiles,
     attachDocFromUrl,
     parsingDocs: parsingDocsCount > 0,
+    // fj:提交在飞 —— 发送按钮据此变灰,是重入闸在界面上的那一半。
+    isSubmitting,
     docUploadProgress,
     startEditRerun,
     getRootProps,

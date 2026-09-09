@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Edit3, Folder, Globe, Lock, Share2, ShieldCheck, Star, Trash2, UserCheck, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -150,7 +150,25 @@ function ProjectVisibilityBadges({
   );
 }
 
-export default function SidebarProjectItem({
+/**
+ * 一行项目。**用 memo 包起来**。
+ *
+ * ## 为什么现在包才有意义
+ *
+ * `memo` 靠的是"props 引用没变"。此前 `sessions={getProjectSessions(project)}`
+ * **每次渲染都是一个新数组**(内部整份拷贝+排序),所以包了也永远不命中 ——
+ * 这也是为什么它此前没被包:包了没用。
+ *
+ * `getAllSessions` 换成按 project 对象缓存之后,这条 props 才真正稳定下来,
+ * `memo` 从"白写"变成"有效"。两件事必须一起做,单做任何一件都没用。
+ *
+ * ## 剩下那条会穿透 memo 的 props 是故意的
+ *
+ * `currentTime` 每 60 秒变一次,届时所有行一起重渲染 —— 这是对的:
+ * 相对时间("3 分钟前")本来就该刷新。要紧的是**搜索框每敲一个字**、
+ * 展开/收起某个项目、某条会话状态变化时,不相干的行不再跟着重渲染。
+ */
+function SidebarProjectItem({
   project,
   selectedProject,
   selectedSession,
@@ -633,3 +651,5 @@ export default function SidebarProjectItem({
     </div>
   );
 }
+
+export default memo(SidebarProjectItem);

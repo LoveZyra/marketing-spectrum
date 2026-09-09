@@ -7,7 +7,6 @@ import type {
   SessionActivityMap,
 } from '../../../hooks/useSessionProtection';
 import type { SessionEstablishedContext, SessionNavigationOptions } from '../../chat/types/types';
-import type { RecentSessionEntry } from '../../chat/utils/recentSessions';
 import type { SettingsMainTab } from '../../settings/types/types';
 
 export type PrdFile = {
@@ -39,8 +38,6 @@ export type MainContentProps = {
    * 用户要的是"所有展开的栏目都收起" —— 项目侧栏归 AppContent 管,由它据此隐藏。
    */
   onEditorMaximizedChange?: (maximized: boolean) => void;
-  /** ef:首页空态「最近会话」的数据(跨项目、按时间取前几条),由 AppContent 算好。 */
-  recentSessions?: RecentSessionEntry[];
   /** ef:顶栏铅笔改名 / 「…」删除会话 —— 实现在 AppContent。 */
   onRenameSession?: (sessionId: string, summary: string) => Promise<boolean> | boolean;
   onDeleteSession?: (sessionId: string, sessionTitle: string) => void;

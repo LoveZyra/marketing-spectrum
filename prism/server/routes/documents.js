@@ -220,6 +220,25 @@ function validationError(message) {
  * '＜' (U+FF1C): the text stays human-readable but can no longer close the
  * envelope. Case-insensitive because HTML/XML tag matching is.
  */
+/**
+ * fj:抓回来的页面标题要单独清洗一次。
+ *
+ * 标题会被前端拼进 `<attached-document name="...">` 的属性里,而
+ * `escapeAttachedDocumentTags` 只管正文。`htmlToText` 取 `<title>` 之后还会
+ * `decodeXmlEntities`,把 `&lt;` `&gt;` `&#10;` 还原成真的尖括号和换行 ——
+ * 于是攻击者控制的页面可以用标题把信封提前闭合,让注入的指令落在信封外面。
+ *
+ * 前端也有一份同样的清洗(`attachmentPrompt.ts` 的 `escapeAttr`)。**两侧都做**
+ * 是刻意的:任何一侧单独成立,不依赖对方。
+ */
+export function sanitizeFetchedTitle(title) {
+  return String(title ?? '')
+    .replace(/[<>"]/g, '')
+    .replace(/[\s\u0000-\u001f\u007f]+/g, ' ')
+    .trim()
+    .slice(0, 200);
+}
+
 export function escapeAttachedDocumentTags(text) {
   return String(text ?? '').replace(/<(?=\/attached-document)/gi, '＜');
 }
@@ -1368,7 +1387,7 @@ router.post('/fetch-url', async (req, res) => {
       if (!capped.text) return res.status(422).json({ error: 'No readable text found on the page' });
       return res.json({
         url: currentUrl.toString(),
-        title: title || currentUrl.hostname,
+        title: sanitizeFetchedTitle(title) || currentUrl.hostname,
         chars: capped.text.length,
         truncated: capped.truncated || buffer.length >= MAX_URL_BYTES,
         text: capped.text,

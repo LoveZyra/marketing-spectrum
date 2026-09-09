@@ -19,6 +19,7 @@ const initialFormState: WizardFormState = {
   workspacePath: '',
   visibility: 'personal',
   sharedUserIds: [],
+  templateId: '',
 };
 
 export default function ProjectCreationWizard({
@@ -66,6 +67,8 @@ export default function ProjectCreationWizard({
         path: formState.workspacePath.trim(),
         visibility: formState.visibility,
         sharedUserIds: formState.visibility === 'shared' ? formState.sharedUserIds : [],
+        // 空串 = 不用模板,后端据此走原来的空目录流程
+        templateId: formState.templateId || undefined,
       });
 
       onProjectCreated?.(project);
@@ -112,8 +115,10 @@ export default function ProjectCreationWizard({
               workspacePath={formState.workspacePath}
               visibility={formState.visibility}
               sharedUserIds={formState.sharedUserIds}
+              templateId={formState.templateId}
               isCreating={isCreating}
               onWorkspacePathChange={(workspacePath) => updateField('workspacePath', workspacePath)}
+              onTemplateIdChange={(templateId) => updateField('templateId', templateId)}
               onVisibilityChange={(visibility) => updateField('visibility', visibility)}
               onSharedUserIdsChange={(sharedUserIds) => updateField('sharedUserIds', sharedUserIds)}
               onAdvanceToConfirm={() => setStep(2)}

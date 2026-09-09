@@ -1,5 +1,4 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
@@ -15,6 +14,8 @@ import type {
 } from '@/shared/types.js';
 import { readProviderSessionActiveModelChange } from '@/shared/utils.js';
 import { getDataDir } from '@/utils/runtime-paths.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('providers');
 
 export const PROVIDER_MODELS_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const PROVIDER_MODELS_CACHE_VERSION = 2;
@@ -194,7 +195,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     try {
       await writeProviderModelsCacheFile(cachePath, memoryCache, now());
     } catch (error) {
-      console.warn('Unable to persist provider models cache:', error);
+      log.warn('Unable to persist provider models cache:', error);
     }
   };
 

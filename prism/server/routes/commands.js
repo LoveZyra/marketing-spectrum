@@ -6,7 +6,12 @@ import express from "express";
 
 import { providerModelsService } from "../modules/providers/services/provider-models.service.js";
 import { parseFrontMatter } from "../shared/frontmatter.js";
+import { canViewerSeeSession, usageRecordsDb } from "../modules/database/index.js";
+import { readRequestViewer } from "../shared/project-visibility.js";
+import { assertViewerMayCreateSessionAt } from "../modules/providers/services/session-project-path-guard.service.js";
 import { findAppRoot, getModuleDir } from "../utils/runtime-paths.js";
+import { createLogger } from "../shared/logger.js";
+const log = createLogger("commands");
 
 const __dirname = getModuleDir(import.meta.url);
 // This route reads the top-level package.json for the status command, so it needs the real
@@ -141,14 +146,14 @@ async function scanCommandsDirectory(dir, baseDir, namespace) {
             metadata: frontmatter,
           });
         } catch (err) {
-          console.error(`Error parsing command file ${fullPath}:`, err.message);
+          log.error(`Error parsing command file ${fullPath}:`, err.message);
         }
       }
     }
   } catch (err) {
     // Directory doesn't exist or can't be accessed - this is okay
     if (err.code !== "ENOENT" && err.code !== "EACCES") {
-      console.error(`Error scanning directory ${dir}:`, err.message);
+      log.error(`Error scanning directory ${dir}:`, err.message);
     }
   }
 
@@ -336,6 +341,32 @@ Custom commands can be created in:
     // 状态帧透传到前端 tokenBudget,再随 /cost 的 context 走到这里。
     const costUsd = Number(tokenUsage.costUsd ?? tokenUsage.total_cost_usd ?? 0) || 0;
 
+    /*
+     * fh:台账里这条会话的**累计花销**。
+     *
+     * 上面那个 `costUsd` 来自前端内存里的 tokenBudget —— 刷新就没,换台机器就没。
+     * 这一条读 `usage_records`,是落了库的,而且**跨重启、跨设备都在**。
+     *
+     * 两个数并列显示是刻意的:它们口径不同(内存里那个是本次页面会话看到的最后
+     * 一个累计值,台账那个是这条会话历次回合的增量之和),对不上的时候正好说明
+     * "你这次打开之前它还花过钱"。合成一个数反而会把这层信息抹掉。
+     */
+    let ledger = null;
+    try {
+      const totals = context?.sessionId ? usageRecordsDb.totalsForSession(context.sessionId) : null;
+      if (totals) {
+        ledger = {
+          runs: Number(totals.runs) || 0,
+          costUsd: Number(totals.cost_usd) || 0,
+          inputTokens: Number(totals.input_tokens) || 0,
+          outputTokens: Number(totals.output_tokens) || 0,
+        };
+      }
+    } catch (error) {
+      // 读台账失败不该让 /cost 整个打不开 —— 它主要的信息来自上面那份内存数据。
+      log.warn('读会话用量台账失败:', error?.message ?? error);
+    }
+
     return {
       type: "builtin",
       action: "cost",
@@ -345,6 +376,7 @@ Custom commands can be created in:
           total,
         },
         ...(costUsd > 0 ? { costUsd } : {}),
+        ...(ledger ? { ledger } : {}),
         ...(hasTokenBreakdown
           ? {
               tokenBreakdown: {
@@ -372,7 +404,7 @@ Custom commands can be created in:
       version = packageJson.version;
       packageName = packageJson.name;
     } catch (err) {
-      console.error("Error reading package.json:", err);
+      log.error("Error reading package.json:", err);
     }
 
     const uptime = process.uptime();
@@ -470,6 +502,18 @@ router.post("/list", async (req, res) => {
 
     // Scan project-level commands (.claude/commands/)
     if (projectPath) {
+      /**
+       * fj:项目路径来自请求体,必须过归属门。
+       *
+       * 此前这条路由只挂了 `authenticateToken`,`projectPath` 直接拿去
+       * `path.join(projectPath, ".claude", "commands")` 递归扫 —— 任何登录用户
+       * 传 `/home/别人/项目` 就能读出对方自定义命令的路径、frontmatter 与描述,
+       * `/execute` 更能拿到**全文**(部署步骤、内部地址、凭据取用方式常写在里面)。
+       *
+       * 用的是与 MCP 三条路由同一道现成的门(`assertViewerMayCreateSessionAt`):
+       * 已登记项目查可见性,未登记路径同时过 `validateWorkspacePath`,失败统一 404。
+       */
+      await assertViewerMayCreateSessionAt(readRequestViewer(req), projectPath);
       const projectCommandsDir = path.join(projectPath, ".claude", "commands");
       const projectCommands = await scanCommandsDirectory(
         projectCommandsDir,
@@ -503,7 +547,7 @@ router.post("/list", async (req, res) => {
       count: allCommands.length,
     });
   } catch (error) {
-    console.error("Error listing commands:", error);
+    log.error("Error listing commands:", error);
     res.status(500).json({
       error: "Failed to list commands",
       message: error.message,
@@ -527,6 +571,25 @@ router.post("/execute", async (req, res) => {
       });
     }
 
+    /**
+     * fj:`context.sessionId` / `context.projectPath` 都来自请求体,必须过归属门。
+     *
+     * 内置 handler 里 `/cost` 读 `usageRecordsDb.totalsForSession(context.sessionId)`,
+     * `/models` 和 `/status` 读 `getCurrentActiveModel(provider, sessionId)` ——
+     * 此前一条鉴权都没有,任何登录用户拿到一个会话 id(截图、分享链接)就能长期
+     * 查别人会话的 runs / 花费 / token / 当前模型。
+     *
+     * 这条判据在别处是**明确补过的**:`provider.routes.ts` 那两条 active-model
+     * 路由的注释直接写着"读会泄露别人会话的当前模型",`server/index.js` 的
+     * `/api/claude/*` 也补了。唯独这里漏了。统一回 404,不给存在性预言机。
+     */
+    if (context?.sessionId && !canViewerSeeSession(context.sessionId, readRequestViewer(req))) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    if (context?.projectPath) {
+      await assertViewerMayCreateSessionAt(readRequestViewer(req), context.projectPath);
+    }
+
     // Handle built-in commands.
     // 查表对前导斜杠不敏感:handler 以 "/help" 为键,但调用方传 "help" 也该认。
     const handler =
@@ -540,7 +603,7 @@ router.post("/execute", async (req, res) => {
           command: commandName,
         });
       } catch (error) {
-        console.error(
+        log.error(
           `Error executing built-in command ${commandName}:`,
           error,
         );
@@ -622,7 +685,7 @@ router.post("/execute", async (req, res) => {
       });
     }
 
-    console.error("Error executing command:", error);
+    log.error("Error executing command:", error);
     res.status(500).json({
       error: "Failed to execute command",
       message: error.message,

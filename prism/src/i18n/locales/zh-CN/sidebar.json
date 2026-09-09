@@ -34,7 +34,6 @@
     "addToFavorites": "添加到收藏",
     "removeFromFavorites": "从收藏移除",
     "editSessionName": "手动编辑会话名称",
-    "deleteSession": "永久删除此会话",
     "activeSessionIndicator": "最近活跃的会话（最近 10 分钟）",
     "save": "保存",
     "cancel": "取消",
@@ -51,8 +50,7 @@
   "actions": {
     "settings": "设置",
     "cancel": "取消",
-    "save": "保存",
-    "delete": "删除"
+    "save": "保存"
   },
   "status": {
     "active": "活动",
@@ -95,10 +93,6 @@
     "deleteAllData": "永久删除所有数据"
   },
   "project": {
-    "public": "公共",
-    "rootOnly": "仅 root",
-    "shared": "共享",
-    "sharedOut": "已共享",
     "permissions": {
       "title": "项目权限",
       "close": "关闭",

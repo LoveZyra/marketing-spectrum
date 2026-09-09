@@ -1,4 +1,5 @@
 import { getConnection } from '@/modules/database/connection.js';
+import { cachedPrepare } from '@/modules/database/prepared-cache.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
 import { buildProjectVisibilityClause, type VisibilityScope } from '@/modules/database/visibility-sql.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
@@ -81,8 +82,7 @@ export const sessionsDb = {
     // since it's a foreign key in the sessions table.
     projectsDb.createProjectPath(normalizedProjectPath);
 
-    const existing = db
-      .prepare(
+    const existing = cachedPrepare(db,
         `SELECT session_id FROM sessions
          WHERE provider_session_id = ? AND provider = ?
          LIMIT 1`
@@ -90,13 +90,28 @@ export const sessionsDb = {
       .get(providerSessionId, provider) as { session_id: string } | undefined;
 
     if (existing) {
-      db.prepare(
+      /**
+       * fj:**不再把 `isArchived` 写回 0。**
+       *
+       * 这是"磁盘发现会话"的 upsert,watcher 的每个 `change` 事件都会走到这里。
+       * 无条件解档的后果:
+       *   1. 归档面板里的会话是可以直接点开的,而打开任意会话 400ms 后会发
+       *      prewarm、prewarm 跑 `claude --resume` —— 按本仓自己的注释,它"会碰
+       *      一下这个 JSONL 的 mtime 却不追加任何消息" → chokidar `change`
+       *      → 这里 → **它自己跑回了活跃列表**;
+       *   2. 归档一条正在流式输出的会话,transcript 持续追加,3 秒内必然被重新
+       *      索引解档。
+       * 用户把会话丢进回收站只是想再看一眼内容,回来发现它又在侧栏里,反复归档也没用。
+       *
+       * 复活改由调用方显式做(`updateSessionIsArchived(id, false)`)。
+       * `projectsDb.createProjectPath` 的 ON CONFLICT 早就是这个写法,这里是对齐它。
+       */
+      cachedPrepare(db,
         `UPDATE sessions SET
            provider = ?,
            updated_at = COALESCE(?, CURRENT_TIMESTAMP),
            project_path = ?,
            jsonl_path = ?,
-           isArchived = 0,
            custom_name = COALESCE(?, custom_name)
          WHERE session_id = ?`
       ).run(
@@ -114,7 +129,7 @@ export const sessionsDb = {
     // Sessions created outside the app (directly via the provider CLI) are
     // keyed by the provider-native id for both columns. The ON CONFLICT path
     // covers legacy rows that predate the provider_session_id mapping.
-    db.prepare(
+    cachedPrepare(db,
       `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, 0, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))
        ON CONFLICT(session_id) DO UPDATE SET
@@ -123,7 +138,6 @@ export const sessionsDb = {
          updated_at = excluded.updated_at,
          project_path = excluded.project_path,
          jsonl_path = excluded.jsonl_path,
-         isArchived = 0,
          custom_name = COALESCE(excluded.custom_name, sessions.custom_name)`
     ).run(
       providerSessionId,
@@ -162,7 +176,7 @@ export const sessionsDb = {
     // 已存在的项目走 ON CONFLICT,owner 不会被改;所以**第一次落行就得带对 owner**。
     projectsDb.createProjectPath(normalizedProjectPath, null, ownerUserId);
 
-    db.prepare(
+    cachedPrepare(db,
       `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
        VALUES (?, ?, NULL, NULL, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     ).run(sessionId, provider, normalizedProjectPath);
@@ -183,8 +197,7 @@ export const sessionsDb = {
     const db = getConnection();
 
     const merge = db.transaction(() => {
-      const duplicate = db
-        .prepare(
+      const duplicate = cachedPrepare(db,
           `SELECT ${SESSION_ROW_COLUMNS} FROM sessions
            WHERE (session_id = ? OR provider_session_id = ?)
              AND session_id <> ?
@@ -193,8 +206,8 @@ export const sessionsDb = {
         .get(providerSessionId, providerSessionId, sessionId) as SessionRow | undefined;
 
       if (duplicate) {
-        db.prepare('DELETE FROM sessions WHERE session_id = ?').run(duplicate.session_id);
-        db.prepare(
+        cachedPrepare(db, 'DELETE FROM sessions WHERE session_id = ?').run(duplicate.session_id);
+        cachedPrepare(db,
           `UPDATE sessions SET
              provider_session_id = ?,
              jsonl_path = COALESCE(jsonl_path, ?),
@@ -205,7 +218,7 @@ export const sessionsDb = {
         return;
       }
 
-      db.prepare(
+      cachedPrepare(db,
         `UPDATE sessions SET
            provider_session_id = ?,
            updated_at = CURRENT_TIMESTAMP
@@ -218,7 +231,7 @@ export const sessionsDb = {
 
   updateSessionCustomName(sessionId: string, customName: string): void {
     const db = getConnection();
-    db.prepare(
+    cachedPrepare(db,
       `UPDATE sessions
        SET custom_name = ?
        WHERE session_id = ?`
@@ -232,7 +245,7 @@ export const sessionsDb = {
    */
   setSessionCustomNameIfEmpty(sessionId: string, customName: string): void {
     const db = getConnection();
-    db.prepare(
+    cachedPrepare(db,
       `UPDATE sessions
        SET custom_name = ?
        WHERE session_id = ?
@@ -242,8 +255,7 @@ export const sessionsDb = {
 
   getSessionById(sessionId: string): SessionRow | null {
     const db = getConnection();
-    const row = db
-      .prepare(
+    const row = cachedPrepare(db,
         `SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE session_id = ?
@@ -264,8 +276,7 @@ export const sessionsDb = {
    */
   getSessionByProviderSessionId(providerSessionId: string): SessionRow | null {
     const db = getConnection();
-    const row = db
-      .prepare(
+    const row = cachedPrepare(db,
         `SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE provider_session_id = ?
@@ -279,8 +290,7 @@ export const sessionsDb = {
 
   getAllSessions(): SessionRow[] {
     const db = getConnection();
-    const rows = db
-      .prepare(
+    const rows = cachedPrepare(db,
         `SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE isArchived = 0`
@@ -296,8 +306,7 @@ export const sessionsDb = {
    */
   getArchivedSessions(): SessionRow[] {
     const db = getConnection();
-    const rows = db
-      .prepare(
+    const rows = cachedPrepare(db,
         `SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE isArchived = 1
@@ -322,14 +331,63 @@ export const sessionsDb = {
    * 回落到"会话自己记的路径在不在公共目录下" —— 与 JS 侧同义。会话路径为空
    * 时仅 root 可见,也与 JS 侧那条 `ownerUserId: -1` 同义。
    */
+  /**
+   * fj:超过保留期的归档会话 —— **最旧的在前**。
+   *
+   * 归档保留期清扫专用。判据下推到 SQL,而不是"取最新的一页回来再按 cutoff 过滤"
+   * (那样永远够不到该清的那些,见 archive-retention.service 的说明)。
+   */
+  getExpiredArchivedSessions(cutoffIso: string, limit: number): string[] {
+    const db = getConnection();
+    const rows = cachedPrepare(db,
+      `SELECT session_id FROM sessions
+       WHERE isArchived = 1
+         AND datetime(COALESCE(updated_at, created_at)) < datetime(?)
+       ORDER BY datetime(COALESCE(updated_at, created_at)) ASC
+       LIMIT ?`
+    ).all(cutoffIso, limit) as Array<{ session_id: string }>;
+    return rows.map((row) => row.session_id);
+  },
+
   getArchivedSessionsPage(
     scope: VisibilityScope,
     limit: number,
     offset: number,
   ): { rows: SessionRow[]; total: number } {
+    return sessionsDb.getVisibleSessionsPage(scope, limit, offset, { archived: 'only' });
+  },
+
+  /**
+   * 可见会话的**分页**查询 —— 归档面板与外部 API 共用。
+   *
+   * `archived` 三档:`'only'`(归档面板)、`'exclude'`(默认列表)、
+   * `'include'`(外部 API 的 `?includeArchived=1`)。
+   *
+   * ## 为什么外部 API 也要走这条
+   *
+   * `GET /api/agent/sessions` 原来是 `getAllSessions()` **整表捞出来**,再在 JS 侧
+   * 逐行 `canViewerSeeSession()` 过滤 —— 而那个函数每行要查库。better-sqlite3 是
+   * **同步**的,所以 4000 条会话 = 4000+ 次同步查询把**事件循环整个按住**:
+   * 实测 219ms 内所有人的 WebSocket 帧、所有请求全部停摆,而这只是一次列表调用。
+   *
+   * 而且先捞后过滤根本没法分页(先分页再过滤,每页剩几条全看运气),
+   * 所以它连 `total` 都得靠捞全表才能算。
+   *
+   * 下推之后同样的数据量实测 2.18ms,并且 `total` 由 SQL 的 COUNT 直接给。
+   * 这正是归档面板当初做过的同一件事(见上一个方法的注释)—— 那次只改了归档这一处。
+   */
+  getVisibleSessionsPage(
+    scope: VisibilityScope,
+    limit: number,
+    offset: number,
+    options: { archived?: 'only' | 'exclude' | 'include' } = {},
+  ): { rows: SessionRow[]; total: number } {
     const db = getConnection();
 
-    let where = 's.isArchived = 1';
+    const archived = options.archived ?? 'exclude';
+    let where = archived === 'only'
+      ? 's.isArchived = 1'
+      : archived === 'exclude' ? 's.isArchived = 0' : '1 = 1';
     let params: unknown[] = [];
     if (scope.kind === 'user') {
       const visibility = buildProjectVisibilityClause({
@@ -345,14 +403,13 @@ export const sessionsDb = {
 
     const from = `FROM sessions s LEFT JOIN projects p ON p.project_path = s.project_path WHERE ${where}`;
     const prefixed = SESSION_ROW_COLUMNS.split(', ').map((column) => `s.${column}`).join(', ');
-    const rows = db
-      .prepare(
+    const rows = cachedPrepare(db,
         `SELECT ${prefixed} ${from}
          ORDER BY datetime(COALESCE(s.updated_at, s.created_at)) DESC, s.session_id DESC
          LIMIT ? OFFSET ?`
       )
       .all(...params, limit, offset) as SessionRow[];
-    const totalRow = db.prepare(`SELECT COUNT(*) AS count ${from}`).get(...params) as { count: number } | undefined;
+    const totalRow = cachedPrepare(db, `SELECT COUNT(*) AS count ${from}`).get(...params) as { count: number } | undefined;
 
     return { rows: normalizeSessionRows(rows), total: Number(totalRow?.count ?? 0) };
   },
@@ -360,8 +417,7 @@ export const sessionsDb = {
   getSessionsByProjectPath(projectPath: string): SessionRow[] {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
-    const rows = db
-      .prepare(
+    const rows = cachedPrepare(db,
         `SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE project_path = ?
@@ -379,8 +435,7 @@ export const sessionsDb = {
   getSessionsByProjectPathIncludingArchived(projectPath: string): SessionRow[] {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
-    const rows = db
-      .prepare(
+    const rows = cachedPrepare(db,
         `SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE project_path = ?`
@@ -393,8 +448,7 @@ export const sessionsDb = {
   getSessionsByProjectPathPage(projectPath: string, limit: number, offset: number): SessionRow[] {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
-    const rows = db
-      .prepare(
+    const rows = cachedPrepare(db,
         `SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE project_path = ?
@@ -417,14 +471,30 @@ export const sessionsDb = {
    *
    * 只服务 offset=0(项目列表的默认形态);翻页仍走单项目那条,不做复杂化。
    */
-  getFirstSessionsForProjectPaths(projectPaths: string[], limit: number): Map<string, SessionRow[]> {
+  /**
+   * `includeArchived` 是 ff 轮加的,给**归档项目列表**用。
+   *
+   * 归档列表原来走的是"每个项目一次查询"的老路(N+1),240 个归档项目就是 240 次;
+   * 而且它不分页 —— `getSessionsByProjectPathIncludingArchived` 把每个项目的**全部**
+   * 会话读进内存再拼成响应。活跃列表在 E7 轮已经批量化过了,归档这条**当时漏了**。
+   *
+   * 这里选择给已有方法加一个参数,而不是另写一份 `...IncludingArchived` 的批量方法:
+   * 这个仓库在 A-2 上栽过 —— 同一条判据写两遍,过一阵就漂开,漂出来的缝就是 bug。
+   * 归档与非归档的区别只有 WHERE 里那一句,不值得为它复制一份窗口函数。
+   */
+  getFirstSessionsForProjectPaths(
+    projectPaths: string[],
+    limit: number,
+    options: { includeArchived?: boolean } = {},
+  ): Map<string, SessionRow[]> {
     const out = new Map<string, SessionRow[]>();
     if (projectPaths.length === 0 || limit <= 0) return out;
     const db = getConnection();
     const normalized = projectPaths.map((p) => normalizeProjectPath(p));
     const placeholders = normalized.map(() => '?').join(',');
-    const rows = db
-      .prepare(
+    // 两个变体是两条不同的 SQL 字符串,cachedPrepare 各缓存各的,互不影响。
+    const archivedClause = options.includeArchived === true ? '' : '\n             AND isArchived = 0';
+    const rows = cachedPrepare(db,
         `SELECT ${SESSION_ROW_COLUMNS} FROM (
            SELECT ${SESSION_ROW_COLUMNS},
                   ROW_NUMBER() OVER (
@@ -432,8 +502,7 @@ export const sessionsDb = {
                     ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC
                   ) AS rn
            FROM sessions
-           WHERE project_path IN (${placeholders})
-             AND isArchived = 0
+           WHERE project_path IN (${placeholders})${archivedClause}
          ) WHERE rn <= ?`
       )
       .all(...normalized, limit) as SessionRow[];
@@ -449,19 +518,21 @@ export const sessionsDb = {
     return out;
   },
 
-  /** 批量计数(E7):一次 GROUP BY 顶掉 N 次 COUNT。 */
-  countSessionsByProjectPaths(projectPaths: string[]): Map<string, number> {
+  /** 批量计数(E7):一次 GROUP BY 顶掉 N 次 COUNT。`includeArchived` 见上一个方法。 */
+  countSessionsByProjectPaths(
+    projectPaths: string[],
+    options: { includeArchived?: boolean } = {},
+  ): Map<string, number> {
     const out = new Map<string, number>();
     if (projectPaths.length === 0) return out;
     const db = getConnection();
     const normalized = projectPaths.map((p) => normalizeProjectPath(p));
     const placeholders = normalized.map(() => '?').join(',');
-    const rows = db
-      .prepare(
+    const archivedClause = options.includeArchived === true ? '' : '\n           AND isArchived = 0';
+    const rows = cachedPrepare(db,
         `SELECT project_path, COUNT(*) AS count
          FROM sessions
-         WHERE project_path IN (${placeholders})
-           AND isArchived = 0
+         WHERE project_path IN (${placeholders})${archivedClause}
          GROUP BY project_path`
       )
       .all(...normalized) as Array<{ project_path: string; count: number }>;
@@ -472,8 +543,7 @@ export const sessionsDb = {
   countSessionsByProjectPath(projectPath: string): number {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
-    const row = db
-      .prepare(
+    const row = cachedPrepare(db,
         `SELECT COUNT(*) AS count
          FROM sessions
          WHERE project_path = ?
@@ -487,17 +557,16 @@ export const sessionsDb = {
   deleteSessionsByProjectPath(projectPath: string): void {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
-    db.prepare(`
+    cachedPrepare(db, `
             DELETE FROM session_display_messages
             WHERE session_id IN (SELECT session_id FROM sessions WHERE project_path = ?)
         `).run(normalizedProjectPath);
-        db.prepare(`DELETE FROM sessions WHERE project_path = ?`).run(normalizedProjectPath);
+        cachedPrepare(db, `DELETE FROM sessions WHERE project_path = ?`).run(normalizedProjectPath);
   },
 
   getSessionName(sessionId: string, provider: string): string | null {
     const db = getConnection();
-    const row = db
-      .prepare(
+    const row = cachedPrepare(db,
         `SELECT custom_name
          FROM sessions
          WHERE session_id = ? AND provider = ?`
@@ -513,7 +582,7 @@ export const sessionsDb = {
    */
   updateSessionIsArchived(sessionId: string, isArchived: boolean): void {
     const db = getConnection();
-    db.prepare(
+    cachedPrepare(db,
       `UPDATE sessions
        SET isArchived = ?
        WHERE session_id = ?`
@@ -524,7 +593,7 @@ export const sessionsDb = {
     const db = getConnection();
     // 显示日志没有对 sessions 建外键(新会话的第一条消息可能早于 sessions 行落库),
     // 所以删会话时要显式清一遍,免得留下永远读不到的孤儿行。
-    db.prepare('DELETE FROM session_display_messages WHERE session_id = ?').run(sessionId);
-    return db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId).changes > 0;
+    cachedPrepare(db, 'DELETE FROM session_display_messages WHERE session_id = ?').run(sessionId);
+    return cachedPrepare(db, 'DELETE FROM sessions WHERE session_id = ?').run(sessionId).changes > 0;
   },
 };

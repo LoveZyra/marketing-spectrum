@@ -14,6 +14,8 @@
 import { getConnection } from '@/modules/database/connection.js';
 import { appConfigDb } from '@/modules/database/repositories/app-config.js';
 import { decrypt, encrypt, getEncryptionKey } from '@/shared/crypto-box.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('db');
 import type {
   CreateCredentialResult,
   CredentialPublicRow,
@@ -116,7 +118,7 @@ export const credentialsDb = {
       return decrypt(row.credential_value, key());
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error('Could not decrypt stored credential', {
+      log.error('Could not decrypt stored credential', {
         credentialType,
         error: message,
       });

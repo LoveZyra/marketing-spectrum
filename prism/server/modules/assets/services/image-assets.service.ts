@@ -3,15 +3,20 @@ import path from 'node:path';
 import { getGlobalImageAssetsDir, toPosixPath } from '@/shared/image-attachments.js';
 
 /**
- * Image mime types accepted for chat attachment uploads. SVG is allowed for
- * storage/preview even though some providers (Claude API) skip it at send time.
+ * 聊天图片附件接受的 mime。
+ *
+ * fj:**SVG 移出白名单。**
+ *
+ * 原来的理由是"允许存储/预览,尽管有的 provider 发送时会跳过" —— 但用户视角
+ * 不是这样:他附了一张图、界面上也显示出来了,然后模型说"我没看到图片"。
+ * 上传即拒、当场给出理由,比传上去再静默丢掉诚实得多。
+ * (SVG 还带着一层存储型 XSS 的老账,资源路由为此专门强制 `attachment` 下发。)
  */
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',
   'image/gif',
   'image/webp',
-  'image/svg+xml',
 ]);
 
 // Used only by this service and the assets routes via the barrel file.

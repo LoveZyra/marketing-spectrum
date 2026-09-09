@@ -17,6 +17,8 @@ import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 
 import { APP_CONFIG_TABLE_SCHEMA_SQL } from '@/modules/database/schema.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('db');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,7 +57,7 @@ function ensureDatabaseDirectory(dbPath: string): void {
   const dir = path.dirname(dbPath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
-    console.log('Created database directory:', dir);
+    log.info('Created database directory:', dir);
   }
 }
 
@@ -73,7 +75,7 @@ function migrateLegacyDatabase(targetPath: string): void {
 
   try {
     fs.copyFileSync(legacyPath, targetPath);
-    console.log('Migrated legacy database', { from: legacyPath, to: targetPath });
+    log.info('Migrated legacy database', { from: legacyPath, to: targetPath });
 
 
     // copy the write-ahead log and shared memory files (auth.db-wal, auth.db-shm) if they exist, to preserve any uncommitted transactions
@@ -84,7 +86,7 @@ function migrateLegacyDatabase(targetPath: string): void {
       }
     }
   } catch (err: any) {
-    console.error('Could not migrate legacy database', { error: err.message });
+    log.error('Could not migrate legacy database', { error: err.message });
   }
 }
 
@@ -152,7 +154,7 @@ function applyPragmas(db: Database.Database): void {
     db.pragma('synchronous = NORMAL');
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn('Could not apply database pragmas', { error: message });
+    log.warn('Could not apply database pragmas', { error: message });
   }
 }
 
@@ -165,7 +167,15 @@ function applyPragmas(db: Database.Database): void {
  * Called on a daily timer from init-db.ts; retention is `keep` most-recent
  * files (default 7).
  */
-export function backupDatabase(keep = 7): string | null {
+/**
+ * 增量备份每批拷多少页。
+ *
+ * 100 页 × 4KB ≈ 400KB —— 单批的耗时远小于一帧预算,而批数够少,不至于让
+ * 回调本身成为开销。调大它会让备份更快但更"顿",调小反之。
+ */
+const BACKUP_PAGES_PER_STEP = 100;
+
+export async function backupDatabase(keep = 7): Promise<string | null> {
   const dbPath = resolveDatabasePath();
   if (!fs.existsSync(dbPath)) return null;
 
@@ -180,14 +190,35 @@ export function backupDatabase(keep = 7): string | null {
 
   try {
     const db = getConnection();
-    // VACUUM INTO refuses to overwrite, so a same-second retry is a no-op.
+    // 同一秒重试是空操作(目标文件已存在)。
     if (fs.existsSync(target)) return target;
-    db.prepare('VACUUM INTO ?').run(target);
+
+    /**
+     * 用 `db.backup()` 而不是 `VACUUM INTO`。
+     *
+     * 两者都能产出一份完整副本,区别在**阻不阻塞**:
+     *
+     * - `VACUUM INTO` 是 better-sqlite3 的同步 API,整份库拷完之前**事件循环一步都走不了**。
+     *   108MB 的库实测停 611ms;按现在的增长,1GB 就是每天卡 6 秒 —— 期间所有人的
+     *   WebSocket 帧、所有 HTTP 请求、所有定时任务一起停摆,而这只是一次例行备份。
+     * - `db.backup()` 是**增量**的:每次 `progress` 回调返回下一批要拷的页数,
+     *   两批之间事件循环能喘气。100 页一批,在 4KB 页大小下约 400KB —— 单批远小于
+     *   一帧的预算,拷 1GB 也不会让任何一次请求明显变慢。
+     *
+     * 代价是 `backup()` **不做碎片整理**(VACUUM 会),所以备份文件可能比源库略大。
+     * 对一份备份来说这不重要 —— 它是拿来恢复的,不是拿来省空间的;而"每天卡几秒"
+     * 是所有人都能感觉到的。
+     *
+     * 返回 Promise 之后调用方(init-db 的两个定时器)也跟着不再阻塞。
+     */
+    await db.backup(target, {
+      progress: ({ remainingPages }) => (remainingPages > 0 ? BACKUP_PAGES_PER_STEP : 0),
+    });
     pruneBackups(backupDir, baseName, keep);
     return target;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error('Database backup failed', { error: message });
+    log.error('Database backup failed', { error: message });
     return null;
   }
 }
@@ -225,6 +256,6 @@ export function closeConnection(): void {
   if (instance) {
     instance.close();
     instance = null;
-    console.log('Database connection closed');
+    log.info('Database connection closed');
   }
 }

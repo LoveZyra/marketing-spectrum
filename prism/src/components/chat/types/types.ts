@@ -1,5 +1,4 @@
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
-import type { RecentSessionEntry } from '../utils/recentSessions';
 import type {
   MarkSessionIdle,
   MarkSessionProcessing,
@@ -143,6 +142,4 @@ export interface ChatInterfaceProps {
   newSessionTrigger?: number;
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
-  /** ef:首页空态「最近会话」。 */
-  recentSessions?: RecentSessionEntry[];
 }

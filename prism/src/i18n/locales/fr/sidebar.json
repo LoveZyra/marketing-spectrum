@@ -30,7 +30,6 @@
     "addToFavorites": "Ajouter aux favoris",
     "removeFromFavorites": "Retirer des favoris",
     "editSessionName": "Modifier manuellement le nom de la session",
-    "deleteSession": "Supprimer définitivement cette session",
     "activeSessionIndicator": "Session récemment active (10 dernières minutes)",
     "save": "Enregistrer",
     "cancel": "Annuler",
@@ -42,8 +41,7 @@
   "actions": {
     "settings": "Paramètres",
     "cancel": "Annuler",
-    "save": "Enregistrer",
-    "delete": "Supprimer"
+    "save": "Enregistrer"
   },
   "status": {
     "active": "Actif",
@@ -76,8 +74,5 @@
     "deleteSession": "Supprimer la session",
     "confirmDelete": "Que souhaitez-vous faire avec",
     "deleteAllData": "Supprimer toutes les données définitivement"
-  },
-  "project": {
-    "public": "Public"
   }
 }

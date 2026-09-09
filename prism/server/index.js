@@ -14,7 +14,7 @@ import cors from 'cors';
 import { AppError, generateMessageId } from '@/shared/utils.js';
 import { methodOverrideMiddleware } from '@/shared/method-override.js';
 import { closeSessionsWatcher, initializeSessionsWatcher, markInterruptedTurnsOnStartup, sessionsService, startArchiveRetentionSweeper } from '@/modules/providers/index.js';
-import { broadcastRuntimeEvicted, createWebSocketServer } from '@/modules/websocket/index.js';
+import { broadcastRuntimeEvicted, createWebSocketServer, drainPendingSendForSession } from '@/modules/websocket/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { createTasksRouter, startTaskScheduler, stopTaskScheduler } from '@/modules/tasks/index.js';
 import { createFilesRouter } from '@/modules/files/index.js';
@@ -25,9 +25,11 @@ import {
     writeLocalServerMarker,
     removeLocalServerMarker,
 } from '@/modules/system/index.js';
+import { createLogger } from '@/shared/logger.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
 
+import { notifyRunFailed } from './services/notification-orchestrator.js';
 import { findAppRoot, getModuleDir, getDataDir, migrateLegacyDataDir } from './utils/runtime-paths.js';
 import {
     queryClaudeSDK,
@@ -78,6 +80,8 @@ import { listRootUsernames } from './shared/root-users.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { c } from './utils/colors.js';
 
+const log = createLogger('boot');
+
 const __dirname = getModuleDir(import.meta.url);
 // The server source runs from /server, while the compiled output runs from /dist-server/server.
 // Resolving the app root once keeps every repo-level lookup below aligned across both layouts.
@@ -96,7 +100,7 @@ const RUNNING_VERSION = (() => {
     }
 })();
 
-console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
+log.info('SERVER_PORT from env:', process.env.SERVER_PORT);
 
 const app = express();
 const server = http.createServer(app);
@@ -234,7 +238,7 @@ app.use('/api', (req, res, next) => {
 // 挡不住这三种请求。见 shared/method-override.ts。必须在所有 router 之前。
 app.use('/api', methodOverrideMiddleware());
 // 启动日志留一行:线上排查"隧道到底生效没有"时 grep 这一句即可。
-console.log(`${c.info('[INFO]')} 方法隧道已启用:POST + X-HTTP-Method-Override / ?_method → PATCH/PUT/DELETE`);
+log.info(`方法隧道已启用:POST + X-HTTP-Method-Override / ?_method → PATCH/PUT/DELETE`);
 
 // dm:慢请求日志。阈值毫秒,PRISM_SLOW_REQUEST_MS 覆盖,0 关闭,默认 2000。
 // 只记一行 —— 方法、路径、状态码、耗时、用户。SSE 常开连接不算慢,跳过。
@@ -253,7 +257,7 @@ if (SLOW_REQUEST_MS > 0) {
             const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
             if (elapsedMs < SLOW_REQUEST_MS) return;
             const user = req.user?.username || '-';
-            console.warn(`[Slow] ${req.method} ${req.originalUrl} → ${res.statusCode} ${Math.round(elapsedMs)}ms user=${user}`);
+            log.warn(`[Slow] ${req.method} ${req.originalUrl} → ${res.statusCode} ${Math.round(elapsedMs)}ms user=${user}`);
         });
         next();
     });
@@ -271,7 +275,7 @@ if (SLOW_REQUEST_MS > 0) {
 const maProxyRouter = createMaProxyRouterFromEnv(process.env, console);
 if (maProxyRouter) {
     app.use(MA_PROXY_PREFIX, apiRateLimiter, maProxyRouter);
-    console.log(`${c.info('[INFO]')} 营销诊断反代已挂载: ${MA_PROXY_PREFIX}/* -> ${maProxyRouter.maProxyTarget}`);
+    log.info(`营销诊断反代已挂载: ${MA_PROXY_PREFIX}/* -> ${maProxyRouter.maProxyTarget}`);
 }
 
 // recsys 反代(/recsys/* -> 本机回环的推荐算法点位监控),PRISM_RECSYS_TARGET 不配
@@ -280,7 +284,7 @@ if (maProxyRouter) {
 const recsysProxyRouter = createRecsysProxyRouterFromEnv(process.env, console);
 if (recsysProxyRouter) {
     app.use(RECSYS_PROXY_PREFIX, apiRateLimiter, recsysProxyRouter);
-    console.log(`${c.info('[INFO]')} 推荐算法点位反代已挂载: ${RECSYS_PROXY_PREFIX}/* -> ${recsysProxyRouter.recsysTarget}`);
+    log.info(`推荐算法点位反代已挂载: ${RECSYS_PROXY_PREFIX}/* -> ${recsysProxyRouter.recsysTarget}`);
 } else {
     // 没配 PRISM_RECSYS_TARGET 时给一句人话。不接的话 /recsys 会一路掉到 SPA 的
     // catch-all,浏览器里看到的是 Prism 自己的界面套在一个奇怪地址上 —— 那比 404
@@ -300,7 +304,7 @@ if (recsysProxyRouter) {
             + '<code>HOST=127.0.0.1</code>。</p></body></html>'
         );
     });
-    console.log(`${c.info('[INFO]')} 推荐算法点位反代未配置(PRISM_RECSYS_TARGET 未设置),${RECSYS_PROXY_PREFIX} 会给出配置提示页`);
+    log.info(`推荐算法点位反代未配置(PRISM_RECSYS_TARGET 未设置),${RECSYS_PROXY_PREFIX} 会给出配置提示页`);
 }
 
 // 反代只负责"转",不负责"上游是否活着"。配了 PRISM_MA_API_AUTOSTART 就顺带把上游那个
@@ -399,7 +403,7 @@ app.post('/api/providers/:provider/sessions/:sessionId/prewarm', authenticateTok
 
         res.json({ success: true, ...result });
     } catch (error) {
-        console.warn('[Prewarm] failed:', error?.message || error);
+        log.warn('[Prewarm] failed:', error?.message || error);
         res.json({ success: true, warmed: false, reason: 'error' });
     }
 });
@@ -437,7 +441,7 @@ app.get('/api/providers/:provider/sessions/:sessionId/runtime', authenticateToke
         }
         return res.json({ success: true, ...describeClaudeRuntime(session.provider_session_id) });
     } catch (error) {
-        console.warn('[Runtime] status failed:', error?.message || error);
+        log.warn('[Runtime] status failed:', error?.message || error);
         return res.json({ success: true, resident: false, busy: false, reason: 'error' });
     }
 });
@@ -463,7 +467,7 @@ app.post('/api/providers/:provider/sessions/:sessionId/runtime/release', authent
         const result = await releaseClaudeSession(session.provider_session_id);
         return res.json({ success: true, ...result, ...describeClaudeRuntime(session.provider_session_id) });
     } catch (error) {
-        console.warn('[Runtime] release failed:', error?.message || error);
+        log.warn('[Runtime] release failed:', error?.message || error);
         return res.json({ success: true, released: false, reason: 'error' });
     }
 });
@@ -621,7 +625,7 @@ app.use((err, req, res, next) => {
     });
   }
 
-  console.error(err);
+  log.error(err);
 
   return res.status(500).json({
     success: false,
@@ -653,7 +657,7 @@ async function shutdownStep(label, fn) {
     try {
         await fn();
     } catch (err) {
-        console.error(`[Shutdown] ${label} failed:`, err?.message || err);
+        log.error(`[Shutdown] ${label} failed:`, err?.message || err);
     }
 }
 
@@ -661,14 +665,14 @@ async function shutdownStep(label, fn) {
 // ignored; the 8s hard-exit timer still guarantees termination.
 async function shutdown(signal) {
     if (shutdownInProgress) {
-        console.log(`[Shutdown] ${signal} received while already shutting down — ignoring`);
+        log.info(`[Shutdown] ${signal} received while already shutting down — ignoring`);
         return;
     }
     shutdownInProgress = true;
-    console.log(`[Shutdown] ${signal} received — closing (hard exit in ${SHUTDOWN_HARD_EXIT_MS / 1000}s)`);
+    log.info(`[Shutdown] ${signal} received — closing (hard exit in ${SHUTDOWN_HARD_EXIT_MS / 1000}s)`);
 
     const hardExitTimer = setTimeout(() => {
-        console.error('[Shutdown] Cleanup exceeded time limit — forcing exit');
+        log.error('[Shutdown] Cleanup exceeded time limit — forcing exit');
         process.exit(1);
     }, SHUTDOWN_HARD_EXIT_MS);
     hardExitTimer.unref();
@@ -676,7 +680,7 @@ async function shutdown(signal) {
     // Stop accepting new HTTP connections (not awaited: idle keep-alive
     // sockets can hold close() open past the hard-exit window).
     await shutdownStep('http close', () => {
-        server.close(() => console.log('[Shutdown] HTTP server closed'));
+        server.close(() => log.info('[Shutdown] HTTP server closed'));
     });
 
     // Terminate WS clients, then close the WS server. Terminating shell
@@ -706,14 +710,14 @@ async function shutdown(signal) {
                 content: '服务已重启,这一回合被中断。点下方「重发上一条消息」可继续。',
             });
         }
-        if (running.length > 0) console.log(`[Shutdown] Marked ${running.length} interrupted run(s)`);
+        if (running.length > 0) log.info(`[Shutdown] Marked ${running.length} interrupted run(s)`);
     });
 
     // Abort in-flight Claude runs (sessions with a live turn)…
     await shutdownStep('claude aborts', async () => {
         const activeSessionIds = getActiveClaudeSDKSessions() || [];
         if (activeSessionIds.length === 0) return;
-        console.log(`[Shutdown] Aborting ${activeSessionIds.length} active Claude session(s)`);
+        log.info(`[Shutdown] Aborting ${activeSessionIds.length} active Claude session(s)`);
         await Promise.allSettled(
             activeSessionIds.map((sessionId) => Promise.resolve(abortClaudeSDKSession(sessionId)))
         );
@@ -725,7 +729,7 @@ async function shutdown(signal) {
     // them explicitly so every subprocess is closed cleanly.
     await shutdownStep('claude runtime dispose', async () => {
         const disposed = await disposeAllRuntimes();
-        if (disposed > 0) console.log(`[Shutdown] Disposed ${disposed} idle Claude runtime(s)`);
+        if (disposed > 0) log.info(`[Shutdown] Disposed ${disposed} idle Claude runtime(s)`);
     });
 
     // JupyterLab 子进程(SIGTERM;kernel 落盘由 jupyter 自己负责)。
@@ -747,6 +751,35 @@ async function shutdown(signal) {
 
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
+
+/**
+ * 进程级兜底。**这是一台多用户服务器**,一个人的一次意外不该把所有人的会话、
+ * 终端和定时任务一起带走。
+ *
+ * package.json 要求 node >= 22,而 Node >= 15 的 `--unhandled-rejections` 默认是
+ * `throw` —— 也就是说在补上这两条之前,任何一个没 catch 的 promise、任何一个没挂
+ * 监听器的流 error,都是**整机退出**。
+ *
+ * 为什么记完日志还是要退:进程走到这里说明有一条我们没预料到的路径,状态已经不可信
+ * (半开的事务、半写的 transcript)。带着不可信的状态继续服务,比重启一次更糟。
+ * 走 `shutdown()` 而不是裸崩,是为了让数据库、备份定时器、子进程有机会收尾 ——
+ * 裸崩会把 WAL 留在需要恢复的状态上。
+ *
+ * `shutdown` 自己有 8 秒硬退出窗口,所以不会卡死在这里。
+ */
+const fatal = (kind) => (error) => {
+  log.error(`[FATAL] ${kind}:`, error);
+  // shutdown 自身再抛就真没救了,兜一层直接退,别形成递归。
+  try {
+    void shutdown(kind);
+  } catch (shutdownError) {
+    log.error('[FATAL] shutdown 自身失败,直接退出:', shutdownError);
+    process.exit(1);
+  }
+};
+
+process.on('uncaughtException', fatal('uncaughtException'));
+process.on('unhandledRejection', fatal('unhandledRejection'));
 
 // Initialize database and start server
 async function startServer() {
@@ -773,31 +806,50 @@ async function startServer() {
         // 没人能开审批队列 → 同事注册后全部卡在待审、登不进,而产品里没有任何提示。
         // 至少在启动日志里喊一声,让运维一眼看到。
         if (listRootUsernames().length === 0) {
-            console.warn('');
-            console.warn(`${c.warn('[WARN]')} PRISM_ROOT_USERS 为空 —— 没有任何管理员。`);
-            console.warn('       后果:设置页看不到「账号」标签,新注册的账号会永远卡在待审批、无人能批。');
-            console.warn('       解决:在 .env 里设 PRISM_ROOT_USERS=<你的用户名>(用该名字注册后即为 root),然后重启。');
-            console.warn('');
+            log.warn('');
+            log.warn(`PRISM_ROOT_USERS 为空 —— 没有任何管理员。`);
+            log.warn('       后果:设置页看不到「账号」标签,新注册的账号会永远卡在待审批、无人能批。');
+            log.warn('       解决:在 .env 里设 PRISM_ROOT_USERS=<你的用户名>(用该名字注册后即为 root),然后重启。');
+            log.warn('');
         }
 
         // Production mode = a built dist folder exists
         const distIndexPath = path.join(APP_ROOT, 'dist', 'index.html');
         const isProduction = fs.existsSync(distIndexPath);
 
-        console.log(`${c.info('[INFO]')} Using Claude Agents SDK for Claude integration`);
-        console.log('');
+        log.info(`Using Claude Agents SDK for Claude integration`);
+        log.raw('');
 
         if (isProduction) {
-            console.log(`${c.info('[INFO]')} To run in production mode, go to http://${DISPLAY_HOST}:${SERVER_PORT}`);
+            log.info(`To run in production mode, go to http://${DISPLAY_HOST}:${SERVER_PORT}`);
         }
 
-        console.log(`${c.info('[INFO]')} To run in development mode with hot-module replacement, go to http://${DISPLAY_HOST}:${VITE_PORT}`);
+        log.info(`To run in development mode with hot-module replacement, go to http://${DISPLAY_HOST}:${VITE_PORT}`);
 
         server.listen(SERVER_PORT, HOST, async () => {
             const appInstallPath = APP_ROOT;
             // 定时任务调度器:服务就绪即装载(执行走与网页聊天同一条 run 通道)。
-            try { startTaskScheduler(queryClaudeSDK); } catch (error) {
-                console.warn('[Tasks] 调度器启动失败:', error?.message || error);
+            // 超时后要能真的掐掉回合(否则子进程继续写同一份 transcript,下一拍
+            // 又起第二个进程),回合结束后要能放行排队的网页消息 —— 两个能力都由
+            // 这里注入,tasks 模块不直接 import claude-sdk(模块边界 + 防环)。
+            try {
+                startTaskScheduler(queryClaudeSDK, {
+                    abortClaudeRun: (runId) => abortClaudeSDKSession('', { runId }),
+                    drainPendingSend: drainPendingSendForSession,
+                    // 任务失败要有人知道 —— 无人值守正是定时任务存在的理由。
+                    // 走与回合失败同一条编排(偏好闸 + 去重 + 通道),不另开一套。
+                    notifyTaskFailed: ({ userId, sessionId, taskName, error }) => {
+                        notifyRunFailed({
+                            userId,
+                            provider: 'system',
+                            sessionId,
+                            error: `定时任务「${taskName}」执行失败:${error}`,
+                            sessionName: taskName,
+                        });
+                    },
+                });
+            } catch (error) {
+                log.warn('[Tasks] 调度器启动失败:', error?.message || error);
             }
             /**
              * 清掉 Prism 自己跑 CLI 留下的幽灵项目行(目前只剩模型探测那一种)。
@@ -808,24 +860,27 @@ async function startServer() {
             try {
                 const { removed } = pruneInternalProjects();
                 if (removed.length > 0) {
-                    console.log(`${c.info('[INFO]')} 清理了 ${removed.length} 个 Prism 自己跑出来的幽灵项目`);
+                    log.info(`清理了 ${removed.length} 个 Prism 自己跑出来的幽灵项目`);
                 }
             } catch (error) {
-                console.warn('[Projects] 幽灵项目清理失败:', error?.message || error);
+                log.warn('[Projects] 幽灵项目清理失败:', error?.message || error);
             }
             await writeLocalServerMarker(LOCAL_SERVER_MARKER_PATH, buildLocalServerMarker()).catch((error) => {
-                console.warn('[WARN] Could not write local server marker:', error.message);
+                log.warn('Could not write local server marker:', error.message);
             });
 
-            console.log('');
-            console.log(c.dim('═'.repeat(63)));
-            console.log(`  ${c.bright('Prism Server - Ready')}`);
-            console.log(c.dim('═'.repeat(63)));
-            console.log('');
-            console.log(`${c.info('[INFO]')} Server URL:  ${c.bright('http://' + DISPLAY_HOST + ':' + SERVER_PORT)}`);
-            console.log(`${c.info('[INFO]')} Installed at: ${c.dim(appInstallPath)}`);
-            console.log(`${c.tip('[TIP]')}  Run "prism status" for full configuration details`);
-            console.log('');
+            // 启动横幅走 log.raw():这几行的**排版本身就是内容**,
+            // 每行前面挂上时间戳和级别只会把框线冲垮。日志分级管的是流水,
+            // 不管这种一次性的招牌。
+            log.raw('');
+            log.raw(c.dim('═'.repeat(63)));
+            log.raw(`  ${c.bright('Prism Server - Ready')}`);
+            log.raw(c.dim('═'.repeat(63)));
+            log.raw('');
+            log.raw(`${c.info('[INFO]')} Server URL:  ${c.bright('http://' + DISPLAY_HOST + ':' + SERVER_PORT)}`);
+            log.raw(`${c.info('[INFO]')} Installed at: ${c.dim(appInstallPath)}`);
+            log.raw(`${c.tip('[TIP]')}  Run "prism status" for full configuration details`);
+            log.raw('');
 
             // Start watching the projects folder for changes
             await initializeSessionsWatcher();
@@ -835,11 +890,11 @@ async function startServer() {
             // "Server Ready" 之后的启动流程。起不来也只是 /api/ma/* 返回 502,
             // Prism 其余功能一概不受影响 —— 所以这里 catch 掉,绝不让它把 Prism 带崩。
             maService?.start().catch(err => {
-                console.error('[ma-service] 自启失败:', err?.message || err);
+                log.error('[ma-service] 自启失败:', err?.message || err);
             });
         });
     } catch (error) {
-        console.error('[ERROR] Failed to start server:', error);
+        log.error('Failed to start server:', error);
         process.exit(1);
     }
 }

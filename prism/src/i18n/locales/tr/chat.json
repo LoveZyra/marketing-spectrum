@@ -16,9 +16,6 @@
     "tool": "Araç",
     "claude": "AI"
   },
-  "tools": {
-    "settings": "Araç Ayarları"
-  },
   "interactive": {
     "title": "Etkileşimli Prompt",
     "waiting": "CLI'da yanıtın bekleniyor",
@@ -36,7 +33,6 @@
   },
   "input": {
     "placeholder": "Komutlar için /, dosyalar için @ yaz ya da {{provider}}'a her şeyi sor...",
-    "attachFiles": "Dosya ekle",
     "attachImages": "Resim ekle",
     "send": "Gönder",
     "stop": "Durdur",
@@ -46,7 +42,6 @@
     },
     "clickToChangeMode": "İzin modunu değiştirmek için tıkla (veya girdide Tab tuşuna bas)",
     "showAllCommands": "Tüm komutları göster",
-    "clearInput": "Girdiyi temizle",
     "scrollToBottom": "En alta git",
     "attachmentPath": "yol",
     "modelHint": "Geçerli model: {{model}} · değiştirmek için tıklayın"
@@ -72,9 +67,6 @@
       "expandAll": "Tümünü göster",
       "loadingAll": "Tüm mesajlar yükleniyor...",
       "allLoaded": "Tüm mesajlar yüklendi"
-    },
-    "tokens": {
-      "compacting": "sıkıştırma"
     }
   },
   "shell": {

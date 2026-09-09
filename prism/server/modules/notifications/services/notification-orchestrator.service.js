@@ -1,4 +1,7 @@
 import { notificationPreferencesDb, sessionsDb } from '@/modules/database/index.js';
+import { webhookChannel } from '@/modules/notifications/services/webhook-channel.service.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('notify');
 
 const KIND_TO_PREF_KEY = {
   action_required: 'actionRequired',
@@ -187,7 +190,17 @@ function buildPayloadFromNormalized(normalizedEvent) {
 // delivery channel remains here. The orchestrator still normalizes events
 // and applies per-user event preferences and dedupe so future channels can
 // plug back in without touching the call sites.
-const notificationChannels = [];
+/**
+ * 投递通道。
+ *
+ * Web Push / Electron 两个通道在 web-only 重构时删掉了,此后这个数组**一直是空的**
+ * —— 也就是说服务端一条通知都发不出去,而编排管线(偏好闸、去重、payload)还完整跑着。
+ * 最直接的后果:**定时任务失败没有任何人会知道**,而无人值守正是定时任务存在的理由。
+ *
+ * fd 轮把 webhook 通道接了回来。它按"配没配 `PRISM_NOTIFY_WEBHOOK_URL`"自启用,
+ * 没配就等于零通道,`hasDeliveryChannels()` 照常早退,一次多余的查询都不会发生。
+ */
+const notificationChannels = [webhookChannel];
 
 /**
  * E11 —— 零通道时整条编排都是白算。
@@ -202,7 +215,9 @@ const notificationChannels = [];
  * 就全都活过来,调用点一个字都不用改。
  */
 function hasDeliveryChannels() {
-  return notificationChannels.length > 0;
+  // 看**启用了几个**,不是配了几个 —— webhook 没配地址时是"在册但未启用",
+  // 这时仍然要早退,否则那几十次白算的查询又回来了。
+  return notificationChannels.some((channel) => channel.isEnabled());
 }
 
 function notifyUserIfEnabled({ userId, event }) {
@@ -225,7 +240,7 @@ function notifyUserIfEnabled({ userId, event }) {
       continue;
     }
     Promise.resolve(channel.send({ userId, event: normalizedEvent, payload })).catch((err) => {
-      console.error(`Notification channel "${channel.id}" send error:`, err);
+      log.error(`Notification channel "${channel.id}" send error:`, err);
     });
   }
 }

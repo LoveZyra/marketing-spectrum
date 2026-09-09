@@ -1,5 +1,7 @@
 import { appConfigDb, projectsDb, userDb } from '@/modules/database/index.js';
 import { listRootUsernames } from '@/shared/root-users.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('admin');
 
 /**
  * Flag key. Its presence — not its value — is what stops the backfill running
@@ -37,7 +39,7 @@ export function backfillProjectOwners(env: NodeJS.ProcessEnv = process.env): Bac
     const projectsAssigned = projectsDb.assignUnownedProjectsTo(rootUserId);
     appConfigDb.set(BACKFILL_FLAG, new Date().toISOString());
 
-    console.log(
+    log.info(
       `[Owners] Backfilled ${projectsAssigned} project(s) to root user "${username}" (id ${rootUserId})`,
     );
     return { status: 'backfilled', rootUserId, rootUsername: username, projectsAssigned };
@@ -45,7 +47,7 @@ export function backfillProjectOwners(env: NodeJS.ProcessEnv = process.env): Bac
 
   // No configured root has registered yet. Try again next boot — and say so,
   // because a silent skip here looks exactly like a broken migration later.
-  console.log(
+  log.info(
     '[Owners] Project owner backfill skipped: no account from PRISM_ROOT_USERS exists yet',
   );
   return { status: 'no_root_account' };

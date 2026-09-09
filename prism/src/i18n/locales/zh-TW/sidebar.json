@@ -34,7 +34,6 @@
     "addToFavorites": "加入收藏",
     "removeFromFavorites": "從收藏移除",
     "editSessionName": "手動編輯工作階段名稱",
-    "deleteSession": "永久刪除此工作階段",
     "save": "儲存",
     "cancel": "取消",
     "clearSearch": "清除搜尋",
@@ -46,8 +45,7 @@
   "actions": {
     "settings": "設定",
     "cancel": "取消",
-    "save": "儲存",
-    "delete": "刪除"
+    "save": "儲存"
   },
   "status": {
     "active": "使用中",
@@ -87,10 +85,6 @@
     "deleteAllData": "永久刪除所有資料"
   },
   "project": {
-    "public": "公共",
-    "rootOnly": "僅 root",
-    "shared": "共享",
-    "sharedOut": "已共享",
     "permissions": {
       "title": "專案權限",
       "close": "關閉",

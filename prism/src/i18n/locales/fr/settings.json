@@ -10,9 +10,6 @@
     "languageLabel": "Langue d'affichage",
     "languageDescription": "Choisissez votre langue préférée pour l'interface"
   },
-  "appearance": {
-    "theme": "Thème"
-  },
   "quickSettings": {
     "title": "Paramètres rapides",
     "sections": {
@@ -60,10 +57,6 @@
     }
   },
   "appearanceSettings": {
-    "darkMode": {
-      "label": "Mode sombre",
-      "description": "Basculer entre les thèmes clair et sombre"
-    },
     "projectSorting": {
       "label": "Tri des projets",
       "description": "Ordre d'affichage des projets dans la barre latérale",

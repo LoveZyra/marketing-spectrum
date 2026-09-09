@@ -3,6 +3,7 @@ import { Cpu } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { authenticatedFetch } from '../../../../utils/api';
+import { formatBytes } from '../../../../utils/formatBytes';
 
 type OwnerUsage = {
   userId: number | null;
@@ -29,12 +30,7 @@ export type RuntimeStats = {
   caches: { history: { entries: number; bytes: number } };
 };
 
-const formatBytes = (bytes: number): string => {
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} B`;
-};
+// 口径见 utils/formatBytes(这份原本与父组件 ServerStatusTab 的那份不一致)。
 
 const ownerLabel = (owner: OwnerUsage, anonymous: string): string =>
   owner.username ?? (owner.userId == null ? anonymous : `#${owner.userId}`);

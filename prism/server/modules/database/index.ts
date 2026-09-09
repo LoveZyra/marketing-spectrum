@@ -21,3 +21,5 @@ export { uiSettingsDb, type UiSettingsRecord } from '@/modules/database/reposito
 export { userDb } from '@/modules/database/repositories/users.js';
 export type { ApprovalStatus, UserAdminRow } from '@/modules/database/repositories/users.js';
 export { attachmentsDb, type AttachmentKind, type AttachmentRecord } from '@/modules/database/repositories/attachments.db.js';
+export { usageRecordsDb, deriveCostDelta } from '@/modules/database/repositories/usage-records.db.js';
+export type { UsageRecordInput, UsageRecordRow, UsageSummaryRow, UsageSource } from '@/modules/database/repositories/usage-records.db.js';

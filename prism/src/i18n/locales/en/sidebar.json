@@ -34,7 +34,6 @@
     "addToFavorites": "Add to favorites",
     "removeFromFavorites": "Remove from favorites",
     "editSessionName": "Manually edit session name",
-    "deleteSession": "Delete this session permanently",
     "activeSessionIndicator": "Recently active session (last 10 minutes)",
     "save": "Save",
     "cancel": "Cancel",
@@ -51,8 +50,7 @@
   "actions": {
     "settings": "Settings",
     "cancel": "Cancel",
-    "save": "Save",
-    "delete": "Delete"
+    "save": "Save"
   },
   "status": {
     "active": "Active",
@@ -95,10 +93,6 @@
     "deleteAllData": "Delete all data permanently"
   },
   "project": {
-    "public": "Public",
-    "rootOnly": "Root only",
-    "shared": "Shared",
-    "sharedOut": "Shared out",
     "permissions": {
       "title": "Project permissions",
       "close": "Close",

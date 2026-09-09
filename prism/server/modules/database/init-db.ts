@@ -1,6 +1,8 @@
 import { backupDatabase, getConnection } from "@/modules/database/connection.js";
 import { runMigrations } from "@/modules/database/migrations.js";
 import { INIT_SCHEMA_SQL } from "@/modules/database/schema.js";
+import { createLogger } from "@/shared/logger.js";
+const log = createLogger("db");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -31,11 +33,15 @@ export const startDatabaseBackups = (): void => {
     // migrations, project scan) for the same write lock.
     initialBackupTimer = setTimeout(() => {
         initialBackupTimer = null;
-        backupDatabase(keep);
+        // 现在是异步增量备份(见 connection.ts),悬空的 promise 要接住 ——
+        // 没人 catch 的 rejection 在 Node 22 下是整机退出。
+        void backupDatabase(keep).catch((error) => log.error('Database backup failed', error));
     }, 60_000);
     initialBackupTimer.unref();
 
-    backupTimer = setInterval(() => backupDatabase(keep), intervalMs);
+    backupTimer = setInterval(() => {
+        void backupDatabase(keep).catch((error) => log.error('Database backup failed', error));
+    }, intervalMs);
     backupTimer.unref();
 };
 
@@ -56,12 +62,12 @@ export const initializeDatabase = async () => {
     try {
         const db = getConnection();
         db.exec(INIT_SCHEMA_SQL);
-        console.log('Database schema applied');
+        log.info('Database schema applied');
         runMigrations(db);
         startDatabaseBackups();
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log('Database initialization failed', { error: message });
+        log.info('Database initialization failed', { error: message });
         throw err;
     }
 };

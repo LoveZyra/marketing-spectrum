@@ -38,7 +38,30 @@ const RETIRED_FILES = [
   'src/components/chat/view/subcomponents/ToolGroupContainer.tsx',
   'src/components/sidebar/view/subcomponents/SidebarCollapsed.tsx',
   'src/constants/branding.ts',
+  // eu —— 技能训练(SkillOpt)整个功能移除。**这条后果最实**:server/tsconfig.json
+  // 的 include 是全树通配 + noEmitOnError,部署目录里残留一棵 skillopt 树,tsc 会去
+  // 编它,而它 import 的仓库层和审计事件都已经删干净 —— **整个 server 构建挂掉**,
+  // 错误信息还指向一堆早该不存在的文件。目录用代表性文件登记。
+  'server/modules/skillopt/skillopt.service.ts',
+  'src/components/skillopt/SkillOptPage.tsx',
+  'server/modules/database/repositories/skillopt-runs.db.ts',
+  // ew —— tools/skillopt 整棵
+  'tools/skillopt/adapter.py',
+  // ex —— 首页还原回两栏版式,ef/ek 加的这三个跟着撤掉
+  'src/components/chat/view/subcomponents/HomeToolsSection.tsx',
+  'src/components/chat/utils/recentSessions.ts',
+  'src/components/chat/utils/recentSessions.test.ts',
 ];
+
+/*
+ * ⚠️ 这张表**只有每轮都维护才有价值,漏一轮就等于没有**。
+ *
+ * 它一度停在 bt 轮,而此后 eu / ew / ex 三轮退役的 5 棵树一个都没登记 ——
+ * 也就是说这个守卫在最需要它的那几次升级里是哑的(尤其 skillopt:它是唯一一次
+ * 残留会直接让构建挂掉的)。
+ *
+ * 所以:**删文件的那一轮就把它加进来**,别等发包检查单。
+ */
 
 const stale = RETIRED_FILES.filter((relative) => fs.existsSync(path.join(root, relative)));
 

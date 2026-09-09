@@ -8,6 +8,8 @@
  */
 
 import { getConnection } from '@/modules/database/connection.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('db');
 
 type UserRow = {
   id: number;
@@ -112,7 +114,7 @@ export const userDb = {
       ).run(userId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error('Failed to update last login', { error: message });
+      log.error('Failed to update last login', { error: message });
     }
   },
 

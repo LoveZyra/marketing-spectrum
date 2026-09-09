@@ -2,10 +2,13 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { projectVisibilityInput, projectsDb, sessionsDb } from '@/modules/database/index.js';
-import { generateDisplayName } from '@/modules/projects/index.js';
+// 同 sessions-watcher:走 barrel 会成环,叶子直取。
+import { generateDisplayName } from '@/shared/project-display-name.js';
 import { ChatSessionWriter } from '@/modules/websocket/services/chat-session-writer.service.js';
-import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
+import { connectedClients, WS_OPEN_STATE } from '@/shared/websocket-state.js';
 import { canViewerSeeProject } from '@/shared/project-visibility.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('ws');
 import type {
   LLMProvider,
   NormalizedMessage,
@@ -80,11 +83,54 @@ const MAX_BUFFERED_EVENTS_PER_RUN = 5000;
  */
 const MAX_BUFFERED_BYTES_PER_RUN = 8 * 1024 * 1024;
 
-/** 一条事件的近似字节数。只数字符串内容,足够做预算控制。 */
+/**
+ * 一条事件的近似字节数。
+ *
+ * ## 为什么不能"只数字符串内容"
+ *
+ * 原来这里只数 `content` 和 `toolResult.content` 两个字段,其余一律按 256 字节计。
+ * 而缓冲里真正的大头恰恰不在这两个字段上:
+ *
+ *   - `toolInput` —— Write / Edit 工具带的是**整份文件正文**;
+ *   - `toolResult.toolUseResult`、`subagentTools` —— 子代理那一整棵过程;
+ *   - `changed_files` 的 `files[]`(每条带 diff)、`images`。
+ *
+ * 于是 8 MB 的上限**几乎永远触不到**,实际只剩 `MAX_BUFFERED_EVENTS_PER_RUN = 5000`
+ * 这一道条数闸。一轮里做几十上百次大文件 Write(代码生成类任务的常态)就是
+ * 200 帧 × 1 MB = 200 MB 挂在一条 run 上,再乘并发数和 5 分钟保留期。
+ * 裁剪逻辑本身是对的,只是永远不会被唤醒。
+ *
+ * ## 为什么用 JSON.stringify 而不是逐字段累加
+ *
+ * 这几个字段都是 `unknown`(见 shared/types.ts),形状由 provider 决定,逐字段累加
+ * 等于在这里复刻一份 provider 的数据结构 —— 那份复刻迟早和真实形状漂开,而漂开的
+ * 表现是"预算又不准了",没人会发现。stringify 是唯一不会漂的口径。
+ *
+ * 代价是每条事件多一次序列化。这条路径每回合几十到几百次,不在热循环里;
+ * 而且 stringify 失败(循环引用)时回落到 256,不会让一条畸形事件打断整轮。
+ */
 function approximateEventBytes(event: NormalizedMessage): number {
   const content = typeof event.content === 'string' ? event.content.length : 0;
   const toolResult = typeof event.toolResult?.content === 'string' ? event.toolResult.content.length : 0;
-  return content + toolResult + 256;
+
+  let heavy = 0;
+  for (const value of [
+    event.toolInput,
+    event.toolResult?.toolUseResult,
+    (event as { toolUseResult?: unknown }).toolUseResult,
+    (event as { subagentTools?: unknown }).subagentTools,
+    (event as { files?: unknown }).files,
+    event.images,
+  ]) {
+    if (value == null) continue;
+    try {
+      heavy += JSON.stringify(value)?.length ?? 0;
+    } catch {
+      heavy += 256; // 循环引用之类:给个下限,别让预算算崩
+    }
+  }
+
+  return content + toolResult + heavy + 256;
 }
 
 /**
@@ -147,11 +193,21 @@ async function broadcastCanonicalSessionUpsert(appSessionId: string): Promise<vo
   });
 }
 
-function evictRunLater(appSessionId: string): void {
+/**
+ * fj:定时器要认 **run**,不认会话 id。
+ *
+ * 原来回调里只做 `runs.get(appSessionId)` —— 没有捕获调度它的那个 run。
+ * 同一会话 5 分钟内跑完两轮(排队续发、连续对话都会)时,R1 的定时器到点会看到
+ * **R2** 且状态是 completed,直接把它删掉,比 R2 自己的保留期早了几分钟。
+ *
+ * 现在的可见后果很小(已完成 run 的 replay 本来就被 `isProcessing` 挡着,
+ * 只是 `chat_subscribed` 会把 `lastSeq` 报成 0),列在这里是因为这是一个确定的
+ * 实现缺陷,而修法只有一行。
+ */
+function evictRunLater(run: ChatRun): void {
   const timer = setTimeout(() => {
-    const run = runs.get(appSessionId);
-    if (run && run.status === 'completed') {
-      runs.delete(appSessionId);
+    if (runs.get(run.appSessionId) === run && run.status === 'completed') {
+      runs.delete(run.appSessionId);
     }
   }, COMPLETED_RUN_RETENTION_MS);
 
@@ -178,6 +234,22 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
     return null;
   }
 
+  /**
+   * fj:已完成的 run **一律不再转发内容帧**。
+   *
+   * 上面那道闸只挡重复的 `complete`,其它 kind 照发照落库。而中止路径会抢先发
+   * 终止帧把 run 标成 completed,被杀掉的运行时随后还会吐一阵在途的
+   * `tool_result` / `stream_delta` / `changed_files` —— 于是:
+   *   - 前端已经停了转圈、停止按钮也没了,正文却还在长;
+   *   - `seq` 继续往前推,而客户端的补发游标停在终止帧那里,下次订阅会被判成空洞;
+   *   - 这些帧还会被 writer 落进显示日志,刷新之后"停止"那一刻之后的内容仍然在。
+   *
+   * 用户的判断是"我按了停止,所以后面的都不算数" —— 这一句让实现与那个判断一致。
+   */
+  if (run.status === 'completed') {
+    return null;
+  }
+
   run.lastSeq += 1;
 
   const outbound: NormalizedMessage = {
@@ -193,7 +265,7 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
     outbound.actualSessionId = run.appSessionId;
     run.status = 'completed';
     run.completedAt = Date.now();
-    evictRunLater(run.appSessionId);
+    evictRunLater(run);
   }
 
   // 审批帧**不进重放缓冲**。
@@ -255,7 +327,7 @@ function recordProviderSessionId(run: ChatRun, providerSessionId: string): void 
     run.providerSessionId = providerSessionId;
     void broadcastCanonicalSessionUpsert(run.appSessionId).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[ChatRunRegistry] Failed to broadcast canonical session mapping', {
+      log.error('[ChatRunRegistry] Failed to broadcast canonical session mapping', {
         appSessionId: run.appSessionId,
         providerSessionId,
         error: message,
@@ -263,7 +335,7 @@ function recordProviderSessionId(run: ChatRun, providerSessionId: string): void 
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error('[ChatRunRegistry] Failed to persist provider session id mapping', {
+    log.error('[ChatRunRegistry] Failed to persist provider session id mapping', {
       appSessionId: run.appSessionId,
       providerSessionId,
       error: message,
@@ -429,6 +501,23 @@ export const chatRunRegistry = {
   /** 当前(或刚结束)那一轮的 id;没有 run 时为 null。 */
   currentRunId(appSessionId: string): string | null {
     return runs.get(appSessionId)?.runId ?? null;
+  },
+
+  /**
+   * fj:重放缓冲里**还剩的最早那个 seq**。
+   *
+   * 缓冲会按条数/字节被裁剪(注释里写着"截断后客户端回落 REST"),但客户端此前
+   * **无从知道自己是不是踩到了截断**:它只看 seq 有没有跳号,而重放是从缓冲现有
+   * 的第一条开始发的 —— 首帧就缺了一段时,跳号检测看到的是"连续的",于是那段
+   * 内容静默丢失,直到下一次跳号或整轮结束才被 REST 补回来。
+   *
+   * 报出这个水位,客户端拿它和自己的 `lastSeq` 一比就知道要不要直接回落 REST。
+   */
+  earliestBufferedSeq(appSessionId: string): number | null {
+    const run = runs.get(appSessionId);
+    if (!run || run.events.length === 0) return null;
+    const first = run.events[0];
+    return typeof first.seq === 'number' ? first.seq : null;
   },
 
   replayEvents(appSessionId: string, afterSeq: number, clientRunId?: string | null): NormalizedMessage[] {

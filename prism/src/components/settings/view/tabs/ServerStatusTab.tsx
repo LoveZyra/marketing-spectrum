@@ -3,9 +3,11 @@ import { Activity, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { authenticatedFetch } from '../../../../utils/api';
+import { formatBytes, formatKilobytes } from '../../../../utils/formatBytes';
 
 import AttachmentQuotaSection from './AttachmentQuotaSection';
 import RuntimeStatsSection from './RuntimeStatsSection';
+import UsageCostSection from './UsageCostSection';
 
 type ServerStatus = {
   now: string;
@@ -33,13 +35,9 @@ type StatusResponse = { success?: boolean; status?: ServerStatus; error?: string
 
 const REFRESH_MS = 10_000;
 
-const formatBytes = (bytes: number): string => {
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
-  return `${Math.round(bytes / 1024)} KB`;
-};
-
-const formatKb = (kb: number): string => formatBytes(kb * 1024);
+// 口径见 utils/formatBytes —— 这里原来是四份实现之一,和它的子组件
+// RuntimeStatsSection 并排渲染却对不上(MB 档小数位不同,而且缺 < 1KB 分支)。
+const formatKb = formatKilobytes;
 
 const formatUptime = (seconds: number): string => {
   const days = Math.floor(seconds / 86400);
@@ -211,6 +209,10 @@ export default function ServerStatusTab() {
               原因通常在这两块里,而它们此前一个都看不见。 */}
           <RuntimeStatsSection refreshMs={REFRESH_MS} />
           <AttachmentQuotaSection />
+          {/* fg:用量与费用台账。放在服务器页而不是"我的账号",是因为它回答的是
+              运维/负责人的问题("这个月花了多少、谁花的"),不是个人偏好。
+              非 root 打开时服务端只给他自己的行,组件里有一句说明。 */}
+          <UsageCostSection />
         </>
       )}
     </div>

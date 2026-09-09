@@ -18,11 +18,28 @@ export type ConversationHolder = {
   userId: string | number | null;
   username: string | null;
   since: string;
+  /** fj:释放凭据 —— 见 `claimForShell`。 */
+  token?: string;
 };
 
 const holders = new Map<string, ConversationHolder>();
 
-/** 终端接管一段对话。同一会话重复接管按最后一次算。 */
+/**
+ * fj:接管令牌。
+ *
+ * 这把锁原来只有一个 `Map<sessionId, holder>`:接管是覆盖式的、释放是无条件
+ * `delete`。两条真实的错法:
+ *   1. **覆盖** —— 第二个人在同一路径开终端,`claimForShell` 直接盖掉第一个人的
+ *      记录;第一个人的 PTY 退出时把整条锁删掉,而第二个人的终端还连着 ——
+ *      chat 以为没人接管,开始与 PTY 双写同一份 transcript。
+ *   2. **错误释放** —— 任何一条断开路径调 `releaseShellClaim(sessionId)` 都能
+ *      删掉**别人**刚建立的那把锁。
+ *
+ * 令牌把"谁持有"这件事变得可判定:释放时必须出示自己那张,对不上就不动。
+ */
+let claimSequence = 0;
+
+/** 终端接管一段对话。返回的 token 是释放时的凭据。 */
 export function claimForShell(
   appSessionId: string,
   viewer: { userId?: string | number | null; username?: string | null },
@@ -32,6 +49,7 @@ export function claimForShell(
     userId: viewer.userId ?? null,
     username: viewer.username ?? null,
     since: new Date().toISOString(),
+    token: `claim_${++claimSequence}_${Date.now()}`,
   };
   holders.set(appSessionId, holder);
   return holder;
@@ -50,7 +68,18 @@ export function claimForShell(
  * 丢掉之后,下一次在 Prism 里发言会用 transcript(此时它已经包含终端那一截)
  * 重新抄一份完整的日志。代价是重抄一次,换来的是"要么完整、要么没有"这条不变式。
  */
-export function releaseShellClaim(appSessionId: string): void {
+export function releaseShellClaim(appSessionId: string, token?: string): void {
+  const current = holders.get(appSessionId);
+  if (!current) return;
+  /**
+   * fj:出示的令牌对不上就**什么都不做**。
+   *
+   * 不给令牌的调用方(老路径)按旧行为放行 —— 一刀切要求令牌会让任何一条
+   * 漏传的断开路径把锁永久留住,那比偶尔多释放一次更糟。
+   */
+  if (token && current.token && current.token !== token) {
+    return;
+  }
   holders.delete(appSessionId);
   try {
     sessionMessagesDb.deleteForSession(appSessionId);

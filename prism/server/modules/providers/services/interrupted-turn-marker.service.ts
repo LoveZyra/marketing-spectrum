@@ -19,6 +19,8 @@
 
 import { getConnection, sessionMessagesDb } from '@/modules/database/index.js';
 import { generateMessageId } from '@/shared/utils.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('providers');
 
 type TailRow = { session_id: string; kind: string; payload: string };
 
@@ -76,10 +78,10 @@ export function markInterruptedTurnsOnStartup(): number {
       if (appended) marked += 1;
     }
     if (marked > 0) {
-      console.log(`[startup] 已给 ${marked} 条被重启打断的会话补上「请重发」标记`);
+      log.info(`[startup] 已给 ${marked} 条被重启打断的会话补上「请重发」标记`);
     }
   } catch (error) {
-    console.warn('[startup] 打断标记补写失败:', (error as Error)?.message || error);
+    log.warn('[startup] 打断标记补写失败:', (error as Error)?.message || error);
   }
   return marked;
 }

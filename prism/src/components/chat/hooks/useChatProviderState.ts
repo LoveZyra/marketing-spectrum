@@ -159,8 +159,17 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
     localStorage.setItem('claude-model', model);
   }, []);
 
+  /**
+   * fj:迟到的响应不许污染当前会话。
+   *
+   * 这个请求没有任何票据:切会话很快时(A 慢 → B 快),A 的响应会**盖在**
+   * B 的视图上 —— 界面上显示的是另一条会话的模型,而用户完全看不出来。
+   * store 那边早就有 `_fetchSeq` 这套票据,这里补一个同样的。
+   */
+  const activeModelRequestRef = useRef(0);
   const refreshActiveSessionModel = useCallback(async (sessionId?: string | null) => {
     const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    const ticket = ++activeModelRequestRef.current;
     if (!normalizedSessionId) {
       setActiveSessionModel(null);
       return;
@@ -171,8 +180,10 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
         `/api/providers/${PROVIDER}/sessions/${encodeURIComponent(normalizedSessionId)}/active-model`,
       );
       const body = (await response.json()) as { success?: boolean; data?: { model?: string } };
+      if (ticket !== activeModelRequestRef.current) return; // 被更新的请求顶替了
       setActiveSessionModel(response.ok && body.data?.model ? body.data.model : null);
     } catch {
+      if (ticket !== activeModelRequestRef.current) return;
       // A missing indicator is better than a wrong one.
       setActiveSessionModel(null);
     }

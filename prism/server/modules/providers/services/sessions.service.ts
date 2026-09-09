@@ -145,10 +145,25 @@ export function collectWorkFrames(messages: readonly NormalizedMessage[]): Colle
   /** 本轮至今最后一条**有内容的助手正文**的消息 id —— 结算时挂它。 */
   let pendingAnchorId = '';
   let turnCount = 0;
+  /**
+   * fj:上限改成保留**最新**的若干轮,与 `frames` 的尾部截断同向。
+   *
+   * 原来是 `turnCount < MAX_TURN_OUTPUT_ENTRIES` —— 消息从旧到新遍历,计数一旦
+   * 到顶,后面所有轮都不再写入。方向和帧截断正好相反,于是长会话里"越老的回合
+   * 越有产出卡,最近刚跑完的这几轮反而什么都没有",而 `:255` 的注释说的正是
+   * 最新那一轮最要紧。(`dropPendingWrite` 还会 delete 键却不回退 `turnCount`,
+   * 实际能挂上的轮数比上限更少。)
+   *
+   * 现在满了就淘汰最早的那个键(Map/对象的键序就是插入序),先进先出。
+   */
   const flushTurn = () => {
-    if (pendingAnchorId && pendingTurnFiles.length > 0 && turnCount < MAX_TURN_OUTPUT_ENTRIES) {
+    if (pendingAnchorId && pendingTurnFiles.length > 0) {
       turnOutputs[pendingAnchorId] = pendingTurnFiles;
       turnCount += 1;
+      const keys = Object.keys(turnOutputs);
+      if (keys.length > MAX_TURN_OUTPUT_ENTRIES) {
+        delete turnOutputs[keys[0]];
+      }
     }
     pendingTurnFiles = [];
     pendingAnchorId = '';
@@ -342,7 +357,60 @@ function resolveProjectDisplayName(
  * class, keeping normalization/history call sites decoupled from implementation
  * file layout.
  */
+/**
+ * fj:丢掉页首那几条**配不上对**的 `tool_result`。
+ *
+ * 比"往前多取几条"简单也更安全:多取会改变 `offset` 的含义(调用方按它算
+ * 下一页),而丢掉几条只是让这一页少几行 —— 那几行本来在前端也是不渲染的。
+ * 它们会在用户往上翻、`tool_use` 进入窗口时一起回来。
+ */
+const MAX_DROPPED_ORPHAN_RESULTS = 8;
+
+function dropLeadingOrphanToolResults(messages: NormalizedMessage[]): NormalizedMessage[] {
+  const toolUseIds = new Set(
+    messages
+      .filter((message) => message.kind === 'tool_use')
+      .map((message) => (message as { toolId?: string }).toolId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  );
+  let start = 0;
+  while (
+    start < messages.length
+    && start < MAX_DROPPED_ORPHAN_RESULTS
+    && messages[start].kind === 'tool_result'
+  ) {
+    const toolId = (messages[start] as { toolId?: string }).toolId;
+    if (!toolId || toolUseIds.has(toolId)) break;
+    start += 1;
+  }
+  return start === 0 ? messages : messages.slice(start);
+}
+
 export const sessionsService = {
+  /**
+   * 这个访问者可见的会话**分页**列表(外部 API `GET /api/agent/sessions` 用)。
+   *
+   * 放在这一层是因为 `visibilityScopeOf`(Viewer → SQL 可见范围)住在这里 ——
+   * 路由层不该自己再拼一遍那条判据。仓库层只认 scope,不认 Viewer。
+   *
+   * 之前那条路由是 `getAllSessions()` 整表捞 + JS 侧逐行过滤,而过滤函数每行查库:
+   * better-sqlite3 是同步的,4000 条会话就是 4000+ 次同步查询把**事件循环整个按住**
+   * (实测 219ms,期间所有人的 WS 帧和请求全停)。下推之后 2.18ms。
+   */
+  listVisibleSessionsPage(
+    viewer: Viewer,
+    limit: number,
+    offset: number,
+    options: { includeArchived?: boolean } = {},
+  ) {
+    return sessionsDb.getVisibleSessionsPage(
+      visibilityScopeOf(viewer),
+      limit,
+      offset,
+      { archived: options.includeArchived ? 'include' : 'exclude' },
+    );
+  },
+
   /**
    * Lists provider ids that can load session history and normalize live messages.
    */
@@ -469,8 +537,22 @@ export const sessionsService = {
      * 老会话继续走 transcript(带着 `transcript-provenance` 的出处判定),
      * 新会话从第一条消息起就走日志。
      */
+    /**
+     * fj:「日志有行」不等于「日志是权威」。
+     *
+     * `trimSession` 会把超出 `PRISM_DISPLAY_LOG_MAX_PER_SESSION`(默认 2000)的
+     * 最早那批**物理删掉**。此前这里只判 `loggedCount > 0`,于是长会话被裁之后
+     * 仍然一律读日志 —— 早期几百上千条从界面永久消失,`total` 跟着变小,界面还
+     * 显示"已加载全部"。磁盘上的 jsonl 一直都在,只是应用再也不看它。
+     *
+     * 现在裁剪会盖戳,盖过戳且**确实有 transcript 可回落**时就走 transcript。
+     * 没有 transcript 的会话(纯新建、还没落盘)即使被裁也只能读日志 —— 那是
+     * 它仅有的记录,读残缺的也好过读不到。
+     */
     const loggedCount = sessionMessagesDb.countForSession(sessionId);
-    if (loggedCount > 0) {
+    const logIsAuthoritative = loggedCount > 0
+      && !(sessionMessagesDb.isTrimmed(sessionId) && Boolean(session.provider_session_id));
+    if (logIsAuthoritative) {
       const limit = options.limit ?? null;
       const offset = options.offset ?? 0;
 
@@ -480,8 +562,21 @@ export const sessionsService = {
       // 全量重读 —— 长会话(数千行)一轮省一次整段读盘。
       if (limit !== null) {
         const page = sessionMessagesDb.listTailPage(sessionId, limit, offset);
+        /**
+         * fj:**页首不许是一条孤儿 `tool_result`。**
+         *
+         * 分页按原始事件切,而工具调用与它的结果是两条独立事件 —— 边界正好落在
+         * 中间时,这一页的第一条就是一个找不到 `tool_use` 的结果。前端为此专门
+         * 写了"有 toolId 却找不到调用就跳过渲染"的分支(`useChatMessages`),
+         * 于是那条结果**看不见**,而对应的调用在上一页里显示成"没有结果" ——
+         * 直到用户往上翻一页才自己拼回去。
+         *
+         * 边界往前挪几条,把 `tool_use` 一起带进来。上限 8 条:一轮里工具调用
+         * 与结果是紧邻的,挪太多等于把分页的意义削掉。
+         */
+        const trimmed = dropLeadingOrphanToolResults(page.messages);
         return {
-          messages: page.messages.map((message) => ({ ...message, sessionId })),
+          messages: trimmed.map((message) => ({ ...message, sessionId })),
           total: page.total,
           hasMore: page.hasMore,
           offset,
@@ -625,6 +720,24 @@ export const sessionsService = {
         action: 'archived',
         deletedFromDisk: false,
       };
+    }
+
+    /**
+     * fj:**跑着的会话不许硬删。**
+     *
+     * 此前删除与运行之间没有任何协调:行删掉了、transcript 也删了,而运行时
+     * 还在往那份已经不存在的 jsonl 里追加,writer 还在往一个没有主的 session_id
+     * 落显示日志(那张表刻意没建外键,所以孤儿行会一直留着)。收尾时
+     * `completeRunIfCurrent` 又去更新一行不存在的记录。
+     *
+     * 明确拒绝、并告诉用户怎么办,比"删了但后台还在跑"好 —— 后者的现场
+     * 极难解释:侧栏里没有这条会话,CPU 却在转,日志里还在刷它的输出。
+     */
+    if (chatRunRegistry.isProcessing(sessionId)) {
+      throw new AppError(
+        `会话 "${sessionId}" 正在跑一个回合 —— 先停止它再删除(否则后台仍会继续跑,而它已经没有归属了)。`,
+        { code: 'SESSION_RUN_IN_PROGRESS', statusCode: 409 },
+      );
     }
 
     let removedFromDisk = false;

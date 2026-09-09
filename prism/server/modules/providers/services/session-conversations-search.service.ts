@@ -5,7 +5,7 @@ import readline from 'node:readline';
 import { spawn } from 'cross-spawn';
 
 import { resolveRipgrepPath } from '@/shared/ripgrep-path.js';
-import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { NO_SUCH_USER_ID, projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { canViewerSeeProject } from '@/shared/project-visibility.js';
 import { isInternalContent } from '@/modules/providers/list/claude/transcript-provenance.js';
 
@@ -617,6 +617,16 @@ async function runRipgrepFilesWithMatches(
   });
 }
 
+/**
+ * ripgrep 预筛:挑出**可能**含有查询词的文件。
+ *
+ * fj:`words` 现在是**去重且封顶**的预筛词表,不是完整查询词。这里返回的是
+ * 一个过近似集合(over-approximation),严格判定由调用方的 `matchesQuery`
+ * 负责 —— 少几个约束只会让候选集更大,不会漏结果。
+ *
+ * 封顶的理由见 `MAX_RIPGREP_WORDS`:每个词一整轮 ripgrep,而词与词取交集时
+ * 只要每个词都命中全部文件,集合就不收窄,早退闸永不触发。
+ */
 async function findMatchedFileKeys(
   searchablePathEntries: SearchablePathEntry[],
   rawQuery: string,
@@ -779,10 +789,17 @@ async function parseClaudeSessionMatches(
 
     let currentSessionId: string | null = null;
 
+    /**
+     * 流在 try **外面**建、finally 里关。
+     *
+     * 这个循环有两条 abrupt completion:命中结果上限 / 请求被取消时的 `break`,
+     * 以及任何抛错。两条都绕过 autoClose —— 流没走到 'end',fd 既不回收也不被 GC 收。
+     * 也就是说**每一次"搜索对话"命中上限或被用户取消,就漏一个 fd**。
+     * 实测 30 次早 break = +30 fd。
+     */
+    const fileStream = fsSync.createReadStream(session.jsonl_path);
+    const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
     try {
-      const fileStream = fsSync.createReadStream(session.jsonl_path);
-      const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
       for await (const line of rl) {
         if (runtime.totalMatches >= runtime.limit || runtime.isAborted()) {
           break;
@@ -866,6 +883,9 @@ async function parseClaudeSessionMatches(
     } catch {
       runtime.claudeFileResultsCache.set(fileKey, new Map());
       return null;
+    } finally {
+      rl.close();
+      fileStream.destroy();
     }
 
     const fileResults = new Map<string, SessionConversationResult>();
@@ -952,8 +972,43 @@ function restrictToViewer(
 
   return sessions.filter((session) => {
     const key = normalizeComparablePath(session.project_path ?? '');
-    if (!key || !metaByPath.has(key)) {
-      return true;
+    /**
+     * fj:兜底方向要与 `canViewerSeeSession` 一致 —— **不是 `return true`**。
+     *
+     * 同一条"会话可见性"规则在仓库里有三份实现,而它们对"`project_path` 为空 /
+     * 查不到对应项目行"这个边界给出**相反**的答案:
+     *   - `session-visibility.ts` → `ownerUserId: -1`,**仅 root**;
+     *   - `sessions.db.ts` 的 SQL → `TRIM(COALESCE(project_path,'')) <> ''`,
+     *     **非 root 一律排除**;
+     *   - 这里 → `return true`,**对所有登录用户可见**。
+     *
+     * 而搜索返回的是对话正文片段,泄漏面比侧栏列表大得多。schema 里
+     * `ON DELETE SET NULL` 说明这种孤儿行是被预期会出现的(正常删除路径先删会话
+     * 行,所以目前不可达,但这条判据不该靠"上游恰好不产生"成立)。
+     * 症状会是「搜得到但点不进去」—— 排查时很难联想到是判据漂移。
+     */
+    if (!key) {
+      // project_path 为空:与 session-visibility 同义 —— 只有 root 看得见。
+      return canViewerSeeProject({
+        // -1 与 session-visibility.ts 同义:没有这个用户,于是只有 root 判得过。
+        ownerUserId: NO_SUCH_USER_ID,
+        viewerUserId: viewer.userId,
+        viewerUsername: viewer.username,
+        projectPath: null,
+        visibility: null,
+        sharedUserIds: [],
+      });
+    }
+    if (!metaByPath.has(key)) {
+      // 有路径但查不到项目行:按"无主项目"判 —— 落在公共目录下才可见。
+      return canViewerSeeProject({
+        ownerUserId: null,
+        viewerUserId: viewer.userId,
+        viewerUsername: viewer.username,
+        projectPath: session.project_path ?? null,
+        visibility: null,
+        sharedUserIds: [],
+      });
     }
 
     const meta = metaByPath.get(key)!;
@@ -968,6 +1023,9 @@ function restrictToViewer(
   });
 }
 
+/** fj:参与 ripgrep 预筛的最大词数 —— 见 searchConversations 里的说明。 */
+const MAX_RIPGREP_WORDS = 8;
+
 export async function searchConversations(
   query: string,
   limit = 50,
@@ -977,11 +1035,31 @@ export async function searchConversations(
 ): Promise<{ results: ProjectConversationResult[]; totalMatches: number; query: string }> {
   const safeQuery = typeof query === 'string' ? query.trim() : '';
   const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? limit : 50, 200));
+  /**
+   * fj:去重 + 封顶。
+   *
+   * **每个词**都会对"当前仍匹配的文件集"跑一整轮 ripgrep(40 个文件一批、并发 6
+   * 地 spawn 子进程),而词与词取交集 —— 只要每个词都命中全部文件,集合就不收窄,
+   * `remainingEntries.length === 0` 那道早退闸永远不触发。
+   *
+   * Node 默认 16KB 请求头允许约 8000 个词;语料 1000 个会话 → 每轮 25 个 chunk
+   * → **20 万次进程 spawn**,顺序跑完。`/api` 的 600 次/分钟限流挡不住
+   * "一个请求就很贵"这种形状,一个登录用户就能把 CPU 长时间打满。
+   *
+   * 超出 8 个的词交给 `matchesQuery` 在内存里判 —— 它本来就是权威判据,
+   * ripgrep 只是用来快速缩小候选文件集的。
+   */
   const words = safeQuery.toLowerCase().split(/\s+/).filter((word) => word.length > 0);
 
   if (words.length === 0) {
     return { results: [], totalMatches: 0, query: safeQuery };
   }
+
+  /**
+   * 只有**预筛**用这份收窄过的词表 —— 最终判定仍然是全量 `words` 的
+   * `matchesQuery`,所以语义不变(预筛的候选集只会更大,不会更小)。
+   */
+  const prefilterWords = [...new Set(words)].slice(0, MAX_RIPGREP_WORDS);
 
   const isAborted = () => signal?.aborted === true;
   if (isAborted()) {
@@ -1024,7 +1102,8 @@ export async function searchConversations(
   const matchedFileKeys = await findMatchedFileKeys(
     searchablePathEntries,
     safeQuery,
-    words,
+    // fj:预筛只用收窄过的词表(见 prefilterWords)。
+    prefilterWords,
     signal ?? undefined,
   );
   if (isAborted() || matchedFileKeys.size === 0) {

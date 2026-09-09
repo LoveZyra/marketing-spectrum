@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -16,9 +16,9 @@ import { useProjectsState } from '../../hooks/useProjectsState';
 import { useQueuedMessageAutoSend } from '../../hooks/useQueuedMessageAutoSend';
 import { api } from '../../utils/api';
 import { pullAccountSettings } from '../../utils/accountSettings';
+import ErrorBoundary from '../../shared/view/ErrorBoundary';
 import SettingsModalHost from '../settings/view/SettingsModalHost';
 import SessionDeleteDialog, { type SessionDeleteTarget } from '../../shared/view/SessionDeleteDialog';
-import { buildRecentSessions } from '../chat/utils/recentSessions';
 
 import AppRail from './AppRail';
 
@@ -136,23 +136,12 @@ function AppContentInner() {
    *   上次存下的展开/折叠状态,而不是一进来就强行展开。
    * 移动端侧栏是抽屉(由 sidebarOpen 管),这条规则不适用。
    */
-  // ef:首页空态的「最近会话」—— 跨项目取最近 3 条,数据就是侧栏那份 projects。
-  const recentSessions = useMemo(
-    () => buildRecentSessions(
-      projects,
-      3,
-      t('sidebar:projects.newSession', { defaultValue: '新会话' }),
-      { running: processingSessions },
-    ),
-    [processingSessions, projects, t],
-  );
-
   /**
    * ef:顶栏的改名与删除。
    *
    * 侧栏折叠时 `<Sidebar/>` 整棵不渲染 —— 它那套改名 / 删除的实现和确认框
    * 跟着一起消失,所以顶栏这两件事必须住在这一层。改完 / 删完都刷一次项目列表,
-   * 侧栏与首页的"最近会话"跟着更新。
+   * 侧栏跟着更新。
    */
   const [sessionDeleteTarget, setSessionDeleteTarget] = useState<SessionDeleteTarget | null>(null);
 
@@ -300,10 +289,24 @@ function AppContentInner() {
           pendingApprovalCount={pendingApprovalCount}
         />
       )}
+      {/*
+        * 侧栏套错误边界。
+        *
+        * 聊天区(MainContent)和每个懒加载面板(LazyPanel)都有兜底,**侧栏没有** ——
+        * 而侧栏是这个应用里数据最杂的一块:项目树、会话列表、运行状态、多选、
+        * 权限徽标,任何一处渲染时抛错,整页白屏,连"回到聊天"都做不到。
+        *
+        * `Suspense` 兜不住这个:它只管懒加载的等待,不管运行时异常。
+        *
+        * `resetKeys` 给 selectedProject —— 换个项目就重试一次。侧栏崩多半是某条
+        * 数据的形状不对(比如一个字段意外为 null),换项目正好换掉那批数据。
+        */}
       {!isMobile ? (
         isSidebarCollapsed ? null : (
           <div className="h-full flex-shrink-0 border-r border-border">
-            <Sidebar {...sidebarSharedProps} />
+            <ErrorBoundary label={t('tabs.projects', { defaultValue: '项目' })} resetKeys={[selectedProject?.name ?? null]}>
+              <Sidebar {...sidebarSharedProps} />
+            </ErrorBoundary>
           </div>
         )
       ) : (
@@ -330,7 +333,10 @@ function AppContentInner() {
             onClick={(event) => event.stopPropagation()}
             onTouchStart={(event) => event.stopPropagation()}
           >
-            <Sidebar {...sidebarSharedProps} />
+            {/* 移动端抽屉里的同一棵侧栏,同样要兜底 —— 崩了整页白屏。 */}
+            <ErrorBoundary label={t('tabs.projects', { defaultValue: '项目' })} resetKeys={[selectedProject?.name ?? null]}>
+              <Sidebar {...sidebarSharedProps} />
+            </ErrorBoundary>
           </div>
         </div>
       )}
@@ -358,7 +364,6 @@ function AppContentInner() {
           }
           onShowSettings={openSettings}
           onEditorMaximizedChange={setEditorMaximized}
-          recentSessions={recentSessions}
           onRenameSession={handleHeaderRenameSession}
           onDeleteSession={handleHeaderDeleteSession}
           externalMessageUpdate={externalMessageUpdate}

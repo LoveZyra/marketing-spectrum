@@ -30,7 +30,6 @@
     "addToFavorites": "お気に入りに追加",
     "removeFromFavorites": "お気に入りから削除",
     "editSessionName": "セッション名を手動で編集",
-    "deleteSession": "このセッションを完全に削除",
     "activeSessionIndicator": "最近アクティブなセッション（過去10分以内）",
     "save": "保存",
     "cancel": "キャンセル",
@@ -41,8 +40,7 @@
   "actions": {
     "settings": "設定",
     "cancel": "キャンセル",
-    "save": "保存",
-    "delete": "削除"
+    "save": "保存"
   },
   "status": {
     "active": "アクティブ",
@@ -68,8 +66,5 @@
     "confirmDelete": "このプロジェクトをどうしますか：",
     "sessionCount": "このプロジェクトには{{count}}件の会話があります。",
     "deleteAllData": "すべてのデータを完全に削除"
-  },
-  "project": {
-    "public": "Public"
   }
 }

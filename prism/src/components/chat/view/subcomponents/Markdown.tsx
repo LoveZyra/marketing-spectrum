@@ -270,7 +270,18 @@ const MarkdownBody = memo(function MarkdownBody({ content, streaming }: { conten
         if (fileRef && !isExternalHref(href)) {
           return (
             <a
-              href={href || fileRef}
+              /**
+               * fj:这条分支也要过 `safeLinkHref`。
+               *
+               * `fileRef` 在 href 不像路径时会**取链接文本**,而 react-markdown
+               * 会把 `[javascript:a/b]()` 的 href 洗成 `''` —— 于是
+               * `'' || fileRef` 落到链接文本上,渲染出 `<a href="javascript:...">`。
+               * 点击被下面的 `preventDefault` 挡着、浏览器也拦 `javascript:`,
+               * 所以**实际不可利用**;但这正是 dv 轮明确要消除的形态,而且用户
+               * 「复制链接地址」会拿到一段脚本。href 只是可复制/可悬停的展示值,
+               * 真正的行为由 onClick 接管,所以洗成 '#' 不影响功能。
+               */
+              href={safeLinkHref(href || fileRef) ?? '#'}
               className="cursor-pointer text-foreground hover:underline dark:text-primary"
               onClick={(event) => {
                 event.preventDefault();

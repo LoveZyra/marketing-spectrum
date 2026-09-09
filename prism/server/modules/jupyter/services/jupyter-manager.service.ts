@@ -18,6 +18,8 @@ import http from 'node:http';
 
 import { createTicketStore } from '@/shared/ticket-store.js';
 import { WORKSPACES_ROOT } from '@/shared/utils.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('jupyter');
 
 export const JUPYTER_BASE_PATH = '/jupyter';
 
@@ -231,7 +233,7 @@ async function startJupyter(): Promise<EnsureResult> {
       recordCrash();
       const tail = state.stderrTail.trim().split('\n').slice(-8).join('\n');
       state.lastError = `jupyter 进程退出(code ${code ?? 'null'})${tail ? `:\n${tail}` : ''}`;
-      console.warn(`[jupyter] 进程退出 code=${code ?? 'null'}`);
+      log.warn(`[jupyter] 进程退出 code=${code ?? 'null'}`);
     }
   });
 
@@ -249,7 +251,7 @@ async function startJupyter(): Promise<EnsureResult> {
     if (await probeReady(runtime)) {
       state.ready = true;
       state.lastError = null;
-      console.log(`[jupyter] lab 就绪:127.0.0.1:${port}${JUPYTER_BASE_PATH}`);
+      log.info(`[jupyter] lab 就绪:127.0.0.1:${port}${JUPYTER_BASE_PATH}`);
       return { ok: true, runtime };
     }
     if (Date.now() > deadline) {

@@ -1,8 +1,7 @@
 {
   "buttons": {
     "save": "保存",
-    "cancel": "キャンセル",
-    "create": "作成"
+    "cancel": "キャンセル"
   },
   "tabs": {
     "chat": "チャット",
@@ -11,9 +10,6 @@
   },
   "status": {
     "completed": "完了"
-  },
-  "common": {
-    "version": "バージョン"
   },
   "mainContent": {
     "loading": "Prism を読み込んでいます",

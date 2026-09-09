@@ -50,11 +50,6 @@ export function resolveOverriddenMethod(method: string, headerValue: unknown, qu
   return TUNNELED_METHODS.has(fromQuery) ? fromQuery : null;
 }
 
-/** 前端要不要给这个方法走隧道。与服务端认的集合是同一份。 */
-export function isTunneledMethod(method: string | undefined): boolean {
-  return typeof method === 'string' && TUNNELED_METHODS.has(method.toUpperCase());
-}
-
 export function methodOverrideMiddleware() {
   return (req: Request, _res: Response, next: NextFunction): void => {
     const query = req.query as Record<string, unknown>;

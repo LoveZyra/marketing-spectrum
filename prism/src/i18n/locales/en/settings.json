@@ -34,9 +34,6 @@
     "languageLabel": "Language",
     "languageDescription": "Which language the interface is shown in"
   },
-  "appearance": {
-    "theme": "Theme"
-  },
   "quickSettings": {
     "title": "Quick Settings",
     "sections": {
@@ -88,10 +85,6 @@
     }
   },
   "appearanceSettings": {
-    "darkMode": {
-      "label": "Dark Mode",
-      "description": "Toggle between light and dark themes"
-    },
     "projectSorting": {
       "label": "Project Sorting",
       "description": "How projects are ordered in the sidebar",
@@ -119,7 +112,6 @@
     },
     "uiTheme": {
       "label": "Interface theme",
-      "description": "Pick the material and palette for the whole interface",
       "options": {
         "blueprint": {
           "name": "Paper Blueprint",
@@ -358,8 +350,24 @@
     },
     "loading": "Loading…",
     "empty": "No entries",
+    "emptyFiltered": "No entries match these filters. Try different filters or clear them.",
     "prev": "Prev",
-    "next": "Next"
+    "next": "Next",
+    "filter": {
+      "allEvents": "All events",
+      "allOutcomes": "All outcomes",
+      "success": "Success",
+      "failure": "Failure",
+      "usernamePlaceholder": "Username (optional)",
+      "apply": "Filter",
+      "clear": "Clear",
+      "group": {
+        "auth": "Sign-in & accounts",
+        "projects": "Project changes",
+        "skills": "Skill install/remove",
+        "credentials": "Credentials & tickets"
+      }
+    }
   },
   "models": {
     "title": "Model mapping",
@@ -421,10 +429,6 @@
     "quotaCancel": "Cancel"
   },
   "skills": {
-    "title": "Skills",
-    "scopeUser": "User",
-    "scopePlugin": "Plugin",
-    "scopeProject": "Project",
     "sizeLimit": "Selected skill folders must be smaller than 30 MB in total.",
     "noSkillMd": "The selected folder does not contain a SKILL.md file.",
     "readFailed": "Failed to read skill folder",
@@ -459,10 +463,33 @@
     "remove": "Uninstall",
     "removeTitle": "Uninstall this skill?",
     "removeBody": "This deletes the entire skill directory for \"{{name}}\". It cannot be undone.",
+    "removeShared": "The skill library is shared by everyone on this server — uninstalling it changes behaviour for all users, not just you.",
     "removeCancel": "Cancel",
     "removeConfirm": "Uninstall",
     "removing": "Uninstalling…",
     "removeDone": "Uninstalled \"{{name}}\"",
     "removeFailed": "Uninstall failed, please try again."
+  },
+  "usage": {
+    "title": "Usage & cost",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "empty": "No usage recorded in this period. It appears after your first turn.",
+    "scopedHint": "Showing your own usage only",
+    "footnote": "Cost comes from the model's own billing value, recorded per turn. This is not the number in the chat /cost popup — that one is current context usage, this is cumulative spend.",
+    "by": {
+      "day": "By day",
+      "username": "By user",
+      "project_path": "By project",
+      "model": "By model",
+      "source": "By source"
+    },
+    "columns": {
+      "key": "Dimension",
+      "runs": "Turns",
+      "input": "Input",
+      "output": "Output",
+      "cost": "Cost"
+    }
   }
 }

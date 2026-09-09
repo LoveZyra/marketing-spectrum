@@ -16,6 +16,8 @@
 
 import express from 'express';
 
+import { createLogger } from '@/shared/logger.js';
+
 import {
   changedFilesSince,
   listCheckpoints,
@@ -28,6 +30,8 @@ import { isClaudeSDKSessionActive } from '../claude-sdk.js';
 import { chatRunRegistry } from '../modules/websocket/services/chat-run-registry.service.js';
 import { projectVisibilityInput, projectsDb, sessionMessagesDb, sessionsDb } from '../modules/database/index.js';
 import { canViewerSeeProject, readRequestViewer } from '../shared/project-visibility.js';
+
+const log = createLogger('routes');
 
 const router = express.Router();
 
@@ -217,7 +221,7 @@ function appendFilesRevertedFrame(meta, relPaths) {
       paths: relPaths,
     });
   } catch (error) {
-    console.warn('[Checkpoint] files_reverted frame append failed:', error?.message || error);
+    log.warn('[Checkpoint] files_reverted frame append failed:', error?.message || error);
   }
 }
 

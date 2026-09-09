@@ -10,9 +10,6 @@
     "languageLabel": "表示言語",
     "languageDescription": "インターフェースの表示言語を選択してください"
   },
-  "appearance": {
-    "theme": "テーマ"
-  },
   "quickSettings": {
     "title": "クイック設定",
     "sections": {
@@ -60,10 +57,6 @@
     }
   },
   "appearanceSettings": {
-    "darkMode": {
-      "label": "ダークモード",
-      "description": "ライトテーマとダークテーマを切り替えます"
-    },
     "projectSorting": {
       "label": "プロジェクトの並び順",
       "description": "サイドバーでのプロジェクトの並び順を設定します",

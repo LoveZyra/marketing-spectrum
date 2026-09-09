@@ -16,9 +16,6 @@
     "tool": "Outil",
     "claude": "AI"
   },
-  "tools": {
-    "settings": "Paramètres de l'outil"
-  },
   "interactive": {
     "title": "Invite interactive",
     "waiting": "En attente de votre réponse dans le CLI",
@@ -36,7 +33,6 @@
   },
   "input": {
     "placeholder": "Tapez / pour les commandes, @ pour les fichiers, ou posez une question à {{provider}}...",
-    "attachFiles": "Joindre des fichiers",
     "attachImages": "Joindre des images",
     "send": "Envoyer",
     "stop": "Arrêter",
@@ -46,7 +42,6 @@
     },
     "clickToChangeMode": "Cliquez pour changer le mode de permission (ou appuyez sur Tab dans la saisie)",
     "showAllCommands": "Afficher toutes les commandes",
-    "clearInput": "Effacer la saisie",
     "scrollToBottom": "Défiler vers le bas",
     "attachmentPath": "chemin",
     "modelHint": "Modèle actuel : {{model}} · cliquer pour changer"
@@ -72,9 +67,6 @@
       "expandAll": "Tout afficher",
       "loadingAll": "Chargement de tous les messages...",
       "allLoaded": "Tous les messages chargés"
-    },
-    "tokens": {
-      "compacting": "compression"
     }
   },
   "shell": {

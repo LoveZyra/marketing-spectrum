@@ -30,7 +30,6 @@
     "addToFavorites": "Zu Favoriten hinzufügen",
     "removeFromFavorites": "Aus Favoriten entfernen",
     "editSessionName": "Sitzungsname manuell bearbeiten",
-    "deleteSession": "Diese Sitzung dauerhaft löschen",
     "activeSessionIndicator": "Kürzlich aktive Sitzung (letzte 10 Minuten)",
     "save": "Speichern",
     "cancel": "Abbrechen",
@@ -42,8 +41,7 @@
   "actions": {
     "settings": "Einstellungen",
     "cancel": "Abbrechen",
-    "save": "Speichern",
-    "delete": "Löschen"
+    "save": "Speichern"
   },
   "status": {
     "active": "Aktiv",
@@ -76,8 +74,5 @@
     "deleteSession": "Sitzung löschen",
     "confirmDelete": "Was möchtest du mit",
     "deleteAllData": "Alle Daten dauerhaft löschen"
-  },
-  "project": {
-    "public": "Public"
   }
 }

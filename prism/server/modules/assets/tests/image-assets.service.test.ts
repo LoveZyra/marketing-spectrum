@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
+
 import { test } from 'vitest';
 
 import {
@@ -17,7 +18,9 @@ const ASSETS_DIR = getGlobalImageAssetsDir();
 
 test('isAllowedImageMimeType accepts image formats and rejects the rest', () => {
   assert.equal(isAllowedImageMimeType('image/png'), true);
-  assert.equal(isAllowedImageMimeType('image/svg+xml'), true);
+  // fj:SVG 移出白名单 —— 它上传得进来、界面上也显示,但发送时被静默丢掉,
+  // 用户只会看到模型说我没看到图片。上传即拒更诚实。
+  assert.equal(isAllowedImageMimeType('image/svg+xml'), false);
   assert.equal(isAllowedImageMimeType('application/pdf'), false);
   assert.equal(isAllowedImageMimeType('text/html'), false);
 });

@@ -206,6 +206,23 @@ export function useChatRealtimeHandlers({
           // pending tool-permission prompts for the run.
           if (!sid) return;
 
+          /**
+           * fj:首帧缺口 —— 重放缓冲已经把我们要的那段裁掉了。
+           *
+           * 服务端的重放是"从缓冲现有的第一条开始发",而缓冲会按条数/字节被裁。
+           * 客户端此前只靠 seq 跳号检测,而首帧缺口在跳号检测里**是看不见的**
+           * (发来的那一串本身是连续的)—— 那段内容就静默丢了。
+           *
+           * ack 现在带上缓冲还剩的最早 seq:比我们的游标还大,说明中间那段没了,
+           * 直接回落 REST 全量补一次(REST 永远是权威来源)。
+           */
+          const earliest = typeof msg.earliestBufferedSeq === 'number' ? msg.earliestBufferedSeq : null;
+          const cursor = lastSeqRef.current.get(sid);
+          const sameRunAsCursor = cursor && cursor.runId === (msg.runId as string | null ?? null);
+          if (msg.isProcessing && earliest !== null && sameRunAsCursor && earliest > cursor.seq + 1) {
+            void sessionStore.refreshFromServer(sid);
+          }
+
           if (msg.isProcessing) {
             onSessionProcessing?.(sid);
           } else {

@@ -41,8 +41,8 @@ const RAIL_BUTTON_CLASS =
  * 移动端不渲染 —— 小屏仍走 MainContentHeader 里的顶部标签栏。
  *
  * **这条轨只放 Prism 自己的标签页。** ek 一度把「算法效果查询」也挂了上来,
- * el 撤掉 —— 轨位留给别的用途(用户定夺)。外部应用的入口只在首页的「工具」
- * 栏目(见 config/externalApps.ts 与 HomeToolsSection)。
+ * el 撤掉 —— 轨位留给别的用途(用户定夺)。外部应用的入口在首页第四张起手卡里
+ * (清单见 config/externalApps.ts)。
  */
 export default function AppRail({
   activeTab,

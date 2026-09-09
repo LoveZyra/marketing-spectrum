@@ -8,6 +8,8 @@ import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMess
 import { createNormalizedMessage, generateMessageId, readObjectRecord, sliceTailPage } from '@/shared/utils.js';
 import { sessionsDb } from '@/modules/database/index.js';
 import { FetchHistoryCache, type CachedHistory } from '@/modules/providers/list/claude/history-cache.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('sessions');
 
 import {
   isInternalContent,
@@ -110,7 +112,7 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`Error parsing agent file ${filePath}:`, message);
+    log.warn(`Error parsing agent file ${filePath}:`, message);
   }
 
   return tools;
@@ -224,7 +226,7 @@ async function getSessionMessages(
       limit,
     };
   } catch (error) {
-    console.error(`Error reading messages for session ${sessionId}:`, error);
+    log.error(`Error reading messages for session ${sessionId}:`, error);
     return limit === null ? [] : { messages: [], total: 0, hasMore: false };
   }
 }
@@ -735,7 +737,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       result = await getSessionMessages(sessionId, providerSessionId, null, 0);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[ClaudeProvider] Failed to load session ${sessionId}:`, message);
+      log.warn(`[ClaudeProvider] Failed to load session ${sessionId}:`, message);
       return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }
 

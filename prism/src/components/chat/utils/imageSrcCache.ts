@@ -100,6 +100,23 @@ export class ImageSrcCache {
       this.totalBytes -= entry.bytes;
       this.revoke(entry.url);
     }
+
+    /**
+     * fj:全表都被引用住时的硬闸。
+     *
+     * `refs > 0` 的条目一律跳过是对的(还在渲染的图不能撤 URL),但如果有条目
+     * 因为 bug 被永久钉住(release 漏调),这个循环就会**每次遍历全表却一个都
+     * 删不掉** —— 缓存从此无上限增长,而且没有任何迹象。
+     *
+     * 超限还清不掉时打一行 warn:这不是正常状态,要让人从日志里看得出来。
+     * 不强行撤 URL —— 那会让正在显示的图变成裂图,比多占内存更糟。
+     */
+    if (this.entries.size > this.maxEntries * 2 || this.totalBytes > this.maxBytes * 2) {
+      console.warn(
+        `[imageSrcCache] 超限但无可淘汰条目(${this.entries.size} 条 / ${this.totalBytes} 字节,`
+        + '全部仍被引用)—— 可能有 release 没被调到',
+      );
+    }
   }
 }
 

@@ -1,6 +1,8 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
 
+import { createLogger } from '@/shared/logger.js';
+
 import { userDb, auditLogDb } from '../modules/database/index.js';
 import { getConnection } from '../modules/database/connection.js';
 import { generateToken, authenticateToken } from '../middleware/auth.js';
@@ -14,6 +16,8 @@ import {
 import { issueTicket, WS_TICKET_TTL_MS } from '../shared/ws-tickets.js';
 import { isApprovalRequired, isRootUser } from '../shared/root-users.js';
 import { broadcastPendingApprovalCount } from '../modules/websocket/index.js';
+
+const log = createLogger('auth');
 
 const router = express.Router();
 const db = getConnection();
@@ -33,7 +37,7 @@ router.get('/status', async (req, res) => {
       isAuthenticated: false // Will be overridden by frontend if token exists
     });
   } catch (error) {
-    console.error('Auth status error:', error);
+    log.error('Auth status error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -51,10 +55,25 @@ router.get('/status', async (req, res) => {
 //     itself out of its own approval queue.
 router.post('/register', authRateLimiter, async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username: rawUsername, password } = req.body;
 
     // Validate input
-    if (!username || !password) {
+    if (!rawUsername || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+
+    /**
+     * 前后空格必须在**进库之前**去掉。
+     *
+     * 大小写那一半由 `users.username` 的 `COLLATE NOCASE UNIQUE` 兜住(见 schema.ts
+     * 上的注释:那是安全属性,不是便利属性)。但排序规则管不了空白 ——
+     * `" alice "` 与 `"alice"` 在 NOCASE 下**仍然是两行**,而 `isRootUser()` 会
+     * 先 `trim()` 再比对,于是 `" alice "` 照样判定为 root。同一个提权的空白变体。
+     *
+     * 只 trim 不 lower:大小写唯一性归排序规则管,展示时保留用户自己选的写法。
+     */
+    const username = String(rawUsername).trim();
+    if (!username) {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
@@ -135,7 +154,7 @@ router.post('/register', authRateLimiter, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Registration error:', error);
+    log.error('Registration error:', error);
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       res.status(409).json({ error: 'Username already exists' });
     } else {
@@ -159,8 +178,9 @@ router.post('/login', authRateLimiter, loginLockout, async (req, res) => {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
-    // Get user from database
-    const user = userDb.getUserByUsername(username);
+    // 与注册同一口径:去掉前后空格再查。大小写由列上的 COLLATE NOCASE 兜住,
+    // 这里只需要把空白抹平 —— 否则用户复制粘贴带了个空格就登不进去。
+    const user = userDb.getUserByUsername(String(username).trim());
     if (!user) {
       const failure = recordLoginFailure(req);
       auditLogDb.record({
@@ -243,7 +263,7 @@ router.post('/login', authRateLimiter, loginLockout, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Login error:', error);
+    log.error('Login error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -334,7 +354,7 @@ router.post('/change-password', authenticateToken, authRateLimiter, async (req, 
     const token = generateToken(userDb.getUserById(user.id));
     res.json({ success: true, token });
   } catch (error) {
-    console.error('Change password error:', error);
+    log.error('Change password error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -346,7 +366,8 @@ router.post('/change-password', authenticateToken, authRateLimiter, async (req, 
 // its full 7-day lifetime intact. A ticket is 60s, one-use, and useless once
 // redeemed. See server/shared/ws-tickets.js.
 router.post('/ws-ticket', authenticateToken, (req, res) => {
-  const ticket = issueTicket(req.user.id);
+  // fj:把签发时的 token_version 一起带上 —— 消费时要比对(见 ws-tickets.js)。
+  const ticket = issueTicket(req.user.id, userDb.getUserById(req.user.id)?.token_version ?? 0);
   auditLogDb.record({
     ...auditContext(req),
     userId: req.user.id,
@@ -365,12 +386,33 @@ router.get('/audit-log', authenticateToken, (req, res) => {
     // Unscoped, this endpoint is an account directory: usernames, login times
     // and IPs for every colleague on the server, readable by any account.
     const scopeUserId = req.user?.isRoot ? null : (req.user?.id ?? -1);
+
+    /*
+     * ff:筛选。事件类型现在有 27 种,纯倒序分页答不了"上周三谁把那个项目删了"。
+     *
+     * 三个条件都是**在 scopeUserId 划定的范围之内**再缩小的 —— 拼 WHERE 的地方
+     * (`buildAuditWhere`)把 `user_id = ?` 放在最前面且不受 filters 影响。
+     * 尤其 `username`:非 root 传别人的名字得到的是空结果,不是别人的行。
+     */
+    const rawEvents = req.query.events;
+    const events = (typeof rawEvents === 'string' ? rawEvents.split(',') : Array.isArray(rawEvents) ? rawEvents : [])
+      .map((value) => String(value).trim())
+      .filter(Boolean)
+      .slice(0, 40);           // 事件类型总共二十几种,40 是防止有人拿超长 IN 打库
+    const outcome = req.query.outcome === 'success' || req.query.outcome === 'failure'
+      ? req.query.outcome
+      : undefined;
+    const usernameLike = typeof req.query.username === 'string'
+      ? req.query.username.slice(0, 100)
+      : undefined;
+    const filters = { events, outcome, usernameLike };
+
     res.json({
-      entries: auditLogDb.list(limit, offset, scopeUserId),
-      total: auditLogDb.count(scopeUserId),
+      entries: auditLogDb.list(limit, offset, scopeUserId, filters),
+      total: auditLogDb.count(scopeUserId, filters),
     });
   } catch (error) {
-    console.error('Audit log error:', error);
+    log.error('Audit log error:', error);
     res.status(500).json({ error: 'Failed to read audit log' });
   }
 });

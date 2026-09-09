@@ -21,11 +21,18 @@ const store = createTicketStore({ ttlMs: WS_TICKET_TTL_MS });
  * @param {string|number} userId
  * @returns {string} 32 字节随机数的 64 位十六进制串
  */
-export function issueTicket(userId) {
+export function issueTicket(userId, tokenVersion = null) {
   if (userId === undefined || userId === null || userId === '') {
     throw new Error('issueTicket requires a userId');
   }
-  return store.issue({ userId });
+  /**
+   * fj:把签发时的 `token_version` 一起存进去。
+   *
+   * 这条分支原来只做 `getUserById`,**不校验 `token_version`** —— 而 REST 和
+   * JWT-WS 两条路都校验。于是「退出所有设备 / 改密码」之后,已经签发出去的
+   * 那张 60 秒票据仍然能开一条新 socket。
+   */
+  return store.issue({ userId, tokenVersion });
 }
 
 /**
@@ -36,7 +43,7 @@ export function issueTicket(userId) {
  */
 export function consumeTicket(ticket) {
   const payload = store.consume(ticket);
-  return payload ? { userId: payload.userId } : null;
+  return payload ? { userId: payload.userId, tokenVersion: payload.tokenVersion ?? null } : null;
 }
 
 /** 仅供测试。 */

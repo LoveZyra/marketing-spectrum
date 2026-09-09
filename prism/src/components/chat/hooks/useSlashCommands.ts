@@ -3,6 +3,7 @@ import type { Dispatch, KeyboardEvent, RefObject, SetStateAction } from 'react';
 
 import { authenticatedFetch } from '../../../utils/api';
 import { safeLocalStorage } from '../utils/chatStorage';
+import { replaceCompletionToken } from '../utils/completionBoundary';
 import type { LLMProvider, Project } from '../../../types/app';
 
 const COMMAND_QUERY_DEBOUNCE_MS = 150;
@@ -191,6 +192,11 @@ export function useSlashCommands({
   const [showCommandMenu, setShowCommandMenu] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(-1);
+  /**
+   * fj:鼠标悬停的那一项。**只用于视觉高亮**,不参与回车行为判定
+   * (见 handleCommandSelect 的说明)。
+   */
+  const [hoveredCommandIndex, setHoveredCommandIndex] = useState(-1);
   const [slashPosition, setSlashPosition] = useState(-1);
 
   const commandQueryTimerRef = useRef<number | null>(null);
@@ -372,13 +378,21 @@ export function useSlashCommands({
         ? slashPosition
         : currentTextarea?.selectionStart ?? input.length;
       const textBeforeCommand = input.slice(0, insertionStart);
-      const textAfterCommandStart = input.slice(insertionStart);
-      const spaceIndex = textAfterCommandStart.indexOf(' ');
-      const textAfterCommand = slashPosition >= 0 && spaceIndex !== -1
-        ? textAfterCommandStart.slice(spaceIndex).trimStart()
-        : input.slice(currentTextarea?.selectionEnd ?? insertionStart);
+      /**
+       * fj:命令 token 的结尾同样是**第一个空白字符**(与 `@` 提及同源的 bug)。
+       *
+       * 原来是 `indexOf(' ')` 之后 `slice(spaceIndex).trimStart()` —— 空格**之前**
+       * 的所有内容(含换行和那一行的正文)被整段丢掉:`/comp\nabc def` 补全成
+       * `/compact def`,`\nabc` 没了。没有空格时才走 `selectionEnd` 兜底、内容才
+       * 保得住,所以这个 bug 是"有空格才炸",更难被发现。判据与 `@` 提及共用。
+       */
       const separator = textBeforeCommand && !/\s$/.test(textBeforeCommand) ? ' ' : '';
-      const newInput = `${textBeforeCommand}${separator}${command.name}${textAfterCommand ? ` ${textAfterCommand}` : ' '}`;
+      const { text: newInput } = replaceCompletionToken(
+        input,
+        insertionStart,
+        `${separator}${command.name}`,
+        currentTextarea?.selectionEnd ?? undefined,
+      );
 
       setInput(newInput);
       resetCommandMenuState();
@@ -433,6 +447,17 @@ export function useSlashCommands({
     [executeNonSkillCommand, insertCommandIntoInput],
   );
 
+  /**
+   * fj:输入框里当前那个斜杠 token(去掉前导 `/`)—— Tab 补全据此实时算匹配,
+   * 不吃 150ms 去抖之后才更新的 `commandQuery`。
+   */
+  const currentSlashToken = useCallback((): string => {
+    if (slashPosition < 0) return '';
+    const rest = input.slice(slashPosition + 1);
+    const whitespace = rest.match(/\s/);
+    return whitespace?.index !== undefined ? rest.slice(0, whitespace.index) : rest;
+  }, [input, slashPosition]);
+
   const handleCommandSelect = useCallback(
     (command: SlashCommand | null, index: number, isHover: boolean) => {
       if (!command || !selectedProject) {
@@ -440,7 +465,16 @@ export function useSlashCommands({
       }
 
       if (isHover) {
-        setSelectedCommandIndex(index);
+        /**
+         * fj:悬停只做**视觉高亮**,不写决定回车行为的那个 index。
+         *
+         * 菜单是 440px 宽的 portal,锚在输入框上方最多 360px 高 —— 正好盖在最后
+         * 几条消息上,是鼠标很自然的停放位置。原来 `onMouseEnter` 直接写
+         * `selectedCommandIndex`,而"没高亮就不抢回车"的判据是 `< 0`,
+         * **悬停也算高亮**:用户输入 `/deploy 到测试环境` 这类以斜杠开头的正常
+         * 消息,鼠标恰好在那片区域,按回车就变成"插入鼠标底下那条命令"。
+         */
+        setHoveredCommandIndex(index);
         return;
       }
 
@@ -534,6 +568,7 @@ export function useSlashCommands({
 
       if (event.key === 'ArrowUp') {
         event.preventDefault();
+        setHoveredCommandIndex(-1);
         setSelectedCommandIndex((previousIndex) =>
           previousIndex > 0 ? previousIndex - 1 : filteredCommands.length - 1,
         );
@@ -551,13 +586,27 @@ export function useSlashCommands({
         // 想选命令的人本来就会先按方向键。
         //
         // Tab 不在此列 —— 它是补全键,"补成第一个匹配项"正是它该有的行为。
+        // fj:只看**键盘**选中的那个 index —— 悬停不参与(见 handleCommandSelect)。
         if (event.key === 'Enter' && selectedCommandIndex < 0) {
           return false;
         }
         event.preventDefault();
-        const target = selectedCommandIndex >= 0
-          ? filteredCommands[selectedCommandIndex]
-          : filteredCommands[0];
+        /**
+         * fj:Tab 补全用**当前输入实时算**的匹配,不用 `filteredCommands`。
+         *
+         * `filteredCommands` 由 `commandQuery` 派生,而 `commandQuery` 晚 150ms
+         * (去抖)—— 连打 `/compact` 后 150ms 内按 Tab(快打字者的键间隔常在
+         * 100ms 上下),列表可能还停在上一次查询上,补进去的是一个和用户所敲
+         * 毫无关系的命令。第 573 行那条修复只把 **Enter** 排除在"退而取首项"
+         * 之外,注释也写明"Tab 不在此列",但没考虑列表本身是旧的。
+         */
+        const liveTarget = event.key === 'Tab' && selectedCommandIndex < 0
+          ? filterSlashCommands(slashCommands, currentSlashToken())[0]
+          : null;
+        const target = liveTarget
+          ?? (selectedCommandIndex >= 0
+            ? filteredCommands[selectedCommandIndex]
+            : filteredCommands[0]);
         if (target) {
           selectCommandFromKeyboard(target, mode);
         }
@@ -572,7 +621,10 @@ export function useSlashCommands({
 
       return false;
     },
-    [showCommandMenu, filteredCommands, resetCommandMenuState, selectCommandFromKeyboard, selectedCommandIndex],
+    [
+      showCommandMenu, filteredCommands, resetCommandMenuState, selectCommandFromKeyboard,
+      selectedCommandIndex, slashCommands, currentSlashToken,
+    ],
   );
 
   useEffect(
@@ -590,6 +642,7 @@ export function useSlashCommands({
     commandQuery,
     showCommandMenu,
     selectedCommandIndex,
+    hoveredCommandIndex,
     resetCommandMenuState,
     handleCommandSelect,
     handleToggleCommandMenu,

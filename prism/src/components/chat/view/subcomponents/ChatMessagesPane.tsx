@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { memo, useCallback, useMemo, useRef } from 'react';
-import type { Dispatch, ReactNode, RefObject, SetStateAction } from 'react';
+import type { Dispatch, RefObject, SetStateAction } from 'react';
 
 import type { ChatMessage } from '../../types/types';
 import type {
@@ -11,7 +11,6 @@ import type {
 import { Shimmer } from '../../../../shared/view/ui';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
-import type { RecentSessionEntry } from '../../utils/recentSessions';
 import { extractTurnOutputsCached, type TurnOutputFile } from '../../utils/turnOutputs';
 import { cn } from '../../../../lib/utils';
 import { createGroupIdentityState, groupConsecutiveTools, isSubagentGroupItem, isToolGroupItem, stabilizeGroupIdentity } from '../../utils/toolGrouping';
@@ -70,13 +69,13 @@ interface ChatMessagesPaneProps {
   /** F2:失败一键重试 —— 重发最近一条用户消息。 */
   onRetryLastTurn?: () => void;
   /**
-   * ef:首页空态(没选会话、没有消息)。这时滚动容器铺点阵画布(全库只此一处),
-   * 输入框以 composerSlot 的形式嵌在问候语下面,再带上跨项目的最近会话。
+   * 首页空态(没选会话、没有消息)。这时滚动容器铺点阵画布(全库只此一处)。
+   *
+   * ef 时这里还带着 `composerSlot` / `recentSessions` —— 输入框嵌在问候语下面、
+   * 底下挂最近会话。ex 把首页还原回两栏版式,输入框回到页面底部,这三个入参
+   * 一起撤了;留下的 `isHome` 只管点阵画布和居中。
    */
   isHome?: boolean;
-  composerSlot?: ReactNode;
-  recentSessions?: RecentSessionEntry[];
-  onOpenSession?: (sessionId: string) => void;
   /**
    * ej:助手回答 id → 这一轮的产出文件,**服务端按全量历史算好**的那份。
    * 有它就以它为准,没有(还没拉到 / 刚跑完的这一轮)才退回窗口内现推。
@@ -89,6 +88,40 @@ interface ChatMessagesPaneProps {
  * 变一次的时间戳会让下游所有以它为依据的 memo 全部失效。
  */
 const STREAMING_TIMESTAMP = 0;
+
+/**
+ * fj:模块级空数组常量。
+ *
+ * 之前这里是字面量 `[]` —— 每次渲染都是**新数组**,而 `MessageComponent` 是浅
+ * 比较的 `memo`,一个引用变化就让整条列表重渲。流式期间 `streamingText` 每次
+ * flush 都会让本组件重渲(约 10Hz),窗口内 100 条消息也就跟着全部重渲,
+ * 文件顶部那段"memo 形同虚设"的分析在消息这一档仍然成立。
+ */
+const NO_TURN_OUTPUTS: TurnOutputFile[] = [];
+
+/**
+ * fj:这条消息会不会真的渲染「产出」卡。
+ *
+ * 只有普通的助手正文才会。工具行、任务通知、压缩摘要、交互式提示
+ * (ExitPlanMode / AskUserQuestion)、思考块虽然也是 `assistant`,
+ * 但它们各自的渲染分支不读 `turnOutputs` —— 让它们参与"领取/清空"就等于
+ * 把这一轮的产出卡吃掉。
+ */
+function canRenderTurnOutputs(item: ChatMessage): boolean {
+  if (item.type !== 'assistant' || item.isStreaming) return false;
+  const flags = item as ChatMessage & {
+    isToolUse?: boolean;
+    isTaskNotification?: boolean;
+    isCompactSummary?: boolean;
+    isInteractivePrompt?: boolean;
+    isThinking?: boolean;
+  };
+  return !flags.isToolUse
+    && !flags.isTaskNotification
+    && !flags.isCompactSummary
+    && !flags.isInteractivePrompt
+    && !flags.isThinking;
+}
 
 function ChatMessagesPane({
   scrollContainerRef,
@@ -127,9 +160,6 @@ function ChatMessagesPane({
   onEditRerun,
   onRetryLastTurn,
   isHome = false,
-  composerSlot = null,
-  recentSessions,
-  onOpenSession,
   serverTurnOutputs,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
@@ -262,15 +292,14 @@ function ChatMessagesPane({
           </div>
         </div>
       ) : chatMessages.length === 0 ? (
-        <ChatEmptyState
-          selectedSession={selectedSession}
-          currentSessionId={currentSessionId}
-          provider={provider}
-          setInput={setInput}
-          composerSlot={composerSlot}
-          recentSessions={recentSessions}
-          onOpenSession={onOpenSession}
-        />
+        <div className="mx-auto w-full max-w-[68rem]">
+          <ChatEmptyState
+            selectedSession={selectedSession}
+            currentSessionId={currentSessionId}
+            provider={provider}
+            setInput={setInput}
+          />
+        </div>
       ) : (
         <>
           {/* Loading indicator for older messages (hide when load-all is active).
@@ -333,7 +362,7 @@ function ChatMessagesPane({
              * 回答渲染完再一起吐出来;中途遇到别的东西(用户又发了一条、错误)
              * 就丢掉 —— 那说明这一轮没有正文可挂。
              */
-            let pendingTurnOutputs: TurnOutputFile[] = [];
+            let pendingTurnOutputs: TurnOutputFile[] = NO_TURN_OUTPUTS;
             /**
              * eh 修:**窗口没到头时,第一段工具流是被切断的,不能拿它算产出。**
              *
@@ -353,6 +382,27 @@ function ChatMessagesPane({
               if (isSubagentGroupItem(item)) {
                 const groupPrevMessage = item.messages[item.messages.length - 1] || prevMessage;
                 prevMessage = groupPrevMessage;
+                /**
+                 * fj:子代理写出的文件也算本轮产出。
+                 *
+                 * `extractTurnOutputs` 本来就会扫 `subagentState.childTools`,但它
+                 * 此前只在工具组分支被调用 —— 一轮里只派子代理干活(常见:并行派
+                 * 几路子代理写文档)时,`pendingTurnOutputs` 全程为空,回答下面
+                 * 没有产出卡;而右侧工作面板的会话级产出表(走全量消息)里**有**
+                 * 这些文件,两处对不上,用户会以为正文这边漏了。
+                 */
+                if (renderedIndex !== 0 || windowStartsAtBeginning) {
+                  const childOutputs = extractTurnOutputsCached(
+                    item, item.messages, selectedProject?.fullPath || selectedProject?.path,
+                  );
+                  if (childOutputs.length > 0) {
+                    const seen = new Set(pendingTurnOutputs.map((file) => file.path));
+                    pendingTurnOutputs = [
+                      ...pendingTurnOutputs,
+                      ...childOutputs.filter((file) => !seen.has(file.path)),
+                    ];
+                  }
+                }
                 return (
                   <SubagentGroupCard
                     key={`subagents-${getGroupKey(item)}`}
@@ -366,7 +416,7 @@ function ChatMessagesPane({
                 const groupPrevMessage = prevMessage;
                 prevMessage = item.messages[item.messages.length - 1] || prevMessage;
                 pendingTurnOutputs = renderedIndex === 0 && !windowStartsAtBeginning
-                  ? []
+                  ? NO_TURN_OUTPUTS
                   : extractTurnOutputsCached(item, item.messages, selectedProject?.fullPath || selectedProject?.path);
 
                 return (
@@ -393,10 +443,22 @@ function ChatMessagesPane({
               // 一出现就是最终形态。拉不到(接口失败)或这一轮刚跑完还没回写时,
               // 才退回窗口内现推 —— 那一轮就在眼前,窗口一定是完整的。
               const serverOutputs = serverOutputsByIndex?.get(renderedIndex);
-              const turnOutputs = item.type === 'assistant' && !item.isStreaming
+              /**
+               * fj:判据从"是不是助手且不在流式"换成"**这条能不能真的挂产出卡**"。
+               *
+               * `ExitPlanMode` / `AskUserQuestion`(不入组、单独成项)、任务通知、
+               * 压缩摘要**都是** `assistant && !isStreaming` —— 它们在这里"领走"
+               * `pendingTurnOutputs`,而各自的渲染分支根本不读 `turnOutputs`,
+               * 紧接着下面那句又把它清空。于是「Write 几个文件 → ExitPlanMode →
+               * 最终回答」这一轮的产出卡直接不出现,要等服务端映射回来才补上。
+               *
+               * 不满足的项现在**既不领也不清**,让 pending 继续传给真正的正文那条。
+               */
+              const canCarryOutputs = canRenderTurnOutputs(item);
+              const turnOutputs = canCarryOutputs
                 ? (serverOutputs ?? pendingTurnOutputs)
-                : [];
-              if (item.type !== 'assistant' || !item.isStreaming) pendingTurnOutputs = [];
+                : NO_TURN_OUTPUTS;
+              if (canCarryOutputs) pendingTurnOutputs = NO_TURN_OUTPUTS;
 
               // 只有**收尾在错误上**的对话才给重试按钮:老错误早被后面的
               // 对话翻篇了,回合在跑时也不该再塞一条。

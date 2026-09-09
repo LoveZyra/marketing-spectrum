@@ -2,6 +2,7 @@ import express from 'express';
 
 import { auditLogDb, projectsDb, resolveVisibleProjectRoot, userDb } from '@/modules/database/index.js';
 import { createProject, updateProjectDisplayName } from '@/modules/projects/services/project-management.service.js';
+import { listProjectTemplates } from '@/modules/projects/services/project-template.service.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
@@ -134,6 +135,24 @@ router.get(
  * 挂在 /api/projects 下走统一登录鉴权;不含任何敏感字段。放在 /:projectId 组
  * 之前注册,免得 "shareable-users" 被当成一个 projectId 吞掉。
  */
+/**
+ * fh:可用的项目模板。
+ *
+ * 不做权限区分:模板是服务器上的公共脚手架(运维放进 `PRISM_PROJECT_TEMPLATES_DIR`),
+ * 谁都能用、内容里也不该有秘密。真正的门在**复制**那一侧 —— 符号链接一律拒、
+ * 已有文件不覆盖、文件数与总字节封顶,见 project-template.service.ts 顶部那段。
+ *
+ * 位置要紧:和 `/archived`、`/shareable-users` 一样是**单段字面量**路由,
+ * 必须待在 `/:projectId` 那一族前面。放文件末尾的话,将来谁加一条裸的
+ * `router.get('/:projectId')`,这条就会被悄悄吃掉,而且报的是 404 不是冲突。
+ */
+router.get(
+  '/templates',
+  asyncHandler(async (_req: express.Request, res: express.Response) => {
+    res.json(createApiSuccessResponse({ templates: await listProjectTemplates() }));
+  }),
+);
+
 router.get(
   '/shareable-users',
   asyncHandler(async (req, res) => {
@@ -313,17 +332,25 @@ router.post(
       sharedUserIds = parsedIds;
     }
 
+    // fh:从模板创建。只取字符串,合法性交给 resolveTemplateDir(形状收死,不做
+    // resolve-then-prefix-check 那种每次都要重新论证的写法)。
+    const templateId = typeof requestBody.templateId === 'string' && requestBody.templateId.trim()
+      ? requestBody.templateId.trim()
+      : null;
+
     const projectCreationResult = await createProject({
       projectPath,
       customName,
       ownerUserId: callerId,
       visibility: rawVisibility === 'public' ? 'public' : null,
       sharedUserIds,
+      templateId,
     });
 
     res.json({
       success: true,
       project: projectCreationResult.project,
+      ...(projectCreationResult.template ? { template: projectCreationResult.template } : {}),
       message:
         projectCreationResult.outcome === 'reactivated_archived'
           ? 'Archived project path reused successfully'

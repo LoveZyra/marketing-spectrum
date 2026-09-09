@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { getConnection } from '@/modules/database/connection.js';
+import { cachedPrepare } from '@/modules/database/prepared-cache.js';
 import { buildProjectVisibilityClause } from '@/modules/database/visibility-sql.js';
 import type { CreateProjectPathResult, ProjectRepositoryRow } from '@/shared/types.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
@@ -37,7 +38,7 @@ export const projectsDb = {
         const normalizedProjectName = normalizeProjectDisplayName(normalizedProjectPath, customProjectName);
         const attemptedId = randomUUID();
         // ON CONFLICT 分支不碰 owner_user_id / visibility:复活归档路径不得改归属与权限。
-        const row = db.prepare(`
+        const row = cachedPrepare(db, `
         INSERT INTO projects (project_id, project_path, custom_project_name, isArchived, owner_user_id, visibility)
             VALUES (?, ?, ?, 0, ?, ?)
             ON CONFLICT(project_path) DO UPDATE SET
@@ -63,7 +64,7 @@ export const projectsDb = {
     getProjectPath(projectPath: string): ProjectRepositoryRow | null {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        const row = db.prepare(`
+        const row = cachedPrepare(db, `
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived, owner_user_id, visibility
             FROM projects
             WHERE project_path = ?
@@ -74,7 +75,7 @@ export const projectsDb = {
 
     getProjectById(projectId: string): ProjectRepositoryRow | null {
         const db = getConnection();
-        const row = db.prepare(`
+        const row = cachedPrepare(db, `
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived, owner_user_id, visibility
             FROM projects
             WHERE project_id = ?
@@ -93,7 +94,7 @@ export const projectsDb = {
      */
     getProjectPathById(projectId: string): string | null {
         const db = getConnection();
-        const row = db.prepare(`
+        const row = cachedPrepare(db, `
             SELECT project_path
             FROM projects
             WHERE project_id = ?
@@ -117,7 +118,7 @@ export const projectsDb = {
     getProjectPaths(visibleTo: number | null = null): ProjectRepositoryRow[] {
         const db = getConnection();
         if (visibleTo === null) {
-            return db.prepare(`
+            return cachedPrepare(db, `
                 SELECT project_id, project_path, custom_project_name, isStarred, isArchived, owner_user_id, visibility
                 FROM projects
                 WHERE isArchived = 0
@@ -127,7 +128,7 @@ export const projectsDb = {
         // 与 JS 侧 canViewerSeeProject 逐字同义(parity 测试盯着):
         // 本人的 OR 显式公共 OR 被指定授权 OR (无主且在公共目录下)。
         const visibility = buildProjectVisibilityClause({ userId: visibleTo });
-        return db.prepare(`
+        return cachedPrepare(db, `
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived, owner_user_id, visibility
             FROM projects
             WHERE isArchived = 0 AND ${visibility.sql}
@@ -142,7 +143,7 @@ export const projectsDb = {
     getArchivedProjectPaths(visibleTo: number | null = null): ProjectRepositoryRow[] {
         const db = getConnection();
         if (visibleTo === null) {
-            return db.prepare(`
+            return cachedPrepare(db, `
                 SELECT project_id, project_path, custom_project_name, isStarred, isArchived, owner_user_id, visibility
                 FROM projects
                 WHERE isArchived = 1
@@ -150,7 +151,7 @@ export const projectsDb = {
         }
 
         const visibility = buildProjectVisibilityClause({ userId: visibleTo });
-        return db.prepare(`
+        return cachedPrepare(db, `
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived, owner_user_id, visibility
             FROM projects
             WHERE isArchived = 1 AND ${visibility.sql}
@@ -164,7 +165,7 @@ export const projectsDb = {
         if (projectIds.length === 0) return out;
         const db = getConnection();
         const placeholders = projectIds.map(() => '?').join(',');
-        const rows = db.prepare(`
+        const rows = cachedPrepare(db, `
             SELECT project_id, user_id FROM project_shares WHERE project_id IN (${placeholders})
         `).all(...projectIds) as Array<{ project_id: string; user_id: number }>;
         for (const row of rows) {
@@ -177,7 +178,7 @@ export const projectsDb = {
 
     getProjectSharedUserIds(projectId: string): number[] {
         const db = getConnection();
-        const rows = db.prepare(`
+        const rows = cachedPrepare(db, `
             SELECT user_id FROM project_shares WHERE project_id = ?
         `).all(projectId) as Array<{ user_id: number }>;
         return rows.map((row) => row.user_id);
@@ -191,8 +192,8 @@ export const projectsDb = {
         const db = getConnection();
         const uniqueIds = [...new Set(userIds)].filter((id) => Number.isInteger(id));
         const replace = db.transaction(() => {
-            db.prepare('DELETE FROM project_shares WHERE project_id = ?').run(projectId);
-            const insert = db.prepare(
+            cachedPrepare(db, 'DELETE FROM project_shares WHERE project_id = ?').run(projectId);
+            const insert = cachedPrepare(db,
                 'INSERT INTO project_shares (project_id, user_id, granted_by) VALUES (?, ?, ?)',
             );
             for (const userId of uniqueIds) {
@@ -205,7 +206,7 @@ export const projectsDb = {
     /** 某用户收藏的全部项目 id(project_stars,按用户隔离)。 */
     getStarredProjectIdsForUser(userId: number): string[] {
         const db = getConnection();
-        const rows = db.prepare(`
+        const rows = cachedPrepare(db, `
             SELECT project_id FROM project_stars WHERE user_id = ?
         `).all(userId) as Array<{ project_id: string }>;
         return rows.map((row) => row.project_id);
@@ -214,7 +215,7 @@ export const projectsDb = {
     /** 该用户是否收藏了该项目。 */
     isProjectStarredByUser(projectId: string, userId: number): boolean {
         const db = getConnection();
-        const row = db.prepare(`
+        const row = cachedPrepare(db, `
             SELECT 1 AS present FROM project_stars WHERE project_id = ? AND user_id = ?
         `).get(projectId, userId);
         return row !== undefined;
@@ -224,11 +225,11 @@ export const projectsDb = {
     setProjectStarForUser(projectId: string, userId: number, starred: boolean): void {
         const db = getConnection();
         if (starred) {
-            db.prepare(`
+            cachedPrepare(db, `
                 INSERT OR IGNORE INTO project_stars (project_id, user_id) VALUES (?, ?)
             `).run(projectId, userId);
         } else {
-            db.prepare(`
+            cachedPrepare(db, `
                 DELETE FROM project_stars WHERE project_id = ? AND user_id = ?
             `).run(projectId, userId);
         }
@@ -237,7 +238,7 @@ export const projectsDb = {
     /** Owner of a project, or null when it is public. Undefined = no such project. */
     getProjectOwner(projectId: string): number | null | undefined {
         const db = getConnection();
-        const row = db.prepare(`
+        const row = cachedPrepare(db, `
             SELECT owner_user_id FROM projects WHERE project_id = ?
         `).get(projectId) as { owner_user_id: number | null } | undefined;
 
@@ -247,7 +248,7 @@ export const projectsDb = {
     /** 显式可见性:'public' 或 null(默认语义)。false = 无此项目。 */
     setProjectVisibility(projectId: string, visibility: 'public' | null): boolean {
         const db = getConnection();
-        const result = db.prepare(`
+        const result = cachedPrepare(db, `
             UPDATE projects SET visibility = ? WHERE project_id = ?
         `).run(visibility, projectId);
 
@@ -257,7 +258,7 @@ export const projectsDb = {
     /** Reassigns a project. `null` makes it public. False when the id matches nothing. */
     setProjectOwner(projectId: string, ownerUserId: number | null): boolean {
         const db = getConnection();
-        const result = db.prepare(`
+        const result = cachedPrepare(db, `
             UPDATE projects SET owner_user_id = ? WHERE project_id = ?
         `).run(ownerUserId, projectId);
 
@@ -274,7 +275,7 @@ export const projectsDb = {
      */
     assignUnownedProjectsTo(ownerUserId: number): number {
         const db = getConnection();
-        const result = db.prepare(`
+        const result = cachedPrepare(db, `
             UPDATE projects SET owner_user_id = ? WHERE owner_user_id IS NULL
         `).run(ownerUserId);
 
@@ -284,7 +285,7 @@ export const projectsDb = {
     getCustomProjectName(projectPath: string): string | null {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        const row = db.prepare(`
+        const row = cachedPrepare(db, `
             SELECT custom_project_name
             FROM projects
             WHERE project_path = ?
@@ -296,7 +297,7 @@ export const projectsDb = {
     updateCustomProjectName(projectPath: string, customProjectName: string | null): void {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        db.prepare(`
+        cachedPrepare(db, `
             INSERT INTO projects (project_id, project_path, custom_project_name)
             VALUES (?, ?, ?)
             ON CONFLICT(project_path) DO UPDATE SET custom_project_name = excluded.custom_project_name
@@ -305,7 +306,7 @@ export const projectsDb = {
 
     updateCustomProjectNameById(projectId: string, customProjectName: string | null): void {
         const db = getConnection();
-        db.prepare(`
+        cachedPrepare(db, `
             UPDATE projects
             SET custom_project_name = ?
             WHERE project_id = ?
@@ -315,7 +316,7 @@ export const projectsDb = {
     updateProjectIsStarred(projectPath: string, isStarred: boolean): void {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        db.prepare(`
+        cachedPrepare(db, `
             UPDATE projects
             SET isStarred = ?
             WHERE project_path = ?
@@ -324,7 +325,7 @@ export const projectsDb = {
 
     updateProjectIsStarredById(projectId: string, isStarred: boolean): void {
         const db = getConnection();
-        db.prepare(`
+        cachedPrepare(db, `
             UPDATE projects
             SET isStarred = ?
             WHERE project_id = ?
@@ -334,7 +335,7 @@ export const projectsDb = {
     updateProjectIsArchived(projectPath: string, isArchived: boolean): void {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        db.prepare(`
+        cachedPrepare(db, `
             UPDATE projects
             SET isArchived = ?
             WHERE project_path = ?
@@ -343,7 +344,7 @@ export const projectsDb = {
 
     updateProjectIsArchivedById(projectId: string, isArchived: boolean): void {
         const db = getConnection();
-        db.prepare(`
+        cachedPrepare(db, `
             UPDATE projects
             SET isArchived = ?
             WHERE project_id = ?
@@ -353,7 +354,7 @@ export const projectsDb = {
     deleteProjectPath(projectPath: string): void {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        db.prepare(`
+        cachedPrepare(db, `
             DELETE FROM projects
             WHERE project_path = ?
         `).run(normalizedProjectPath);
@@ -367,14 +368,13 @@ export const projectsDb = {
      * `isPrismInternalProjectPath` 里)。项目表是几十到几百行的量级,全表扫没问题。
      */
     listAllProjectPaths(): Array<{ project_id: string; project_path: string }> {
-        return getConnection()
-            .prepare('SELECT project_id, project_path FROM projects')
+        return cachedPrepare(getConnection(), 'SELECT project_id, project_path FROM projects')
             .all() as Array<{ project_id: string; project_path: string }>;
     },
 
     deleteProjectById(projectId: string): void {
         const db = getConnection();
-        db.prepare(`
+        cachedPrepare(db, `
             DELETE FROM projects
             WHERE project_id = ?
         `).run(projectId);

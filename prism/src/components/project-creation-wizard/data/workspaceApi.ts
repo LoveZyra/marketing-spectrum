@@ -5,6 +5,7 @@ import type {
   CreateProjectPayload,
   CreateProjectResponse,
   FolderSuggestion,
+  ProjectTemplate,
   ShareableUser,
 } from '../types';
 
@@ -94,4 +95,21 @@ export const createProjectRequest = async (payload: CreateProjectPayload) => {
   }
 
   return data.project;
+};
+
+/**
+ * fh:拉可用模板。
+ *
+ * 失败时返回空数组而不是抛 —— 模板是锦上添花,取不到不该让「新建项目」整个打不开。
+ * 界面上那一格自然消失,用户走原来的空目录流程。
+ */
+export const fetchProjectTemplates = async (): Promise<ProjectTemplate[]> => {
+  try {
+    const response = await authenticatedFetch('/api/projects/templates');
+    if (!response.ok) return [];
+    const data = (await response.json()) as { data?: { templates?: ProjectTemplate[] } };
+    return data.data?.templates ?? [];
+  } catch {
+    return [];
+  }
 };

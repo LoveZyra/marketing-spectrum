@@ -1,8 +1,7 @@
 {
   "buttons": {
     "save": "저장",
-    "cancel": "취소",
-    "create": "생성"
+    "cancel": "취소"
   },
   "tabs": {
     "chat": "채팅",
@@ -11,9 +10,6 @@
   },
   "status": {
     "completed": "완료"
-  },
-  "common": {
-    "version": "버전"
   },
   "mainContent": {
     "loading": "Prism 로딩 중",

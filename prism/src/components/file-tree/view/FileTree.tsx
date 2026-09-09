@@ -164,6 +164,24 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   );
 
   // Centralized click behavior keeps file actions identical across all presentation modes.
+  /**
+   * 新建文件 / 新建文件夹的稳定引用。
+   *
+   * 这两个原来是内联箭头 `(path) => operations.handleStartCreate(path, 'file')` ——
+   * 每次渲染都是新函数,把子树的 `memo` **整个击穿**:同文件其它回调都规规矩矩
+   * `useCallback` 了,只有这两个漏了,于是那些 memo 一条也没生效。
+   *
+   * 文件树在大目录下是重渲染成本最高的一块,而它的父组件会被 status 帧高频驱动。
+   */
+  const handleNewFile = useCallback(
+    (path: string) => operations.handleStartCreate(path, 'file'),
+    [operations],
+  );
+  const handleNewFolder = useCallback(
+    (path: string) => operations.handleStartCreate(path, 'directory'),
+    [operations],
+  );
+
   const handleItemClick = useCallback(
     (item: FileTreeNode) => {
       if (item.type === 'directory') {
@@ -503,8 +521,8 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           formatRelativeTime={formatRelativeTimeLabel}
           onRename={operations.handleStartRename}
           onDelete={operations.handleStartDelete}
-          onNewFile={(path) => operations.handleStartCreate(path, 'file')}
-          onNewFolder={(path) => operations.handleStartCreate(path, 'directory')}
+          onNewFile={handleNewFile}
+          onNewFolder={handleNewFolder}
           onCopyPath={operations.handleCopyPath}
           onDownload={operations.handleDownload}
           onRefresh={refreshFiles}

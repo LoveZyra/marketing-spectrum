@@ -8,6 +8,7 @@ import type {
   WorkspacePathValidationResult,
 } from '@/shared/types.js';
 import { AppError, normalizeProjectPath, validateWorkspacePath } from '@/shared/utils.js';
+import { prepareProjectTemplate, writePreparedTemplate, type ApplyTemplateResult } from '@/modules/projects/services/project-template.service.js';
 
 type CreateProjectInput = {
   projectPath: string;
@@ -18,6 +19,11 @@ type CreateProjectInput = {
   visibility?: 'public' | null;
   /** 创建时选「指定用户」的授权列表;写入 project_shares。 */
   sharedUserIds?: number[];
+  /**
+   * fh:从模板创建。模板就是服务器上一棵普通目录树,这里递归 copy 进去。
+   * 不传就是原来的行为(空目录)。
+   */
+  templateId?: string | null;
 };
 
 type CreateProjectDependencies = {
@@ -51,6 +57,8 @@ type ProjectApiView = {
 type CreateProjectServiceResult = {
   outcome: 'created' | 'reactivated_archived';
   project: ProjectApiView;
+  /** fh:铺了模板时带上结果,让界面能如实说"这几个文件已存在,没动"。 */
+  template?: ApplyTemplateResult;
 };
 
 const defaultDependencies: CreateProjectDependencies = {
@@ -115,6 +123,22 @@ export async function createProject(
     });
   }
 
+  /*
+   * fh:**模板先验,后建。**
+   *
+   * 探针里抓到的真事:第一版把铺模板放在这个函数末尾,于是
+   * `templateId: "../evil"` 走的是「建目录 → 项目行落库 → 才发现名字不合法 → 抛」,
+   * 接口回 `success:false` 而项目**已经在库里**。连打五个非法请求,
+   * 侧栏就多了五个幽灵项目 —— 用户被告知失败的东西,下次刷新自己冒出来。
+   *
+   * 所以校验(名字形状、模板存在、符号链接、大小上限)全部提到最前面:
+   * 不合法就在什么都还没建的时候失败。比"失败了再回滚"可靠 —— 回滚本身也会失败,
+   * 而且"复活归档路径"那种情形根本不该回滚。
+   */
+  const preparedTemplate = input.templateId
+    ? await prepareProjectTemplate(input.templateId)
+    : null;
+
   const pathValidation = await dependencies.validatePath(normalizedPath);
   if (!pathValidation.valid || !pathValidation.resolvedPath) {
     throw new AppError('Invalid project path', {
@@ -157,10 +181,35 @@ export async function createProject(
     dependencies.setProjectShares(projectRow.project_id, sharedUserIds, input.ownerUserId ?? null);
   }
 
+  /*
+   * fh:铺模板(校验已经在函数最前面做完了,这里只负责写)。
+   *
+   * ## 为什么"写"留在最后
+   *
+   * 写要发生在**目录建好、且这条项目记录确实落库之后**。放前面的话,
+   * 后面任何一个 throw(路径不合法、路径已被别人占着)都会留下一棵铺好的树
+   * 在一个不属于任何项目的目录里 —— 没人知道它存在,也没人会去清。
+   *
+   * ## 复活归档路径时也铺,但不覆盖
+   *
+   * `applyProjectTemplate` 对已存在的文件是**跳过**不是覆盖(COPYFILE_EXCL)。
+   * 复活的目录里有真东西,拿模板盖上去就是数据丢失。
+   *
+   * ## 铺失败不回滚项目
+   *
+   * 项目已经建好了,模板只是锦上添花。失败时把错误抛给调用方,由路由决定
+   * 是整个失败还是带着告警成功 —— 这里不擅自决定"要不要把刚建好的项目删掉"。
+   */
+  let templateResult: ApplyTemplateResult | undefined;
+  if (preparedTemplate) {
+    templateResult = await writePreparedTemplate(preparedTemplate, resolvedProjectPath);
+  }
+
   // Archived rows intentionally remain archived when reused, as requested.
   return {
     outcome: persistedProject.outcome,
     project: mapProjectRowToApiView(projectRow),
+    ...(templateResult ? { template: templateResult } : {}),
   };
 }
 

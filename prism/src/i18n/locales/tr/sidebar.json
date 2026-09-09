@@ -30,7 +30,6 @@
     "addToFavorites": "Favorilere ekle",
     "removeFromFavorites": "Favorilerden çıkar",
     "editSessionName": "Oturum adını elle düzenle",
-    "deleteSession": "Bu oturumu kalıcı olarak sil",
     "activeSessionIndicator": "Yakın zamanda etkin oturum (son 10 dakika)",
     "save": "Kaydet",
     "cancel": "İptal",
@@ -42,8 +41,7 @@
   "actions": {
     "settings": "Ayarlar",
     "cancel": "İptal",
-    "save": "Kaydet",
-    "delete": "Sil"
+    "save": "Kaydet"
   },
   "status": {
     "active": "Aktif",
@@ -76,8 +74,5 @@
     "deleteSession": "Oturumu Sil",
     "confirmDelete": "Ne yapmak istersin:",
     "deleteAllData": "Tüm veriyi kalıcı olarak sil"
-  },
-  "project": {
-    "public": "Public"
   }
 }

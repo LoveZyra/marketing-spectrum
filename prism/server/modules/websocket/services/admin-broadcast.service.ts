@@ -1,4 +1,4 @@
-import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
+import { connectedClients, WS_OPEN_STATE } from '@/shared/websocket-state.js';
 import { readSocketViewer } from '@/shared/project-visibility.js';
 import { isRootUser } from '@/shared/root-users.js';
 import { userDb } from '@/modules/database/index.js';

@@ -50,7 +50,6 @@ function ChatInterface({
   sendByCtrlEnter,
   externalMessageUpdate,
   newSessionTrigger,
-  recentSessions,
 }: ChatInterfaceProps) {
   const { subscribe } = useWebSocket();
   const { t } = useTranslation('chat');
@@ -74,8 +73,36 @@ function ChatInterface({
   // on every sequenced frame, read whenever a `chat.subscribe` is sent so the
   // server replays only the events this client actually missed.
   const lastSeqRef = useRef(new Map<string, { runId: string | null; seq: number }>());
+  /**
+   * fj:重连补订要读"哪些会话在跑",但这个值不该让 `handleWebSocketReconnect`
+   * 每轮换一次身份(它是 WebSocketContext 的 onReconnect 依赖)。
+   */
+  const processingSessionsRef = useRef(processingSessions);
+  processingSessionsRef.current = processingSessions;
 
-  const resetStreamingState = useCallback(() => {
+  /**
+   * 清流式缓冲。**不传 sessionId 就是全清** —— 只有整体卸载才该那样。
+   *
+   * fj:此前只有全清一种。而 `updateStreaming` 是**整体替换**语义,它依赖累积
+   * 缓冲一直是"从头到现在的全文";缓冲被清空后,后台会话的下一批 delta 从空串
+   * 开始累积,`stream_end` 时那一小段残片就被当成完整回答提交进 realtime。
+   *
+   * 触发路径很日常:A 正在流式输出时点侧栏的**项目行**(或「新建会话」、
+   * 或删掉当前查看的另一条会话)—— 都会让 `selectedSession` 变 null,走进
+   * `useChatSessionState` 那个通用分支。同一文件的注释早就写明"全清只该发生在
+   * 整体卸载 / 新建会话",但那个调用点并不是新建会话。
+   *
+   * 切回 A 看到的是一条**残缺的**助手气泡;而服务端那份完整的随后又被拉回来,
+   * 两份并排,且因为正文不一致,`pruneRealtimeSupersededByServer` 也清不掉它。
+   */
+  const resetStreamingState = useCallback((sessionId?: string | null) => {
+    if (sessionId) {
+      const timer = streamTimerRef.current.get(sessionId);
+      if (timer) clearTimeout(timer);
+      streamTimerRef.current.delete(sessionId);
+      accumulatedStreamRef.current.delete(sessionId);
+      return;
+    }
     for (const timer of streamTimerRef.current.values()) clearTimeout(timer);
     streamTimerRef.current.clear();
     accumulatedStreamRef.current.clear();
@@ -117,7 +144,7 @@ function ChatInterface({
     canAbortSession,
     abortDiscardsPending,
     currentSessionId,
-    setCurrentSessionId,
+    markSessionEstablished,
     isLoadingSessionMessages,
     isLoadingMoreMessages,
     hasMoreMessages,
@@ -161,10 +188,12 @@ function ChatInterface({
   // the session gateway before the first send. Record it locally and put it
   // in the URL — this id never changes again, so there is no later handoff.
   const handleSessionEstablished = useCallback<NonNullable<ChatInterfaceProps['onSessionEstablished']>>((sessionId, context) => {
-    setCurrentSessionId(sessionId);
+    // fi:用 markSessionEstablished 而不是裸 setCurrentSessionId —— 要记下
+    // "这个 id 是本视图建立的",路由跟上之前才有资格撑着正文(见 useChatSessionState)。
+    markSessionEstablished(sessionId);
     onSessionEstablished?.(sessionId, context);
     onNavigateToSession?.(sessionId);
-  }, [setCurrentSessionId, onSessionEstablished, onNavigateToSession]);
+  }, [markSessionEstablished, onSessionEstablished, onNavigateToSession]);
 
   // 当前会话里用户已发消息的正文(旧→新),经 ref 惰性取值 —— 给 composer 的
   // ↑ 键历史回填与"失败重试"用,引用恒定不随流式 tick 换。
@@ -190,6 +219,7 @@ function ChatInterface({
     commandQuery,
     showCommandMenu,
     selectedCommandIndex,
+    hoveredCommandIndex,
     resetCommandMenuState,
     handleCommandSelect,
     handleToggleCommandMenu,
@@ -207,6 +237,7 @@ function ChatInterface({
     handleAttachFiles,
     attachDocFromUrl,
     parsingDocs,
+    isSubmitting,
     docUploadProgress,
     startEditRerun,
     getRootProps,
@@ -278,15 +309,42 @@ function ChatInterface({
   const handleWebSocketReconnect = useCallback(async () => {
     if (!selectedProject || !selectedSession) return;
     await sessionStore.refreshFromServer(selectedSession.id);
-    statusCheckSentAtRef.current.set(selectedSession.id, Date.now());
-    sendMessage({
-      type: 'chat.subscribe',
-      sessions: [{
-        sessionId: selectedSession.id,
-        lastSeq: lastSeqRef.current.get(selectedSession.id)?.seq ?? 0,
-        lastRunId: lastSeqRef.current.get(selectedSession.id)?.runId ?? null,
-      }],
-    });
+
+    /**
+     * fj:补订**所有本客户端知道在跑的会话**,不只是当前查看的那条。
+     *
+     * 服务端的推流集合是按 socket 记的(`sessionViewers`,socket 一关就摘除),
+     * 所以新 socket 对后台正在跑的会话**不再是 viewer** —— 那条会话的实时帧从此
+     * 收不到,一直到用户切进去时主 effect 才重新订阅并靠 `lastSeq` 补发。
+     * 表现是"在跑但没输出"(转圈全靠 5 秒轮询撑着)。
+     *
+     * `chat.subscribe` 的 `sessions` 本来就是数组,一并带上即可。
+     */
+    const targets = new Map<string, { sessionId: string; lastSeq: number; lastRunId: string | null }>();
+    const track = (sessionId: string) => {
+      if (!sessionId || targets.has(sessionId)) return;
+      targets.set(sessionId, {
+        sessionId,
+        lastSeq: lastSeqRef.current.get(sessionId)?.seq ?? 0,
+        lastRunId: lastSeqRef.current.get(sessionId)?.runId ?? null,
+      });
+    };
+    track(selectedSession.id);
+    for (const sessionId of processingSessionsRef.current?.keys() ?? []) track(sessionId);
+
+    /**
+     * fj:只在**确认送达**之后才记发送时刻。
+     *
+     * `statusCheckSentAtRef` 的用途是"丢弃比这次请求更早的 idle ack";无条件记
+     * 就等于在等一个不会来的 ack。同一件事在 `useChatSessionState` 里专门写了
+     * `if (sent)` 并附了注释,这里破坏了同一个不变量 —— 而且这行在
+     * `await refreshFromServer` 之后执行,那段 await 期间 socket 完全可能又断了。
+     */
+    const sent = sendMessage({ type: 'chat.subscribe', sessions: [...targets.values()] });
+    if (sent) {
+      const now = Date.now();
+      for (const sessionId of targets.keys()) statusCheckSentAtRef.current.set(sessionId, now);
+    }
   }, [selectedProject, selectedSession, sendMessage, sessionStore]);
 
   // dr:实时 changed_files 帧转的伪 Write 消息(本轮 Bash/python 写盘的文件
@@ -297,11 +355,23 @@ function ChatInterface({
   useEffect(() => {
     setChangedFiles(null);
     setLiveChangedMessages([]);
-  }, [selectedSession?.id]);
+    // fj:依赖要含 currentSessionId —— 新会话页上 `selectedSession?.id` 恒为
+    // undefined,只靠它这个 effect 永远不会重跑。
+  }, [selectedSession?.id, currentSessionId]);
 
   const handleChangedFiles = useCallback((payload: { sessionId: string | null; checkpointId: string | null; files: unknown[]; truncated?: boolean; cwd?: string | null }) => {
     const activeId = selectedSession?.id || currentSessionId || null;
-    if (payload.sessionId && activeId && payload.sessionId !== activeId) return;
+    /**
+     * fj:归属不明或不匹配**一律丢弃**。
+     *
+     * 原来是 `payload.sessionId && activeId && payload.sessionId !== activeId` ——
+     * `activeId` 为 null(新会话页)时整个条件短路成假,**帧被放行**。于是停在
+     * 空白的新会话页上,后台某条会话跑完一轮,这里就冒出「本轮改动的文件」卡片,
+     * 右侧工作面板的产出里列着另一条对话写的文件,点进去还能直接打开。
+     * 而下面那个清空 effect 只依赖 `selectedSession?.id`(此时恒为 undefined),
+     * 也不会把它清掉。
+     */
+    if (!activeId || (payload.sessionId && payload.sessionId !== activeId)) return;
     setChangedFiles({
       checkpointId: payload.checkpointId,
       files: payload.files as ChangedFileEntry[],
@@ -512,9 +582,8 @@ function ChatInterface({
   }
 
   /**
-   * ef:首页空态时输入框搬到问候语下面(ChatEmptyState 的 composerSlot),
-   * 不再钉在底部;其余时候仍在消息流下方。同一个元素、两个位置 —— 切换时会重挂,
-   * 输入内容在 state 里,不丢。
+   * 首页空态判定。ef 曾用它把输入框搬进空态(composerSlot);ex 还原版式后
+   * 输入框始终在消息流下方,这里只剩下"给滚动容器铺点阵画布 + 居中"这一个用途。
    */
   const isHome =
     chatMessages.length === 0
@@ -558,6 +627,7 @@ function ChatInterface({
       onAttachFiles={handleAttachFiles}
       onAttachUrl={attachDocFromUrl}
       parsingDocs={parsingDocs}
+      isSubmitting={isSubmitting}
       docUploadProgress={docUploadProgress}
       showFileDropdown={showFileDropdown}
       filteredFiles={filteredFiles}
@@ -565,6 +635,7 @@ function ChatInterface({
       onSelectFile={selectFile}
       filteredCommands={filteredCommands}
       selectedCommandIndex={selectedCommandIndex}
+      hoveredCommandIndex={hoveredCommandIndex}
       onCommandSelect={handleCommandSelect}
       onCloseCommandMenu={resetCommandMenuState}
       isCommandMenuOpen={showCommandMenu}
@@ -646,9 +717,6 @@ function ChatInterface({
           onEditRerun={startEditRerun}
           onRetryLastTurn={handleRetryLastTurn}
           isHome={isHome}
-          composerSlot={isHome ? composerElement : null}
-          recentSessions={recentSessions}
-          onOpenSession={onNavigateToSession}
           serverTurnOutputs={serverTurnOutputs}
           />
         </div>
@@ -686,7 +754,7 @@ function ChatInterface({
             </div>
           )}
 
-          {!isHome && composerElement}
+          {composerElement}
         </div>
       </div>
 

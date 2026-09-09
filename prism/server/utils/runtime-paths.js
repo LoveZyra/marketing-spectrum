@@ -3,6 +3,9 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('boot');
+
 export function getModuleDir(importMetaUrl) {
   return path.dirname(fileURLToPath(importMetaUrl));
 }
@@ -73,7 +76,7 @@ export function migrateLegacyDataDir() {
 
     try {
       fs.renameSync(legacyDir, targetDir);
-      console.log(`[INFO] Migrated Prism data directory: ${legacyDir} -> ${targetDir}`);
+      log.info(`Migrated Prism data directory: ${legacyDir} -> ${targetDir}`);
       return true;
     } catch (error) {
       if (error && error.code === 'EXDEV') {
@@ -90,7 +93,7 @@ export function migrateLegacyDataDir() {
         } catch {
           // The note is best-effort; the copy above is what matters.
         }
-        console.log(`[INFO] Copied Prism data directory across filesystems: ${legacyDir} -> ${targetDir}`);
+        log.info(`Copied Prism data directory across filesystems: ${legacyDir} -> ${targetDir}`);
         return true;
       }
       throw error;
@@ -98,7 +101,7 @@ export function migrateLegacyDataDir() {
   } catch (error) {
     // A failed migration must never prevent startup — the server falls back to
     // whatever state exists at the (possibly fresh) target directory.
-    console.warn('[WARN] Prism data directory migration failed:', error?.message || error);
+    log.warn('Prism data directory migration failed:', error?.message || error);
     return false;
   }
 }

@@ -14,7 +14,7 @@ import {
 } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { handleChatConnection } from '@/modules/websocket/services/chat-websocket.service.js';
-import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
+import { connectedClients } from '@/shared/websocket-state.js';
 
 /**
  * 别人订阅一条正在跑的会话,不能把回答从提问者那里劫走。

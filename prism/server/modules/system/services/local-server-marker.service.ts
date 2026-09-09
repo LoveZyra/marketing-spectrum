@@ -1,6 +1,9 @@
 import { promises as fsPromises } from 'node:fs';
 import path from 'node:path';
 
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('system');
+
 /**
  * Writes the `local-server.json` marker (in the Prism data dir) that lets the
  * CLI and desktop tooling discover a running local server. Moved verbatim
@@ -31,7 +34,7 @@ export async function removeLocalServerMarker(markerPath: string): Promise<void>
     await fsPromises.unlink(markerPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn('[WARN] Could not remove local server marker:', (error as Error).message);
+      log.warn('Could not remove local server marker:', (error as Error).message);
     }
   }
 }

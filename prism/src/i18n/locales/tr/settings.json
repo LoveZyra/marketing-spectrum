@@ -10,9 +10,6 @@
     "languageLabel": "Görüntüleme Dili",
     "languageDescription": "Arayüz için tercih ettiğin dili seç"
   },
-  "appearance": {
-    "theme": "Tema"
-  },
   "quickSettings": {
     "title": "Hızlı Ayarlar",
     "sections": {
@@ -61,10 +58,6 @@
     }
   },
   "appearanceSettings": {
-    "darkMode": {
-      "label": "Koyu Mod",
-      "description": "Açık ve koyu temalar arasında geçiş yap"
-    },
     "projectSorting": {
       "label": "Proje Sıralama",
       "description": "Projelerin kenar çubuğunda nasıl sıralanacağı",

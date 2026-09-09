@@ -7,7 +7,7 @@ import { test } from 'vitest';
 
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
-import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
+import { connectedClients } from '@/shared/websocket-state.js';
 
 /**
  * Minimal stand-in for a websocket connection: collects every JSON frame the
@@ -420,4 +420,46 @@ test('审批帧不进重放缓冲(否则刷新后已回答的框会重新弹出�
       '审批的权威来源是 chat_subscribed.pendingPermissions,重放里不该再有一份',
     );
   });
+});
+
+/**
+ * fj:已完成的 run 不再转发迟到的内容帧。
+ *
+ * 中止会抢先发终止帧把 run 标成 completed,而被杀掉的运行时随后还会吐一阵
+ * 在途的 tool_result / stream_delta。此前只有重复的 `complete` 被丢弃,
+ * 其它 kind 照发照落库 —— 前端已经停了转圈,正文却还在长。
+ */
+test('fj:complete 之后的内容帧一律丢弃', async () => {
+  const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
+  process.env.PRISM_PUBLIC_WORKSPACE = '/workspace';
+  try {
+    await withIsolatedDatabase(() => {
+      sessionsDb.createAppSession('app-late', 'claude', '/workspace/demo');
+      const connection = new FakeConnection();
+      connectedClients.add(connection as never);
+      const run = chatRunRegistry.startRun({
+        appSessionId: 'app-late',
+        provider: 'claude',
+        providerSessionId: null,
+        connection,
+        userId: null,
+      })!;
+
+      run.writer.send({ kind: 'text', role: 'assistant', content: '正文', sessionId: 'app-late' } as never);
+      const beforeComplete = connection.frames.length;
+
+      chatRunRegistry.completeRunIfCurrent(run, { exitCode: 0, aborted: true });
+      // 运行时随后吐的在途帧
+      run.writer.send({ kind: 'tool_result', toolId: 't1', content: '迟到的结果', sessionId: 'app-late' } as never);
+      run.writer.send({ kind: 'text', role: 'assistant', content: '停止之后还在长', sessionId: 'app-late' } as never);
+
+      const afterFrames = connection.frames.slice(beforeComplete);
+      const contentFrames = afterFrames.filter((frame) => frame.kind !== 'complete');
+      assert.deepEqual(contentFrames, [], `complete 之后不该再有内容帧,实际:${JSON.stringify(contentFrames)}`);
+      connectedClients.delete(connection as never);
+    });
+  } finally {
+    if (previousPublic === undefined) delete process.env.PRISM_PUBLIC_WORKSPACE;
+    else process.env.PRISM_PUBLIC_WORKSPACE = previousPublic;
+  }
 });

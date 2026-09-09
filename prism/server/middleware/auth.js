@@ -2,10 +2,14 @@ import crypto from 'crypto';
 
 import jwt from 'jsonwebtoken';
 
+import { createLogger } from '@/shared/logger.js';
+
 import { userDb, appConfigDb } from '../modules/database/index.js';
 import { IS_PLATFORM } from '../constants/config.js';
 import { isRootUser } from '../shared/root-users.js';
 import { consumeSseTicket } from '../shared/sse-tickets.js';
+
+const log = createLogger('auth');
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
@@ -15,8 +19,8 @@ const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
 // init so operators know the deployment MUST sit behind an external auth
 // proxy — Prism itself performs no authentication in this mode.
 if (IS_PLATFORM) {
-  console.warn(
-    '[WARN] IS_PLATFORM is enabled: all Prism authentication is bypassed. ' +
+  log.warn(
+    'IS_PLATFORM is enabled: all Prism authentication is bypassed. ' +
     'An external authentication proxy in front of this server is required.'
   );
 }
@@ -61,7 +65,7 @@ const authenticateToken = async (req, res, next) => {
       req.user = withRootFlag(user);
       return next();
     } catch (error) {
-      console.error('Platform mode error:', error);
+      log.error('Platform mode error:', error);
       return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
     }
   }
@@ -129,7 +133,7 @@ const authenticateToken = async (req, res, next) => {
     req.user = withRootFlag(user);
     next();
   } catch (error) {
-    console.error('Token verification error:', error);
+    log.error('Token verification error:', error);
     return res.status(403).json({ error: 'Invalid token' });
   }
 };
@@ -184,7 +188,7 @@ const authenticateWebSocket = (token) => {
       }
       return null;
     } catch (error) {
-      console.error('Platform mode WebSocket error:', error);
+      log.error('Platform mode WebSocket error:', error);
       return null;
     }
   }
@@ -210,7 +214,7 @@ const authenticateWebSocket = (token) => {
     }
     return { userId: user.id, username: user.username };
   } catch (error) {
-    console.error('WebSocket token verification error:', error);
+    log.error('WebSocket token verification error:', error);
     return null;
   }
 };

@@ -53,8 +53,15 @@ describe('票据存储', () => {
 describe('两类票据的对外契约不变', () => {
   test('WS 票据是一次性的', () => {
     const ticket = issueTicket(42);
-    assert.deepEqual(consumeTicket(ticket), { userId: 42 });
+    // fj:载荷多了 tokenVersion —— 消费时要比对,不比对的话「退出所有设备」
+    // 之后已签发的那张 60 秒票据仍能开新连接(REST 和 JWT-WS 两条路都比对了)。
+    assert.deepEqual(consumeTicket(ticket), { userId: 42, tokenVersion: null });
     assert.equal(consumeTicket(ticket), null);
+  });
+
+  test('fj:签发时带上的 token_version 会原样还回来', () => {
+    const ticket = issueTicket(7, 3);
+    assert.deepEqual(consumeTicket(ticket), { userId: 7, tokenVersion: 3 });
   });
 
   test('WS 票据拒绝空 userId', () => {

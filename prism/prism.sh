@@ -32,6 +32,8 @@ cd "$(dirname "$0")" || exit 1
 APP_DIR="$(pwd)"
 LOG_FILE="$APP_DIR/prism.log"
 NODE_ENTRY="dist-server/server/index.js"
+# 保留几代旧日志。0 表示不保留(回到"每次启动截断"的老行为)。
+LOG_KEEP="${PRISM_LOG_KEEP:-5}"
 
 # --- 从 .env 读取端口与监听地址(与 load-env.js 的取值口径一致) ---
 read_env() {
@@ -121,6 +123,23 @@ do_stop() {
   return 1
 }
 
+# 把 prism.log 挪成 prism.log.1,旧的依次后移,超出 LOG_KEEP 的丢掉。
+# 用 mv 而不是 cp+truncate:mv 是原子的,不会出现"拷到一半又被写"的半截文件。
+rotate_logs() {
+  [ -f "$LOG_FILE" ] || return 0
+  if [ "$LOG_KEEP" -le 0 ] 2>/dev/null; then return 0; fi
+  local i
+  i="$LOG_KEEP"
+  rm -f "${LOG_FILE}.${i}" 2>/dev/null
+  while [ "$i" -gt 1 ]; do
+    if [ -f "${LOG_FILE}.$((i - 1))" ]; then
+      mv -f "${LOG_FILE}.$((i - 1))" "${LOG_FILE}.${i}" 2>/dev/null
+    fi
+    i=$((i - 1))
+  done
+  mv -f "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null
+}
+
 do_start() {
   echo "=== 启动 ==="
   if running; then
@@ -138,6 +157,12 @@ do_start() {
   : "${UV_THREADPOOL_SIZE:=16}"
   export UV_THREADPOOL_SIZE
 
+  # 轮转旧日志。
+  #
+  # 此前这里是 `> "$LOG_FILE"` —— **每次启动都把上一轮的日志截掉**。
+  # 而"服务挂了、我重启一下"恰恰是最常见的操作:等你想起来去看它为什么挂,
+  # 证据已经被自己的重启抹掉了。轮转成本几乎为零,能救的却正是最难复现的那一次。
+  rotate_logs
   # env -u API_KEY:见文件头第 3 条。
   nohup env -u API_KEY npm run server > "$LOG_FILE" 2>&1 &
   local start_pid=$!

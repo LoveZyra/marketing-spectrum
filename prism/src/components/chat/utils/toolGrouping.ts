@@ -257,6 +257,23 @@ export function stabilizeGroupIdentity(
 ): { items: MessageListItem[]; next: GroupIdentityState } {
   const next: GroupIdentityState = { byMember: new WeakMap(), serial: previous.serial };
 
+  /**
+   * fj:本轮已经被认领过的旧组。
+   *
+   * 认亲规则是「段首命中 → 段尾命中 → 逐条兜底」,但**不记录某个旧组是否已被
+   * 本轮另一个新组认领过**;而 `next.serial += previousGroup ? 0 : 1` 只在完全
+   * 找不到旧组时才发新号。于是一个旧组 G 被中间插入的消息劈成 G1、G2 时,
+   * 两个都用 `messages[0]` 命中 G、**两个都拿到 `G._key`**。
+   *
+   * 中间插入不是罕见情形:`computeMerged` 会把 `[...server, ...extra]` 按时间
+   * 重排,所以服务端刷新只要带回一条时间戳夹在两个工具调用之间的行(压缩摘要、
+   * error 行、任务通知、`ExitPlanMode`/`AskUserQuestion`、子代理容器)就会造成。
+   *
+   * 后果是同层出现两个 `key="activity-group_N"`:React 报重复 key,至少一段
+   * 时间轴每次渲染被卸载重建 —— 用户展开过的步骤自己收回去、整段高度突变。
+   */
+  const claimed = new Set<ToolGroupItem | SubagentGroupItem>();
+
   const out = items.map((item) => {
     const isGroup = isToolGroupItem(item) || isSubagentGroupItem(item);
     if (!isGroup) return item as MessageListItem;
@@ -269,14 +286,20 @@ export function stabilizeGroupIdentity(
       candidate && ('_isGroup' in candidate) === ('_isGroup' in groupItem) ? candidate : undefined
     );
 
-    let previousGroup = sameKind(previous.byMember.get(messages[0]))
-      ?? sameKind(previous.byMember.get(messages[messages.length - 1]));
+    // 已经被本轮另一个组认领过的旧组不再算命中(见 claimed 的说明)。
+    const unclaimed = (candidate: ToolGroupItem | SubagentGroupItem | undefined) => (
+      candidate && !claimed.has(candidate) ? candidate : undefined
+    );
+
+    let previousGroup = unclaimed(sameKind(previous.byMember.get(messages[0])))
+      ?? unclaimed(sameKind(previous.byMember.get(messages[messages.length - 1])));
     if (!previousGroup) {
       for (const message of messages) {
-        previousGroup = sameKind(previous.byMember.get(message));
+        previousGroup = unclaimed(sameKind(previous.byMember.get(message)));
         if (previousGroup) break;
       }
     }
+    if (previousGroup) claimed.add(previousGroup);
 
     const contentUnchanged = Boolean(
       previousGroup

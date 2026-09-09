@@ -153,6 +153,73 @@ describe('forgetUnder', () => {
       expect(attachmentsDb.totalBytesForUser(1)).toBe(10);
     });
   });
+
+  /**
+   * 目录名里带下划线的兄弟目录**也**不许被误伤。
+   *
+   * 上面那条用例挑的兄弟是 `attachments-old` —— 它验的是"前缀有没有补分隔符",
+   * 而**不是** LIKE 的元字符问题,所以真正的 bug 从它底下溜过去了:
+   * 原实现是 `abs_path LIKE '<dir>/%'`,`_` 是 LIKE 的单字符通配符,而目录名带
+   * 下划线(`my_proj`、`data_v2`、`user_features`)在真实路径里再普通不过。
+   *
+   * 当时代码里还写着一句辩解:「LIKE 里的 `%_` 是通配元字符,但附件绝对路径里
+   * 不会出现」—— 那句话是错的,写的人想的是 `%`。实测删 `my_proj` 时把
+   * `myXproj`、`my2proj` 的台账一起删了(4 行删掉 3 行)。
+   *
+   * 后果是双向的:那些文件不再计入配额(配额绕过),而过期清扫只删台账记过的行,
+   * 它们从此没人认领、**永久占盘**。
+   *
+   * 所以这条用例的兄弟目录必须是 `_` 的**通配命中**形状,不能再挑 `-old` 那种。
+   */
+  it('兄弟目录名里带下划线也不误伤(LIKE 的 _ 是单字符通配符)', async () => {
+    await withIsolatedDatabase((dir) => {
+      const fs = require('node:fs');
+      const path = require('node:path');
+
+      // 目标:my_proj。两个兄弟正好会被 `my_proj` 里的 `_` 通配命中。
+      const target = path.join(dir, 'my_proj', 'attachments');
+      const siblingX = path.join(dir, 'myXproj', 'attachments');
+      const sibling2 = path.join(dir, 'my2proj', 'attachments');
+      for (const d of [target, siblingX, sibling2]) fs.mkdirSync(d, { recursive: true });
+
+      const files = [
+        path.join(target, 'a.png'),
+        path.join(siblingX, 'b.png'),
+        path.join(sibling2, 'c.png'),
+      ];
+      for (const f of files) {
+        fs.writeFileSync(f, 'x');
+        attachmentsDb.record({ userId: 1, sessionId: null, projectPath: dir, kind: 'file', absPath: f, bytes: 10 });
+      }
+      expect(attachmentsDb.totalBytesForUser(1)).toBe(30);
+
+      attachmentsDb.forgetUnder(target);
+
+      // 只该少掉目标那一行。原实现在这里会是 0(三行全删)。
+      expect(attachmentsDb.totalBytesForUser(1)).toBe(20);
+    });
+  });
+
+  it('子目录里的台账也一并删掉', async () => {
+    await withIsolatedDatabase((dir) => {
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const root = path.join(dir, 'attachments');
+      const nested = path.join(root, 'sub', 'deeper');
+      fs.mkdirSync(nested, { recursive: true });
+      const shallow = path.join(root, 'a.png');
+      const deep = path.join(nested, 'b.png');
+      for (const f of [shallow, deep]) {
+        fs.writeFileSync(f, 'x');
+        attachmentsDb.record({ userId: 1, sessionId: null, projectPath: dir, kind: 'file', absPath: f, bytes: 10 });
+      }
+      expect(attachmentsDb.totalBytesForUser(1)).toBe(20);
+
+      // 前缀范围查询是半开区间 [prefix, prefixEnd),子目录天然落在里面
+      attachmentsDb.forgetUnder(root);
+      expect(attachmentsDb.totalBytesForUser(1)).toBe(0);
+    });
+  });
 });
 
 describe('commitAttachmentWithinQuota', () => {

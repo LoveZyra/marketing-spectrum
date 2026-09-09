@@ -16,9 +16,6 @@
     "tool": "工具",
     "claude": "AI"
   },
-  "tools": {
-    "settings": "工具設定"
-  },
   "interactive": {
     "title": "互動式提示",
     "waiting": "等待您在 CLI 中回應",
@@ -36,7 +33,6 @@
   },
   "input": {
     "placeholder": "輸入 / 叫用指令，@ 選取檔案，或向 {{provider}} 提問...",
-    "attachFiles": "附加檔案",
     "attachImages": "附加圖片",
     "send": "傳送",
     "stop": "停止",
@@ -46,7 +42,6 @@
     },
     "clickToChangeMode": "點擊變更權限模式（或在輸入框中按 Tab）",
     "showAllCommands": "顯示所有指令",
-    "clearInput": "清空輸入",
     "scrollToBottom": "捲動到底部",
     "attachmentPath": "路徑",
     "modelHint": "目前模型：{{model}} · 點擊切換",
@@ -115,9 +110,6 @@
       "expandAll": "全部展開",
       "loadingAll": "正在載入全部訊息...",
       "allLoaded": "全部訊息已載入"
-    },
-    "tokens": {
-      "compacting": "壓縮中"
     }
   },
   "shell": {
@@ -276,14 +268,6 @@
     "denied": "已拒絕"
   },
   "home": {
-    "greeting": {
-      "morning": "早安",
-      "noon": "午安",
-      "afternoon": "午安",
-      "evening": "晚安"
-    },
-    "subtitle": "從一個問題開始，或者接著上次的工作。",
-    "recentSessions": "最近會話",
-    "greetingWithName": "{{greeting}}，{{name}}"
+    "starters": "試試這些開始"
   }
 }

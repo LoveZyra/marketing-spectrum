@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangleIcon, History, RotateCcwIcon, XIcon } from 'lucide-react';
 
 import { authenticatedFetch } from '../../../../utils/api';
 import { Shimmer } from '../../../../shared/view/ui';
+import { useModalKeyboard } from '../../../../shared/view/hooks/useModalKeyboard';
 
 import { RestoreForceDialog } from './ChangedFilesCard';
 import type { RestoreBlockerPayload } from './ChangedFilesCard';
@@ -127,8 +128,13 @@ export default function CheckpointHistoryPanel({
     }
   };
 
+  // Esc 关闭 + Tab 焦点陷阱 —— 这个弹层声明了 aria-modal 却没有模态行为,
+  // 键盘用户 Tab 会跑到背后的页面上去。判据见 useModalKeyboard。
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalKeyboard(modalRef, { onClose });
+
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true">
+    <div ref={modalRef} className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-[rgba(16,16,16,0.72)]" onClick={onClose} aria-hidden="true" />
       <div className="prism-modal-shadow relative flex h-full w-full max-w-md flex-col border-l border-border bg-card">
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">

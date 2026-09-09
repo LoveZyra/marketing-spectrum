@@ -25,6 +25,8 @@ type CommandMenuCommand = {
 type CommandMenuProps = {
   commands?: CommandMenuCommand[];
   selectedIndex?: number;
+  /** fj:鼠标悬停项 —— 只影响高亮,不影响回车行为(见 useSlashCommands)。 */
+  hoveredIndex?: number;
   onSelect?: (command: CommandMenuCommand, index: number, isHover: boolean) => void;
   onClose: () => void;
   position?: { top: number; left: number; bottom?: number };
@@ -129,6 +131,7 @@ const getMenuPosition = (position: { top: number; left: number; bottom?: number 
 export default function CommandMenu({
   commands = [],
   selectedIndex = -1,
+  hoveredIndex = -1,
   onSelect,
   onClose,
   position = { top: 0, left: 0 },
@@ -265,7 +268,8 @@ export default function CommandMenu({
           )}
 
           {(groupedCommands[namespace] || []).map(({ command, commandIndex, renderKey }) => {
-            const isSelected = commandIndex === selectedIndex;
+            // fj:键盘选中或鼠标悬停都高亮,但只有前者会让回车去插入命令。
+            const isSelected = commandIndex === selectedIndex || commandIndex === hoveredIndex;
             const NamespaceIcon = getNamespaceIcon(namespace);
             const accentClass = getNamespaceAccentClass(namespace);
             return (

@@ -1,8 +1,7 @@
 {
   "buttons": {
     "save": "Сохранить",
-    "cancel": "Отмена",
-    "create": "Создать"
+    "cancel": "Отмена"
   },
   "tabs": {
     "chat": "Чат",
@@ -11,9 +10,6 @@
   },
   "status": {
     "completed": "Завершено"
-  },
-  "common": {
-    "version": "Версия"
   },
   "mainContent": {
     "loading": "Загрузка Prism",

@@ -7,7 +7,7 @@ import express, { type RequestHandler, type Router } from 'express';
 import mime from 'mime-types';
 import multer from 'multer';
 
-import { attachmentsDb, projectsDb, resolveVisibleProjectRoot } from '@/modules/database/index.js';
+import { attachmentsDb, resolveVisibleProjectRoot } from '@/modules/database/index.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
 import {
   getFileTree,
@@ -22,6 +22,8 @@ import {
 } from '@/modules/files/services/path-validation.service.js';
 import { searchProjectFiles } from '@/modules/files/services/project-search.service.js';
 import { validateWorkspacePath, WORKSPACES_ROOT } from '@/shared/utils.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('files');
 
 // The file tree can browse above the project root (see the ?path= parameter on
 // GET /api/projects/:projectId/files), but READING a file it lists is a
@@ -247,8 +249,9 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
     try {
       const dirPath = req.query.path as string | undefined;
 
-      console.log('[API] Browse filesystem request for path:', dirPath);
-      console.log('[API] WORKSPACES_ROOT is:', WORKSPACES_ROOT);
+      // 每点一次目录就两行 —— 默认档位下不打。第二行还会把 WORKSPACES_ROOT
+      // 写进日志(服务端布局,不该躺在一份到处贴的日志里),更该压到 debug。
+      log.debug('浏览目录:', dirPath, '(root:', WORKSPACES_ROOT, ')');
       // Default to home directory if no path provided
       const defaultRoot = WORKSPACES_ROOT;
       let targetPath = dirPath ? expandWorkspacePath(dirPath) : defaultRoot;
@@ -318,7 +321,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       });
 
     } catch (error) {
-      console.error('Error browsing filesystem:', error);
+      log.error('Error browsing filesystem:', error);
       res.status(500).json({ error: 'Failed to browse filesystem' });
     }
   });
@@ -358,7 +361,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         throw mkdirError;
       }
     } catch (error) {
-      console.error('Error creating folder:', error);
+      log.error('Error creating folder:', error);
       res.status(500).json({ error: 'Failed to create folder' });
     }
   });
@@ -396,7 +399,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       try { mtimeMs = (await fsPromises.stat(resolved)).mtimeMs; } catch { /* 读得到内容通常也 stat 得到,取不到就置空、退化为不检测 */ }
       res.json({ content, path: resolved, mtimeMs });
     } catch (error) {
-      console.error('Error reading file:', error);
+      log.error('Error reading file:', error);
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
         res.status(404).json({ error: 'File not found' });
@@ -470,14 +473,14 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       fileStream.pipe(res);
 
       fileStream.on('error', (error) => {
-        console.error('Error streaming file:', error);
+        log.error('Error streaming file:', error);
         if (!res.headersSent) {
           res.status(500).json({ error: 'Error reading file' });
         }
       });
 
     } catch (error) {
-      console.error('Error serving binary file:', error);
+      log.error('Error serving binary file:', error);
       if (!res.headersSent) {
         res.status(500).json({ error: (error as Error).message });
       }
@@ -547,7 +550,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         message: 'File saved successfully'
       });
     } catch (error) {
-      console.error('Error saving file:', error);
+      log.error('Error saving file:', error);
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
         res.status(404).json({ error: 'File or directory not found' });
@@ -613,7 +616,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       await setTreeLocationHeaders(res, listedPath, actualPath);
       res.json(files);
     } catch (error) {
-      console.error('[ERROR] File tree error:', (error as Error).message);
+      log.error('File tree error:', (error as Error).message);
       res.status(500).json({ error: (error as Error).message });
     }
   });
@@ -690,7 +693,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         message: `${type === 'file' ? 'File' : 'Directory'} created successfully`
       });
     } catch (error) {
-      console.error('Error creating file/directory:', error);
+      log.error('Error creating file/directory:', error);
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'EACCES') {
         res.status(403).json({ error: 'Permission denied' });
@@ -768,7 +771,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         message: 'Renamed successfully'
       });
     } catch (error) {
-      console.error('Error renaming file/directory:', error);
+      log.error('Error renaming file/directory:', error);
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'EACCES') {
         res.status(403).json({ error: 'Permission denied' });
@@ -841,7 +844,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         message: 'Deleted successfully'
       });
     } catch (error) {
-      console.error('Error deleting file/directory:', error);
+      log.error('Error deleting file/directory:', error);
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'EACCES') {
         res.status(403).json({ error: 'Permission denied' });
@@ -894,7 +897,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
     // Use multer middleware
     uploadMiddleware.array('files', MAX_FILE_UPLOAD_COUNT)(req, res, async (err: unknown) => {
       if (err) {
-        console.error('Multer error:', err);
+        log.error('Multer error:', err);
         const errCode = (err as { code?: string }).code;
         if (errCode === 'LIMIT_FILE_SIZE') {
           // 413 rather than 400: the request is well-formed, it is the size that
@@ -936,11 +939,11 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
           try {
             filePaths = JSON.parse(relativePaths);
           } catch {
-            console.log('[DEBUG] Failed to parse relativePaths:', relativePaths);
+            log.debug('Failed to parse relativePaths:', relativePaths);
           }
         }
 
-        console.log('[DEBUG] File upload request:', {
+        log.debug('File upload request:', {
           projectId,
           targetPath: JSON.stringify(targetPath),
           targetPathType: typeof targetPath,
@@ -963,27 +966,27 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
           return res.status(404).json({ error: 'Project not found' });
         }
 
-        console.log('[DEBUG] Project root:', projectRoot);
+        log.debug('Project root:', projectRoot);
 
         // Validate and resolve target path
         // If targetPath is empty or '.', use project root directly
         const targetDir = targetPath || '';
         let resolvedTargetDir;
 
-        console.log('[DEBUG] Target dir:', JSON.stringify(targetDir));
+        log.debug('Target dir:', JSON.stringify(targetDir));
 
         if (!targetDir || targetDir === '.' || targetDir === './') {
           // Empty path means upload to project root
           resolvedTargetDir = path.resolve(projectRoot);
-          console.log('[DEBUG] Using project root as target:', resolvedTargetDir);
+          log.debug('Using project root as target:', resolvedTargetDir);
         } else {
           const validation = await validatePathInProject(projectRoot, targetDir);
           if (!validation.valid) {
-            console.log('[DEBUG] Path validation failed:', validation.error);
+            log.debug('Path validation failed:', validation.error);
             return res.status(403).json({ error: validation.error });
           }
           resolvedTargetDir = validation.resolved;
-          console.log('[DEBUG] Resolved target dir:', resolvedTargetDir);
+          log.debug('Resolved target dir:', resolvedTargetDir);
         }
 
         // Ensure target directory exists
@@ -995,18 +998,18 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
 
         // Move uploaded files from temp to target directory
         const uploadedFiles = [];
-        console.log('[DEBUG] Processing files:', uploadedRequestFiles.map(f => ({ originalname: f.originalname, path: f.path })));
+        log.debug('Processing files:', uploadedRequestFiles.map(f => ({ originalname: f.originalname, path: f.path })));
         for (let i = 0; i < uploadedRequestFiles.length; i++) {
           const file = uploadedRequestFiles[i];
           // Use relative path if provided (for folder uploads), otherwise use originalname
           const fileName = (filePaths && filePaths[i]) ? filePaths[i] : file.originalname;
-          console.log('[DEBUG] Processing file:', fileName, '(originalname:', file.originalname + ')');
+          log.debug('Processing file:', fileName, '(originalname:', file.originalname + ')');
           const destPath = path.join(resolvedTargetDir, fileName);
 
           // Validate destination path
           const destValidation = await validatePathInProject(projectRoot, destPath);
           if (!destValidation.valid) {
-            console.log('[DEBUG] Destination validation failed for:', destPath);
+            log.debug('Destination validation failed for:', destPath);
             // Clean up temp file
             await fsPromises.unlink(file.path).catch(() => {});
             continue;
@@ -1041,7 +1044,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
           message: `Uploaded ${uploadedFiles.length} ${uploadedFiles.length === 1 ? 'file' : 'files'} successfully`
         });
       } catch (error) {
-        console.error('Error uploading files:', error);
+        log.error('Error uploading files:', error);
         // Clean up any remaining temp files
         for (const file of uploadedRequestFiles) {
           await fsPromises.unlink(file.path).catch(() => {});

@@ -193,8 +193,19 @@ export const api = {
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
     // root 读全量,普通用户只回自己的行(服务端裁剪)。
-    auditLog: ({ limit = 50, offset = 0 } = {}) =>
-      authenticatedFetch(`/api/auth/audit-log?limit=${limit}&offset=${offset}`),
+    /**
+     * @param {{limit?: number, offset?: number, events?: string[], outcome?: string, username?: string}} [options]
+     */
+    auditLog: (options = {}) => {
+      const { limit = 50, offset = 0, events = [], outcome = '', username = '' } = options;
+      const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      // 三个筛选参数都只在有值时才带上 —— 空参数会让 URL 变长且不好读,
+      // 而服务端对空值的处理本来就是"不筛"。
+      if (events.length > 0) query.set('events', events.join(','));
+      if (outcome) query.set('outcome', outcome);
+      if (username.trim()) query.set('username', username.trim());
+      return authenticatedFetch(`/api/auth/audit-log?${query.toString()}`);
+    },
   },
 
   // Protected endpoints

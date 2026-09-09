@@ -1,8 +1,7 @@
 {
   "buttons": {
     "save": "Kaydet",
-    "cancel": "İptal",
-    "create": "Oluştur"
+    "cancel": "İptal"
   },
   "tabs": {
     "chat": "Sohbet",
@@ -11,9 +10,6 @@
   },
   "status": {
     "completed": "Tamamlandı"
-  },
-  "common": {
-    "version": "Sürüm"
   },
   "mainContent": {
     "loading": "Prism Yükleniyor",

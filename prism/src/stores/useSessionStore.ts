@@ -265,7 +265,28 @@ function getUserTurnOrdinalBefore(
     }
 
     if (candidate.kind === 'text' && candidate.role === 'user') {
-      userCount++;
+      /**
+       * fj:同一条用户消息只算**一次**。
+       *
+       * 合并视图里同一句话常常有两份:本地乐观行(`local_*`)和服务端落库那份。
+       * `computeMerged` 对它们的去重是"渲染时"做的,而这里数的是**原始合并数组**
+       * —— 于是回合序号被多算,fi 那条按"同一轮同文"判定的 thinking 去重就会
+       * 漏删(序号对不上)或跨回合误删(两条不同回合的 thinking 被算成同一轮)。
+       *
+       * 判据用 `local_` 前缀:那正是乐观行的 id 形状,而服务端行的 id 来自
+       * transcript 的 uuid 或流式的 `uuid_块序号`,不会撞。
+       */
+      if (typeof candidate.id === 'string' && candidate.id.startsWith('local_')) {
+        // 乐观行:只有在**服务端还没有**对应那句时才算(否则就是重复计数)
+        const echoedOnServer = serverMessages.some((serverMessage) => (
+          serverMessage.kind === 'text'
+          && serverMessage.role === 'user'
+          && String(serverMessage.content ?? '').trim() === String(candidate.content ?? '').trim()
+        ));
+        if (!echoedOnServer) userCount++;
+      } else {
+        userCount++;
+      }
     }
   }
 
@@ -310,6 +331,8 @@ function isAssistantTextEchoedInSameTurnOnServer(
   serverMessages: NormalizedMessage[],
   realtimeMessages: NormalizedMessage[],
   presortedMerged?: NormalizedMessage[],
+  // fi:thinking 行也走同一套"同一轮里服务端有没有同文"判定,只是 kind 不同。
+  kind: 'text' | 'thinking' = 'text',
 ): boolean {
   const assistantText = (message.content || '').trim();
   if (!assistantText) {
@@ -325,7 +348,7 @@ function isAssistantTextEchoedInSameTurnOnServer(
   return serverMessages
     .slice(turnRange.start + 1, turnRange.end)
     .some((serverMessage) =>
-      serverMessage.kind === 'text'
+      serverMessage.kind === kind
       && serverMessage.role === 'assistant'
       && (serverMessage.content || '').trim() === assistantText,
     );
@@ -374,7 +397,7 @@ function dedupeAdjacentAssistantEchoes(merged: NormalizedMessage[]): NormalizedM
  * JSONL indexing lags) stays in `realtimeMessages` so the chat pane never
  * flashes the empty "Continue your conversation" state.
  */
-function pruneRealtimeSupersededByServer(
+export function pruneRealtimeSupersededByServer(
   serverMessages: NormalizedMessage[],
   realtimeMessages: NormalizedMessage[],
 ): NormalizedMessage[] {
@@ -424,6 +447,31 @@ function pruneRealtimeSupersededByServer(
 
     if (message.kind === 'tool_use' && message.toolId) {
       if (serverMessages.some((serverMessage) => serverMessage.kind === 'tool_use' && serverMessage.toolId === message.toolId)) {
+        return false;
+      }
+    }
+
+    /*
+     * fi:tool_result 与 thinking 原来**没有任何规则**,直接落到下面的 `return true`。
+     * 只要 id 和服务端那份对不上(服务端补了 id、或前端那份是本地合成的),
+     * 服务端刷新之后它们就永远留在 realtime 里,和服务端那份**并排渲染成两份**,
+     * 而且没有任何刷新能清掉 —— 只有 F5。
+     *
+     * 实测构造 id 不一致的场景:3 条变 6 条,整组原样重复。
+     *
+     * 判据和它们的邻居对齐:tool_result 按 toolId(与 tool_use 同源);
+     * thinking 按"同一轮里服务端有同文"(与助手正文同一套)。
+     * 都是**只在服务端确实有对应行时才清**,服务端还没落库的照旧留着 —— 这条
+     * 边界不能动,否则回合进行中正文会闪空。
+     */
+    if (message.kind === 'tool_result' && message.toolId) {
+      if (serverMessages.some((serverMessage) => serverMessage.kind === 'tool_result' && serverMessage.toolId === message.toolId)) {
+        return false;
+      }
+    }
+
+    if (message.kind === 'thinking') {
+      if (isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages, mergedView(), 'thinking')) {
         return false;
       }
     }
@@ -636,6 +684,28 @@ export function useSessionStore() {
       slot.offset = (opts.offset ?? 0) + messages.length;
       slot.fetchedAt = Date.now();
       slot.status = 'idle';
+      /**
+       * fj:剪掉服务端已经接管的实时行 —— 与 `refreshFromServer` 同一条规则。
+       *
+       * `computeMerged` 对服务端行的去重**只按 id**,而实时帧的 id 是服务端现生成的、
+       * REST 历史的 id 来自 jsonl 的 `uuid` —— 两边永远对不上。真正按 `toolId` /
+       * 同轮同文去重的规则全在 `pruneRealtimeSupersededByServer` 里,而它此前只有
+       * `refreshFromServer` 一个调用点。
+       *
+       * 漏在这里的后果:回合在**非当前查看**的会话里结束时,`complete` 分支的刷新
+       * 被 `sid === activeViewSessionId` 挡掉,realtime 里留着整整一轮;之后重新
+       * 打开它走的是这条 `fetchFromServer` —— 那一轮的每个工具调用、每段 thinking
+       * 都渲染两份(fi 的测试注释里说的「3 条变 6 条」,修在了 refresh 路径、漏了这条)。
+       *
+       * **只在首屏那次剪**:`fetchMore` 是前插,按只含尾窗的服务端快照去剪会把
+       * 尚未被覆盖的实时行误删。
+       */
+      if ((opts.offset ?? 0) === 0) {
+        slot.realtimeMessages = pruneRealtimeSupersededByServer(
+          slot.serverMessages,
+          slot.realtimeMessages,
+        );
+      }
       recomputeMergedIfNeeded(slot);
       if (data.tokenUsage) {
         slot.tokenUsage = data.tokenUsage;

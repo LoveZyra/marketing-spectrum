@@ -10,9 +10,6 @@
     "languageLabel": "Язык интерфейса",
     "languageDescription": "Выберите предпочитаемый язык для интерфейса"
   },
-  "appearance": {
-    "theme": "Тема"
-  },
   "quickSettings": {
     "title": "Быстрые настройки",
     "sections": {
@@ -60,10 +57,6 @@
     }
   },
   "appearanceSettings": {
-    "darkMode": {
-      "label": "Темная тема",
-      "description": "Переключение между светлой и темной темами"
-    },
     "projectSorting": {
       "label": "Сортировка проектов",
       "description": "Как проекты упорядочены на боковой панели",

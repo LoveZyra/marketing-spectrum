@@ -4,8 +4,10 @@ import path from 'node:path';
 
 import express, { type RequestHandler, type Router } from 'express';
 
-import { canViewerSeeSession, projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { canViewerSeeSession, projectsDb, sessionsDb, usageRecordsDb } from '@/modules/database/index.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('system');
 
 type UsageRouterDependencies = {
   authenticateToken: RequestHandler;
@@ -173,7 +175,7 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
             }
           }
         } catch (error) {
-          console.warn('[Fork] Transcript scan failed:', (error as Error).message);
+          log.warn('[Fork] Transcript scan failed:', (error as Error).message);
         }
       }
 
@@ -283,8 +285,68 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
         }
       });
     } catch (error) {
-      console.error('Error reading session token usage:', error);
+      log.error('Error reading session token usage:', error);
       res.status(500).json({ error: 'Failed to read session token usage' });
+    }
+  });
+
+  /**
+   * fg:用量与费用台账。
+   *
+   * ## 和上面那条 token-usage 端点的区别(**别混**)
+   *
+   * 上面那条读 JSONL 里**最后一条** assistant 消息的 usage —— 它衡量的是
+   * "当前上下文占了多少",给 `/cost` 的进度条用。名字里有 Totals,但它不是总和。
+   *
+   * 这条读 `usage_records` 表,是**累计花销**:一轮一行,逐条累加过的。
+   * 两个数天然不一样,而且差可以是一个数量级 —— 谁把它们当同一个数用,
+   * 得到的结论就是错的。
+   *
+   * ## 可见范围
+   *
+   * root 看全量,其他人只看自己的行。和审计日志同一条规矩:费用行带着
+   * project_path 和 model,不设防的话任何账号都能摸清别人在做什么项目。
+   */
+  router.get('/api/usage/records', authenticateToken, (req, res) => {
+    try {
+      const user = (req as unknown as { user?: { id?: number; isRoot?: boolean } }).user;
+      const scopeUserId = user?.isRoot ? null : (user?.id ?? -1);
+      const limit = Number.parseInt(String(req.query.limit ?? ''), 10) || 50;
+      const offset = Number.parseInt(String(req.query.offset ?? ''), 10) || 0;
+      const days = Number.parseInt(String(req.query.days ?? ''), 10) || null;
+
+      res.json({
+        entries: usageRecordsDb.list(limit, offset, scopeUserId, days),
+        total: usageRecordsDb.count(scopeUserId, days),
+        scoped: scopeUserId !== null,
+      });
+    } catch (error) {
+      log.error('读用量明细失败:', error);
+      res.status(500).json({ error: 'Failed to read usage records' });
+    }
+  });
+
+  /** 汇总。`by` 只接受白名单里的维度 —— 它会拼进 SQL 的 GROUP BY。 */
+  router.get('/api/usage/summary', authenticateToken, (req, res) => {
+    try {
+      const user = (req as unknown as { user?: { id?: number; isRoot?: boolean } }).user;
+      const scopeUserId = user?.isRoot ? null : (user?.id ?? -1);
+      const requested = String(req.query.by ?? 'day');
+      const allowed = ['username', 'project_path', 'model', 'source', 'day'] as const;
+      const by = (allowed as readonly string[]).includes(requested)
+        ? (requested as (typeof allowed)[number])
+        : 'day';
+      const days = Number.parseInt(String(req.query.days ?? ''), 10) || 30;
+
+      res.json({
+        by,
+        days,
+        rows: usageRecordsDb.summarize(by, scopeUserId, days),
+        scoped: scopeUserId !== null,
+      });
+    } catch (error) {
+      log.error('读用量汇总失败:', error);
+      res.status(500).json({ error: 'Failed to read usage summary' });
     }
   });
 

@@ -3,6 +3,7 @@ import type { Dispatch, KeyboardEvent, RefObject, SetStateAction } from 'react';
 
 import { api } from '../../../utils/api';
 import { escapeRegExp } from '../utils/chatFormatting';
+import { replaceCompletionToken } from '../utils/completionBoundary';
 import type { Project } from '../../../types/app';
 
 interface ProjectFileNode {
@@ -103,8 +104,26 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
       return;
     }
 
+    /**
+     * fj:结束判据从"半角空格"改成"任意空白"。
+     *
+     * 换行不是半角空格,**中文正文里也几乎没有半角空格** —— 于是
+     * `参考@Rea这个文件改一下` 会让下拉一直开着,盖住上方消息,还把 ↑/↓ 吞掉
+     * (方向键既移不动光标,也触发不了历史回填)。
+     */
     const textAfterAt = textBeforeCursor.slice(lastAtIndex + 1);
-    if (textAfterAt.includes(' ')) {
+    if (/\s/.test(textAfterAt)) {
+      setShowFileDropdown(false);
+      setAtSymbolPosition(-1);
+      return;
+    }
+
+    /**
+     * fj:`@` 前面必须是行首或空白,否则 `zhang@example.com` 这种邮箱地址
+     * 一打出来就弹文件下拉。
+     */
+    const charBeforeAt = lastAtIndex > 0 ? textBeforeCursor[lastAtIndex - 1] : '';
+    if (charBeforeAt && !/\s/.test(charBeforeAt)) {
       setShowFileDropdown(false);
       setAtSymbolPosition(-1);
       return;
@@ -178,13 +197,20 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
 
   const selectFile = useCallback(
     (file: MentionableFile) => {
-      const textBeforeAt = input.slice(0, atSymbolPosition);
-      const textAfterAtQuery = input.slice(atSymbolPosition);
-      const spaceIndex = textAfterAtQuery.indexOf(' ');
-      const textAfterQuery = spaceIndex !== -1 ? textAfterAtQuery.slice(spaceIndex) : '';
-
-      const newInput = `${textBeforeAt}${file.path} ${textAfterQuery}`;
-      const newCursorPosition = textBeforeAt.length + file.path.length + 1;
+      /**
+       * fj:被替换的只是「@ 到光标」这一段,后面的正文一个字都不许动。
+       *
+       * 原来是 `indexOf(' ')` 找半角空格,找不到就把余下全部丢弃。换行不是空格,
+       * **中文正文里也没有半角空格** —— 于是回头去改一个提及(光标停在 `@Rea`
+       * 后面、下面还有几行正文)时,点一下补全项就把后面全吃掉了,没有撤销、
+       * 没有提示。判据抽到 `completionBoundary`,与斜杠命令共用一份并钉了测试。
+       */
+      const { text: newInput, caret: newCursorPosition } = replaceCompletionToken(
+        input,
+        atSymbolPosition,
+        file.path,
+        cursorPosition,
+      );
 
       if (textareaRef.current && !textareaRef.current.matches(':focus')) {
         textareaRef.current.focus();
@@ -213,7 +239,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
         }
       });
     },
-    [input, atSymbolPosition, textareaRef, setInput],
+    [input, atSymbolPosition, cursorPosition, textareaRef, setInput],
   );
 
   const handleFileMentionsKeyDown = useCallback(

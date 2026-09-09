@@ -286,3 +286,103 @@ describe('归档会话列表的 SQL 口径与 canViewerSeeSession 一致', () =>
     );
   });
 });
+
+/**
+ * fb 把**未归档**会话列表的可见性也下推进了 SQL(`getVisibleSessionsPage`),
+ * 给外部 API `GET /api/agent/sessions` 用 —— 它原来是整表捞出来再在 JS 侧逐行过滤,
+ * 而过滤函数每行查库,4000 条会话就把同步的事件循环按住 219ms。
+ *
+ * 归档那条已经有 parity 测试(见上一个 describe),但这次新增的是**另外两档**
+ * (`exclude` 与 `include`),它们各自的 WHERE 不一样。下推可见性最大的风险就是
+ * SQL 与 JS 判据漂开 —— 一漂就是"列得出来点进去 404",或者反过来:越权。
+ * 所以三档都得钉。
+ */
+describe('未归档 / 全部会话列表的 SQL 口径与 canViewerSeeSession 一致', () => {
+  test('exclude 与 include 两档都与 JS 逐条同答案', async () => {
+    const publicRoot = path.resolve('/workspace/public');
+    process.env.PRISM_PUBLIC_WORKSPACE = publicRoot;
+    delete process.env.PRISM_ROOT_USERS;
+    await freshDb();
+
+    const alice = { id: Number(userDb.createUser('alice', 'h').id), username: 'alice' };
+    const bob = { id: Number(userDb.createUser('bob', 'h').id), username: 'bob' };
+
+    projectsDb.createProjectPath('/workspace/alice/app', null, alice.id);
+    projectsDb.createProjectPath('/workspace/bob/open', null, bob.id, 'public');
+    projectsDb.createProjectPath('/workspace/bob/solo', null, bob.id);
+    projectsDb.createProjectPath(path.join(publicRoot, 'shared'), null, null);
+
+    // 一半归档一半不归档 —— 两档的 WHERE 才真的被分开验到
+    const live: Array<[string, string]> = [
+      ['live-alice', '/workspace/alice/app'],
+      ['live-open', '/workspace/bob/open'],
+      ['live-solo', '/workspace/bob/solo'],
+      ['live-pub', path.join(publicRoot, 'shared')],
+    ];
+    const archived: Array<[string, string]> = [
+      ['arch-alice', '/workspace/alice/app'],
+      ['arch-solo', '/workspace/bob/solo'],
+    ];
+    for (const [sessionId, projectPath] of [...live, ...archived]) {
+      sessionsDb.createSession(sessionId, 'claude', projectPath, sessionId);
+    }
+    for (const [sessionId] of archived) sessionsDb.updateSessionIsArchived(sessionId, true);
+
+    const idsIn = (result: { rows: Array<{ session_id: string }> }) =>
+      result.rows.map((row) => row.session_id).sort();
+
+    for (const viewer of [alice, bob]) {
+      const scope = { kind: 'user' as const, userId: viewer.id };
+
+      // exclude:只该有未归档的,且逐条与 JS 一致
+      const excluded = sessionsDb.getVisibleSessionsPage(scope, 500, 0, { archived: 'exclude' });
+      for (const [sessionId] of archived) {
+        assert.ok(!idsIn(excluded).includes(sessionId), `exclude 档漏进了归档会话 ${sessionId}`);
+      }
+      for (const [sessionId] of live) {
+        const jsSays = canViewerSeeSession(sessionId, { userId: viewer.id, username: viewer.username });
+        assert.equal(
+          idsIn(excluded).includes(sessionId), jsSays,
+          `exclude 不一致:viewer=${viewer.username} session=${sessionId}`,
+        );
+      }
+
+      // include:归档与未归档都在,同样逐条与 JS 一致
+      const included = sessionsDb.getVisibleSessionsPage(scope, 500, 0, { archived: 'include' });
+      for (const [sessionId] of [...live, ...archived]) {
+        const jsSays = canViewerSeeSession(sessionId, { userId: viewer.id, username: viewer.username });
+        assert.equal(
+          idsIn(included).includes(sessionId), jsSays,
+          `include 不一致:viewer=${viewer.username} session=${sessionId}`,
+        );
+      }
+    }
+
+    // 具体断言,免得两边同时错还"一致"
+    const aliceScope = { kind: 'user' as const, userId: alice.id };
+    assert.deepEqual(
+      idsIn(sessionsDb.getVisibleSessionsPage(aliceScope, 500, 0, { archived: 'exclude' })),
+      ['live-alice', 'live-open', 'live-pub'],
+    );
+    assert.deepEqual(
+      idsIn(sessionsDb.getVisibleSessionsPage(aliceScope, 500, 0, { archived: 'include' })),
+      ['arch-alice', 'live-alice', 'live-open', 'live-pub'],
+    );
+
+    // total 必须是**过滤后**的总数,不是全表 —— 分页的正确性全靠它
+    const bobExcluded = sessionsDb.getVisibleSessionsPage(
+      { kind: 'user', userId: bob.id }, 500, 0, { archived: 'exclude' },
+    );
+    assert.equal(bobExcluded.total, bobExcluded.rows.length);
+
+    // 分页本身:limit/offset 走 SQL,两页拼起来正好是全集且不重不漏
+    const rootAll = sessionsDb.getVisibleSessionsPage({ kind: 'all' }, 500, 0, { archived: 'include' });
+    const p1 = sessionsDb.getVisibleSessionsPage({ kind: 'all' }, 3, 0, { archived: 'include' });
+    const p2 = sessionsDb.getVisibleSessionsPage({ kind: 'all' }, 3, 3, { archived: 'include' });
+    assert.equal(p1.total, rootAll.total);
+    assert.deepEqual(
+      [...p1.rows, ...p2.rows].map((r) => r.session_id).sort(),
+      rootAll.rows.map((r) => r.session_id).sort(),
+    );
+  });
+});

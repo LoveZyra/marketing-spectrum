@@ -1,6 +1,9 @@
 import { promises as fsPromises } from 'node:fs';
 import path from 'node:path';
 
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('files');
+
 /** One node of the project file tree, exactly as the frontend consumes it. */
 export type FileTreeItem = {
   name: string;
@@ -122,7 +125,7 @@ export async function getFileTree(
     // Only log non-permission errors to avoid spam
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== 'EACCES' && code !== 'EPERM') {
-      console.error('Error reading directory:', error);
+      log.error('Error reading directory:', error);
     }
     return [];
   }

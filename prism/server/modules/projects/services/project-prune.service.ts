@@ -1,5 +1,7 @@
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { isPrismInternalProjectPath } from '@/shared/prism-internal-transcripts.js';
+import { createLogger } from '@/shared/logger.js';
+const log = createLogger('projects');
 
 /**
  * 清掉 Prism 自己跑出来的「幽灵项目」。
@@ -32,7 +34,7 @@ export function pruneInternalProjects(): { removed: string[] } {
       projectsDb.deleteProjectById(row.project_id);
       removed.push(row.project_path);
     } catch (error) {
-      console.warn(`[project-prune] 删不掉 ${row.project_path}:`, (error as Error).message);
+      log.warn(`[project-prune] 删不掉 ${row.project_path}:`, (error as Error).message);
     }
   }
   return { removed };

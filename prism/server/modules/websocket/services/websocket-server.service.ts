@@ -7,6 +7,9 @@ import { handleChatConnection } from '@/modules/websocket/services/chat-websocke
 import { verifyWebSocketClient } from '@/modules/websocket/services/websocket-auth.service.js';
 import { handleShellConnection } from '@/modules/websocket/services/shell-websocket.service.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
+import { createLogger } from '@/shared/logger.js';
+import { userDb } from '@/modules/database/index.js';
+const log = createLogger('ws');
 
 type WebSocketServerDependencies = {
   verifyClient: Parameters<typeof verifyWebSocketClient>[1];
@@ -88,6 +91,26 @@ export function createWebSocketServer(
         ws.terminate();
         return;
       }
+      /**
+       * fj:顺带复检身份 —— 吊销/停用/删除要真的把人踢下线。
+       *
+       * 身份只在握手时判一次,之后 `prismUserId` 盖在 socket 上就一直有效,
+       * 连接生命周期内没有任何复检。于是管理员停用一个账号、或用户自己
+       * 「退出所有设备」之后,只要那个标签页没关,聊天连接就一直可用 ——
+       * `canViewerSeeSession` 只按 `prismUserId` 比对项目 owner,用户行没了
+       * 也照样匹配得上。多用户部署里这就是「已经被踢掉的人还在往项目里发指令」。
+       *
+       * 放在已有的心跳 interval 里:30 秒一次、每连接一次主键查询,成本可忽略。
+       */
+      const viewerId = (ws as { prismUserId?: string | number | null }).prismUserId;
+      if (viewerId !== null && viewerId !== undefined) {
+        const stillValid = userDb.getUserById(Number(viewerId));
+        if (!stillValid) {
+          log.info('[ws] 账号已不存在/已停用,断开这条连接');
+          ws.close(4401, 'account revoked');
+          return;
+        }
+      }
       heartbeatState.isAlive = false;
       try {
         ws.ping();
@@ -113,7 +136,7 @@ export function createWebSocketServer(
       return;
     }
 
-    console.log('[WARN] Unknown WebSocket path:', pathname);
+    log.warn('Unknown WebSocket path:', pathname);
     ws.close();
   });
 
