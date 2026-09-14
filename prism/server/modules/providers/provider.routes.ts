@@ -16,6 +16,7 @@ import {
 import { providerAuthService } from '@/modules/providers/services/provider-auth.service.js';
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
 import { providerMcpService } from '@/modules/providers/services/mcp.service.js';
+import { redactMcpSecretsInList, shouldRedactScope } from '@/modules/providers/services/mcp-redaction.js';
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
@@ -691,6 +692,30 @@ router.delete(
  * `workspacePath` 为空时不校验:那表示"不针对某个项目",此时只有 user scope 有意义,
  * 而 user scope 已经被下面的 root 判定挡住了。
  */
+/**
+ * F03:**读和写分成两道门。**
+ *
+ * fj 把 `user` 作用域收成 root-only,但那道门读写一起挡 —— 而前端的 MCP 页面
+ * 对所有人都会拉一次 `scope=user`,于是普通用户打开那个页面就看到一条报错。
+ * 而"这台机器上装了哪些 MCP server"本身不是秘密:它决定了你的会话能调用什么。
+ *
+ * 真正不能给的是里面的 `env` / `headers` —— API key 和 bearer token 放在那里。
+ * 所以读这道门放行,由 `redactMcpSecrets` 把值打掉(见那个模块的说明)。
+ *
+ * 非 user 作用域读写同一道门:它要过项目归属检查,而那正是"能读到的 = 能写的"。
+ */
+async function assertMayReadMcpScope(
+  req: Request,
+  scope: string | null | undefined,
+  workspacePath: string | null | undefined,
+): Promise<void> {
+  if (scope === 'user') {
+    // 全机配置人人可见(值会被打码),不需要项目归属。
+    return;
+  }
+  await assertMayTouchMcpScope(req, scope, workspacePath);
+}
+
 async function assertMayTouchMcpScope(
   req: Request,
   scope: string | null | undefined,
@@ -734,16 +759,36 @@ router.get(
     const provider = parseProvider(req.params.provider);
     const workspacePath = readOptionalQueryString(req.query.workspacePath);
     const scope = parseMcpScope(req.query.scope);
-    await assertMayTouchMcpScope(req, scope, workspacePath);
+    await assertMayReadMcpScope(req, scope, workspacePath);
+    const isRoot = Boolean(req.user?.isRoot);
 
     if (scope) {
       const servers = await providerMcpService.listProviderMcpServersForScope(provider, scope, { workspacePath });
-      res.json(createApiSuccessResponse({ provider, scope, servers }));
+      res.json(createApiSuccessResponse({
+        provider,
+        scope,
+        servers: shouldRedactScope(scope, isRoot) ? redactMcpSecretsInList(servers) : servers,
+      }));
       return;
     }
 
+    /**
+     * F03:**不带 scope 的那条路此前把三组原样返回。**
+     *
+     * 过的只是"这个项目看得见吗",而返回里带着 `user` 作用域 ——
+     * 也就是 `~/.claude.json`,全机配置,`env`/`headers` 里正是 API key 和
+     * bearer token。任何登录用户读一次就全拿到了。
+     *
+     * 现在按作用域逐组决定要不要打码,和显式 scope 那条路同一套规则。
+     */
     const groupedServers = await providerMcpService.listProviderMcpServers(provider, { workspacePath });
-    res.json(createApiSuccessResponse({ provider, scopes: groupedServers }));
+    const scopes = Object.fromEntries(
+      Object.entries(groupedServers).map(([groupScope, servers]) => [
+        groupScope,
+        shouldRedactScope(groupScope, isRoot) ? redactMcpSecretsInList(servers) : servers,
+      ]),
+    );
+    res.json(createApiSuccessResponse({ provider, scopes }));
   }),
 );
 
@@ -956,6 +1001,8 @@ router.get(
       {
         title,
         sessionId,
+        // F38:原生 id 一起带出去 —— transcript / 检查点都按它组织。
+        providerSessionId: dbSession?.provider_session_id ?? null,
         exportedAt: new Date().toISOString(),
         // fj:显式映射,不再用 `as` 强转 —— 强转正是让 `toolUseId`/`toolName`
         //     这类字段名漂移在编译期完全静默的原因(导出里恒为 null)。
@@ -969,6 +1016,17 @@ router.get(
           toolInput: (message as { toolInput?: unknown }).toolInput,
           toolId: (message as { toolId?: string }).toolId,
           isError: (message as { isError?: boolean }).isError,
+          // F38:附件清单。`images` 是归一化消息上的既有字段,此前导出完全不看它。
+          attachments: Array.isArray((message as { images?: unknown[] }).images)
+            ? ((message as { images: unknown[] }).images).map((image) => {
+              const record = (image && typeof image === 'object' ? image : {}) as Record<string, unknown>;
+              return {
+                name: typeof record.name === 'string' ? record.name : undefined,
+                path: typeof record.path === 'string' ? record.path : undefined,
+                mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
+              };
+            })
+            : undefined,
         })),
       },
       formatRaw,

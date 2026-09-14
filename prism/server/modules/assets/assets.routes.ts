@@ -10,7 +10,12 @@ import {
   isAllowedImageMimeType,
   resolveImageAssetFile,
 } from '@/modules/assets/services/image-assets.service.js';
-import { attachmentsDb, resolveVisibleProjectRoot } from '@/modules/database/index.js';
+import {
+  attachmentsDb,
+  canViewerSeeProjectPath,
+  resolveVisibleProjectRoot,
+  sessionsDb,
+} from '@/modules/database/index.js';
 import {
   checkQuota,
   commitAttachmentWithinQuota,
@@ -35,9 +40,35 @@ const router = express.Router();
  * 不让人传图。
  */
 function resolveUploadTarget(req: express.Request): { dir: string; projectPath: string | null } {
+  const viewer = readRequestViewer(req);
+
+  /**
+   * A7:**会话说了算,不是侧栏说了算。**
+   *
+   * 这个函数原来只看前端传的 `projectId`(侧栏选中的那个项目),于是落盘目录来自
+   * `projects.project_path`,而 `chat.send` 那道图片门比的是 `sessions.project_path`
+   * —— 两个不同来源的值。只要对不齐,图片就落在门看不到的地方:**页面上显示得
+   * 好好的**(前端按侧栏 projectId 走 files/content 取原图),**模型却一张都收不到**,
+   * 除了服务端一行 warn 之外没有任何线索。
+   *
+   * root 尤其容易踩:它对所有项目可见,所以上传一定会落进某个项目的 `attachments/`
+   * (普通用户看不见的项目会回落全局目录,反而三道门都认)。
+   *
+   * 请求本来就带着 `sessionId`(见前端的 `attachmentQuery`),优先按它解析:
+   * 落盘目录与那道门从此是同一个来源。可见性照旧要过 —— 会话看不见就不给用它的项目。
+   */
+  const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
+  if (sessionId) {
+    const session = sessionsDb.getSessionById(sessionId);
+    const sessionProjectPath = session?.project_path ?? null;
+    if (sessionProjectPath && canViewerSeeProjectPath(viewer, sessionProjectPath)) {
+      return ensureAttachmentDir(sessionProjectPath);
+    }
+  }
+
   const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
   const projectRoot = projectId
-    ? resolveVisibleProjectRoot(readRequestViewer(req), projectId)
+    ? resolveVisibleProjectRoot(viewer, projectId)
     : null;
   return ensureAttachmentDir(projectRoot);
 }

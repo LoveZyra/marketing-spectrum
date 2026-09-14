@@ -200,3 +200,48 @@ test('回归:压缩摘要仍然被改标成 assistant,而不是被出处判定�
   assert.equal(out.length, 1);
   assert.equal(out[0].role, 'assistant');
 });
+
+/**
+ * gb(回归):**CLI 自己发起的那一轮的注入帧,不许渲染成用户气泡。**
+ *
+ * 后台子代理完成、会话内定时任务触发时,CLI 用自己的命令队列注入一条 user 帧,
+ * 内容是 `<task-notification>…</task-notification>` 的裸 XML。
+ *
+ * 实测**两种形态并存**:
+ *   - 带 `origin:{"kind":"task-notification"}` —— 原来那条 origin 判据能拦;
+ *   - **完全没有 origin 字段**(2026-09-09 那两条)—— 结构判据一条都不命中,
+ *     内容前缀清单里也没有它。此前它没露出来,只是因为整轮都在上游被丢掉了;
+ *     观测回合(gb)把这一轮接住之后,它会**原样渲染成一条用户气泡**。
+ *
+ * 所以这两条都走**真实链路**(整行喂 `normalizeMessage`),不是手搓判据 ——
+ * 上一轮的教训就是"手搓字面量喂纯函数不算证明"。
+ */
+describe('gb:task-notification 注入帧', () => {
+  const NOTIFICATION = '<task-notification>\n  <task id="ab67282f5aa2d91fa" status="completed" />\n</task-notification>';
+
+  it('带 origin 的:不产生用户气泡', () => {
+    const row = userRow({ origin: { kind: 'task-notification' } }, NOTIFICATION);
+    assert.equal(bubbles(row).length, 0);
+  });
+
+  it('**没有 origin 的**:同样不产生用户气泡(这一条是新补的判据)', () => {
+    const row = userRow({}, NOTIFICATION);
+    assert.equal(bubbles(row).length, 0);
+  });
+
+  it('数组内容形态也拦得住', () => {
+    const row = userRow({}, [{ type: 'text', text: NOTIFICATION }]);
+    assert.equal(bubbles(row).length, 0);
+  });
+
+  it('用户原话后面被追加了通知块 → 只留用户原话', () => {
+    const row = userRow({}, `帮我看下这个${NOTIFICATION}`);
+    const out = bubbles(row);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].content, '帮我看下这个');
+  });
+
+  it('反证的另一半:一句普通用户消息照旧是气泡(判据没有放宽到吃掉真人发言)', () => {
+    assert.equal(bubbles(userRow({}, '把 README 改一下')).length, 1);
+  });
+});

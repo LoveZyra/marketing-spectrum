@@ -14,7 +14,7 @@ import cors from 'cors';
 import { AppError, generateMessageId } from '@/shared/utils.js';
 import { methodOverrideMiddleware } from '@/shared/method-override.js';
 import { closeSessionsWatcher, initializeSessionsWatcher, markInterruptedTurnsOnStartup, sessionsService, startArchiveRetentionSweeper } from '@/modules/providers/index.js';
-import { broadcastRuntimeEvicted, createWebSocketServer, drainPendingSendForSession } from '@/modules/websocket/index.js';
+import { broadcastRuntimeEvicted, createWebSocketServer, drainPendingSendForSession, observeOrphanFrames } from '@/modules/websocket/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { createTasksRouter, startTaskScheduler, stopTaskScheduler } from '@/modules/tasks/index.js';
 import { createFilesRouter } from '@/modules/files/index.js';
@@ -35,6 +35,8 @@ import {
     queryClaudeSDK,
     prewarmClaudeSession,
     setRuntimeEvictionNotifier,
+    setOrphanTurnHook,
+    mergeUserMessage,
     releaseClaudeSession,
     abortClaudeSDKSession,
     getActiveClaudeSDKSessions,
@@ -131,6 +133,9 @@ const wss = createWebSocketServer(server, {
     chat: {
         spawnFns: { claude: queryClaudeSDK },
         abortFns: { claude: abortClaudeSDKSession },
+        // gc:真合流 —— 会话忙着时把用户这条话直接推进 CLI 的命令队列,
+        // 而不是攒在 Prism 自己的排队里等这一轮跑完。不成立时自动退回排队。
+        mergeFns: { claude: mergeUserMessage },
         getToolApprovalSessionId,
         resolveToolApproval,
         getPendingApprovalsForSession,
@@ -161,6 +166,13 @@ app.locals.wss = wss;
 // F14:常驻进程被名额挤掉时,给还在看那段对话的人推一条状态帧。
 // claude-sdk 不认识 websocket 层,由组合根接线。
 setRuntimeEvictionNotifier(broadcastRuntimeEvicted);
+
+/**
+ * gb:CLI 自己发起的那一轮(后台子代理完成通知、会话内定时任务)交给观测回合接住。
+ * 同样由组合根接线 —— claude-sdk 不认识 run 注册表。不接线时行为退回改动前
+ * (只计数、丢弃),所以这一行是这个功能的总开关。
+ */
+setOrphanTurnHook(observeOrphanFrames);
 
 // Behind nginx/Caddy the socket address is the proxy's. Opt-in only: trusting
 // X-Forwarded-For unconditionally would let any direct client forge a fresh

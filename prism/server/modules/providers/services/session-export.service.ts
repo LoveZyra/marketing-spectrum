@@ -35,6 +35,23 @@ export type ExportableMessage = {
    */
   toolId?: string;
   isError?: boolean;
+  /**
+   * F38:**这条消息带了哪些附件。**
+   *
+   * 导出此前完全不提附件 —— 一条"看这张图,里面的报错是什么"导出来只剩那句话,
+   * 读的人无从知道当时还给了模型一张图。JSON 导出的自述目标是"喂给别的工具做
+   * 二次分析",少了附件那份分析建立在残缺的输入上。
+   *
+   * 只导**清单**(文件名 / 路径 / 类型),不导内容:导出是给人读和给工具分析的,
+   * 把几百 KB base64 塞进 Markdown 只会让它打不开。
+   */
+  attachments?: ExportableAttachment[];
+};
+
+export type ExportableAttachment = {
+  name?: string;
+  path?: string;
+  mimeType?: string;
 };
 
 export type ExportOptions = {
@@ -45,6 +62,13 @@ export type ExportOptions = {
 export type SessionExportInput = {
   title: string;
   sessionId: string;
+  /**
+   * F38:**provider 原生会话 id。**
+   *
+   * 导出里原来只有 app 会话 id,而 transcript、检查点、工具日志全按原生 id 组织
+   * —— 拿着导出去对 jsonl 时,第一步就断了。带上它,导出才是自洽的。
+   */
+  providerSessionId?: string | null;
   exportedAt: string;
   messages: ExportableMessage[];
 };
@@ -56,6 +80,18 @@ export type RenderedExport = {
 };
 
 export type ExportFormat = 'md' | 'html' | 'json';
+
+/** 附件清单的一行:名字优先,退回路径的最后一段。 */
+function attachmentLabel(attachment: ExportableAttachment): string {
+  if (attachment.name && attachment.name.trim()) return attachment.name.trim();
+  const p = typeof attachment.path === 'string' ? attachment.path : '';
+  const base = p.split(/[\\/]/).pop();
+  return base || '(未命名附件)';
+}
+
+function attachmentsOf(message: ExportableMessage): ExportableAttachment[] {
+  return Array.isArray(message.attachments) ? message.attachments.filter(Boolean) : [];
+}
 
 const formatTimestamp = (value: string | undefined): string => {
   if (!value) return '';
@@ -145,6 +181,15 @@ export function renderMarkdownExport(input: SessionExportInput, options: ExportO
       .filter(Boolean)
       .join(' · ');
     lines.push(`## ${who}${meta ? ` (${meta})` : ''}`, '', (message.content ?? '').trim(), '');
+    // F38:附件只列清单,不导内容(base64 塞进 Markdown 会让它打不开)。
+    const attachments = attachmentsOf(message);
+    if (attachments.length > 0) {
+      lines.push(`附件(${attachments.length}):`);
+      for (const attachment of attachments) {
+        lines.push(`- ${attachmentLabel(attachment)}${attachment.path ? ` — \`${attachment.path}\`` : ''}`);
+      }
+      lines.push('');
+    }
   }
   return `${lines.join('\n').trimEnd()}\n`;
 }
@@ -160,6 +205,8 @@ export function renderJsonExport(input: SessionExportInput, options: ExportOptio
     prismExportVersion: 1,
     title: input.title,
     sessionId: input.sessionId,
+    // F38:带上原生 id —— transcript / 检查点 / 工具日志都按它组织。
+    providerSessionId: input.providerSessionId ?? null,
     exportedAt: input.exportedAt,
     includesTools: options.includeTools === true,
     messages: selectExportMessages(input.messages, options).map((message) => {
@@ -175,12 +222,19 @@ export function renderJsonExport(input: SessionExportInput, options: ExportOptio
             : { output: message.content ?? '', isError: Boolean(message.isError) }),
         };
       }
+      const attachments = attachmentsOf(message);
       return {
         type: 'message',
         role: message.role ?? null,
         timestamp: message.timestamp ?? null,
         model: message.role === 'assistant' ? message.model ?? null : null,
         content: (message.content ?? '').trim(),
+        // F38:清单而不是内容 —— 消费方要原图自己按 path 取。
+        attachments: attachments.map((attachment) => ({
+          name: attachmentLabel(attachment),
+          path: attachment.path ?? null,
+          mimeType: attachment.mimeType ?? null,
+        })),
       };
     }),
   };
@@ -209,9 +263,16 @@ export function renderHtmlExport(input: SessionExportInput, options: ExportOptio
       const meta = [formatTimestamp(message.timestamp), isUser ? null : message.model]
         .filter(Boolean)
         .join(' · ');
+      const attachments = attachmentsOf(message);
+      // F38:附件只列清单 —— 导出是给人读的,内嵌 base64 会让文件打不开。
+      const attachmentsHtml = attachments.length > 0
+        ? `\n  <div class="attachments">附件(${attachments.length}):${
+          attachments.map((attachment) => `<span>${escapeHtml(attachmentLabel(attachment))}</span>`).join('')
+        }</div>`
+        : '';
       return `<div class="msg ${isUser ? 'user' : 'assistant'}">
   <div class="who">${isUser ? '用户' : '助手'}${meta ? `<span class="meta">${escapeHtml(meta)}</span>` : ''}</div>
-  <div class="body">${escapeHtml((message.content ?? '').trim())}</div>
+  <div class="body">${escapeHtml((message.content ?? '').trim())}</div>${attachmentsHtml}
 </div>`;
     })
     .join('\n');
@@ -232,6 +293,8 @@ export function renderHtmlExport(input: SessionExportInput, options: ExportOptio
   .who { font-weight: 600; font-size: 12px; margin-bottom: 6px; color: #4b5563; }
   .who .meta { font-weight: 400; margin-left: 8px; color: #9ca3af; font-family: ui-monospace, monospace; font-size: 11px; }
   .body { white-space: pre-wrap; word-break: break-word; }
+  .attachments { margin-top: 8px; font-size: 12px; color: #6b7280; }
+  .attachments span { display: inline-block; margin-left: 6px; padding: 1px 6px; border: 1px solid #e5e7eb; border-radius: 6px; background: #fafafa; }
   .tool { margin: 8px 0 8px 6%; padding: 8px 12px; border-left: 3px solid #d1d5db; background: #fafafa; color: #4b5563; font-size: 13px; }
   .tool pre { margin: 6px 0 0; overflow-x: auto; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 12px; }
 </style>

@@ -1,5 +1,7 @@
 import type { ChatMessage } from '../types/types';
 
+import { getIntrinsicMessageKey } from './messageKeys';
+
 export interface ToolGroupItem {
   _isGroup: true;
   /** 跨渲染稳定的组身份,专供 React key —— 见 stabilizeGroupIdentity。 */
@@ -229,12 +231,31 @@ export function groupConsecutiveTools(
  */
 export interface GroupIdentityState {
   byMember: WeakMap<ChatMessage, ToolGroupItem | SubagentGroupItem>;
+  /**
+   * fz:**按消息的内在 id 再存一份。**
+   *
+   * `byMember` 是 `WeakMap`,认的是**对象引用**。而每一轮 `complete` 都会触发
+   * `refreshFromServer`,它 `slot.serverMessages = incoming` —— 整份消息对象
+   * 被换成刚 `await response.json()` 出来的新对象;`normalizedToChatMessages`
+   * 的转换缓存也是 WeakMap,旧 key 一起没。于是认亲**全部落空**,每一段都拿
+   * 新号,`_key` 全变,React 卸载重挂**每一条时间轴**:
+   *
+   * - 用户展开过的那一步(可能是一大段 diff)自己收回去,页面蹿半屏;
+   * - 手动点开/点收的折叠状态回到自动规则;
+   * - 收尾那次 `1fr → 0fr` 的过渡从零开始,平滑收起变成硬跳。
+   *
+   * 这三条正是这个函数的注释里写着要防的。丢帧补拉(回合进行中)和重连补齐
+   * 也走同一条路,所以不是"每轮一次",是"抖一下就来一次"。
+   *
+   * 内在 id 来自服务端(uuid / toolId / rowid),对象换了它不变 —— 拿它兜底。
+   */
+  byMemberKey: Map<string, ToolGroupItem | SubagentGroupItem>;
   /** 新组的自增编号。放在 state 里,组件卸载重挂之前一直连续。 */
   serial: number;
 }
 
 export function createGroupIdentityState(): GroupIdentityState {
-  return { byMember: new WeakMap(), serial: 0 };
+  return { byMember: new WeakMap(), byMemberKey: new Map(), serial: 0 };
 }
 
 /**
@@ -255,7 +276,11 @@ export function stabilizeGroupIdentity(
   items: MessageListItem[],
   previous: GroupIdentityState,
 ): { items: MessageListItem[]; next: GroupIdentityState } {
-  const next: GroupIdentityState = { byMember: new WeakMap(), serial: previous.serial };
+  const next: GroupIdentityState = {
+    byMember: new WeakMap(),
+    byMemberKey: new Map(),
+    serial: previous.serial,
+  };
 
   /**
    * fj:本轮已经被认领过的旧组。
@@ -291,11 +316,21 @@ export function stabilizeGroupIdentity(
       candidate && !claimed.has(candidate) ? candidate : undefined
     );
 
-    let previousGroup = unclaimed(sameKind(previous.byMember.get(messages[0])))
-      ?? unclaimed(sameKind(previous.byMember.get(messages[messages.length - 1])));
+    /**
+     * 认亲:先按对象引用(便宜且精确),落空再按内在 id(对象被整体换掉时唯一
+     * 还认得出来的东西,见 `byMemberKey`)。两轮都是「段首 → 段尾 → 逐条兜底」。
+     */
+    const lookup = (message: ChatMessage) => {
+      const byRef = unclaimed(sameKind(previous.byMember.get(message)));
+      if (byRef) return byRef;
+      const key = getIntrinsicMessageKey(message);
+      return key ? unclaimed(sameKind(previous.byMemberKey.get(key))) : undefined;
+    };
+
+    let previousGroup = lookup(messages[0]) ?? lookup(messages[messages.length - 1]);
     if (!previousGroup) {
       for (const message of messages) {
-        previousGroup = unclaimed(sameKind(previous.byMember.get(message)));
+        previousGroup = lookup(message);
         if (previousGroup) break;
       }
     }
@@ -317,6 +352,8 @@ export function stabilizeGroupIdentity(
 
     for (const message of messages) {
       next.byMember.set(message, group);
+      const key = getIntrinsicMessageKey(message);
+      if (key) next.byMemberKey.set(key, group);
     }
     return group;
   });

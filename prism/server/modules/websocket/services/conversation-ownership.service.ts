@@ -39,11 +39,33 @@ const holders = new Map<string, ConversationHolder>();
  */
 let claimSequence = 0;
 
-/** 终端接管一段对话。返回的 token 是释放时的凭据。 */
+/**
+ * 终端接管一段对话。返回的 token 是释放时的凭据。
+ *
+ * fl:**已经被接管时不再盲覆盖。**
+ *
+ * fk 给释放加了令牌,但接管这一侧仍是无条件 `set` —— 两个人在同一路径开终端时
+ * 只记得后者;后者先退出会把整把锁释放掉,而前者的 PTY 还连着,chat 于是判成
+ * "没人接管",开始与那个 PTY 双写同一份 transcript。令牌只挡住了"错误释放"
+ * 的一半,另一半在这里。
+ *
+ * 已被别人持有时返回**现有的持有者**(token 不给出去),调用方据此知道自己
+ * 没拿到锁;同一个人重复接管(重连)照旧续期。
+ */
 export function claimForShell(
   appSessionId: string,
   viewer: { userId?: string | number | null; username?: string | null },
 ): ConversationHolder {
+  const existing = holders.get(appSessionId);
+  if (existing) {
+    const sameViewer = String(existing.userId ?? '') === String(viewer.userId ?? '');
+    if (!sameViewer) {
+      // 别人持有着 —— 不覆盖,把现有持有者原样报回去(不含 token)。
+      return { ...existing, token: undefined };
+    }
+    // 同一个人重连:沿用同一张令牌,免得旧连接的退出路径把新的这把释放掉。
+    return existing;
+  }
   const holder: ConversationHolder = {
     panel: 'shell',
     userId: viewer.userId ?? null,

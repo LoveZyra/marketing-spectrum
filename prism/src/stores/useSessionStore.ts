@@ -29,6 +29,8 @@ export type MessageKind =
   | 'session_created'
   | 'interactive_prompt'
   | 'task_notification'
+  // gd:后台任务进展。**故意不落库**(每几秒一条),只走直播 —— 见 server/shared/types.ts
+  | 'task_progress'
   // prism additions: per-turn git checkpoints + changed-files summaries
   | 'checkpoint_created'
   | 'changed_files';
@@ -63,6 +65,17 @@ export interface NormalizedMessage {
   isLocalCommand?: boolean;
   isLocalCommandStdout?: boolean;
   isCompactSummary?: boolean;
+  /**
+   * ga:**这条 error 是前端就地插的本地提示,不是这一轮的结果。**
+   *
+   * 附件太大、文档解析失败、抓网页失败…… 一共九处,与正在跑的那一轮毫无关系。
+   * `endsTurnForOutputs` 靠它放行(fw/fz),可这个字段此前**没有出现在这个类型里**,
+   * 于是 `chatMessageToNormalized` 的 error 分支把它剥掉、`convertMessage` 也不还原 ——
+   * **修复代码在,数据到不了它**,拖个大附件照旧把正在跑的清单折掉。
+   *
+   * 类型缺一个字段,整条链路就会在某一段悄悄把它丢掉。这条要跟着走完全程。
+   */
+  isLocalNotice?: boolean;
   images?: Array<{ path?: string; data?: string; name?: string }>;
   toolName?: string;
   toolInput?: unknown;
@@ -79,6 +92,18 @@ export interface NormalizedMessage {
   newSessionId?: string;
   status?: string;
   summary?: string;
+  /**
+   * gd:后台任务。`toolId` 就是那次 Task/Agent 调用的 `tool_use_id` ——
+   * 也就是子代理卡的身份;前端据此把进展与汇报归到卡上(见 useChatMessages)。
+   */
+  taskId?: string;
+  taskProgress?: {
+    toolUses?: number;
+    totalTokens?: number;
+    durationMs?: number;
+    lastToolName?: string;
+    subagentType?: string;
+  };
   exitCode?: number;
   actualSessionId?: string;
   parentToolUseId?: string;
@@ -139,7 +164,7 @@ export interface SessionSlot {
 
 const EMPTY: NormalizedMessage[] = [];
 
-function createEmptySlot(): SessionSlot {
+export function createEmptySlot(): SessionSlot {
   return {
     serverMessages: EMPTY,
     realtimeMessages: EMPTY,
@@ -166,7 +191,18 @@ function createEmptySlot(): SessionSlot {
  * on top of the persisted copy before realtime is cleared.
  */
 const LOCAL_USER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
-const LOCAL_USER_DEDUPE_CLOCK_SKEW_MS = 10_000;
+/**
+ * ga:**改成对称。**
+ *
+ * 本地乐观回声与服务端那份**只能靠时间戳去重**(id 永远对不上 —— 服务端那份
+ * 刻意不外发帧)。此前给了"服务端最晚 5 分钟"的余量,却只给"服务端最早 10 秒",
+ * 两侧差 30 倍。而这两个时间来自**两块不同的表**:浏览器时钟与服务器时钟。
+ *
+ * 客户端表快 30 秒(手动设过时间、虚机/手机 NTP 没同步)就判成两条:
+ * **用户自己发的每句话渲染两遍,页内无法自愈**;还会让回合序号整体错位一个
+ * 回合,连锁污染 thinking / 正文的去重。时钟偏差是双向的,没有理由只容忍一边。
+ */
+const LOCAL_USER_DEDUPE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 function userTextFingerprint(m: NormalizedMessage): string | null {
   if (m.kind !== 'text' || m.role !== 'user') return null;
@@ -228,6 +264,14 @@ function compareMessagesChronologically(a: NormalizedMessage, b: NormalizedMessa
   return 0;
 }
 
+/** 这个数组已经按时间排好了吗 —— 一趟线性扫描。 */
+function isChronological(list: readonly NormalizedMessage[]): boolean {
+  for (let i = 1; i < list.length; i += 1) {
+    if (compareMessagesChronologically(list[i - 1], list[i]) > 0) return false;
+  }
+  return true;
+}
+
 /**
  * Count how many user turns precede `message` in a chronologically merged view
  * of server + realtime rows. Used to match a realtime row to the correct turn
@@ -246,6 +290,7 @@ function getUserTurnOrdinalBefore(
 ): number {
   const messageTime = readMessageTime(message);
   let userCount = 0;
+  const serverIds = new Set(serverMessages.map((serverMessage) => serverMessage.id));
 
   const merged = presortedMerged
     ?? [...serverMessages, ...realtimeMessages].sort(compareMessagesChronologically);
@@ -266,25 +311,28 @@ function getUserTurnOrdinalBefore(
 
     if (candidate.kind === 'text' && candidate.role === 'user') {
       /**
-       * fj:同一条用户消息只算**一次**。
+       * 同一条用户消息只算**一次**。
        *
-       * 合并视图里同一句话常常有两份:本地乐观行(`local_*`)和服务端落库那份。
+       * 合并视图里同一句话常常有两份:实时那份和服务端落库那份。
        * `computeMerged` 对它们的去重是"渲染时"做的,而这里数的是**原始合并数组**
-       * —— 于是回合序号被多算,fi 那条按"同一轮同文"判定的 thinking 去重就会
-       * 漏删(序号对不上)或跨回合误删(两条不同回合的 thinking 被算成同一轮)。
+       * —— 于是回合序号被多算,按"同一轮同文"判定的 thinking / 助手正文去重就会
+       * 漏删(序号对不上)或跨回合误删(两条不同回合被算成同一轮)。
        *
-       * 判据用 `local_` 前缀:那正是乐观行的 id 形状,而服务端行的 id 来自
-       * transcript 的 uuid 或流式的 `uuid_块序号`,不会撞。
+       * **N01:判据是"这条是不是服务端那份",不是"id 像不像 `local_`"。**
+       *
+       * fj 那版只认 `local_` 前缀 —— 那只是实时用户行的**一种** id 形状。
+       * 队列续发、回放补帧、以及任何由服务端帧构造出的实时用户行都不是这个
+       * 形状,于是它们照旧被多算一次(fk 审计里的 N01,和 K01/K02 一样是
+       * "收窄判据时只收窄了一半")。
+       * 现在按 id 是否出现在服务端快照里判定,一次覆盖所有形状。
+       *
+       * 回声判定复用 `hasServerEchoForLocalUser` —— 它带时间窗,所以
+       * **十分钟后又发一次同样的"继续"不会被当成回声**(纯比正文会,那会让
+       * 第二轮的序号少算一,thinking 去重整体错位一个回合)。
        */
-      if (typeof candidate.id === 'string' && candidate.id.startsWith('local_')) {
-        // 乐观行:只有在**服务端还没有**对应那句时才算(否则就是重复计数)
-        const echoedOnServer = serverMessages.some((serverMessage) => (
-          serverMessage.kind === 'text'
-          && serverMessage.role === 'user'
-          && String(serverMessage.content ?? '').trim() === String(candidate.content ?? '').trim()
-        ));
-        if (!echoedOnServer) userCount++;
-      } else {
+      if (serverIds.has(candidate.id)) {
+        userCount++;
+      } else if (!hasServerEchoForLocalUser(candidate, serverMessages)) {
         userCount++;
       }
     }
@@ -584,6 +632,148 @@ export function planSlotEviction(
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
+/**
+ * fm:**服务端快照落地的唯一入口。**
+ *
+ * 首屏(`fetchFromServer`)、刷新(`refreshFromServer`)、补页(`fetchMore`)、
+ * 搜索定位四条路径原来各写一遍"怎么合并、要不要剪实时行、游标怎么推" ——
+ * 于是每加一条规则就要记得改四处,而实际上每次只改了一两处:
+ *
+ *   - `pruneRealtimeSupersededByServer` 一开始只在 refresh 里(fi),
+ *     fj 补了首屏,**补页至今没有** → 上翻之后旧的实时思考/结果仍会两份(N02);
+ *   - `offset` 与窗口是同一个不变量,refresh 里为此写了一整段注释(du),
+ *     而那段道理对补页同样成立。
+ *
+ * 收到一处之后,规则只有一份,四条路径的差别缩到 `mode` 这一个参数。
+ */
+/**
+ * F16:**实时行按 id 落位** —— 同一个 id 再来一次是覆盖,不是追加。
+ *
+ * 原来两个入口都是无脑 `[...realtime, ...新来的]`。而同一个事件**会**来第二次:
+ *   - 断线重连按游标补发,而游标只为部分 kind 推进(审批帧故意不推),
+ *     于是补发窗口会盖住一些已经收到的帧;
+ *   - 订阅重叠(旧 socket 还没关、新 socket 已经补发)时整段重放;
+ *   - seq 跳号触发的 REST 补拉与随后的实时帧,在服务端行落库前是两份。
+ *
+ * 后果是同一个工具调用、同一段 thinking 在屏幕上并排出现两次,而且
+ * `pruneRealtimeSupersededByServer` 只会**整体**剪掉它们(服务端接管之后),
+ * 在那之前一直是两份。
+ *
+ * 覆盖而不是丢弃:后到的那份通常更完整(工具调用补上了结果、流式块补上了尾巴)。
+ * 位置保持第一次出现的位置 —— 否则一条早先的工具行会被重排到末尾,
+ * 屏幕上的顺序会跳。
+ */
+export function upsertRealtimeRows(
+  existing: NormalizedMessage[],
+  incoming: NormalizedMessage[],
+  sessionId: string,
+): NormalizedMessage[] {
+  if (incoming.length === 0) return existing;
+
+  const normalized = incoming.map((msg) => (
+    msg.sessionId === sessionId ? msg : { ...msg, sessionId }
+  ));
+
+  const indexById = new Map<string, number>();
+  for (let i = 0; i < existing.length; i++) {
+    indexById.set(existing[i].id, i);
+  }
+
+  const next = existing.slice();
+  for (const msg of normalized) {
+    const at = indexById.get(msg.id);
+    if (at === undefined) {
+      indexById.set(msg.id, next.length);
+      next.push(msg);
+    } else {
+      next[at] = msg;
+    }
+  }
+
+  return next.length > MAX_REALTIME_MESSAGES ? next.slice(-MAX_REALTIME_MESSAGES) : next;
+}
+
+export type SnapshotMode = 'replace' | 'prepend';
+
+export function applyServerSnapshot(
+  slot: SessionSlot,
+  data: { messages?: NormalizedMessage[]; total?: number; hasMore?: boolean; tokenUsage?: unknown },
+  opts: { mode: SnapshotMode; offsetBase?: number },
+): void {
+  const incoming: NormalizedMessage[] = data.messages || [];
+
+  if (opts.mode === 'prepend') {
+    /**
+     * 补页是**前插**。去重按 id:流式期间新行不断落盘、`total` 在涨,而补页按
+     * "已加载条数"算 offset 从尾部取页,这一页可能与已加载窗口重叠。
+     */
+    const existingIds = new Set(
+      slot.serverMessages.map((m) => m.id).filter((id): id is string => typeof id === 'string'),
+    );
+    const freshOlder = incoming.filter((m) => typeof m.id !== 'string' || !existingIds.has(m.id));
+    const prepended = [...freshOlder, ...slot.serverMessages];
+    /**
+     * fz:**前插之后要确认它真的是"更早的"。**
+     *
+     * 服务端的 `offset` 是**尾部偏移**。回合跑着、`total` 在涨,而这期间没有
+     * 任何整体刷新落地(`complete` 还没到;`externalMessageUpdate` 在
+     * `isProcessing` 时刻意跳过 refresh;seq 没跳号)—— 这时上翻一页,
+     * 服务端按**新的** total 算窗口,取回的那一页尾部可能落在我们已有窗口
+     * **之后**:那几行比手里所有行都新,却不在 `existingIds` 里,于是被当成
+     * "更早的一页"塞到了数组最前面。
+     *
+     * 而这条落地路径紧接着会 prune 掉它们的实时副本,`computeMerged` 随后走
+     * "realtime 为空就原样返回 server"的快路径 —— **不排序**。用户看到的是:
+     * 上翻一页之后,本轮最新的几条从底部跳到了 transcript 最顶端。
+     *
+     * 只在真的乱了的时候排一次:绝大多数补页都是纯粹的更早页,`isSorted`
+     * 一趟线性扫描就结束,不额外付 O(n log n)。
+     */
+    slot.serverMessages = isChronological(prepended)
+      ? prepended
+      : [...prepended].sort(compareMessagesChronologically);
+    // 游标按"服务端这一页返回了多少条"推进(不是去重后的条数)——
+    // 它对应服务端的分页位置,与本地去重无关。
+    slot.offset = slot.offset + incoming.length;
+    if (typeof data.total === 'number') slot.total = data.total;
+    slot.hasMore = Boolean(data.hasMore);
+  } else {
+    slot.serverMessages = incoming;
+    /**
+     * 游标必须跟着窗口一起改写(du 的原文保留在这里)。
+     *
+     * `limit` 是在 await **之前**按当时的 loadedCount 算的,而这中间用户可能
+     * 刚上翻了一页。刷新随后落地把窗口换回尾部 20 条,却把 offset 留在 40 ——
+     * 下一次「看更早」按 offset=40 去取,服务端的尾部偏移语义直接跳过了
+     * 倒数 20~40 那一段,**20 条消息永久缺失**且毫无提示。
+     */
+    slot.offset = (opts.offsetBase ?? 0) + incoming.length;
+    slot.total = data.total ?? incoming.length;
+    slot.hasMore = Boolean(data.hasMore);
+  }
+
+  /**
+   * fm:**四条路径都剪实时行**(此前只有 refresh + 首屏)。
+   *
+   * `computeMerged` 对服务端行只按 id 去重,而实时帧的 id 是服务端现生成的、
+   * REST 历史的 id 来自 jsonl 的 uuid —— 两边永远对不上。真正按 toolId /
+   * 同轮同文去重的规则全在 `pruneRealtimeSupersededByServer` 里。
+   *
+   * 前插之后同样要剪:补页带回来的正是"更早那一段"的服务端行,而实时里
+   * 可能还留着它们的副本(后台跑完、没被 refresh 剪过的那一轮)。
+   * 按**合并后的完整已加载快照**剪,不是只按这一页 —— 否则会把尚未落盘的
+   * 实时行误删。
+   */
+  slot.realtimeMessages = pruneRealtimeSupersededByServer(
+    slot.serverMessages,
+    slot.realtimeMessages,
+  );
+
+  if (data.tokenUsage) slot.tokenUsage = data.tokenUsage;
+  slot.fetchedAt = Date.now();
+  recomputeMergedIfNeeded(slot);
+}
+
 export function useSessionStore() {
   const storeRef = useRef(new Map<string, SessionSlot>());
   const activeSessionIdRef = useRef<string | null>(null);
@@ -662,7 +852,6 @@ export function useSessionStore() {
 
       const body = await response.json();
       const data = body?.data ?? body;
-      const messages: NormalizedMessage[] = data.messages || [];
 
       /**
        * A later-started fetch already applied: this response is stale.
@@ -678,38 +867,16 @@ export function useSessionStore() {
       }
       slot._appliedFetchSeq = fetchTicket;
 
-      slot.serverMessages = messages;
-      slot.total = data.total ?? messages.length;
-      slot.hasMore = Boolean(data.hasMore);
-      slot.offset = (opts.offset ?? 0) + messages.length;
-      slot.fetchedAt = Date.now();
-      slot.status = 'idle';
       /**
-       * fj:剪掉服务端已经接管的实时行 —— 与 `refreshFromServer` 同一条规则。
+       * fm:首屏/搜索定位统一走 `applyServerSnapshot`(mode='replace')。
        *
-       * `computeMerged` 对服务端行的去重**只按 id**,而实时帧的 id 是服务端现生成的、
-       * REST 历史的 id 来自 jsonl 的 `uuid` —— 两边永远对不上。真正按 `toolId` /
-       * 同轮同文去重的规则全在 `pruneRealtimeSupersededByServer` 里,而它此前只有
-       * `refreshFromServer` 一个调用点。
-       *
-       * 漏在这里的后果:回合在**非当前查看**的会话里结束时,`complete` 分支的刷新
-       * 被 `sid === activeViewSessionId` 挡掉,realtime 里留着整整一轮;之后重新
-       * 打开它走的是这条 `fetchFromServer` —— 那一轮的每个工具调用、每段 thinking
-       * 都渲染两份(fi 的测试注释里说的「3 条变 6 条」,修在了 refresh 路径、漏了这条)。
-       *
-       * **只在首屏那次剪**:`fetchMore` 是前插,按只含尾窗的服务端快照去剪会把
-       * 尚未被覆盖的实时行误删。
+       * 原来这里是手写的一段:窗口、游标、total/hasMore、剪实时行、重算合并
+       * 各写一遍,而 `refreshFromServer` / `fetchMore` 各自还有一份。三份规则
+       * 长得像但**并不相同** —— 剪实时行只有这条和 refresh 有、`offset` 的
+       * 改写只有 refresh 讲清了道理。收到一处之后差别只剩 `mode`。
        */
-      if ((opts.offset ?? 0) === 0) {
-        slot.realtimeMessages = pruneRealtimeSupersededByServer(
-          slot.serverMessages,
-          slot.realtimeMessages,
-        );
-      }
-      recomputeMergedIfNeeded(slot);
-      if (data.tokenUsage) {
-        slot.tokenUsage = data.tokenUsage;
-      }
+      applyServerSnapshot(slot, data, { mode: 'replace', offsetBase: opts.offset ?? 0 });
+      slot.status = 'idle';
 
       notify(sessionId);
       return slot;
@@ -720,7 +887,18 @@ export function useSessionStore() {
         slot.status = 'error';
         notify(sessionId);
       }
-      return slot;
+      /**
+       * fl:失败也返回 **null**,与上面"被更新的请求顶替了"那条一致。
+       *
+       * 原来返回 `slot` —— 一个 truthy 值,而调用方只判 `if (slot)` 就照着它
+       * 写 `hasMore` / `total`。失败时 slot 还是初始值(`hasMore=false`、
+       * `total=0`),于是**一次网络失败长得和"加载完了,没有更多"一模一样**:
+       * 「加载更多 / 看更早 / 加载全部」三个入口一起消失,用户以为这条会话
+       * 就这么点内容,而实际上一条历史都没拉到。
+       *
+       * `du` 轮为同一个理由把那条分支改成了 null,这条漏了。
+       */
+      return null;
     }
   }, [getSlot, notify]);
 
@@ -750,7 +928,6 @@ export function useSessionStore() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await response.json();
       const data = body?.data ?? body;
-      const olderMessages: NormalizedMessage[] = data.messages || [];
 
       // A full fetch/refresh replaced serverMessages while this page was in
       // flight — prepending onto the new array would duplicate or misorder.
@@ -759,22 +936,14 @@ export function useSessionStore() {
       }
       slot._appliedFetchSeq = fetchTicket;
 
-      // Prepend older messages (they're earlier in the conversation).
-      //
-      // 去重:流式期间新行不断落盘,total 在涨,而 fetchMore 是按"已加载条数"
-      // 算 offset 从尾部取页 —— 这一页可能和已加载窗口重叠,直接 prepend 会出现
-      // 重复消息。按 id 过滤掉已在 serverMessages 里的,再拼接。
-      const existingIds = new Set(
-        slot.serverMessages.map((m) => m.id).filter((id): id is string => typeof id === 'string'),
-      );
-      const freshOlder = olderMessages.filter(
-        (m) => typeof m.id !== 'string' || !existingIds.has(m.id),
-      );
-      slot.serverMessages = [...freshOlder, ...slot.serverMessages];
-      slot.hasMore = Boolean(data.hasMore);
-      // offset 仍按"这一页服务端返回了多少条"推进(而非去重后的条数)——
-      // 它对应服务端的分页游标位置,和本地去重无关。
-      slot.offset = slot.offset + olderMessages.length;
+      /**
+       * fm:补页走 `applyServerSnapshot`(mode='prepend')。
+       *
+       * 前插的去重规则、游标推进的道理原样搬进了 applier;顺带补上此前**只有
+       * 首屏和 refresh 才做**的实时行清理(N02):后台跑完的那一轮留在 realtime
+       * 里,上翻把它对应的服务端行取回来之后,两份会一直并排渲染到 F5。
+       */
+      applyServerSnapshot(slot, data, { mode: 'prepend' });
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
       return slot;
@@ -794,15 +963,7 @@ export function useSessionStore() {
    */
   const appendRealtime = useCallback((sessionId: string, msg: NormalizedMessage) => {
     const slot = getSlot(sessionId);
-    const normalizedMessage =
-      msg.sessionId === sessionId
-        ? msg
-        : { ...msg, sessionId };
-    let updated = [...slot.realtimeMessages, normalizedMessage];
-    if (updated.length > MAX_REALTIME_MESSAGES) {
-      updated = updated.slice(-MAX_REALTIME_MESSAGES);
-    }
-    slot.realtimeMessages = updated;
+    slot.realtimeMessages = upsertRealtimeRows(slot.realtimeMessages, [msg], sessionId);
     recomputeMergedIfNeeded(slot);
     notify(sessionId);
   }, [getSlot, notify]);
@@ -813,16 +974,7 @@ export function useSessionStore() {
   const appendRealtimeBatch = useCallback((sessionId: string, msgs: NormalizedMessage[]) => {
     if (msgs.length === 0) return;
     const slot = getSlot(sessionId);
-    const normalizedMessages = msgs.map((msg) =>
-      msg.sessionId === sessionId
-        ? msg
-        : { ...msg, sessionId },
-    );
-    let updated = [...slot.realtimeMessages, ...normalizedMessages];
-    if (updated.length > MAX_REALTIME_MESSAGES) {
-      updated = updated.slice(-MAX_REALTIME_MESSAGES);
-    }
-    slot.realtimeMessages = updated;
+    slot.realtimeMessages = upsertRealtimeRows(slot.realtimeMessages, msgs, sessionId);
     recomputeMergedIfNeeded(slot);
     notify(sessionId);
   }, [getSlot, notify]);
@@ -854,6 +1006,23 @@ export function useSessionStore() {
       const body = await response.json();
       const data = body?.data ?? body;
 
+      /**
+       * ga:**这份快照比手里的窄,就别落地。**
+       *
+       * `limit` 是在 `await` **之前**按当时的条数冻结的。用户滚到顶等答案时
+       * 上翻一页(+20 条),几十毫秒后 `complete` 触发这次刷新 —— 它的 limit
+       * 还是旧的那个数。补页先落地(220 条),刷新后落地:票**更大**所以通过
+       * 下面那道检查,整份替换成尾部 200 条,**刚翻出来的 20 条原地消失**,
+       * 守位锚点跟着失效、视口再跳一次。
+       *
+       * 票据只能回答"谁更晚发起",回答不了"谁覆盖得更全" —— 而这里票更新的
+       * 那个请求恰恰是按**更小的窗口**构造的。所以票据之外再加这一条。
+       * 丢掉即可:下一轮 complete 还会再刷,那时 limit 是新的。
+       */
+      if (slot.serverMessages.length > limit) {
+        return;
+      }
+
       // A later-started fetch already applied: applying this stale transcript
       // would erase rows the user has already seen (and re-prune realtime
       // rows against an outdated snapshot).
@@ -862,28 +1031,14 @@ export function useSessionStore() {
       }
       slot._appliedFetchSeq = fetchTicket;
 
-      slot.serverMessages = data.messages || [];
       /**
-       * du:分页游标必须跟着窗口一起改写。
+       * fm:刷新走 `applyServerSnapshot`(mode='replace',offsetBase=0)。
        *
-       * `limit` 是在 await **之前**按当时的 loadedCount 算的,而这中间
-       * 用户可能刚上翻了一页(fetchMore 先落地:serverMessages=40、offset=40)。
-       * 这次刷新随后落地,把窗口换回尾部 20 条,却把 offset 留在 40 ——
-       * 下一次「看更早」按 offset=40 去取,服务端的尾部偏移语义直接跳过了
-       * 倒数 20~40 那一段,**20 条消息永久缺失**且毫无提示。
-       * 游标与本地窗口是同一个不变量(见 fetchFromServer 的同名赋值)。
+       * 这条路径原本写得最全(游标改写的道理、只剪不清的实时行规则),
+       * 现在那两段注释搬进了 applier —— 规则只有一份,另外三条路径不会再
+       * 各自漏掉其中一半。
        */
-      slot.offset = slot.serverMessages.length;
-      slot.total = data.total ?? slot.serverMessages.length;
-      slot.hasMore = Boolean(data.hasMore);
-      slot.fetchedAt = Date.now();
-      // Only drop realtime rows the server transcript now owns. A blind clear
-      // here caused the chat pane to flash "Continue your conversation" after
-      // `complete` while JSONL / provider_session_id indexing was still behind.
-      slot.realtimeMessages = pruneRealtimeSupersededByServer(
-        slot.serverMessages,
-        slot.realtimeMessages,
-      );
+      applyServerSnapshot(slot, data, { mode: 'replace' });
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
     } catch (error) {

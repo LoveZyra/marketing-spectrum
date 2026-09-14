@@ -90,7 +90,9 @@
       "loadAll": "加载全部消息",
       "expandAll": "全部展开",
       "loadingAll": "正在加载全部消息...",
-      "allLoaded": "全部消息已加载"
+      "allLoaded": "全部消息已加载",
+      "loadFailed": "这条会话的消息没能加载出来。",
+      "retryLoad": "重试"
     }
   },
   "shell": {
@@ -357,7 +359,7 @@
     "runningCount": "{{count}} 个进行中",
     "defaultTitle": "子代理任务",
     "promptLabel": "指令:",
-    "resultLabel": "子代理汇报",
+    "elapsed": "耗时 {{seconds}}s",
     "noStepsYet": "还没有步骤 —— 子代理正在启动。",
     "failed": "子代理执行失败:"
   },

@@ -290,10 +290,30 @@ export function summarizeToolRow(message: ChatMessage, sessionIsProcessing = tru
   const isError = Boolean(message.toolResult && (message.toolResult as Record<string, unknown>).isError);
   const metric = toolMetric(toolName, message.toolInput, message.toolResult);
 
+  /**
+   * ge:**被转到后台的那次调用,终态在 `background` 里。**
+   *
+   * 转后台时这一行**立刻**拿到一个 "running in the background" 的 tool_result
+   * (SDK 原话),按 `hasResult` 判它当场就是"完成" —— 而它其实刚开始跑。
+   * 真正的完成/失败由 SDK 的 `task_notification` 带回来,按 `tool_use_id` 归到
+   * 这一行上(见 useChatMessages 的 backgroundByToolId)。
+   *
+   * 这也是为什么"后台任务完成"不再需要在主对话流里单独占一行:那件事**这一行
+   * 自己就说得清**,而且说得更准。
+   */
+  const background = (message as { background?: { status?: string } }).background;
+  const backgroundStatus = background?.status === 'completed'
+    ? 'done'
+    : background?.status === 'failed'
+      ? 'error'
+      : background?.status === 'running'
+        ? 'running'
+        : null;
+
   return {
-    status: hasResult
+    status: backgroundStatus ?? (hasResult
       ? (isError ? 'error' : 'done')
-      : (sessionIsProcessing ? 'running' : 'interrupted'),
+      : (sessionIsProcessing ? 'running' : 'interrupted')),
     icon: activityIconKey(toolName),
     label: toolRowLabel(toolName, message.toolInput),
     name: toolName,
@@ -343,46 +363,189 @@ export function summarizeActivityRun(
 /** 还在跑时,收起状态下留几步在外面。 */
 export const ACTIVITY_TAIL_ROWS = 3;
 
-/**
- * **还在跑**的那一段,少于这个步数就不折 —— 两三行的东西再折一层是添乱。
- *
- * 这条只管进行中的段。已经跑完的段无论几步都整段收起,见 `planActivityFold`。
- */
-export const ACTIVITY_MIN_ROWS = 3;
-
 export type ActivityFoldPlan = {
   /** 收起状态下应当显示的行数(从末尾往前数) */
   visibleCount: number;
   /** 被折起来的行数 */
   foldedCount: number;
-  /** 有东西被折起来 —— 抬头才需要做成可点的按钮 */
+  /** 抬头做成可点的按钮 —— 现在只要有行就可点(既能展开也能手动收起) */
   canFold: boolean;
-  /** 抬头是否出现(被折起来时必须出现,否则那些行没有入口) */
+  /** 抬头是否出现 */
   showSummary: boolean;
 };
 
 /**
- * 一轮活动收起时露出多少行。
+ * 一段活动收起时露出多少行。
  *
- * - **回合还没结束**:留最新 `ACTIVITY_TAIL_ROWS` 步 —— 用户盯的是"现在在干什么"。
- *   不足这个步数就全摊着,没什么可折的。
- * - **回合结束之后**:**无论几步都整段收成抬头一行**。做完的活儿不该继续占着屏幕,
- *   哪怕只有一两步 —— 一屏里躺着七八段各留两行的"残骸",比一段长的还碎。
+ * ## fw 起的规则(用户定的)
  *
- * 判据是**回合有没有结束**,不是"这一段里还有没有工具在跑"。后者会在最后一个
- * 工具刚返回、正式回答**还没开始写**的那一刻,把整段从 N 行塌成一行 ——
- * 既让人以为这一轮完了,又在正文即将出现的位置制造一次大幅高度突变。
- * 现在保持摊开,等回合真的收尾再一起折。
+ * 1. **只要有一行就渲染抬头** —— 不再有"少于三步不给抬头"这条。此前一个回合
+ *    刚开跑、段内只有一两行时抬头根本不出现,行光秃秃地摊着,随后第三行落地
+ *    抬头才凭空冒出来,位置还整个错一档;
+ * 2. **这一轮的正文还没开始写**:留最新 `ACTIVITY_TAIL_ROWS` 步,其余折起 ——
+ *    用户盯的是"现在在干什么";不足三步就全露(没什么可折的);
+ * 3. **正式回复一出现**:整段收成抬头一行。做完的活儿不该继续占着屏幕。
  *
- * @param keepTail 回合仍在进行(或这一段里还有工具在跑)
+ * 第 3 条的判据是**正文出没出现**,不是"最后一个工具返回没有"。后者会在工具
+ * 刚返回、正文还没开始写的那一刻把整段塌掉 —— 既让人以为这一轮完了,又在正文
+ * 即将出现的位置制造一次大幅高度突变。判据本身收在 `focusActivityGroup` 里。
+ *
+ * @param keepTail 这一段属于正在跑的这一轮,且正文还没开始出现
  */
+/**
+ * gb:**收起状态下该露几行 —— 收起不等于清空。**
+ *
+ * 这一段此前有两个"收起":自动规则(`planActivityFold`)在回合还在跑时收到
+ * **尾部三行**,而用户手动点抬头收起时,组件里写死的是 **0**。同一个动作两种
+ * 含义,用户点的正是后者 —— 于是一轮跑到 33 步时点一下"收起",正在跑的那几步
+ * 也一起没了,而 `manualFold` 一旦定下就压过自动规则(fw 有意为之),这一轮
+ * **剩下的全程**都不再露尾三。用户看到的就是一条"执行 33 条命令·运行中"的
+ * 光杆抬头,底下什么都没有。
+ *
+ * 所以把"收起的目标"抽成这一个函数,自动与手动两条路共用它。
+ *
+ * **例外**:总共就 ≤ `ACTIVITY_TAIL_ROWS` 行时,"保留最新三个"和"全都露着"是
+ * 同一件事 —— 这时候收起若还留三行,那个按钮就成了点了没反应的死键
+ * (fw 专门修过这个)。所以只有这种情况才真的收干净。
+ *
+ * 白送的一条:回合一结束 `keepTail` 翻 false,收起目标当场变 0 ——
+ * **"会话完成后才全部折叠"是这个判据的自然结果,不用另写一行。**
+ */
+export function collapsedVisibleCount(total: number, keepTail: boolean): number {
+  return keepTail && total > ACTIVITY_TAIL_ROWS ? ACTIVITY_TAIL_ROWS : 0;
+}
+
 export function planActivityFold(total: number, keepTail: boolean): ActivityFoldPlan {
   const visibleCount = keepTail ? Math.min(total, ACTIVITY_TAIL_ROWS) : 0;
   const foldedCount = total - visibleCount;
   return {
     visibleCount,
     foldedCount,
-    canFold: foldedCount > 0,
-    showSummary: foldedCount > 0 || total >= ACTIVITY_MIN_ROWS,
+    canFold: total > 0,
+    showSummary: total > 0,
   };
+}
+
+/**
+ * 渲染列表里一项对"哪一段属于正在跑的这一轮"这件事的作用。
+ *
+ * - `activity` 这一项是一段活动时间轴(工具组);
+ * - `turn-boundary` **开启新的一轮或终结当前一轮**(用户消息 / 错误行);
+ * - `reply` **这一轮的正式回复**(普通助手正文)—— 它不结束回合(后面还可能
+ *   接着调工具),但它一出现,它上面那段活动就该收起来;
+ * - `other` 其余(子代理卡、任务通知、压缩摘要、交互式提示……)—— 不改变归属。
+ */
+export type ActivityItemRole = 'activity' | 'turn-boundary' | 'reply' | 'other';
+
+export type ActivityFocus = {
+  /** 属于正在跑的这一轮的那一段活动的下标;-1 表示没有 */
+  index: number;
+  /** 这一轮的正式回复已经开始出现(已落地的正文,或正在流式打字) */
+  replyStarted: boolean;
+};
+
+/**
+ * 找出"正在跑的这一轮"对应哪一段活动,以及**它的正文开始写了没有**。
+ *
+ * ## 为什么这两件事必须一起算
+ *
+ * 它们的答案来自同一次倒扫,而且各自驱动不同的东西 —— 拆成两个判据就是下一次
+ * "只改了一半"的温床:
+ *
+ * - `index` 决定**行状态**:属于这一轮的段,没有结果的工具行是「运行中」;
+ *   不属于的,是「已中断」。
+ * - `replyStarted` 决定**折不折**:正文一出现就整段收起(规则见 planActivityFold)。
+ *
+ * 曾经这两件事共用一个 `sessionIsProcessing`,于是"正文出现要收起"和"这一行
+ * 还在跑"互相打架:一个说收、一个说这行是运行中。
+ *
+ * ## 倒扫怎么读
+ *
+ * 从尾部往前:
+ * - 撞上 `turn-boundary` → 这一轮**一步都还没跑出来**(用户刚发出消息),返回 -1;
+ * - 撞上 `reply` → 正文已经出现,**接着往前找**它对应的那段活动
+ *   (模型可能写完一段正文又接着调工具,那时最后一段才是当前段);
+ * - 撞上 `activity` → 就是它。
+ *
+ * ft 那版只停在"最后一个工具组",漏掉了"用户发出下一条消息之后,上一轮的活动段
+ * 仍然是最后一个工具组"这一半(fu 修)。传下标取值而不先 map 成数组:渲染期每轮
+ * 都要算一次,长会话里那是几百项的白白分配,而且撞上边界能立刻短路。
+ *
+ * @param replyInFlight 正文正在流式打字(它不在列表里,由调用方告知)
+ */
+/**
+ * 最后一条**回合边界**(用户消息 / provider 报的错)在第几项;没有就是 -1。
+ *
+ * fz:比它靠后的项都属于"最新那一轮"。子代理卡要用它 ——
+ * 那张卡此前连"会话在不在跑"都不知道,于是没有结果的子代理**永久转圈**:
+ * 用户按停止、服务重启、CLI 崩了,`tool_result` 永远不会到,而卡上那个
+ * `animate-spin` 明天、下个月翻回来还在转,旁边同一屏的工具清单却写着「已中断」。
+ *
+ * 判据与折叠那条**刻意分开**:折叠看的是"正文出没出现"(正文一出现就收起),
+ * 而"这个子代理还在不在跑"跟正文写没写没关系 —— 合成一个判据就是下一次
+ * "一个判据回答两个问题"。
+ */
+export function lastTurnBoundaryIndex(
+  total: number,
+  roleAt: (index: number) => ActivityItemRole,
+): number {
+  for (let i = total - 1; i >= 0; i -= 1) {
+    if (roleAt(i) === 'turn-boundary') return i;
+  }
+  return -1;
+}
+
+export function focusActivityGroup(
+  total: number,
+  roleAt: (index: number) => ActivityItemRole,
+  replyInFlight = false,
+): ActivityFocus {
+  let replyStarted = replyInFlight;
+  for (let i = total - 1; i >= 0; i -= 1) {
+    const role = roleAt(i);
+    if (role === 'turn-boundary') return { index: -1, replyStarted };
+    if (role === 'reply') {
+      replyStarted = true;
+      continue;
+    }
+    if (role === 'activity') return { index: i, replyStarted };
+  }
+  return { index: -1, replyStarted };
+}
+
+/**
+ * 这一段要不要保持摊开:**属于正在跑的这一轮,且正文还没开始出现**。
+ *
+ * 两个条件各自都被单独用错过:
+ * - 只看"会话在跑" → 一发消息满屏折叠条全部弹开(ft 之前);
+ * - 只看"是不是最后一个工具组" → 发出下一条消息后上一轮那段又弹开(fu 修);
+ * - 不看正文 → 正文都写出来了,上面那段还摊着三行(fw 修,用户要求)。
+ */
+export function shouldKeepActivityTailOpen(
+  isCurrentTurnGroup: boolean,
+  replyStarted: boolean,
+): boolean {
+  return isCurrentTurnGroup && !replyStarted;
+}
+
+/**
+ * gg:**一条子代理叙述要不要折起来。**
+ *
+ * `forwardSubagentText` 打开之后,子代理的思考与正文都进了卡片里那条嵌套轴。
+ * 思考一条动辄十几行,几条并排就把这根轴撑成一堵墙 —— 用户原话
+ * 「子 agent 的思考输出,折叠掉,不要全部放上显得太多」。
+ *
+ * 判据刻意是**「一行放不放得下」而不是「是不是思考」**:
+ *
+ * - 短思考(「先看看目录结构」)折起来只是多一次点击;
+ * - 长正文同样该折 —— 撑墙的是长度,不是种类。
+ *
+ * 100 字符这个数不是拍的:实测里那些一行就说完的叙述
+ * (「I'll start by exploring the directory to understand the existing code style.」76 字符)
+ * 全部落在它下面,而带换行的多段思考一律落在它上面。
+ */
+export const NARRATION_FOLD_CHARS = 100;
+
+export function shouldFoldNarration(body: string): boolean {
+  return body.length > NARRATION_FOLD_CHARS || body.includes('\n');
 }

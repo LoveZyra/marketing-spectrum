@@ -443,6 +443,14 @@ function ChatComposer({
     return [...imageErrors.entries()].filter(([name]) => !attachedNames.has(name));
   }, [imageErrors, attachedImages]);
 
+  /**
+   * fl:能不能发 —— **按钮与提交路径共用这一个判据**。
+   *
+   * 有正文、或挂了图片/文档,都算"有内容可发"。此前按钮只看 `input.trim()`,
+   * 而 `runSubmit` 已经放行了纯附件,两边对不上:图片挂上了、按钮还是灰的。
+   */
+  const canSubmitNow = Boolean(input.trim()) || attachedImages.length > 0 || attachedDocs.length > 0;
+
   const canQueueDraft = isLoading && Boolean(input.trim());
   // 快捷键说明不再占底栏排版位(那段长文案被左侧一排 chip 挤压后会折行,
   // 底栏随之长高 —— 就是"对话框突然变化"的主要来源),收进发送按钮的悬停提示。
@@ -981,7 +989,14 @@ function ChatComposer({
                  * 于是大文件传到一半按回车,消息**不带那个附件**就发出去了,
                  * 附件随后挂到已清空的输入框上、跟着下一条发出。
                  */
-                disabled={!input.trim() || parsingDocs || isSubmitting}
+                /**
+                 * fl:与提交路径**同一个判据**。
+                 *
+                 * fj 让 `runSubmit` 允许"只挂附件不打字",却漏了这里 ——
+                 * 按钮依旧灰着,回车也没反应,用户只能猜。两处判据必须一致,
+                 * 否则永远会有一边先改、另一边忘掉。
+                 */
+                disabled={!canSubmitNow || parsingDocs || isSubmitting}
                 aria-label={submitAriaLabel}
                 // 悬停提示带上完整快捷键说明(底栏那段长文案删了,信息收到这里)。
                 title={`${submitAriaLabel} · ${submitHint}`}

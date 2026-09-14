@@ -238,7 +238,10 @@ async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual
       userId: task.owner_user_id,
     });
     if (!run) {
-      throw new Error('目标会话正有回合在跑,本次跳过');
+      // ga:`startRun` 拒绝的原因有两种(在跑的回合 / 终端接管着),原来这里
+      // 一律写成前者 —— 一个开着的终端会连发三条内容错误的失败告警,而真正
+      // 该做的事是去关那个终端。原因交给 registry 说(见 explainRunRefusal)。
+      throw new Error(`${chatRunRegistry.explainRunRefusal(sessionId).message},本次跳过`);
     }
 
     // 用户指令行 + 开始回执(ch 轮建立的显示日志规范)

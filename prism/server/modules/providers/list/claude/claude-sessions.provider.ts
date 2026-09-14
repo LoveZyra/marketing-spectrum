@@ -172,24 +172,40 @@ async function getSessionMessages(
       }
     }
 
-    // readdir 只在真的引用了 subagent 时才做。绝大多数会话一个 subagent 都没有,
-    // 而这个目录下文件多时 readdir 并不便宜 —— 原来它排在读 transcript 之前,
-    // 无条件执行。
-    const agentFiles = agentIds.size > 0
-      ? (await fsp.readdir(projectDir)).filter(
-          (file) => file.endsWith('.jsonl') && file.startsWith('agent-'),
-        )
-      : [];
-
+    /**
+     * F35:**两种目录形状都要找。**
+     *
+     * 这里原来只找扁平的 `<projectDir>/agent-<id>.jsonl`,而**同一个仓库里的
+     * 同步器**(`claude-session-synchronizer.provider.ts`)白纸黑字写着当前
+     * 形状是 `<projectDir>/<session-id>/subagents/agent-<id>.jsonl` ——
+     * 它为此还专门写了一个 `isSubagentTranscript()` 来跳过那些文件。
+     *
+     * 两处对同一件事的认知不一致,而读取这一侧找不到就**静默 continue**:
+     * Task 工具在界面上永远没有内层细节,也没有任何地方说过它去哪儿找过。
+     *
+     * 按候选顺序逐个试:嵌套那份是当前形状,排前面;扁平那份是老形状,留作兼容。
+     * 命中即停。全部落空时记一行 debug —— 下次排查不用再猜它找过哪里。
+     */
     for (const agentId of agentIds) {
-      const agentFileName = `agent-${agentId}.jsonl`;
-      if (!agentFiles.includes(agentFileName)) {
-        continue;
+      const candidates = subagentTranscriptCandidates(projectDir, providerSessionId, agentId);
+      let matched = false;
+      for (const candidate of candidates) {
+        try {
+          const tools = await parseAgentTools(candidate);
+          if (tools.length > 0) {
+            agentToolsCache.set(agentId, tools);
+            matched = true;
+            break;
+          }
+        } catch {
+          // 这个候选不存在 / 读不动 —— 试下一个。
+        }
       }
-
-      const agentFilePath = path.join(projectDir, agentFileName);
-      const tools = await parseAgentTools(agentFilePath);
-      agentToolsCache.set(agentId, tools);
+      if (!matched) {
+        log.debug(
+          `[claude] subagent transcript not found for agent ${agentId}; looked in: ${candidates.join(', ')}`,
+        );
+      }
     }
 
     for (const message of messages) {
@@ -398,6 +414,34 @@ export function buildHistoryPage(
     offset: normalizedOffset,
     limit: normalizedLimit,
   };
+}
+
+/**
+ * F35:一个子代理 transcript 可能在哪儿 —— 按**当前形状优先**排序。
+ *
+ * 同步器(`claude-session-synchronizer.provider.ts`)记录的当前形状是
+ * `<projectDir>/<session-id>/subagents/agent-<id>.jsonl`;更早的版本写在
+ * `<projectDir>/agent-<id>.jsonl`。读取这一侧此前只认后者,于是新版本上
+ * **子代理的工具细节永远读不到**,而且找不到时一声不吭。
+ *
+ * 单独抽出来是为了让"去哪儿找"这件事只有一份定义,并且能被测试钉住 ——
+ * SDK 换目录时,改这里一处、测试立刻告诉你哪些调用点会受影响。
+ */
+export function subagentTranscriptCandidates(
+  projectDir: string,
+  providerSessionId: string | null | undefined,
+  agentId: string,
+): string[] {
+  const fileName = `agent-${agentId}.jsonl`;
+  const candidates: string[] = [];
+  if (providerSessionId) {
+    candidates.push(path.join(projectDir, providerSessionId, 'subagents', fileName));
+  }
+  // 同一层的 subagents/(某些版本不按会话再分一层)
+  candidates.push(path.join(projectDir, 'subagents', fileName));
+  // 老形状:直接摊在项目目录下
+  candidates.push(path.join(projectDir, fileName));
+  return candidates;
 }
 
 export class ClaudeSessionsProvider implements IProviderSessions {

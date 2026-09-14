@@ -71,13 +71,35 @@ describe('对话所有权(chat / 终端互斥)', () => {
     assert.doesNotThrow(() => releaseShellClaim('never-claimed'));
   });
 
-  test('重复接管按最后一次算,不会留下两个持有者', () => {
-    claimForShell('s1', { userId: 7, username: 'bob' });
-    claimForShell('s1', { userId: 8, username: 'carol' });
-    assert.equal(currentHolder('s1')?.username, 'carol');
+  /**
+   * fl:语义从"按最后一次算"改成"**先到先得**"。
+   *
+   * 原来第二个人接管会盖掉第一个人的记录 —— 而两个 PTY 都还活着。
+   * 后者先退出时把整把锁释放掉,前者仍连着,chat 于是判成"没人接管",
+   * 开始与那个 PTY 双写同一份 transcript。fk 给释放加了令牌,只堵住了
+   * "错误释放"那一半;这一半在接管这一侧。
+   */
+  test('fl:已被别人接管时不覆盖 —— 后来者拿不到令牌', () => {
+    const first = claimForShell('s1', { userId: 7, username: 'bob' });
+    assert.ok(first.token, '第一个接管的人应当拿到令牌');
 
-    releaseShellClaim('s1');
+    const second = claimForShell('s1', { userId: 8, username: 'carol' });
+    assert.equal(second.token, undefined, '别人持有时不发令牌');
+    assert.equal(second.username, 'bob', '报回来的是现有持有者');
+    assert.equal(currentHolder('s1')?.username, 'bob', '持有者不变');
+
+    // 拿不到令牌的那个人释放不掉别人的锁
+    releaseShellClaim('s1', 'claim_bogus');
+    assert.equal(currentHolder('s1')?.username, 'bob');
+
+    releaseShellClaim('s1', first.token);
     assert.equal(currentHolder('s1'), null);
+  });
+
+  test('fl:同一个人重连沿用同一张令牌 —— 否则旧连接的退出会把新的释放掉', () => {
+    const first = claimForShell('s2', { userId: 7, username: 'bob' });
+    const again = claimForShell('s2', { userId: 7, username: 'bob' });
+    assert.equal(again.token, first.token);
   });
 
   test('没有用户信息时也能登记 —— 平台模式下拿不到用户名,不能因此拒绝接管', () => {

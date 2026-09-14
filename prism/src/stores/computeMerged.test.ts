@@ -208,3 +208,58 @@ describe('fj:回合序号与用户回声', () => {
     expect(pruned.some((m) => m.id === 'rt_think')).toBe(false);
   });
 });
+
+/**
+ * N01:回合序号只按"服务端那份"数,不看 id 长什么样。
+ *
+ * fj 那版判据是 `id.startsWith('local_')` —— 那只是实时用户行的**一种**形状。
+ * 队列续发、回放补帧构造出来的实时用户行不是这个形状,于是被多算一次,
+ * 而"同一轮里服务端有没有同文"的去重整体错位一个回合:该删的没删(两份并排),
+ * 或者删掉了另一轮的同名内容。
+ */
+describe('回合序号(N01)', () => {
+  const T0 = '2026-09-09T10:00:00.000Z';
+  const T1 = '2026-09-09T10:00:01.000Z';
+  const T2 = '2026-09-09T10:00:02.000Z';
+  const T3 = '2026-09-09T10:00:03.000Z';
+
+  const thinking = (id: string, content: string, timestamp: string) =>
+    message(id, { kind: 'thinking', role: 'assistant', content, timestamp });
+
+  test('非 local_ 形状的实时用户行也不重复计数 —— 同一轮的 thinking 照样被剪掉', () => {
+    // 服务端已经落了这一轮;实时里留着同一轮的 thinking(id 与服务端那份对不上)。
+    const server = [
+      user('srv_u1', '第一个问题', T0),
+      thinking('srv_t1', '在想第一个问题', T1),
+      user('srv_u2', '第二个问题', T2),
+      thinking('srv_t2', '在想第二个问题', T3),
+    ];
+    // 实时那份用户行的 id **不是** local_ 形状(队列续发/回放补帧就是这样)。
+    const realtime = [
+      message('q_u2', { role: 'user', content: '第二个问题', timestamp: T2 }),
+      thinking('rt_t2', '在想第二个问题', T3),
+    ];
+
+    const kept = pruneRealtimeSupersededByServer(server, realtime);
+    assert.equal(
+      kept.some((m) => m.id === 'rt_t2'),
+      false,
+      '服务端同一轮里已经有这段 thinking,实时那份必须剪掉',
+    );
+  });
+
+  test('十分钟后重发同一句话:两轮各自成轮,不被当成回声少算一轮', () => {
+    const LATER = '2026-09-09T10:10:00.000Z';
+    const LATER1 = '2026-09-09T10:10:01.000Z';
+    const server = [
+      user('srv_u1', '继续', T0),
+      thinking('srv_t1', '第一轮的思考', T1),
+      user('srv_u2', '继续', LATER),
+    ];
+    // 第二轮的 thinking 还没落盘,内容与第一轮不同 —— 不该被剪。
+    const realtime = [thinking('rt_t2', '第二轮的思考', LATER1)];
+
+    const kept = pruneRealtimeSupersededByServer(server, realtime);
+    assert.equal(kept.length, 1, '还没落盘的这一轮必须留在屏幕上');
+  });
+});

@@ -463,3 +463,75 @@ test('fj:complete 之后的内容帧一律丢弃', async () => {
     else process.env.PRISM_PUBLIC_WORKSPACE = previousPublic;
   }
 });
+
+/**
+ * fl(K01 回归):**正常收尾**之后的「本轮改动的文件」摘要必须还能发出去。
+ *
+ * fk 的那道闸是 `status === 'completed'` 就一律不转发,本意是挡中止之后在途的
+ * 正文帧。但 `queryClaudeSDK` 的结构是"回合函数自己发 complete → 返回 → 外层
+ * 才算 `changedFilesSince` 并发 `changed_files`" —— 于是每一个动过文件的**正常**
+ * 回合,那张卡都被丢掉了(工作面板事件、显示日志一并没有)。
+ * 用 Bash / 脚本写文件时那张卡是唯一线索,补不回来。
+ */
+test('fl:正常 complete 之后,changed_files 仍然送达;正文帧仍然被拒', async () => {
+  const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
+  process.env.PRISM_PUBLIC_WORKSPACE = '/workspace';
+  try {
+    await withIsolatedDatabase(() => {
+      sessionsDb.createAppSession('app-post', 'claude', '/workspace/demo');
+      const connection = new FakeConnection();
+      connectedClients.add(connection as never);
+      const run = chatRunRegistry.startRun({
+        appSessionId: 'app-post', provider: 'claude', providerSessionId: null,
+        connection, userId: null,
+      })!;
+
+      // 正常收尾(不是中止)
+      chatRunRegistry.completeRunIfCurrent(run, { exitCode: 0 });
+
+      // 外层随后发的回合摘要 —— 必须放行
+      run.writer.send({
+        kind: 'changed_files', checkpointId: 'cp1', files: [{ path: '/w/a.ts', status: 'M' }],
+        sessionId: 'app-post',
+      } as never);
+      // 上一个 epoch 的正文残余 —— 仍然要拒
+      run.writer.send({ kind: 'text', role: 'assistant', content: '残余', sessionId: 'app-post' } as never);
+
+      const kinds = connection.frames.map((frame) => frame.kind);
+      assert.ok(kinds.includes('changed_files'), `changed_files 必须送达,实际:${JSON.stringify(kinds)}`);
+      assert.ok(!kinds.includes('text'), 'complete 之后的正文帧仍然要拒');
+      connectedClients.delete(connection as never);
+    });
+  } finally {
+    if (previousPublic === undefined) delete process.env.PRISM_PUBLIC_WORKSPACE;
+    else process.env.PRISM_PUBLIC_WORKSPACE = previousPublic;
+  }
+});
+
+test('fl:**中止**收尾之后,连 changed_files 也不收 —— 用户按了停止,后面的都不算数', async () => {
+  const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
+  process.env.PRISM_PUBLIC_WORKSPACE = '/workspace';
+  try {
+    await withIsolatedDatabase(() => {
+      sessionsDb.createAppSession('app-abort', 'claude', '/workspace/demo');
+      const connection = new FakeConnection();
+      connectedClients.add(connection as never);
+      const run = chatRunRegistry.startRun({
+        appSessionId: 'app-abort', provider: 'claude', providerSessionId: null,
+        connection, userId: null,
+      })!;
+
+      chatRunRegistry.completeRunIfCurrent(run, { exitCode: 1, aborted: true });
+      const before = connection.frames.length;
+      run.writer.send({
+        kind: 'changed_files', checkpointId: 'cp1', files: [{ path: '/w/a.ts', status: 'M' }],
+        sessionId: 'app-abort',
+      } as never);
+      assert.equal(connection.frames.length, before, '中止之后一帧都不该再收');
+      connectedClients.delete(connection as never);
+    });
+  } finally {
+    if (previousPublic === undefined) delete process.env.PRISM_PUBLIC_WORKSPACE;
+    else process.env.PRISM_PUBLIC_WORKSPACE = previousPublic;
+  }
+});

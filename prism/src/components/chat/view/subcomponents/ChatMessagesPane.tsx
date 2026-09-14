@@ -11,9 +11,12 @@ import type {
 import { Shimmer } from '../../../../shared/view/ui';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
-import { extractTurnOutputsCached, type TurnOutputFile } from '../../utils/turnOutputs';
+import type { ChatViewState } from '../../hooks/useChatSessionState';
+import { extractTurnOutputsCached, mergeTurnOutputs, type TurnOutputFile } from '../../utils/turnOutputs';
 import { cn } from '../../../../lib/utils';
 import { createGroupIdentityState, groupConsecutiveTools, isSubagentGroupItem, isToolGroupItem, stabilizeGroupIdentity } from '../../utils/toolGrouping';
+import { focusActivityGroup, lastTurnBoundaryIndex, shouldKeepActivityTailOpen } from '../../utils/toolRowSummary';
+import { activityItemRole, canRenderTurnOutputs, endsTurnForOutputs } from '../../utils/turnBoundary';
 import type { SubagentGroupItem, ToolGroupItem } from '../../utils/toolGrouping';
 
 import MessageComponent from './MessageComponent';
@@ -28,6 +31,10 @@ interface ChatMessagesPaneProps {
   onWheel: () => void;
   onTouchMove: () => void;
   isLoadingSessionMessages: boolean;
+  /** B3:这条会话的正文处于哪一步 —— 'error' 与 'empty' 必须分开渲染。 */
+  chatViewState: ChatViewState;
+  /** 首屏拉取失败时的重试入口。 */
+  onRetryLoadMessages: () => void;
   /** True while the viewed session has an active provider run in flight. */
   isProcessing?: boolean;
   /** True while the run indicator occupies the tail of the stream(底部留白用)。 */
@@ -99,35 +106,14 @@ const STREAMING_TIMESTAMP = 0;
  */
 const NO_TURN_OUTPUTS: TurnOutputFile[] = [];
 
-/**
- * fj:这条消息会不会真的渲染「产出」卡。
- *
- * 只有普通的助手正文才会。工具行、任务通知、压缩摘要、交互式提示
- * (ExitPlanMode / AskUserQuestion)、思考块虽然也是 `assistant`,
- * 但它们各自的渲染分支不读 `turnOutputs` —— 让它们参与"领取/清空"就等于
- * 把这一轮的产出卡吃掉。
- */
-function canRenderTurnOutputs(item: ChatMessage): boolean {
-  if (item.type !== 'assistant' || item.isStreaming) return false;
-  const flags = item as ChatMessage & {
-    isToolUse?: boolean;
-    isTaskNotification?: boolean;
-    isCompactSummary?: boolean;
-    isInteractivePrompt?: boolean;
-    isThinking?: boolean;
-  };
-  return !flags.isToolUse
-    && !flags.isTaskNotification
-    && !flags.isCompactSummary
-    && !flags.isInteractivePrompt
-    && !flags.isThinking;
-}
 
 function ChatMessagesPane({
   scrollContainerRef,
   onWheel,
   onTouchMove,
   isLoadingSessionMessages,
+  chatViewState,
+  onRetryLoadMessages,
   isProcessing = false,
   streamingText = null,
   activity = null,
@@ -291,6 +277,25 @@ function ChatMessagesPane({
             <Shimmer as="p">{t('session.loading.sessionMessages')}</Shimmer>
           </div>
         </div>
+      ) : chatViewState === 'error' && chatMessages.length === 0 ? (
+        /*
+         * B3:**加载失败不是空会话。**
+         *
+         * 在此之前这两种情况走同一个分支:一条 5000 条的会话拉取失败之后,
+         * 界面显示的是「这里还没有消息,开始聊天吧」的起始卡片 —— 用户没有
+         * 任何线索知道那只是一次网络失败,也没有重试的地方,只能切走再切回来
+         * (还得等过 30 秒的 isStale 窗口)。
+         */
+        <div className="mt-8 text-center" role="alert">
+          <p className="text-sm text-muted-foreground">{t('session.messages.loadFailed')}</p>
+          <button
+            type="button"
+            onClick={onRetryLoadMessages}
+            className="mt-2 rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent"
+          >
+            {t('session.messages.retryLoad')}
+          </button>
+        </div>
       ) : chatMessages.length === 0 ? (
         <div className="mx-auto w-full max-w-[68rem]">
           <ChatEmptyState
@@ -357,6 +362,29 @@ function ChatMessagesPane({
             let prevMessage: ChatMessage | null = null;
             const lastItem = groupedVisibleMessages[groupedVisibleMessages.length - 1];
             /**
+             * **哪一段属于"正在跑的这一轮",以及它的正文写了没有。**
+             *
+             * 两件事一次倒扫算出来,判据收在 `focusActivityGroup` 里
+             * (为什么必须一起算,见那个函数的注释)。这里只负责把结果分发下去:
+             * `sessionIsProcessing` 管**行状态**(运行中 / 已中断),
+             * `keepTailOpen` 管**折不折**。
+             *
+             * 正文正在流式打字时它不在这张列表里(流式气泡在 map 之外单独渲染),
+             * 所以要把 `streamingText` 显式告诉它 —— 否则"正文出现就收起"
+             * 会一直等到这一段正文落地才生效,慢整整一个回合。
+             */
+            // fz:最后一条回合边界之后的项都属于最新那一轮 —— 子代理卡拿它判
+            // 「进行中」还是「已中断」(见 lastTurnBoundaryIndex 的注释)。
+            const turnBoundaryIndex = lastTurnBoundaryIndex(
+              groupedVisibleMessages.length,
+              (index) => activityItemRole(groupedVisibleMessages[index]),
+            );
+            const activityFocus = focusActivityGroup(
+              groupedVisibleMessages.length,
+              (index) => activityItemRole(groupedVisibleMessages[index]),
+              Boolean(streamingText),
+            );
+            /**
              * ef:一轮的「产出」卡跟在**回答正文之后**(设计稿)。产出来自上面
              * 那段工具流,所以先在渲染工具组时把它算出来存这儿,等这一轮的助手
              * 回答渲染完再一起吐出来;中途遇到别的东西(用户又发了一条、错误)
@@ -392,36 +420,50 @@ function ChatMessagesPane({
                  * 这些文件,两处对不上,用户会以为正文这边漏了。
                  */
                 if (renderedIndex !== 0 || windowStartsAtBeginning) {
-                  const childOutputs = extractTurnOutputsCached(
-                    item, item.messages, selectedProject?.fullPath || selectedProject?.path,
+                  pendingTurnOutputs = mergeTurnOutputs(
+                    pendingTurnOutputs,
+                    extractTurnOutputsCached(
+                      item, item.messages, selectedProject?.fullPath || selectedProject?.path,
+                    ),
                   );
-                  if (childOutputs.length > 0) {
-                    const seen = new Set(pendingTurnOutputs.map((file) => file.path));
-                    pendingTurnOutputs = [
-                      ...pendingTurnOutputs,
-                      ...childOutputs.filter((file) => !seen.has(file.path)),
-                    ];
-                  }
                 }
                 return (
                   <SubagentGroupCard
                     key={`subagents-${getGroupKey(item)}`}
+                    rowKey={`subagents-${getGroupKey(item)}`}
                     group={item}
                     getMessageKey={getMessageKey}
+                    isCurrentTurn={isProcessing && renderedIndex > turnBoundaryIndex}
                   />
                 );
               }
 
               if (isToolGroupItem(item)) {
+                const isCurrentTurnGroup = isProcessing && renderedIndex === activityFocus.index;
                 const groupPrevMessage = prevMessage;
                 prevMessage = item.messages[item.messages.length - 1] || prevMessage;
+                /**
+                 * fz:**累加,不是赋值。**
+                 *
+                 * 一轮里出现两段工具流是常事(中间夹一个子代理组、
+                 * `ExitPlanMode` / `AskUserQuestion`、压缩摘要、任务通知都会
+                 * 把工具流切成两段)。这里原来是**赋值**,而紧邻的子代理分支
+                 * 是**累加** —— 同一个变量两种语义。于是
+                 * 「工具组 A 写了报告 → 子代理各写一章 → 工具组 B 写汇总」
+                 * 这一轮,B 一行就把前面攒的全覆盖掉,回答下面的产出卡只剩一个
+                 * 文件;要等服务端那份补回来才跳成五个,接口失败就永远是一个。
+                 */
                 pendingTurnOutputs = renderedIndex === 0 && !windowStartsAtBeginning
                   ? NO_TURN_OUTPUTS
-                  : extractTurnOutputsCached(item, item.messages, selectedProject?.fullPath || selectedProject?.path);
+                  : mergeTurnOutputs(
+                    pendingTurnOutputs,
+                    extractTurnOutputsCached(item, item.messages, selectedProject?.fullPath || selectedProject?.path),
+                  );
 
                 return (
                   <ActivityTimeline
                     key={`activity-${getGroupKey(item)}`}
+                    rowKey={`activity-${getGroupKey(item)}`}
                     group={item}
                     prevMessage={groupPrevMessage}
                     createDiff={createDiff}
@@ -432,7 +474,10 @@ function ChatMessagesPane({
                     showRawParameters={showRawParameters}
                     showThinking={showThinking}
                     selectedProject={selectedProject}
-                    sessionIsProcessing={isProcessing}
+                    // 行状态:只有"正在跑的这一轮"那一段的无结果工具行算「运行中」。
+                    sessionIsProcessing={isCurrentTurnGroup}
+                    // 折叠:属于这一轮 **且正文还没开始出现**才留尾部三行。
+                    keepTailOpen={shouldKeepActivityTailOpen(isCurrentTurnGroup, activityFocus.replyStarted)}
                   />
                 );
               }
@@ -458,7 +503,24 @@ function ChatMessagesPane({
               const turnOutputs = canCarryOutputs
                 ? (serverOutputs ?? pendingTurnOutputs)
                 : NO_TURN_OUTPUTS;
-              if (canCarryOutputs) pendingTurnOutputs = NO_TURN_OUTPUTS;
+              if (canCarryOutputs) {
+                pendingTurnOutputs = NO_TURN_OUTPUTS;
+              } else if (endsTurnForOutputs(item)) {
+                /**
+                 * fl:**回合边界要清账。**
+                 *
+                 * fj 把"领取"的判据收窄成 `canRenderTurnOutputs` 是对的(此前
+                 * `ExitPlanMode` 之类会把产出卡吃掉),但连"清空"也一起收窄了 ——
+                 * 于是产出会**跨过回合边界**:`Write → 报错 → 用户又问一句 →
+                 * 助手回答`,那几个文件被挂到了**下一轮**的回答下面。
+                 * 用户会以为是这一轮生成的,点开的却是上一轮的文件。
+                 *
+                 * 所以分成两类:不可展示但**属于本轮**的(思考、工具行、
+                 * 交互式提示)继续往下传;**开启新一轮**的(用户消息)和
+                 * **终结本轮**的(错误行)就地清空。
+                 */
+                pendingTurnOutputs = NO_TURN_OUTPUTS;
+              }
 
               // 只有**收尾在错误上**的对话才给重试按钮:老错误早被后面的
               // 对话翻篇了,回合在跑时也不该再塞一条。
@@ -472,6 +534,7 @@ function ChatMessagesPane({
               return (
                 <MessageComponent
                   key={getMessageKey(item)}
+                  rowKey={getMessageKey(item)}
                   message={item}
                   prevMessage={messagePrevMessage}
                   createDiff={createDiff}

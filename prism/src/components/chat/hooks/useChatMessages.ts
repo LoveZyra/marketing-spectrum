@@ -164,9 +164,81 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       childResultByToolId.set(msg.toolId, msg);
     }
   }
+  /**
+   * gd:**后台任务的进展与汇报,按 `toolId` 归到子代理卡上。**
+   *
+   * SDK 的 `task_progress` / `task_notification` 都带 `tool_use_id`,而那正是
+   * 那次 Task/Agent 调用的 id —— 也就是子代理卡的身份。任务一转后台,
+   * 子代理的内部步骤就**不再走实时流**了(那次工具调用当场拿到一个
+   * "running in the background" 的 tool_result),卡片因此停在转后台之前的那几步。
+   * 线上看到的「2 步」+ 另起一行的完成汇报,就是这两样没连起来。
+   *
+   * 汇报优先于进展:同一个 toolId 上,`task_notification` 是终态,不许被后到的
+   * 进展帧盖回 running(帧的顺序在重连补发时不保证)。
+   */
+  const backgroundByToolId = new Map<string, NonNullable<ChatMessage['subagentState']>['background']>();
+  for (const msg of messages) {
+    if (msg.kind !== 'task_progress' && msg.kind !== 'task_notification') continue;
+    if (!msg.toolId) continue;
+    const existing = backgroundByToolId.get(msg.toolId);
+    if (existing && existing.status !== 'running' && msg.kind === 'task_progress') continue;
+    const progress = (msg as { taskProgress?: Record<string, number | string | undefined> }).taskProgress;
+    backgroundByToolId.set(msg.toolId, {
+      status: msg.kind === 'task_notification'
+        ? (msg.status === 'completed' ? 'completed' : 'failed')
+        : 'running',
+      summary: typeof msg.summary === 'string' && msg.summary.trim() ? msg.summary : existing?.summary,
+      toolUses: typeof progress?.toolUses === 'number' ? progress.toolUses : existing?.toolUses,
+      durationMs: typeof progress?.durationMs === 'number' ? progress.durationMs : existing?.durationMs,
+      lastToolName: typeof progress?.lastToolName === 'string' ? progress.lastToolName : existing?.lastToolName,
+    });
+  }
+  /**
+   * ge:**后台任务的完成/失败归到它自己那一行,主对话流里一行都不多出。**
+   *
+   * gd 只把有 `tool_use_id` 的汇报归给**子代理卡**,别的(转后台的 Bash、
+   * workflow)照旧独立成行 —— 实机看下来那一串「✅ 后台任务完成 Run minidb
+   * test suite」把一条本该连贯的时间轴切得七零八落,而它说的事**那一行自己
+   * 就能说**(那条 Bash 就在上面几行)。
+   *
+   * 所以归属集合放宽到**任何 tool_use**:后台跑的东西必然是某次工具调用起的,
+   * 它的终态就该回到那次调用上。剩下真正无主的(那一行被 trim 出窗口了),
+   * 也不再单独成行 —— 内容仍在显示日志里,只是不在这条轴上插一句旁白。
+   */
+  const toolRowIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.kind === 'tool_use' && msg.toolId) toolRowIds.add(msg.toolId);
+  }
+
   const childrenByParent = new Map<string, SubagentChildTool[]>();
   for (const msg of messages) {
-    if (!msg.parentToolUseId || msg.kind !== 'tool_use') continue;
+    if (!msg.parentToolUseId) continue;
+    /**
+     * ge:**正文与思考也收进来。**
+     *
+     * SDK 默认只转发子代理的 `tool_use` / `tool_result`("enough for a heartbeat
+     * counter"),`forwardSubagentText: true` 之后正文与思考也带着
+     * `parent_tool_use_id` 一起来 —— SDK 明说那就是给"渲染嵌套 transcript"用的。
+     * 此前这两种被**直接丢掉**(顶层那句 `continue` 之外没有别的去处),
+     * 于是点开一张卡只有一串光秃秃的工具名,看不出它在想什么。
+     */
+    if (msg.kind === 'text' || msg.kind === 'thinking') {
+      const body = typeof msg.content === 'string' ? msg.content.trim() : '';
+      if (!body) continue;
+      const narrationList = childrenByParent.get(msg.parentToolUseId) ?? [];
+      narrationList.push({
+        toolId: msg.id || `child_${narrationList.length}`,
+        toolName: msg.kind === 'thinking' ? 'Thinking' : 'Text',
+        toolInput: undefined,
+        toolResult: null,
+        timestamp: new Date(msg.timestamp || Date.now()),
+        kind: msg.kind === 'thinking' ? 'thinking' : 'text',
+        content: body,
+      });
+      childrenByParent.set(msg.parentToolUseId, narrationList);
+      continue;
+    }
+    if (msg.kind !== 'tool_use') continue;
     const result = msg.toolResult
       || (msg.toolId ? childResultByToolId.get(msg.toolId) : undefined)
       || null;
@@ -179,6 +251,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         ? { content: formatToolResultContent(result.content), isError: Boolean(result.isError) }
         : null,
       timestamp: new Date(msg.timestamp || Date.now()),
+      kind: 'tool',
     });
     childrenByParent.set(msg.parentToolUseId, list);
   }
@@ -193,14 +266,37 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     )) {
       continue;
     }
+    /**
+     * ge:任务生命周期的两种行**都不出顶层**。
+     *
+     * 进展每几秒一条,本来就只归行;完成/失败也归到它自己那一行(见上面
+     * `toolRowIds`)。要的是"一根轴串下来",不是每隔几行插一句旁白。
+     */
+    if (msg.kind === 'task_progress' || msg.kind === 'task_notification') continue;
 
     const toolResult = resolveToolResult(msg, toolResultMap);
     const realtimeChildren = msg.kind === 'tool_use' && msg.toolId
       ? childrenByParent.get(msg.toolId) ?? null
       : null;
-    const childSignature = realtimeChildren
-      ? `${realtimeChildren.length}:${realtimeChildren.filter((child) => child.toolResult).length}`
-      : '';
+    // ge:任何工具行都可能被转到后台,不只是子代理容器。
+    const background = msg.kind === 'tool_use' && msg.toolId && toolRowIds.has(msg.toolId)
+      ? backgroundByToolId.get(msg.toolId)
+      : undefined;
+    /**
+     * gd:**后台状态必须进缓存签名。**
+     *
+     * 缓存按 `msg` 对象缓存,而后台任务的进展是**另一条消息**带来的 ——
+     * 容器那一行自己一个字都没变。不进签名的话,进度涨了、任务完成了,
+     * 这张卡还是缓存里那份旧的:"修复代码在,数据到不了它"的又一种形状。
+     */
+    const childSignature = [
+      realtimeChildren
+        ? `${realtimeChildren.length}:${realtimeChildren.filter((child) => child.toolResult).length}`
+        : '',
+      background
+        ? `bg:${background.status}:${background.toolUses ?? ''}:${background.lastToolName ?? ''}:${background.durationMs ?? ''}`
+        : '',
+    ].join('|');
 
     const cached = conversionCache.get(msg);
     if (cached && cached.toolResult === toolResult && cached.childSignature === childSignature) {
@@ -210,7 +306,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       continue;
     }
 
-    const chatMessages = convertMessage(msg, toolResult, realtimeChildren);
+    const chatMessages = convertMessage(msg, toolResult, realtimeChildren, background);
     conversionCache.set(msg, { toolResult, childSignature, chatMessages });
     for (const chatMessage of chatMessages) {
       converted.push(chatMessage);
@@ -231,6 +327,8 @@ function convertMessage(
   msg: NormalizedMessage,
   resolvedToolResult: ResolvedToolResult,
   realtimeChildren: SubagentChildTool[] | null = null,
+  /** gd:这个子代理转到后台之后的进展与汇报(按 toolId 归拢,见调用点)。 */
+  background: NonNullable<ChatMessage['subagentState']>['background'] = undefined,
 ): ChatMessage[] {
   const converted: ChatMessage[] = [];
 
@@ -360,12 +458,20 @@ function convertMessage(
         toolInput: typeof msg.toolInput === 'string' ? msg.toolInput : JSON.stringify(msg.toolInput ?? '', null, 2),
         toolId: msg.toolId,
         toolResult,
+        // ge:转后台的工具行(不只子代理)——`summarizeToolRow` 据此显示真实终态。
+        ...(background ? { background } : {}),
         isSubagentContainer,
         subagentState: isSubagentContainer
           ? {
               childTools,
               currentToolIndex: childTools.length > 0 ? childTools.length - 1 : -1,
-              isComplete: Boolean(toolResult),
+              /**
+               * gd:转到后台的任务,那次工具调用**立刻**就有 tool_result
+               * ("running in the background"),按老判据当场就算"完成"了。
+               * 真正的终态在 `task_notification` 里 —— 有后台状态时以它为准。
+               */
+              isComplete: background ? background.status !== 'running' : Boolean(toolResult),
+              ...(background ? { background } : {}),
             }
           : undefined,
         ...sharedMetadata,
@@ -391,6 +497,11 @@ function convertMessage(
         content: msg.content || 'Unknown error',
         timestamp: msg.timestamp,
         ...sharedMetadata,
+        // ga:本地提示的标记要还原回来 —— `endsTurnForOutputs` 靠它区分
+        // "provider 报的错终结回合"与"前端就地插的一条红字"。
+        // 剥掉它的后果:拖一个超大附件进输入框,正在跑的工具清单当场塌成一行、
+        // 真正在跑的那条命令翻成「已中断」、这一轮的产出卡被清空。
+        ...(msg.isLocalNotice ? { isLocalNotice: true } : {}),
       });
       break;
 

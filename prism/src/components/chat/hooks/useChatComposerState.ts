@@ -1,6 +1,4 @@
-import { emitToast } from '@/shared/view/ui/toastBus';
-
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ChangeEvent,
   ClipboardEvent,
@@ -22,11 +20,28 @@ import {
   claimQueuedMessage,
   clearQueuedMessage,
   readQueuedMessage,
+  releaseQueuedMessage,
   safeLocalStorage,
   writeQueuedMessage,
   type QueuedSendOptions,
 } from '../utils/chatStorage';
 import { queueLockName, runExclusive } from '../utils/queueClaim';
+import {
+  freezeSendCommand,
+  fromStoredCommand,
+  isPendingSend,
+  isSendable,
+  reduceOutbox,
+  restoredEntry,
+  toStoredCommand,
+  withSessionId,
+  type OutboxEntry,
+  type OutboxStatus,
+  type SendCommand,
+  type SendCommandImage,
+  type StoredSendCommand,
+  mayPersistQueuedCommand,
+} from '../utils/sendCommand';
 import type {
   ChatMessage,
   PendingPermissionRequest,
@@ -156,6 +171,8 @@ const landFileInChunks = async (
 
 import { useFileMentions } from './useFileMentions';
 import { isPromptCommand, type SlashCommand, useSlashCommands } from './useSlashCommands';
+
+import { emitToast } from '@/shared/view/ui/toastBus';
 
 /**
  * prism: in-flight transfer state for the generic attach button.
@@ -310,6 +327,72 @@ export type CommandModalPayload = {
   data: HelpCommandData | ModelCommandData | CostCommandData | StatusCommandData;
 };
 
+/**
+ * 这次提交结束时,**还该不该动这个输入框**。
+ *
+ * ## 事故(fl 引入,fn 继承)
+ *
+ * 判据原来是 `sessionKey === submitSessionKey`,而两者是**同一个闭包变量** ——
+ * 恒等,这道守卫从来没生效过。fl 把它改成读 ref(`sessionKeyRef.current`),
+ * 修好了"发送期间切走、清空了新会话输入框"那件事,**却把新会话这一支一起收窄掉了**:
+ *
+ *   新会话页 `submitSessionKey` 是 `null`(还没有会话),而这次发送**自己会创建**
+ *   一条会话 —— `onSessionEstablished` 一调,`sessionKeyRef.current` 就变成新 id。
+ *   收尾时 `id !== null`,守卫判定"用户切走了",**输入框不清**。
+ *
+ * 于是新会话的第一条消息发出去之后,那句话**还留在输入框里**。用户看到消息已经
+ * 发出、输入框却没空,自然会再按一次回车 —— 这次撞上正在跑的回合,被收进排队;
+ * 回合结束自动续发,发完输入框依然没清(同一个判据),再排一次……
+ * **同一句话反复发送,停不下来**,而排队卡上永远显示着它。
+ *
+ * ## 判据
+ *
+ * "还是不是同一条会话"必须把**这次发送自己建立的那条**算进去。
+ * 三种情况都成立:
+ *   - 会话没变;
+ *   - 从"新会话页"(null)变成了**这次发送创建的**那条;
+ *   - 目标会话就是当前会话(路由先落地、id 后到的时序)。
+ *
+ * 只有"变成了**别的**会话"才是真的切走了。
+ */
+export function composerStillOwnedBySubmit(
+  currentSessionKey: string | null,
+  submitSessionKey: string | null,
+  establishedSessionId: string | null,
+): boolean {
+  if (currentSessionKey === submitSessionKey) return true;
+  // 新会话页发出的那一条:它自己把会话建起来了,输入框还是同一个。
+  if (submitSessionKey === null && establishedSessionId !== null) {
+    return currentSessionKey === establishedSessionId;
+  }
+  return false;
+}
+
+/**
+ * F15:**只有属于这条会话的那一份才算数。**
+ *
+ * 两个"下一次发送要附带"的东西都可能是在别处装上的:
+ *   - 分叉点(编辑重跑)要先走一次 `/api/claude/fork-point`,那期间用户完全
+ *     可能切到别的会话去 —— 装上时的 composer 已经不是发起时那个了;
+ *   - 隐藏上下文由一个**全局 window 事件**装上,压根没有会话概念。
+ *
+ * 归属对不上就当没有:否则下一次在另一条会话里发送,会从**别人的** provider
+ * 会话分叉出去,或者把只该给这条会话看的技术细节送进另一段对话。
+ *
+ * 取不到时**不清空** —— 那一份还等着它自己的会话来取。
+ */
+export function takeIfOwned<T>(
+  armed: { owner: string | null } & T | null,
+  owner: string | null,
+): { value: (Omit<{ owner: string | null } & T, 'owner'>) | null; consumed: boolean } {
+  if (!armed || armed.owner !== owner) {
+    return { value: null, consumed: false };
+  }
+  const { owner: _owner, ...rest } = armed;
+  void _owner;
+  return { value: rest as Omit<{ owner: string | null } & T, 'owner'>, consumed: true };
+}
+
 const createFakeSubmitEvent = () => {
   return { preventDefault: () => undefined } as unknown as FormEvent<HTMLFormElement>;
 };
@@ -323,12 +406,6 @@ export type QueuedDraft = {
    * permission settings while another session is being viewed.
    */
   options?: QueuedSendOptions;
-};
-
-const restoreQueuedDraft = (sessionKey: string): QueuedDraft | null => {
-  const saved = readQueuedMessage(sessionKey);
-  // Image attachments can't survive a reload; only text and options persist.
-  return saved ? { content: saved.content, images: [], options: saved.options } : null;
 };
 
 const getNotificationSessionSummary = (
@@ -412,14 +489,25 @@ export function useChatComposerState({
     ((event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>) => Promise<void>) | null
   >(null);
   const inputValueRef = useRef(input);
-  // Prism: pending fork descriptor for edit-and-rerun. When set, the next send
-  // starts a brand-new session branched off the parent's native conversation.
-  const pendingForkRef = useRef<{ providerSessionId: string; resumeSessionAt: string | null } | null>(null);
+  /**
+   * Prism: pending fork descriptor for edit-and-rerun. When set, the next send
+   * starts a brand-new session branched off the parent's native conversation.
+   *
+   * **A 组(F15):连"这是哪条会话的"一起记。**
+   *
+   * `startEditRerun` 在拿分叉点时要走一次网络(`/api/claude/fork-point`),而
+   * 那期间用户完全可能切到别的会话去 —— 分叉点随后**装到新会话的输入框上**,
+   * 下一次在那里发送就会从**另一条会话**的 provider 会话分叉出去。
+   * 隐藏上下文更宽松:它由一个全局 window 事件设置,压根没有会话概念。
+   *
+   * 归属在冻结命令时比对(见 `takeIfOwned`),对不上就当没有。
+   */
+  const pendingForkRef = useRef<{ owner: string | null; providerSessionId: string; resumeSessionAt: string | null } | null>(null);
   // Prism(ck):随下一次发送附带的隐藏上下文(只给模型看,不进气泡/显示日志)。
   // 「让 Claude 创建定时任务」用它携带一次性票据与接口说明。构包时消费并清空;
   // 回合占线被排队(isLoading 早退)时 ref 原样保留,排队消息自动重发再消费。
   // 极端情况(掉线入队)隐藏块不随重发 —— 重新点一次入口即可。
-  const pendingHiddenContextRef = useRef<string | null>(null);
+  const pendingHiddenContextRef = useRef<{ owner: string | null; value: string } | null>(null);
   const selectedProjectId = selectedProject?.projectId;
   // Prefer the stable backend-allocated id (selectedSession.id) but fall back
   // to currentSessionId for a just-established session that hasn't been
@@ -451,20 +539,214 @@ export function useChatComposerState({
   // ↑/↓ 历史回看状态;打字/发送/切会话都会清掉它。
   const historyWalkRef = useRef<HistoryWalkState>(null);
 
-  const [queuedDraft, setQueuedDraft] = useState<QueuedDraft | null>(() => {
-    if (typeof window === 'undefined' || !sessionKey) {
-      return null;
-    }
-    return restoreQueuedDraft(sessionKey);
-  });
+  /**
+   * A 组:排队的那条现在是一个 **outbox 条目**(冻结的命令 + 状态),
+   * 不再是"正文 + File[] + options"三件套。
+   *
+   * 状态机在 `utils/sendCommand.ts`;这里只负责它与 React / localStorage 的接线。
+   */
+  /**
+   * 初始一律为空 —— **从盘恢复只有一个入口**(下面那个换会话 effect,
+   * 它在挂载时也会跑一次)。此前初始 state 也读一次盘,于是"从盘恢复"有两个
+   * 入口、两套判据,而兜底不变式只加在其中一个上就等于没加。
+   */
+  const [outbox, setOutbox] = useState<OutboxEntry | null>(null);
+  /**
+   * **这个标签页已经投递出去的幂等键。**
+   *
+   * 整块排队逻辑的**兜底不变式**:一条命令一旦真的发出去过,就再也不许以任何
+   * 路径回到"待发"。
+   *
+   * 为什么要一条兜底,而不是把每条路径都堵一遍 —— localStorage 那份状态有
+   * **两个写者**:一个 effect(带会跳过的归属守卫)和四处直接调用,其中
+   * `claimQueuedMessage` 认领时会把条目**连认领戳一起写回盘上**。只要清理那一侧
+   * 在某个 commit 被守卫跳过,记录就留在盘上,之后任何一次恢复都会把它读回来:
+   * **几轮之前那句话又变成一张排队卡,还会被自动续发再发一遍**
+   * (线上实测:回答完第二条之后,第一条的「你好」重新排上了队)。
+   *
+   * 逐条堵路径这一轮试过两次,每次都只堵住一半。改成恢复时先问一句
+   * "这条我发过没有" —— 路径再怎么变,这一条都成立。
+   *
+   * 只在内存里(按标签页):刷新之后不拦,那时盘上那份确实还没被这个标签页发过。
+   */
+  const dispatchedClientMessageIdsRef = useRef(new Set<string>());
+
+  /** 换会话恢复排队命令时要读它,但它不该让那个 effect 重跑。 */
+  const selectedProjectIdRef = useRef(selectedProjectId ?? null);
+  selectedProjectIdRef.current = selectedProjectId ?? null;
   /** fj:同步副本 —— 离线入队时要读当前有没有一条在排,而闭包里那个可能是旧的。 */
-  const queuedDraftRef = useRef(queuedDraft);
-  queuedDraftRef.current = queuedDraft;
-  // Which session the in-memory `queuedDraft` belongs to. On a session switch
+  const outboxRef = useRef(outbox);
+  outboxRef.current = outbox;
+  // Which session the in-memory outbox entry belongs to. On a session switch
   // there is one commit where `sessionKey` already points at the new session
-  // while `queuedDraft` still holds the old session's draft; the persistence
+  // while the entry still holds the old session's command; the persistence
   // effect must not write across that gap.
   const queuedDraftSessionRef = useRef<string | null>(sessionKey);
+  /**
+   * fz:恢复 effect **认领到哪条会话了**。落盘 effect 拿它当归属判据 ——
+   * 换会话那一拍它还指着旧 key,落盘整段跳过,不会误清新会话盘上那份。
+   * 初值刻意不是 `sessionKey`:首次挂载也必须等恢复先跑一遍。
+   */
+  const restoredForKeyRef = useRef<string | null>(null);
+  /**
+   * ga:哪条 `sending` 的命令**经历过一次断线**。
+   *
+   * 判据必须是"断过再连上",不能只看"现在连着" —— 后者在 `markCommandSent`
+   * 刚把状态置成 `sending` 的那一拍就成立,于是刚发出去的命令会被立刻拨回待发
+   * 再发一遍。记的是幂等键而不是布尔,免得张冠李戴到下一条命令头上。
+   */
+  const sendingSawDisconnectRef = useRef<string | null>(null);
+
+  /**
+   * 给排队卡片看的那一份(它只要正文和图片张数)。
+   *
+   * 顺带把 `status` / `error` 也带出去 —— 附件恢复不回来时卡片要能说明白
+   * "为什么它没发出去",而不是一直挂在那儿看着像要发。
+   */
+  const queuedDraft = useMemo<(QueuedDraft & { imageCount: number; status: OutboxStatus; error: string | null }) | null>(() => {
+    /**
+     * **只有"还在等着发"的那条才显示排队卡。**
+     *
+     * 原来是"outbox 非空就渲染" —— 而 `markCommandSent` 之后条目停在 `sending`
+     * 等 ACK,于是消息明明已经发出去了,卡片还挂着「已排队 · 本轮结束后自动发送」,
+     * ACK 没到就永远不消失。判据与落盘那一处共用同一个函数(见 isPendingSend):
+     * 那一处我先改了,这一处当时没跟着 —— 于是"刷新之后卡片消失"成了这个 bug
+     * 的指纹(内存里还留着、盘上已经没有)。
+     */
+    if (!isPendingSend(outbox)) return null;
+    if (!outbox) return null;
+    return {
+      content: outbox.command.text,
+      images: [],
+      imageCount: outbox.command.images.length,
+      options: outbox.command.options,
+      status: outbox.status,
+      error: outbox.error,
+    };
+  }, [outbox]);
+
+  /**
+   * 入队:命令进 outbox,同时落盘(带幂等键与图片引用,所以能跨刷新)。
+   *
+   * 已经有一条在排时**接上去而不是覆盖掉**(fj 的取舍保留):服务端只收一条排队
+   * 消息,前端这条通道也是一个槽位;覆盖会让断网期间连发的第一条静默消失。
+   * 合并之后用的是**后一条**命令的 options 与幂等键 —— 它是用户最近一次的意图。
+   */
+  const enqueueCommand = useCallback((
+    command: SendCommand,
+    owner: string | null,
+    initial?: { status: OutboxStatus; error: string },
+  ) => {
+    /**
+     * **只和"还在等着发"的那条合并。**
+     *
+     * 合并的本意是:断网期间连发两条,后一条接在前一条后面,别把第一条挤掉。
+     * 但如果 outbox 里留着的是一条**已经发出去、正在等 ACK**(`sending`)的命令,
+     * 合并就等于把那句话**再发一遍** —— 它会作为新命令正文的前半段送出去。
+     * 判据与排队卡、落盘共用同一个 `isPendingSend`。
+     */
+    const existing = isPendingSend(outboxRef.current) ? outboxRef.current : null;
+    const sameSession = existing && queuedDraftSessionRef.current === owner;
+    const merged = sameSession && existing.command.text.trim()
+      ? freezeSendCommand({
+        sessionKey: command.sessionKey,
+        sessionId: command.sessionId,
+        projectId: command.projectId,
+        clientMessageId: command.clientMessageId,
+        text: `${existing.command.text}\n\n${command.text}`,
+        namingText: existing.command.namingText || command.namingText,
+        images: [...existing.command.images, ...command.images],
+        options: command.options,
+        forkFrom: command.forkFrom ?? existing.command.forkFrom,
+        hiddenContext: command.hiddenContext ?? existing.command.hiddenContext,
+      })
+      : command;
+
+    queuedDraftSessionRef.current = owner;
+    const entry = initial
+      ? { command: merged, status: initial.status, error: initial.error, attempts: 0 }
+      : reduceOutbox(null, { type: 'enqueue', command: merged })!;
+    outboxRef.current = entry;
+    setOutbox(entry);
+  }, []);
+
+  /**
+   * F09:服务端确认收下了。
+   *
+   * 只认**同一个 clientMessageId** —— 别的会话、别的命令的 ACK 不动这一条。
+   * 到这一步才清掉落盘的排队记录(持久化 effect 会因为 outbox 变空而清)。
+   */
+  const handleSendAcked = useCallback((ackSessionId: string, clientMessageId: string) => {
+    /**
+     * fz:**清盘也要过同一道身份判断。**
+     *
+     * 这里原来对内存按 `clientMessageId` 判身份,对盘上却无条件
+     * `clearQueuedMessage(ackSessionId)` —— 只看会话、不看是哪一条命令。
+     * 而服务端确实会为同一个 `clientMessageId` 发**两次** accepted:
+     * 排队收下时一次、回合结束续发真正跑起来时又一次。
+     *
+     * 于是:第一条被收进排队 → 前端标 acked;用户接着又打了一条 B 排进去;
+     * 几分钟后续发成功,**旧命令的第二次 ACK** 到达 —— 内存守卫认出不是同一条、
+     * 不动内存,可那句清盘照样把 **B** 从盘上删了。B 只剩内存一份,
+     * 此后刷新 / 关标签页 / 切会话,它静默消失。
+     *
+     * 一个判据两处用:内存与盘上要么一起动,要么都不动。
+     */
+    let acknowledged = false;
+    setOutbox((current) => {
+      if (!current || current.command.clientMessageId !== clientMessageId) return current;
+      acknowledged = true;
+      const next = reduceOutbox(current, { type: 'acked' });
+      outboxRef.current = next;
+      return next;
+    });
+    // 已确认的那条不该再被别的标签页认领。
+    if (acknowledged && ackSessionId) clearQueuedMessage(ackSessionId);
+  }, []);
+
+  /** 投递成功:先记 sending/acked,再清掉落盘的排队记录。 */
+  const markCommandSent = useCallback((command: SendCommand, owner: string | null) => {
+    queuedDraftSessionRef.current = owner;
+
+    /**
+     * **发出去了就记下这个幂等键,并且当场把盘上那份清掉。**
+     *
+     * 清理原来只由持久化 effect 做,而那个 effect 带一道归属守卫
+     * (`queuedDraftSessionRef.current !== sessionKey` 就跳过)—— 新会话的第一条
+     * 正好会撞上它(提交时 owner 是 null、落地时 sessionKey 已经是新 id)。
+     * 跳过一次,盘上那份就留下了,之后任何一次恢复都会把它读回来。
+     *
+     * 这里直接清,不依赖任何守卫;记 id 是第二道保险(见
+     * `dispatchedClientMessageIdsRef`)。两道都不贵,而这块已经因为"只堵一半"
+     * 出过三次事了。
+     */
+    dispatchedClientMessageIdsRef.current.add(command.clientMessageId);
+    const storageKey = owner || command.sessionKey || command.sessionId;
+    if (storageKey) clearQueuedMessage(storageKey);
+    /**
+     * fz:**删掉了那句"顺手把当前在看的那条也清一遍"。**
+     *
+     * 它读的是 `sessionKeyRef.current`(此刻在看哪条),没有任何归属判断。
+     * 而 `dispatchSendCommand` 在新会话/分叉时要 `await` 一次建会话请求,
+     * 这段时间用户可以切走(`submittingRef` 只挡重复提交,不挡切会话)——
+     * 请求回来时这句清的就是**别人**那条会话盘上的排队记录。
+     *
+     * 上面 `storageKey` 那句(owner → 命令自记的会话 → 命令的会话 id)本来就
+     * 覆盖了这条命令所有可能的落键,再加一句"当前在看的"不解决任何问题,
+     * 只是把一个跨会话误删的窗口敞开一次 HTTP 往返那么长。
+     */
+    /**
+     * F09 的一半:这里记的是 `sending`,**不是 acked**。
+     * 真正的 acked 由服务端的 `chat_ack`(带同一个 clientMessageId)翻转 ——
+     * `socket.send` 返回 true 只代表本地没抛异常。
+     */
+    const entry = reduceOutbox(
+      { command, status: 'queued', error: null, attempts: 0 },
+      { type: 'sending' },
+    )!;
+    outboxRef.current = entry;
+    setOutbox(entry);
+  }, []);
 
   const handleBuiltInCommand = useCallback(
     (result: CommandExecutionResult) => {
@@ -825,6 +1107,7 @@ export function useChatComposerState({
       if (file.size > 20 * 1024 * 1024) {
         addMessage({
           type: 'error',
+          isLocalNotice: true,
           content: `${file.name} 超过 20MB,文档解析放不下这么大的文件。`,
           timestamp: new Date(),
         });
@@ -862,6 +1145,7 @@ export function useChatComposerState({
         const detail = error instanceof Error ? error.message : String(error);
         addMessage({
           type: 'error',
+          isLocalNotice: true,
           content: detail && detail !== 'Failed to fetch'
             ? detail
             : `无法读取 ${file.name}`,
@@ -890,6 +1174,7 @@ export function useChatComposerState({
       if (file.size > 500 * 1024 * 1024) {
         addMessage({
           type: 'error',
+          isLocalNotice: true,
           content: `${file.name} 超过 500MB,单个附件最多 500MB。`,
           timestamp: new Date(),
         });
@@ -946,6 +1231,7 @@ export function useChatComposerState({
       } catch (error) {
         addMessage({
           type: 'error',
+          isLocalNotice: true,
           content: `${file.name} 上传失败:${error instanceof Error ? error.message : String(error)}`,
           timestamp: new Date(),
         });
@@ -986,6 +1272,7 @@ export function useChatComposerState({
     } catch (error) {
       addMessage({
         type: 'error',
+        isLocalNotice: true,
         content: `抓取网页失败:${error instanceof Error ? error.message : String(error)}`,
         timestamp: new Date(),
       });
@@ -1018,6 +1305,8 @@ export function useChatComposerState({
         throw new Error(data?.error || '无法定位分叉点');
       }
       pendingForkRef.current = {
+        // 拿分叉点走了一次网络,期间可能切了会话 —— 归属记的是**发起时**那条。
+        owner: activeSessionId,
         providerSessionId: data.providerSessionId,
         resumeSessionAt: data.resumeSessionAt || null,
       };
@@ -1035,6 +1324,7 @@ export function useChatComposerState({
       pendingForkRef.current = null;
       addMessage({
         type: 'error',
+        isLocalNotice: true,
         content: `编辑重跑失败：${error instanceof Error ? error.message : String(error)}`,
         timestamp: new Date(),
       });
@@ -1143,6 +1433,156 @@ export function useChatComposerState({
     slashCommands,
   ]);
 
+  /**
+   * A 组:提交之后的收尾 —— 清输入框、清附件、收起展开态。
+   *
+   * 抽出来是因为它原来在 `runSubmit` 里**一字不差地出现了四次**(排队分支、
+   * 斜杠命令分支、离线分支、发送成功分支),而其中只有最后一处带着
+   * "期间会话切了没"的守卫。fl 修过那一处(判据从闭包变量换成 ref),
+   * 另外三处照旧 —— 也就是同一个 bug 还留着三份。
+   *
+   * `owner` 是**发起这次提交时**所在的会话键。等待期间用户切走了,composer
+   * 已经属于另一条会话,一个字都不许动;而这条会话自己的草稿仍然要清
+   * (它确实发出去了),所以 `activeDraftKey` 单独判。
+   */
+  const clearComposerAfterSubmit = useCallback((
+    owner: string | null,
+    draftKey: string | null,
+    /** 这次发送自己建立的会话 id(新会话页的第一条)。见 composerStillOwnedBySubmit。 */
+    establishedSessionId: string | null = null,
+  ) => {
+    if (composerStillOwnedBySubmit(sessionKeyRef.current, owner, establishedSessionId)) {
+      setInput('');
+      inputValueRef.current = '';
+      resetCommandMenuState();
+      setAttachedImages([]);
+      setAttachedDocs([]);
+      setUploadingImages(new Map());
+      setImageErrors(new Map());
+      setIsTextareaExpanded(false);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+    }
+    if (draftKey) {
+      safeLocalStorage.removeItem(draftKey);
+    }
+  }, [resetCommandMenuState, setInput]);
+
+  /**
+   * A 组:**投递一条已经冻结的命令。**
+   *
+   * 这个函数**不读 composer 的任何东西** —— 正文、options、分叉点、隐藏上下文、
+   * 图片全在 `command` 里。它是 F13 的修法:自动续发不再"把正文灌回输入框再走一遍
+   * 提交",而是直接投递排队时冻结的那一份,用户正在打的字一个不动。
+   *
+   * 返回投递结果,由调用方决定 outbox 怎么流转。
+   */
+  const dispatchSendCommand = useCallback(async (
+    command: SendCommand,
+  ): Promise<
+    | { ok: true; command: SendCommand; establishedSessionId: string | null }
+    | { ok: false; reason: 'offline' | 'error'; message?: string }
+  > => {
+    let target = command;
+    /** 这一次发送**自己创建**的会话 —— 收尾判归属时要认它(见 composerStillOwnedBySubmit)。 */
+    let establishedSessionId: string | null = null;
+
+    // 新会话在提交时还没有 id —— 服务端在这里分配,再补回命令里。
+    if (!target.sessionId) {
+      try {
+        const response = await authenticatedFetch('/api/providers/sessions', {
+          method: 'POST',
+          body: JSON.stringify({
+            provider,
+            projectPath: selectedProject?.fullPath || selectedProject?.path || '',
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to create session (${response.status})`);
+        }
+        const body = await response.json();
+        const newSessionId = body?.data?.sessionId || null;
+        if (!newSessionId) {
+          return { ok: false, reason: 'error', message: '新建会话失败:服务端没有返回会话号。' };
+        }
+        target = withSessionId(target, newSessionId);
+        establishedSessionId = newSessionId;
+        onSessionEstablished?.(newSessionId, {
+          provider,
+          project: selectedProject!,
+          summary: (target.options.sessionSummary as string | null | undefined) ?? null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        console.error('Session creation failed:', error);
+        return { ok: false, reason: 'error', message: `新建会话失败:${message}` };
+      }
+    }
+
+    // One message shape for every provider. The backend resolves the provider,
+    // project path, and provider-native resume id from the session row;
+    // `options` only carries composer-level preferences.
+    //
+    // F09:带上 `clientMessageId` —— 服务端按它去重。重连之后重投的是**同一个
+    // id**,所以"发出去了没有"这件事第一次有了权威答案(此前只有本地
+    // `socket.send` 没抛异常这一个信号)。
+    const sent = sendMessage({
+      type: 'chat.send',
+      sessionId: target.sessionId,
+      clientMessageId: target.clientMessageId,
+      content: target.text,
+      options: {
+        ...target.options,
+        images: target.images,
+        ...(target.forkFrom ? { forkFrom: target.forkFrom } : {}),
+        ...(target.hiddenContext ? { hiddenContext: target.hiddenContext } : {}),
+      },
+    });
+
+    if (!sent) {
+      return { ok: false, reason: 'offline' };
+    }
+
+    // The optimistic echo must carry the SAME text that went over the wire,
+    // not just what the user typed. The store dedupes a `local_*` user row
+    // against its server-backed copy by exact trimmed content
+    // (userTextFingerprint in stores/useSessionStore.ts); echoing the bare
+    // input while the transcript records input + attachments made the two
+    // fingerprints differ, so every attachment send rendered twice — once
+    // clean, once with the raw attachment tail.
+    addMessage({
+      type: 'user',
+      content: target.text,
+      images: target.images as never,
+      timestamp: new Date(),
+    });
+
+    // Mark this request as processing in the per-session activity map (the
+    // single source of truth the indicator derives from).
+    onSessionProcessing?.(target.sessionId!, {
+      statusText: null,
+      canInterrupt: true,
+    });
+
+    setIsUserScrolledUp(false);
+    setTimeout(() => scrollToBottom(), 100);
+
+    return { ok: true, command: target, establishedSessionId };
+  }, [
+    addMessage,
+    onSessionEstablished,
+    onSessionProcessing,
+    provider,
+    scrollToBottom,
+    selectedProject,
+    sendMessage,
+    setIsUserScrolledUp,
+  ]);
+
+  const dispatchSendCommandRef = useRef(dispatchSendCommand);
+  dispatchSendCommandRef.current = dispatchSendCommand;
+
   const runSubmit = useCallback(
     async (
       event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>,
@@ -1175,54 +1615,113 @@ export function useChatComposerState({
         return;
       }
 
-
       /**
-       * 发起这一次提交时**所在的会话**。
+       * 发起这一次提交时**所在的会话**,以及它的草稿键。
        *
-       * 下面有网络等待(建会话、上传附件),等待期间用户完全可能切到别的会话去。
-       * 而收尾那段("清空输入框、清附件、收起展开态")用的是闭包里捕获的
-       * setter,它们作用在**当前**这个 composer 上 —— 也就是新会话的输入框。
-       *
-       * 实际序列:在 A 里附几张图 + 打字 → 点发送(上传要几秒)→ 切到 B →
-       * 在 B 里接着打字 → A 的上传完成 → **B 的输入框当场清空,刚打的字消失**;
-       * 紧接着草稿持久化 effect 以 B 的 key + 空字符串跑一遍,
-       * `removeItem(B_key)` 把 B 存着的草稿也删掉 —— 刷新都找不回来。
-       *
-       * 所以收尾前要比对:会话变了就只做与"那条会话"有关的事(清它的草稿),
-       * 不碰 composer。
+       * 下面有网络等待(上传附件、建会话),等待期间用户完全可能切到别的会话去。
+       * 收尾那段用的是闭包里捕获的 setter,它们作用在**当前**这个 composer 上 ——
+       * 也就是新会话的输入框。判据见 `clearComposerAfterSubmit`。
        */
       const submitSessionKey = sessionKey;
+      const submitDraftKey = activeDraftKey;
 
       // prism: attached documents ride along as tagged text blocks.
       const docsBlock = buildDocsBlock(attachedDocs);
 
-      // A turn is already in flight: stash this message instead of sending it.
-      // It's auto-flushed (re-running this same function) once the turn ends,
-      // so it still goes through slash-command interception, image upload, etc.
-      if (isLoading) {
-        queuedDraftSessionRef.current = sessionKey;
-        setQueuedDraft({
-          content: currentInput + docsBlock,
-          images: attachedImages,
-          options: buildSendOptions(currentInput),
+      /**
+       * A 组:**先把图片传上去,再决定发还是排队。**
+       *
+       * 原来两个排队分支都在上传**之前**,于是排队记录里存的是 `File[]` ——
+       * 而 `File` 进不了 localStorage。刷新之后 `restoreQueuedDraft` 直接
+       * `images: []`,后台自动发送就把一条"引用了不存在图片"的话发了出去,
+       * 用户毫不知情(F12)。
+       *
+       * 代价是被删掉的排队消息也会留下一次上传;换来的是排队消息的附件**真的
+       * 能跨刷新活下来**。这个取舍很清楚:上传是可回收的,发错的消息不是。
+       */
+      let uploadedImages: SendCommandImage[] = [];
+      if (attachedImages.length > 0) {
+        const formData = new FormData();
+        attachedImages.forEach((file) => {
+          formData.append('images', file);
         });
-        setAttachedDocs([]);
-        setInput('');
-        inputValueRef.current = '';
-        setAttachedImages([]);
-      // fj:文档附件也要一起清。原来只清图片,PDF 留在输入框上、跟着**下一条**
-      // 消息一起发出去 —— 两类附件行为不一致,而且都不是用户预期的。
-      setAttachedDocs([]);
-        setUploadingImages(new Map());
-        setImageErrors(new Map());
-        resetCommandMenuState();
-        setIsTextareaExpanded(false);
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto';
+
+        try {
+          const response = await authenticatedFetch(
+            `/api/assets/images${attachmentQuery(selectedProjectId, currentSessionId)}`,
+            { method: 'POST', headers: {}, body: formData },
+          );
+
+          if (!response.ok) {
+            throw new Error('图片上传失败');
+          }
+
+          const result = await response.json();
+          uploadedImages = Array.isArray(result.images) ? result.images : [];
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown error';
+          console.error('Image upload failed:', error);
+          addMessage({
+            type: 'error',
+            isLocalNotice: true,
+            content: `图片上传失败:${message}`,
+            timestamp: new Date(),
+          });
+          // 输入框与附件原样留着,用户改一改还能再发一次。
+          return;
         }
-        if (activeDraftKey) {
-          safeLocalStorage.removeItem(activeDraftKey);
-        }
+      }
+
+      /**
+       * A 组:**这一次发送到此冻结。**
+       *
+       * 之后无论排队多久、用户在输入框里打了什么、切到了哪条会话,发出去的都是
+       * 这一份。分叉点与隐藏上下文也在这里进命令(F15)—— 它们此前是全局 ref,
+       * 不按会话隔离,而且在确认发出去之前就被消费掉。
+       */
+      const armedFork = takeIfOwned(pendingForkRef.current, submitSessionKey);
+      const armedHiddenContext = takeIfOwned(pendingHiddenContextRef.current, submitSessionKey);
+
+      const command = freezeSendCommand({
+        sessionKey: submitSessionKey,
+        sessionId: selectedSession?.id || currentSessionId || null,
+        projectId: selectedProjectId ?? null,
+        text: currentInput + docsBlock,
+        // du:发送内容用含附件块的那份,但**命名**只能用 currentInput ——
+        // 传含附件的那份,服务端会把会话名落成「总结一下 <attached-document …>」
+        // 这种带标签尾巴的东西,还与前端乐观显示的名字不一致。
+        namingText: currentInput,
+        images: uploadedImages,
+        options: buildSendOptions(currentInput),
+        /**
+         * F15:**只认属于这条会话的那一份。**
+         *
+         * 两个 ref 都可能是在别处装上的:分叉点要等一次网络才装(期间可能切走),
+         * 隐藏上下文由全局 window 事件装(压根没有会话概念)。归属对不上就当没有 ——
+         * 否则下一次在**另一条**会话里发送,会从别人的 provider 会话分叉出去。
+         */
+        forkFrom: armedFork.value,
+        hiddenContext: armedHiddenContext.value?.value ?? null,
+      });
+
+      /**
+       * 分叉点与隐藏上下文**冻结即让位**,但只是从"下一条普通消息"的视野里移走 ——
+       * 它们已经在命令里了,发送失败也不会丢(重试发的是同一个命令)。
+       *
+       * fj 当初为了"建会话失败后再按一次回车仍然是分叉"把清除推迟到了发送之后;
+       * 现在不需要那个补丁:那次重按走的是 outbox 的重试,用的还是这条命令。
+       */
+      // 取到了才清 —— 别人会话的那一份还等着它自己的会话来取。
+      if (armedFork.consumed) pendingForkRef.current = null;
+      if (armedHiddenContext.consumed) pendingHiddenContextRef.current = null;
+
+      // 分叉强制新开一支:目标会话不能沿用当前这条。
+      const dispatchable = command.forkFrom ? { ...command, sessionId: null } as SendCommand : command;
+
+      // A turn is already in flight: queue the frozen command instead of sending.
+      if (isLoading) {
+        enqueueCommand(dispatchable, submitSessionKey);
+        clearComposerAfterSubmit(submitSessionKey, submitDraftKey);
         return;
       }
 
@@ -1259,274 +1758,61 @@ export function useChatComposerState({
          */
         if (matchedCommand && !isPromptCommand(matchedCommand)) {
           executeCommand(matchedCommand, isHelpAlias ? '/help' : commandInput);
-          setInput('');
-          inputValueRef.current = '';
-          setAttachedImages([]);
-          setUploadingImages(new Map());
-          setImageErrors(new Map());
-          resetCommandMenuState();
-          setIsTextareaExpanded(false);
-          if (textareaRef.current) {
-            textareaRef.current.style.height = 'auto';
-          }
+          clearComposerAfterSubmit(submitSessionKey, null);
           return;
         }
       }
 
-      const messageContent = currentInput + docsBlock;
-
-      // Checked before the image upload and the session POST, not just before
-      // the websocket send. Both of those are HTTP and can succeed while the
-      // socket is down, which would leave the user an orphaned empty session
-      // and uploaded attachments for a message that never went anywhere.
+      // Checked before the session POST, not just before the websocket send:
+      // that POST is HTTP and can succeed while the socket is down, which would
+      // leave the user an orphaned empty session for a message that never went
+      // anywhere.
       //
       // 断网不再报错让用户自己重试:走排队通道(和"回合进行中"同一条路),
-      // 排队卡立刻可见、可编辑可删除;连接恢复后自动重放 handleSubmit 发出。
+      // 排队卡立刻可见、可编辑可删除;连接恢复后自动投递。
       if (!isConnected) {
-        /**
-         * fj:已经有一条在排队时,**接上去而不是覆盖掉**。
-         *
-         * 服务端只收一条排队消息,前端这条离线通道也是"一个槽位"。原来直接
-         * `setQueuedDraft(...)` 覆盖,于是断网期间连发两条,第一条静默消失 ——
-         * 而排队卡上只显示一条,用户看不出少了什么。
-         *
-         * 接起来(排队那条在前)与「停止」时 `mergeQueuedIntoInput` 的取舍一致:
-         * 宁可让用户删一句,也不能替他丢一句。
-         */
-        queuedDraftSessionRef.current = sessionKey;
-        const existingQueued = queuedDraftRef.current;
-        const sameSession = existingQueued && queuedDraftSessionRef.current === sessionKey;
-        setQueuedDraft({
-          content: sameSession && existingQueued.content.trim()
-            ? `${existingQueued.content}\n\n${messageContent}`
-            : messageContent,
-          images: sameSession ? [...existingQueued.images, ...attachedImages] : attachedImages,
-          options: buildSendOptions(currentInput),
-        });
-        setAttachedDocs([]);
-        setInput('');
-        inputValueRef.current = '';
-        setAttachedImages([]);
-        setUploadingImages(new Map());
-        setImageErrors(new Map());
-        resetCommandMenuState();
-        setIsTextareaExpanded(false);
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto';
-        }
-        if (activeDraftKey) {
-          safeLocalStorage.removeItem(activeDraftKey);
-        }
+        enqueueCommand(dispatchable, submitSessionKey);
+        clearComposerAfterSubmit(submitSessionKey, submitDraftKey);
         return;
       }
 
-      let uploadedImages: unknown[] = [];
-      if (attachedImages.length > 0) {
-        const formData = new FormData();
-        attachedImages.forEach((file) => {
-          formData.append('images', file);
-        });
-
-        try {
-          const response = await authenticatedFetch(
-            `/api/assets/images${attachmentQuery(selectedProjectId, currentSessionId)}`,
-            { method: 'POST', headers: {}, body: formData },
-          );
-
-          if (!response.ok) {
-            throw new Error('图片上传失败');
-          }
-
-          const result = await response.json();
-          uploadedImages = result.images;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          console.error('Image upload failed:', error);
-          addMessage({
-            type: 'error',
-            content: `图片上传失败:${message}`,
-            timestamp: new Date(),
-          });
-          return;
-        }
-      }
-
-      const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
-      // do:`/技能名 参数` 开场的新会话,侧栏名字用「技能名:参数」,不挂斜杠黑话。
-      const sessionSummary = getNotificationSessionSummary(
-        selectedSession,
-        describeSkillInvocationInput(currentInput, slashCommands),
-      );
-
-      // Prism edit-and-rerun: a pending fork forces a brand-new session that
-      // branches off the parent's native conversation (truncated at the forked
-      // message), so the original thread is preserved untouched.
-      /**
-       * fj:分叉点**不在这里清**。
-       *
-       * 原来是取出即清空,而下面建会话的 POST 可能失败(网络抖动 / 5xx)——
-       * 那时 `pendingForkRef` 已经是 null、输入框里的字还在,用户看到
-       * 「新建会话失败」后再按一次回车,`targetSessionId` 就变成当前会话 id,
-       * 编辑后的消息被**追加进原会话**并在那里开跑一整轮,与"另起一支、
-       * 原线程不动"的意图正好相反,而且没有任何提示说分叉已经失效。
-       *
-       * 现在等到确认发出去了才清(见下面 sendMessage 之后)。
-       */
-      const forkInfo = pendingForkRef.current;
-
-      // The conversation always has a stable backend-allocated session id
-      // BEFORE the first websocket send: brand-new chats allocate one here
-      // via the session gateway. There is no client-visible session-id
-      // handoff later — this id stays valid for the conversation's lifetime.
-      let targetSessionId = forkInfo ? null : (selectedSession?.id || currentSessionId || null);
-      if (!targetSessionId) {
-        try {
-          const response = await authenticatedFetch('/api/providers/sessions', {
-            method: 'POST',
-            body: JSON.stringify({
-              provider,
-              projectPath: resolvedProjectPath,
-            }),
-          });
-          if (!response.ok) {
-            throw new Error(`Failed to create session (${response.status})`);
-          }
-          const body = await response.json();
-          targetSessionId = body?.data?.sessionId || null;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          console.error('Session creation failed:', error);
-          addMessage({
-            type: 'error',
-            content: `新建会话失败:${message}`,
-            timestamp: new Date(),
-          });
-          return;
-        }
-
-        if (!targetSessionId) {
-          addMessage({
-            type: 'error',
-            content: '新建会话失败:服务端没有返回会话号。',
-            timestamp: new Date(),
-          });
-          return;
-        }
-
-        onSessionEstablished?.(targetSessionId, {
-          provider,
-          project: selectedProject,
-          summary: sessionSummary,
-        });
-      }
-
-      // One message shape for every provider. The backend resolves the
-      // provider, project path, and provider-native resume id from the
-      // session row; `options` only carries composer-level preferences.
-      //
-      // Sent *before* the optimistic echo rather than after. Everything from
-      // here to the end of this function is synchronous, so there is no
-      // perceived-latency cost to the reorder, and it means a send that never
-      // left the client cannot leave behind a user bubble, a spinner that
-      // never stops, and an emptied composer — which is what happened when the
-      // socket dropped between the connectivity check above and this line.
-      // 隐藏上下文只搭这一班车:构包即消费,发没发出去都不留给下一条普通消息。
-      const hiddenContext = pendingHiddenContextRef.current;
-      pendingHiddenContextRef.current = null;
-
-      const sent = sendMessage({
-        type: 'chat.send',
-        sessionId: targetSessionId,
-        content: messageContent,
-        options: {
-          // du:发送内容用 messageContent(含附件块),但**命名**只能用
-          // currentInput —— 传含附件的那份,服务端会把会话名落成
-          // 「总结一下 <attached-document name=…>」这种带标签尾巴的东西,
-          // 还与前端乐观显示的名字不一致。
-          ...buildSendOptions(currentInput),
-          images: uploadedImages,
-          ...(forkInfo ? { forkFrom: forkInfo } : {}),
-          ...(hiddenContext ? { hiddenContext } : {}),
-        },
-      });
-
-      // fj:确认发出去了才把分叉点清掉(失败时留着,用户重按一次仍然是分叉)。
-      if (sent) pendingForkRef.current = null;
-
-      if (!sent) {
-        // 连通性检查之后、真正 send 之前的一瞬掉线:同样入队,恢复后自动发。
-        queuedDraftSessionRef.current = sessionKey || targetSessionId;
-        setQueuedDraft({
-          content: messageContent,
-          images: attachedImages,
-          options: buildSendOptions(currentInput),
-        });
-        setAttachedDocs([]);
-        setInput('');
-        inputValueRef.current = '';
-        setAttachedImages([]);
-        setUploadingImages(new Map());
-        setImageErrors(new Map());
-        resetCommandMenuState();
-        setIsTextareaExpanded(false);
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto';
-        }
-        if (activeDraftKey) {
-          safeLocalStorage.removeItem(activeDraftKey);
-        }
-        return;
-      }
-
-      // The optimistic echo must carry the SAME text that went over the wire,
-      // not just what the user typed. The store dedupes a `local_*` user row
-      // against its server-backed copy by exact trimmed content
-      // (userTextFingerprint in stores/useSessionStore.ts); echoing the bare
-      // input while the transcript records input + attachments made the two
-      // fingerprints differ, so every attachment send rendered twice — once
-      // clean, once with the raw attachment tail.
-      const userMessage: ChatMessage = {
-        type: 'user',
-        content: messageContent,
-        images: uploadedImages as any,
-        timestamp: new Date(),
-      };
-
-      addMessage(userMessage);
-      // Mark this request as processing in the per-session activity map (the
-      // single source of truth the indicator derives from). The id is always
-      // concrete at this point — no pending placeholder exists anymore.
-      onSessionProcessing?.(targetSessionId, {
-        statusText: null,
-        canInterrupt: true,
-      });
-
-      setIsUserScrolledUp(false);
-      setTimeout(() => scrollToBottom(), 100);
-
-      // 等待期间用户切走了:composer 现在属于**另一条**会话,一个字都不许动。
-      // 这条会话自己的草稿仍然要清(它确实发出去了)—— activeDraftKey 是闭包里
-      // 捕获的旧 key,指的正是它,所以下面那段照常跑。
-      if (sessionKey === submitSessionKey) {
-        setInput('');
-        inputValueRef.current = '';
-        resetCommandMenuState();
-        setAttachedImages([]);
-        setAttachedDocs([]);
-        setUploadingImages(new Map());
-        setImageErrors(new Map());
-        setIsTextareaExpanded(false);
-
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto';
-        }
-      }
-
-      // 发送成功即清历史回看状态与草稿。
       historyWalkRef.current = null;
-      if (activeDraftKey) {
-        safeLocalStorage.removeItem(activeDraftKey);
+
+      const result = await dispatchSendCommandRef.current(dispatchable);
+      if (result.ok) {
+        /**
+         * 收尾放在投递**之后**:新会话是在投递里建起来的,而
+         * `composerStillOwnedBySubmit` 需要知道"这一次发送建了哪条会话" ——
+         * 提前清就拿不到它,那正是那个反复发送的循环的由来。
+         */
+        clearComposerAfterSubmit(submitSessionKey, submitDraftKey, result.establishedSessionId);
+        markCommandSent(result.command, submitSessionKey);
+        return;
       }
+
+      // 没发出去:输入框留着原文,用户改一改还能再发(命令也留在 outbox 里)。
+
+      if (result.reason === 'offline') {
+        /**
+         * 连通性检查之后、真正 send 之前的一瞬掉线:同样入队,恢复后自动发。
+         *
+         * ga:**收尾也要做。** 上面那条"检查之前就发现断网"的分支是
+         * `enqueueCommand` + `clearComposerAfterSubmit` 两件都做;这一条只做了
+         * 前一件 —— 于是同一句话**既进了队列,又留在输入框里**(草稿键也还在,
+         * 刷新都活得下来)。网络恢复后队列自动发出,用户看着输入框里一模一样的
+         * 字以为没发成功,再按一次回车 —— 同一句话发两遍,两个不同的幂等键,
+         * 服务端认不出来,模型跑两轮、改两遍文件。
+         *
+         * 两条分支是同一件事的两种时机,收尾动作必须一样。
+         */
+        enqueueCommand(dispatchable, submitSessionKey);
+        clearComposerAfterSubmit(submitSessionKey, submitDraftKey);
+        return;
+      }
+
+      addMessage({ type: 'error', isLocalNotice: true, content: result.message ?? '发送失败', timestamp: new Date() });
+      // 建会话失败:命令留在 outbox 里,用户可以重试(分叉点也还在命令里)。
+      enqueueCommand(dispatchable, submitSessionKey, { status: 'failed', error: result.message ?? '发送失败' });
     },
     [
       selectedProjectId,
@@ -1535,20 +1821,16 @@ export function useChatComposerState({
       attachedImages,
       attachedDocs,
       buildSendOptions,
+      clearComposerAfterSubmit,
       currentSessionId,
+      enqueueCommand,
       executeCommand,
       isConnected,
       isLoading,
-      onSessionProcessing,
-      onSessionEstablished,
-      provider,
-      resetCommandMenuState,
-      scrollToBottom,
+      markCommandSent,
       selectedProject,
-      sendMessage,
       sessionKey,
       addMessage,
-      setIsUserScrolledUp,
       slashCommands,
       parsingDocsCount,
     ],
@@ -1601,11 +1883,50 @@ export function useChatComposerState({
       return;
     }
 
-    // 断网期间不冲队:重放 handleSubmit 只会再次入队(750ms 一圈的空转)。
-    // isConnected 翻真时本 effect 会重跑,那时再发。
-    if (isLoading || !queuedDraft || !isConnected) {
+    /**
+     * ga:**`sending` 卡住的那条,重连之后要拨回 `queued` 重投。**
+     *
+     * `markCommandSent` 记的是 `sending`,并且**当场清盘**、输入框也已清空 ——
+     * 真正的 `acked` 由服务端 `chat_ack` 翻转。可如果这一帧还没被服务端读到
+     * 连接就断了(切网 / 合盖唤醒 / 代理超时),此后:盘上没记录、`sending`
+     * 不落盘、排队卡不显示、冲队只认 `queued` —— **全仓库没有任何路径把它拨回去**。
+     * 用户的气泡挂在那里,没有回答、没有报错、没有重试入口。
+     *
+     * 而落盘 effect 的注释写着"重投用的是内存里那份"、`canClearDraft` 写着
+     * "断网重连后我们会带着同一个 clientMessageId 重投,服务端按它去重" ——
+     * **那个重投在代码里不存在**,整套幂等键因此只在后台续发那条路上被用过。
+     *
+     * 现在补上:连接恢复的那一拍,把还停在 `sending` 的那条拨回待发。
+     * 重投用的是**同一个幂等键**,服务端 `registerSend` 认得出来,
+     * 真收到过的那条只会回一个 `duplicate` ACK,不会跑两遍。
+     */
+    if (outbox?.status === 'sending') {
+      if (!isConnected) {
+        // 这条还停在"已交出去、等 ACK",而连接断了 —— 记下来,回来要重投。
+        sendingSawDisconnectRef.current = outbox.command.clientMessageId;
+        return;
+      }
+      if (sendingSawDisconnectRef.current === outbox.command.clientMessageId) {
+        sendingSawDisconnectRef.current = null;
+        const revived = reduceOutbox(outbox, { type: 'retry' });
+        outboxRef.current = revived;
+        setOutbox(revived);
+        return;
+      }
+      // 连接一直好着 —— 那就是正常在等 ACK,不许动它(动了就是刚发出去立刻再发一遍)。
       return;
     }
+    sendingSawDisconnectRef.current = null;
+
+    // 断网期间不冲队:投递只会再次入队(750ms 一圈的空转)。
+    // isConnected 翻真时本 effect 会重跑,那时再发。
+    //
+    // A 组:附件恢复不回来的那条(`needs_attachment`)同样不发 —— 它在等用户
+    // 重新添加图片,自动发出去的会是一条"引用了不存在图片"的话(F12)。
+    if (isLoading || !isSendable(outbox) || !isConnected) {
+      return;
+    }
+    const pending: OutboxEntry = outbox;
 
     // Turn just ended in this session: flush immediately. Otherwise this is a
     // saved draft restored into an apparently idle session — hold it briefly
@@ -1615,26 +1936,32 @@ export function useChatComposerState({
     const timer = setTimeout(() => {
       const dispatch = () => {
         /**
-         * fj:**不覆盖用户正在打的字。**
+         * A 组(F13):**投递排队时冻结的那条命令,不碰输入框。**
          *
-         * 冲队是把排队那条重新灌进输入框再走一遍提交路径,而这段时间里用户
-         * 完全可能已经在打下一句了(回合刚结束、输入框刚解锁,正是他会开始打字
-         * 的那一刻)。原来无条件 `setInput(queuedDraft.content)`,那句话当场没了。
+         * 原来冲队是"把排队正文灌回输入框 → 再走一遍 handleSubmit"。而回合刚
+         * 结束、输入框刚解锁,正是用户开始打下一句的那一刻 —— fj 为此把覆盖改成
+         * 了"两段合起来发",但那只是止血:**用户正在写的下一句仍然会被连带发出去**,
+         * 而且 options 是按当前输入框重建的,不是排队时那一份。
          *
-         * 有正在打的字就把两段按"排队那条在前"合起来 —— 与「停止」时
-         * `mergeQueuedIntoInput` 的取舍一致:宁可让用户删一句,也不能替他丢一句。
+         * 现在排队的是一个冻结的命令,直接投递它:输入框里的字一个不动。
          */
-        const typing = inputValueRef.current.trim();
-        const merged = typing
-          ? `${queuedDraft.content}\n\n${inputValueRef.current}`
-          : queuedDraft.content;
-        setQueuedDraft(null);
-        setInput(merged);
-        inputValueRef.current = merged;
-        setAttachedImages(queuedDraft.images);
-        setTimeout(() => {
-          handleSubmitRef.current?.(createFakeSubmitEvent());
-        }, 0);
+        const owner = queuedDraftSessionRef.current;
+        void dispatchSendCommandRef.current(pending.command).then((result) => {
+          if (result.ok) {
+            markCommandSent(result.command, owner);
+            return;
+          }
+          if (result.reason === 'offline') {
+            // 认领之后没发出去:把戳摘掉,让下一轮/别的标签页能接手。
+            if (sessionKey) releaseQueuedMessage(sessionKey);
+            setOutbox((current) => reduceOutbox(current, { type: 'retry' }));
+            return;
+          }
+          setOutbox((current) => reduceOutbox(current, { type: 'failed', error: result.message ?? '发送失败' }));
+        }).catch((error) => {
+          console.error('排队命令投递失败:', error);
+          setOutbox((current) => reduceOutbox(current, { type: 'failed', error: '发送失败' }));
+        });
       };
 
       // 没有会话键 = 还没落盘,没有别人能抢,直接发。
@@ -1648,7 +1975,8 @@ export function useChatComposerState({
       // 没了(已经发过),或者**别的标签页**刚抢走 —— 都不能再发一次。
       void runExclusive(queueLockName(sessionKey), () => {
         if (!claimQueuedMessage(sessionKey)) {
-          setQueuedDraft(null);
+          setOutbox(null);
+          outboxRef.current = null;
           return;
         }
         dispatch();
@@ -1657,21 +1985,32 @@ export function useChatComposerState({
       });
     }, delay);
     return () => clearTimeout(timer);
-  }, [isLoading, queuedDraft, sessionKey, setInput, isConnected]);
+  }, [isLoading, outbox, sessionKey, isConnected, markCommandSent]);
 
+  /**
+   * 「编辑」排队的那条:正文退回输入框,命令作废。
+   *
+   * 图片**不退回** —— 它们已经上传了,而输入框那侧的 `attachedImages` 是
+   * `File[]`,拿不回原文件。正文退回、图片提示重新添加,比装作还在诚实。
+   */
   const editQueuedDraft = useCallback(() => {
-    if (!queuedDraft) {
+    const entry = outboxRef.current;
+    if (!entry) {
       return;
     }
-    setQueuedDraft(null);
-    setInput(queuedDraft.content);
-    inputValueRef.current = queuedDraft.content;
-    setAttachedImages(queuedDraft.images);
+    setOutbox(null);
+    outboxRef.current = null;
+    setInput(entry.command.text);
+    inputValueRef.current = entry.command.text;
+    if (entry.command.images.length > 0) {
+      emitToast({ message: '排队时附带的图片需要重新添加。' });
+    }
     textareaRef.current?.focus();
-  }, [queuedDraft]);
+  }, [setInput]);
 
   const deleteQueuedDraft = useCallback(() => {
-    setQueuedDraft(null);
+    setOutbox(null);
+    outboxRef.current = null;
   }, []);
 
   /**
@@ -1721,7 +2060,8 @@ export function useChatComposerState({
       setInput(text);
       inputValueRef.current = text;
       pendingHiddenContextRef.current = typeof detail?.hiddenContext === 'string' && detail.hiddenContext
-        ? detail.hiddenContext
+        // 事件是全局的,但上下文只对**触发它时所在的**会话有效。
+        ? { owner: sessionKeyRef.current, value: detail.hiddenContext }
         : null;
       // 等切页/渲染落定再提交;submit 读的是 inputValueRef,不受 state 时序影响。
       window.setTimeout(() => {
@@ -1775,39 +2115,104 @@ export function useChatComposerState({
   // the owner ref) still describe the old one — the ref mismatch makes this
   // effect skip that commit instead of writing/clearing across sessions.
   useEffect(() => {
-    if (!sessionKey || queuedDraftSessionRef.current !== sessionKey) {
+    if (!sessionKey) return;
+    /**
+     * 归属判据换成**条目自己记的那条会话**,不再用一个会漂的 ref。
+     *
+     * 原来是 `queuedDraftSessionRef.current !== sessionKey` 就整段跳过 ——
+     * 它既挡住了"写到别的会话头上",也挡住了**该清没清**。新会话的第一条正好
+     * 撞上:提交时 owner 是 null、落地时 sessionKey 已经是新 id,守卫一跳过,
+     * 盘上那份就留下了。
+     *
+     * 命令里本来就带着 `sessionKey`(冻结时记的),用它判归属既准确又不会漂;
+     * 而"没有条目"这种情况一律执行清理 —— 清一个本来就该空的键,没有风险。
+     */
+    /**
+     * fz:**这一拍的账,得等恢复先认领这条会话。**
+     *
+     * 这个 effect 声明在恢复那个之前,依赖里都有 `sessionKey` —— 换会话那一拍
+     * 它先跑,而此时 `sessionKey` 已经是**新**会话、`outbox` 还是旧会话的
+     * (旧会话没排队时就是 `null`)。下面那句"没有条目就清理"于是清掉的是
+     * **新会话**盘上那份 —— 紧接着恢复 effect 去读,读到空。
+     *
+     * 后果:排队消息**活不过一次刷新,也活不过切走再切回**;而且它把
+     * A 组整套"跨刷新恢复 / 附件描述符 / needs_attachment"一起关掉了
+     * (盘上那份根本不再被读回来 —— 这也是 fr 之后"重复发送"不再复现的真相)。
+     *
+     * fr 把守卫从 `queuedDraftSessionRef.current !== sessionKey`(整段跳过)
+     * 换成 `outbox.command.sessionKey !== sessionKey`,守卫从"两条路都堵"
+     * 退化成"只在有条目时堵一条" —— 又是只收窄了一半。
+     *
+     * 现在的判据是**恢复认领没认领这条会话**:换会话那一拍它还指着旧 key,
+     * 整段跳过;恢复跑完把 key 记上,之后的每一拍照常写/清。既堵住了跨会话
+     * 误清,也没有把"该清没清"那条路重新打开(同会话内的清理照旧发生)。
+     */
+    if (!mayPersistQueuedCommand(restoredForKeyRef.current, sessionKey, outbox?.command.sessionKey)) {
       return;
     }
-    if (queuedDraft?.content) {
+    /**
+     * **落盘的是"还没发出去的那条",不是"outbox 里有东西"。**
+     *
+     * `markCommandSent` 之后条目会停在 `sending` 等 ACK。如果这时候还写盘,
+     * 而 ACK 因为任何原因没到(服务端是旧版本、帧丢了、页面在 ACK 之前被关掉),
+     * 这条记录就永久留在 localStorage 里 —— 而"换会话"那个 effect 每次都会把它
+     * 读回来并置成 `queued`,冲队随即又发一次。**同一句话反复发送,停不下来。**
+     *
+     * 判据收成一句:**只有还等着发的才落盘**(`queued`);附件缺失的那条也要留
+     * (它在等用户补图,刷新之后卡片还得在)。`sending` / `acked` / `failed` 一律清 ——
+     * 已经交出去的那条由 ACK 负责收尾,重投用的是内存里那份,不需要盘上这份。
+     */
+    const shouldPersist = isPendingSend(outbox) && Boolean(outbox?.command.text);
+
+    if (shouldPersist && outbox) {
       /**
-       * fj:图片进不了 localStorage(`File` 序列化不了),而落盘的这份就是
-       * 刷新/换会话之后**唯一**还在的那份 —— 于是"我排了一条带图的消息"
-       * 会静默变成一条纯文本消息发出去,模型看不到图,用户也不知道。
+       * A 组(F12):落盘的是**整条命令** —— 幂等键、图片引用、options、
+       * 分叉点、隐藏上下文都在里面。
        *
-       * 在正文里补一行说明:发出去的内容如实反映"图没跟上",而不是假装
-       * 什么都没发生。图本身仍然留在内存里,不刷新就照常带走。
+       * fj 那版只能存正文和 options:图片是 `File[]`,序列化不了。于是
+       * "我排了一条带图的消息"会静默变成纯文本消息发出去,而 fj 的止血是
+       * **在正文里补一行说明**——那行字会真的发给模型,读起来像用户自己写的。
+       *
+       * 现在图片在提交时就已经上传完了,存的是路径描述符(纯 JSON),
+       * 刷新之后原样读回来还能用;真丢了(老记录 / 存坏了)就落到
+       * `needs_attachment`,停下来等用户重新添加,而不是照发。
        */
-      const hasImages = queuedDraft.images.length > 0;
-      writeQueuedMessage(sessionKey, {
-        content: hasImages
-          ? `${queuedDraft.content}\n\n(排队时附的 ${queuedDraft.images.length} 张图片没能一起保存 —— 刷新页面后需要重新添加)`
-          : queuedDraft.content,
-        options: queuedDraft.options,
-      });
+      writeQueuedMessage(sessionKey, toStoredCommand(outbox.command));
     } else {
       clearQueuedMessage(sessionKey);
     }
-  }, [queuedDraft, sessionKey]);
+  }, [outbox, sessionKey]);
 
-  // Switching sessions swaps in that session's queued draft (image
-  // attachments can't survive a reload, so only text and options restore).
+  /**
+   * 换会话(以及首次挂载)时装入这条会话盘上那份排队命令 —— **恢复的唯一入口**。
+   */
   useEffect(() => {
     queuedDraftSessionRef.current = sessionKey;
+    restoredForKeyRef.current = sessionKey;
     if (!sessionKey) {
-      setQueuedDraft(null);
+      setOutbox(null);
+      outboxRef.current = null;
       return;
     }
-    setQueuedDraft(restoreQueuedDraft(sessionKey));
+    const stored = readQueuedMessage(sessionKey) as StoredSendCommand | null;
+
+    // 兜底不变式:这个标签页已经发出去的命令,不许再回到待发(见上面的说明)。
+    if (stored?.clientMessageId && dispatchedClientMessageIdsRef.current.has(stored.clientMessageId)) {
+      clearQueuedMessage(sessionKey);
+      setOutbox(null);
+      outboxRef.current = null;
+      return;
+    }
+
+    const next = stored
+      ? restoredEntry(fromStoredCommand(stored, {
+        sessionKey,
+        sessionId: sessionKey,
+        projectId: selectedProjectIdRef.current,
+      }))
+      : null;
+    setOutbox(next);
+    outboxRef.current = next;
   }, [sessionKey]);
 
   /**
@@ -2012,12 +2417,15 @@ export function useChatComposerState({
       const current = inputValueRef.current;
       if (current.trim()) {
         const merged = mergeQueuedIntoInput(queuedDraft.content, current);
-        const queuedImages = queuedDraft.images;
-        setQueuedDraft(null);
+        const queuedImageCount = queuedDraft.imageCount;
+        setOutbox(null);
+        outboxRef.current = null;
         setInput(merged);
         inputValueRef.current = merged;
-        if (queuedImages.length > 0) {
-          setAttachedImages((previous) => [...queuedImages, ...previous].slice(0, 5));
+        // A 组:图片**不退回输入框** —— 它们在提交时就已经上传了,而输入框那侧
+        // 是 `File[]`,原文件拿不回来。说一声比装作还挂着诚实。
+        if (queuedImageCount > 0) {
+          emitToast({ message: '排队时附带的图片需要重新添加。' });
         }
         textareaRef.current?.focus();
       } else {
@@ -2112,6 +2520,7 @@ export function useChatComposerState({
       if (deliveredIds.length < validIds.length) {
         addMessage({
           type: 'error',
+          isLocalNotice: true,
           content: '连接已断开,授权未发送成功,请在恢复连接后重试。',
           timestamp: new Date(),
         });
@@ -2197,6 +2606,7 @@ export function useChatComposerState({
     queuedDraft,
     editQueuedDraft,
     deleteQueuedDraft,
+    handleSendAcked,
     restoreQueuedContent,
     handleInputChange,
     handleKeyDown,

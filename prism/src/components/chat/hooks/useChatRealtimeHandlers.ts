@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 
+import { clearQueuedMessage, readQueuedMessage } from '../utils/chatStorage';
 import type { ServerEvent } from '../../../contexts/WebSocketContext';
 import { emitToast } from '../../../shared/view/ui/toastBus';
 import { showCompletionTitleIndicator } from '../../../utils/pageTitleNotification';
@@ -8,6 +9,7 @@ import { playChatCompletionSound, playNotificationSound } from '../../../utils/n
 import type { MarkSessionIdle, MarkSessionProcessing } from '../../../hooks/useSessionProtection';
 import { isCompactionActivity } from '../utils/compactionProgress';
 import { createDropWarner, learnRunSession, resolveEventSid } from '../utils/eventRouting';
+import { describeDroppedQueueMessage } from '../utils/serverQueue';
 import type { PendingPermissionRequest } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
@@ -27,6 +29,63 @@ const isActionablePermissionRequest = (request: { toolName?: unknown } | null | 
  */
 export const advancesReplayCursor = (kind: unknown): boolean =>
   kind !== 'permission_request' && kind !== 'permission_cancelled';
+
+/**
+ * F16:**这一帧是不是已经处理过了。**
+ *
+ * `seq` 在一轮(run)内单调递增,所以"同一个 runId 下 seq 不大于水位"就是重复。
+ * 重复会发生,而且不是异常路径:
+ *   - 断线重连按补发游标要帧,而游标**故意**不为审批帧推进(见
+ *     `advancesReplayCursor`),于是补发窗口会盖住一批已经收到的帧;
+ *   - 订阅重叠(旧 socket 还没关、新 socket 已经开始补发)时整段重放。
+ *
+ * 重复一帧 `stream_delta` 就是把同一段正文再拼一次(累积器是追加语义),
+ * 重复一帧工具事件就是屏幕上并排两份 —— 而这两种都要等服务端行落库、
+ * `pruneRealtimeSupersededByServer` 才收得掉。
+ *
+ * 只对**会推进游标的帧**判重:审批帧不推进游标,按水位判会把它们全判成重复,
+ * 那正是 dv 那轮修过的反面(审批帧照旧要送到界面上)。
+ * 换轮(runId 不同)时 seq 从 0 重来,一律不算重复。
+ */
+export function isDuplicateFrame(
+  seen: { runId: string | null; seq: number } | undefined,
+  runId: string | null,
+  seq: number,
+): boolean {
+  if (!seen) return false;
+  if (seen.runId !== runId) return false;
+  return seq <= seen.seq;
+}
+
+/**
+ * F17:**回放够不够把这一轮补齐** —— 冷订阅同样要判。
+ *
+ * 服务端的重放是"从缓冲现有的第一条开始发",而缓冲会按条数/字节被裁。
+ * ack 因此带上 `earliestBufferedSeq`:它比我们已经收到的位置还靠后,
+ * 说明中间那段永远不会来了,只能回落 REST(权威来源)补一次。
+ *
+ * fj 那版的判据要求 `cursor.runId === ack.runId` —— 也就是**必须已经收过这一轮的帧**。
+ * 于是两种"冷"的情况整个漏掉,而它们恰恰是最常见的:
+ *   - **压根没有游标**:回合是在别的标签页 / 定时任务里起的,这个页面第一次订阅它;
+ *   - **游标属于上一轮**:上一轮看完了,新一轮在我们没看的时候起了。
+ * 两种情况下我们对这一轮**一帧都没有**,而缓冲若已经裁掉开头(`earliest > 0`),
+ * 回放补不回来 —— 界面上就是"这一轮的前半段凭空消失",而且没有任何提示。
+ *
+ * 收成一条:**我们对这一轮覆盖到哪儿**(冷订阅 = -1,什么都没有),
+ * 缓冲的第一条要是接不上,就补拉。
+ */
+export function needsReplayCatchUp(
+  isProcessing: boolean,
+  earliestBufferedSeq: number | null,
+  cursor: { runId: string | null; seq: number } | undefined,
+  runId: string | null,
+): boolean {
+  if (!isProcessing) return false;
+  // 服务端没报缓冲位置(旧版本 / 非运行态):判不了,不猜。
+  if (earliestBufferedSeq === null) return false;
+  const coveredThroughSeq = cursor && cursor.runId === runId ? cursor.seq : -1;
+  return earliestBufferedSeq > coveredThroughSeq + 1;
+}
 
 const hasActionablePermissionRequests = (requests: Array<{ toolName?: unknown }> | null | undefined): boolean => {
   return Array.isArray(requests) && requests.some((request) => isActionablePermissionRequest(request));
@@ -72,6 +131,14 @@ interface UseChatRealtimeHandlersArgs {
   onServerQueueChange?: (sessionId: string, queued: { preview: string; enqueuedAt: string } | null) => void;
   /** 排队被中止带走时把正文退回输入框;回填成功返回 true(输入框非空时不覆盖)。 */
   onServerQueueReturned?: (sessionId: string, content: string) => boolean;
+  /**
+   * F09:服务端确认收下了某个 `clientMessageId`。
+   *
+   * 这是"发出去了"的**唯一**权威信号 —— `socket.send()` 返回 true 只代表本地
+   * 没抛异常。收到它之前,那条命令一直留在 outbox 里,重连后会带着同一个 id
+   * 重投(服务端按 id 去重,所以重投不会产生第二条消息)。
+   */
+  onSendAcked?: (sessionId: string, clientMessageId: string) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -107,6 +174,7 @@ export function useChatRealtimeHandlers({
   onChangedFiles,
   onServerQueueChange,
   onServerQueueReturned,
+  onSendAcked,
 }: UseChatRealtimeHandlersArgs) {
   // Session switches can send `chat.subscribe` before this effect has a chance
   // to rebind the websocket listener. Read the visible session id from a ref
@@ -182,6 +250,9 @@ export function useChatRealtimeHandlers({
             void sessionStore.refreshFromServer(sid);
           }
         }
+        // F16:水位快照要在更新**之前**取(下面那句会把它推到这一帧)。
+        const alreadyApplied = advancesReplayCursor(msg.kind) && isDuplicateFrame(seen, runId, msg.seq);
+
         if (!sameSeenRun || msg.seq > seen.seq) {
           gapSeqRef.current.set(sid, { runId, seq: msg.seq });
         }
@@ -194,6 +265,9 @@ export function useChatRealtimeHandlers({
             lastSeqRef.current.set(sid, { runId, seq: msg.seq });
           }
         }
+
+        // 两条水位都已更新(这一帧确实到过),但内容不再走一遍。
+        if (alreadyApplied) return;
       }
 
       switch (msg.kind) {
@@ -215,11 +289,18 @@ export function useChatRealtimeHandlers({
            *
            * ack 现在带上缓冲还剩的最早 seq:比我们的游标还大,说明中间那段没了,
            * 直接回落 REST 全量补一次(REST 永远是权威来源)。
+           *
+           * F17:判据收进 `needsReplayCatchUp` —— 冷订阅(没有游标、或游标属于
+           * 上一轮)此前整个漏判,见那个函数的说明。
            */
           const earliest = typeof msg.earliestBufferedSeq === 'number' ? msg.earliestBufferedSeq : null;
           const cursor = lastSeqRef.current.get(sid);
-          const sameRunAsCursor = cursor && cursor.runId === (msg.runId as string | null ?? null);
-          if (msg.isProcessing && earliest !== null && sameRunAsCursor && earliest > cursor.seq + 1) {
+          if (needsReplayCatchUp(
+            Boolean(msg.isProcessing),
+            earliest,
+            cursor,
+            (msg.runId as string | null) ?? null,
+          )) {
             void sessionStore.refreshFromServer(sid);
           }
 
@@ -284,6 +365,36 @@ export function useChatRealtimeHandlers({
           return;
         }
 
+        // F09:服务端收下了(已登记回合 / 已收进排队 / 或本来就收过)。
+        case 'chat_ack': {
+          const ackSid = sid || activeViewSessionId;
+          const ackId = typeof msg.clientMessageId === 'string' ? msg.clientMessageId : null;
+          if (!ackSid || !ackId) return;
+          /**
+           * ga:**清盘要在这里做,不能只交给 composer。**
+           *
+           * `onSendAcked` 落到 composer 的 `handleSendAcked`,而全应用只有**一个**
+           * `ChatInterface` 实例,挂在当前正看的那条会话上。后台会话(自动续发
+           * 那条路的服务对象)的 outbox 在内存里是空的 → 身份判断永远不成立 →
+           * `clearQueuedMessage` 永远不执行。记录留在盘上,而认领对自己盖的戳
+           * 恒返回 true,于是**这条会话每跑完一轮就重投一次**:10 分钟内被服务端
+           * 幂等门挡着只是空转,过了 10 分钟去重键过期,**这条消息被真的再跑一遍**,
+           * 此后每 10 分钟一次,无限持续。
+           *
+           * 这个处理器是**应用级**的(所有会话的帧都从这里过),放在这里才覆盖得全。
+           * 身份判断照样有:盘上那条的幂等键要和 ACK 对得上才清 ——
+           * 服务端会为同一条命令发两次 accepted,而这期间用户可能已经排了新的一条。
+           */
+          try {
+            const stored = readQueuedMessage(ackSid);
+            if (stored?.clientMessageId === ackId) clearQueuedMessage(ackSid);
+          } catch {
+            // 存储不可用不该把这一帧带崩。
+          }
+          onSendAcked?.(ackSid, ackId);
+          return;
+        }
+
         // F7:服务端排队(chat.send 撞上在跑的回合时收下的那一条)。
         case 'chat_queued': {
           if (!sid) return;
@@ -298,28 +409,37 @@ export function useChatRealtimeHandlers({
         case 'chat_queue_flushed': {
           if (!sid) return;
           onServerQueueChange?.(sid, null);
-          // 被中止带走 / 过期作废的那条要说一声 —— 否则用户只会看到消息凭空消失。
-          // 被中止带走的那条:正文退回输入框(见 dropPendingSend)。
-          // 回填成功就不用再写那条"已取消"的提示了 —— 东西还在用户手上。
-          if (
-            msg.kind === 'chat_queue_cancelled'
-            && msg.reason === 'aborted'
-            && typeof msg.content === 'string'
-            && msg.content
-            && onServerQueueReturned?.(sid, msg.content)
-          ) {
-            return;
-          }
-          if (msg.kind === 'chat_queue_cancelled' && msg.reason !== 'cancelled') {
+          if (msg.kind !== 'chat_queue_cancelled') return;
+
+          /**
+           * 被中止带走 / 续发没能成立的那条:**正文退回输入框**(见服务端的
+           * `dropPendingSend`)。回填成功就什么都不用再说 —— 东西还在用户手上。
+           *
+           * ga:回填**经常不成立**(不在看这条会话、输入框里已经有字),而 fz 把
+           * "正文已退回输入框"写死在文案里。文案改由 `describeDroppedQueueMessage`
+           * 按**实际结果**决定,退不回去就把原文抄进提示里。
+           */
+          const droppedContent = typeof msg.content === 'string' ? msg.content : '';
+          const returnedToComposer = Boolean(
+            (msg.reason === 'aborted' || msg.reason === 'undeliverable')
+            && droppedContent
+            && onServerQueueReturned?.(sid, droppedContent),
+          );
+          const notice = describeDroppedQueueMessage(
+            typeof msg.reason === 'string' ? msg.reason : '',
+            droppedContent,
+            returnedToComposer,
+          );
+          if (notice) {
             sessionStore.appendRealtime(sid, {
               id: `queue_${msg.reason}_${Date.now()}`,
               sessionId: sid,
               timestamp: new Date().toISOString(),
               provider,
               kind: 'error',
-              content: msg.reason === 'aborted'
-                ? '排队中的那条消息随本轮中止一起取消了,没有发送。'
-                : '排队中的那条消息等待超过 30 分钟,已作废,没有发送。',
+              content: notice,
+              // 本地提示不算回合边界(见 NormalizedMessage.isLocalNotice)。
+              isLocalNotice: true,
             } as NormalizedMessage);
           }
           return;
@@ -575,5 +695,6 @@ export function useChatRealtimeHandlers({
     onChangedFiles,
     onServerQueueChange,
     onServerQueueReturned,
+    onSendAcked,
   ]);
 }

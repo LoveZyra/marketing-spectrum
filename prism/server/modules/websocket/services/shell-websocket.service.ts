@@ -2,10 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+
 import pty, { type IPty } from 'node-pty';
 import { WebSocket, type RawData } from 'ws';
 
-import { projectsDb } from '@/modules/database/index.js';
+import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
+import { canViewerSeeSession, projectsDb, userDb } from '@/modules/database/index.js';
 import { claimForShell, releaseShellClaim } from '@/modules/websocket/services/conversation-ownership.service.js';
 import { pushReplayChunk } from '@/modules/websocket/services/shell-replay-buffer.js';
 import { readSocketViewer, stampSocketViewer } from '@/shared/project-visibility.js';
@@ -310,6 +312,21 @@ export function handleShellConnection(
   stampSocketViewer(ws, request);
   const connectionViewer = readSocketViewer(ws);
 
+  /**
+   * ga:**心跳里那道"凭据被吊销就断开"的复检,对终端连接此前恒不触发。**
+   *
+   * 复检比的是握手时盖的 `prismTokenVersion` 与当前值 —— 而 `stampSocketViewer`
+   * 只盖身份、不盖版本号,聊天那条路是**另外单独盖**的(chat-websocket 里那一段)。
+   * 于是「退出所有设备」/ 改密码之后,已经建立的终端连接一直有效,
+   * 还捏着它接管的那把会话锁。
+   *
+   * 一个判据两条连接都要盖 —— 这正是"同一件事只写在一部分入口上"的形状。
+   */
+  (ws as typeof ws & { prismTokenVersion?: number | null }).prismTokenVersion =
+    connectionViewer.userId !== null && connectionViewer.userId !== undefined
+      ? Number(userDb.getUserById(Number(connectionViewer.userId))?.token_version ?? 0)
+      : null;
+
   let shellProcess: IPty | null = null;
   let ptySessionKey: string | null = null;
   let urlDetectionBuffer = '';
@@ -457,6 +474,33 @@ export function handleShellConnection(
 
         const resume = resolveResumeSessionId(data, dependencies);
         const appSessionId = readString(data.sessionId);
+
+        /**
+         * ga:**接管一段对话之前,先确认这个人看得见它。**
+         *
+         * 这个文件里此前 `canViewerSeeSession` 出现次数是 **0** —— 接管只按
+         * 会话 id 查库,不带 viewer。而拿到锁之后聊天侧**四处无条件认它**:
+         * `chat.send` 回 SESSION_HELD_BY_SHELL、`startRun` 直接返回 null、
+         * 预热跳过、删会话被挡;释放时还会
+         * `sessionMessagesDb.deleteForSession(appSessionId)` ——
+         * **把那条会话的整份显示日志删掉**。
+         *
+         * 也就是说:知道一个会话 id(它就在浏览器地址栏里)就能把别人的对话
+         * 抢过来、让他发不出消息、最后在关掉终端时把他的历史清空。
+         *
+         * 这里判的是**要接管的那条会话**(带 sessionId 才有接管这回事);
+         * 不带 sessionId 的普通终端不受影响。判不过一律按"没有可恢复的记录"
+         * 处理,不给存在性探针 —— 与其它端点的 404 同形口径一致。
+         */
+        const takeoverSessionId = appSessionId || (resume.ok ? resume.sessionId : '');
+        if (takeoverSessionId && !canViewerSeeSession(takeoverSessionId, connectionViewer)) {
+          log.warn(`[Shell] 拒绝接管:${takeoverSessionId} 对这个访问者不可见`);
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: '这段对话不存在或你没有权限访问。',
+          }));
+          return;
+        }
         // 身份在连接建立时就盖好了(见 handleShellConnection 顶部),这里直接用。
         // 原来这里是手抄的一份 `ws.prismUserId` 读取 —— 而 shell 连接从来没被
         // 盖过章,所以它读到的永远是 null。
@@ -473,19 +517,53 @@ export function handleShellConnection(
             takeoverNote = resume.reason === 'not_recorded'
               ? '\x1b[33m这段对话还没有可恢复的记录 —— 先在 chat 里发一轮,让 Claude 报出它自己的会话 id,再回来接管。已为你打开普通终端。\x1b[0m\r\n'
               : '\x1b[33m无法解析这段对话的会话 id,已为你打开普通终端。\x1b[0m\r\n';
+          } else if (chatRunRegistry.isProcessing(appSessionId || resume.sessionId)) {
+            /**
+             * fz:**"有没有回合在跑"要问回合注册表,不是问常驻子进程。**
+             *
+             * 下面那条 `releaseConversation` 走的是 `releaseClaudeSession`,
+             * 它看的是 `claudeRuntimes` 里那个**常驻**运行时有没有 `turn` ——
+             * 相当于"看某一张固定的椅子上有没有人坐着"。可还有两类回合根本不建
+             * 常驻运行时(定时任务、外部 Agent API,它们都带 `oneShot: true`),
+             * 它们**站着写**:椅子永远是空的,于是接管一路放行,两个 CLI 进程
+             * 同时往同一份 jsonl 追加,两条历史交错谁也修不回来;用户关掉终端时
+             * 那套清账还会把整份显示日志删掉重抄,而原始 transcript 已经花了。
+             *
+             * `chatRunRegistry` 是"这条会话有没有东西在跑"的唯一权威(它自己的
+             * 文档原话),而 shell 这条路一次都没查过它。放在 `releaseConversation`
+             * **之前**:先问权威,权威说在跑就直接不放行,连释放都不用试。
+             */
+            takeoverNote = '\x1b[33mchat 里有一轮对话正在进行(也可能是定时任务或外部接口触发的),现在接管会打断它。等它跑完再试。已为你打开普通终端。\x1b[0m\r\n';
           } else if (dependencies.releaseConversation) {
             const released = await dependencies.releaseConversation(resume.sessionId);
             if (released.released) {
-              claimToken = claimForShell(appSessionId || resume.sessionId, viewer).token ?? null;
-              takeoverGranted = true;
+              /**
+               * fl:拿不到 token = 这段对话**已经被别人的终端接管着**
+               * (claimForShell 不再盲覆盖)。不能当成接管成功 —— 那会变成两个
+               * PTY 同时写同一份 transcript。
+               */
+              const claim = claimForShell(appSessionId || resume.sessionId, viewer);
+              if (claim.token) {
+                claimToken = claim.token;
+                takeoverGranted = true;
+              } else {
+                const who = claim.username ? `(${claim.username})` : '';
+                takeoverNote = `\x1b[33m这段对话已经被另一个终端接管${who} —— 关掉那个终端后再来。已为你打开普通终端。\x1b[0m\r\n`;
+              }
             } else {
               takeoverNote = released.reason === 'turn_in_flight'
                 ? '\x1b[33mchat 里有一轮对话正在进行,现在接管会打断它。等它跑完再试。已为你打开普通终端。\x1b[0m\r\n'
                 : '\x1b[33m释放 chat 侧运行时失败,没有接管。已为你打开普通终端。\x1b[0m\r\n';
             }
           } else {
-            claimToken = claimForShell(appSessionId || resume.sessionId, viewer).token ?? null;
-            takeoverGranted = true;
+            const claim = claimForShell(appSessionId || resume.sessionId, viewer);
+            if (claim.token) {
+              claimToken = claim.token;
+              takeoverGranted = true;
+            } else {
+              const who = claim.username ? `(${claim.username})` : '';
+              takeoverNote = `\x1b[33m这段对话已经被另一个终端接管${who} —— 关掉那个终端后再来。已为你打开普通终端。\x1b[0m\r\n`;
+            }
           }
         }
 

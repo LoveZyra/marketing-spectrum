@@ -110,6 +110,25 @@ export function createWebSocketServer(
           ws.close(4401, 'account revoked');
           return;
         }
+        /**
+         * fl:**还要比对 `token_version`。**
+         *
+         * fj 这里只问"用户行还在不在" —— 而「退出所有设备」/ 改密码是**旋转
+         * token_version**,用户行一直都在。于是这道复检对最常见的那种撤销
+         * 完全无效:标签页不关,旧连接就一直能发指令。
+         *
+         * 握手时盖的版本号(prismTokenVersion)与当前值不一致 = 这条连接背后的
+         * 凭据已经被吊销,断开它,让前端拿新票据重连(拿不到就是真的登出了)。
+         */
+        const stampedVersion = (ws as { prismTokenVersion?: number | null }).prismTokenVersion;
+        if (
+          stampedVersion !== null && stampedVersion !== undefined
+          && Number(stillValid.token_version ?? 0) !== Number(stampedVersion)
+        ) {
+          log.info('[ws] 凭据已被吊销(token_version 已旋转),断开这条连接');
+          ws.close(4401, 'credentials revoked');
+          return;
+        }
       }
       heartbeatState.isAlive = false;
       try {

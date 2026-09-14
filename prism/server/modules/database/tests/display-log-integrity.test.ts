@@ -59,6 +59,14 @@ describe('fj:裁剪必须留下痕迹', () => {
     expect(sessionMessagesDb.isTrimmed(sid)).toBe(false);
   });
 
+  it('fl:裁完正好留 limit 条,不是 limit-1', () => {
+    const sid = 'trim-exact';
+    // 上限 128、步长 64:写到 256 条时会在 192 与 256 各裁一次
+    for (let i = 0; i < 256; i += 1) sessionMessagesDb.append(sid, row(sid, i));
+    // 最后一次裁剪发生在 total=256 时,裁完应当正好是 128(此前是 127)
+    expect(sessionMessagesDb.countForSession(sid)).toBe(128);
+  });
+
   it('超上限被裁之后 isTrimmed 为真 —— 这是回放据以回落 transcript 的唯一判据', () => {
     const sid = 'trim-yes';
     for (let i = 0; i < 256; i += 1) sessionMessagesDb.append(sid, row(sid, i));

@@ -78,9 +78,26 @@ export const safeLocalStorage = {
  */
 export type QueuedSendOptions = Record<string, unknown>;
 
+/**
+ * 盘上那份排队记录。
+ *
+ * fz:类型补齐 —— `toStoredCommand` 写进去的字段在这里一个都没有,于是读回来
+ * 的那份被 `as StoredSendCommand` 强转着用,类型系统对"读少了几项"一言不发
+ * (`readQueuedMessage` 削字段那个 bug 因此躲了很久)。这些字段是可选的:
+ * 老记录、以及只存了正文的历史格式都没有。
+ */
 export type StoredQueuedMessage = QueueClaimFields & {
   content: string;
   options?: QueuedSendOptions;
+  /** F09 幂等键 —— 服务端据此去重并回 ACK。老记录没有。 */
+  clientMessageId?: string;
+  /** 图片描述符(纯 JSON,能跨刷新)。 */
+  images?: unknown[];
+  /** 提交时有几张图 —— 与 `images.length` 对不上就说明附件丢了(F12)。 */
+  imageCount?: number;
+  namingText?: string;
+  forkFrom?: unknown;
+  hiddenContext?: string | null;
 };
 
 /**
@@ -104,8 +121,32 @@ export function readQueuedMessage(sessionId: string): StoredQueuedMessage | null
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (parsed && typeof parsed === 'object' && typeof (parsed as StoredQueuedMessage).content === 'string') {
-      const { content, options, claimedBy, claimedAt } = parsed as StoredQueuedMessage;
-      return content.trim() ? { content, options, claimedBy, claimedAt } : null;
+      /**
+       * fz:**保留未知字段。**
+       *
+       * 这里原来是解构出四个字段再**新建一个对象**返回,于是
+       * `toStoredCommand` 写进去的 `clientMessageId / images / imageCount /
+       * namingText / forkFrom / hiddenContext` 在读回来的路上全被扔掉 ——
+       * 而唯一的读者把返回值 `as StoredSendCommand` 用。后果三条,每条都是
+       * 被专门修过的老病:
+       *
+       * 1. `imageCount` 没了 → `attachmentsLost` 恒为 false →
+       *    `needs_attachment` 一次都触发不了 → 冲队把一条引用了不存在图片的话
+       *    直接发给模型(F12 原样复活);
+       * 2. `clientMessageId` 没了 → fr 那条"这个标签页发过的命令不许回到待发"
+       *    的兜底判据恒为 undefined,分支永不进入;
+       * 3. `forkFrom` / `hiddenContext` 没了 → 排队的「编辑重跑」刷新后变成在
+       *    当前会话里续跑,而不是分叉。
+       *
+       * 而 `claimQueuedMessageAs` 认领时会把这份读结果原样写回盘上 ——
+       * **认领动作把盘上那份永久削平**,这是"同一条记录两个写者"的另一半。
+       *
+       * 单测之所以全绿:它拿 `toStoredCommand(...)` 的返回值直接喂
+       * `fromStoredCommand`,**中间没走 localStorage**。所以这次补的回归测试
+       * 必须真的走一遍存储。
+       */
+      const stored = parsed as StoredQueuedMessage;
+      return stored.content.trim() ? { ...stored } : null;
     }
   } catch {
     // Legacy format: the raw draft text itself.

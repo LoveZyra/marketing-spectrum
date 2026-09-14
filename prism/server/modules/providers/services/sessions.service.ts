@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { NO_SUCH_USER_ID, canViewerSeeSession, projectsDb, sessionMessagesDb, sessionsDb, type VisibilityScope } from '@/modules/database/index.js';
 import { isRootUser } from '@/shared/root-users.js';
-import { chatRunRegistry } from '@/modules/websocket/index.js';
+import { chatRunRegistry, currentConversationHolder, hasPendingSendForSession } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import type {
   FetchHistoryOptions,
@@ -358,28 +358,92 @@ function resolveProjectDisplayName(
  * file layout.
  */
 /**
- * fj:丢掉页首那几条**配不上对**的 `tool_result`。
+ * F37:**页边界不许把一次工具调用和它的结果拆开** —— 往前挪,而不是往后丢。
  *
- * 比"往前多取几条"简单也更安全:多取会改变 `offset` 的含义(调用方按它算
- * 下一页),而丢掉几条只是让这一页少几行 —— 那几行本来在前端也是不渲染的。
- * 它们会在用户往上翻、`tool_use` 进入窗口时一起回来。
+ * ## 事故
+ *
+ * 分页按原始事件切,而工具调用与它的结果是两条独立事件。边界正好落在中间时,
+ * 这一页的第一条就是一个找不到 `tool_use` 的结果。前端为此专门写了"有 toolId
+ * 却找不到调用就跳过渲染"的分支,于是那条结果**看不见**,上一页里对应的调用
+ * 显示成"没有结果"。
+ *
+ * fj 的处理是**把那几条丢掉**(最多 8 条)。注释当时写的是"边界往前挪几条,
+ * 把 tool_use 一起带进来",而代码做的是相反的事 —— 止血,不是修好。而且丢掉
+ * 有一个不明显的代价:调用方按**服务端返回的条数**推进 offset,丢掉几条就意味着
+ * 游标少走几格,下一页的窗口与这一页重叠,去重之后净增可能是 0 —— 上翻从此
+ * 卡在同一个位置(fm 那轮在客户端把它识别成 `stalled` 并停下,但内容还是取不到)。
+ *
+ * ## 做法
+ *
+ * 往**更早**的方向扩边界,把缺的 `tool_use` 一起带进这一页。这对游标是自洽的:
+ * `offset` 按返回条数推进,而窗口起点也相应前移,下一页正好接上,不重叠也不跳过。
+ *
+ * 上限 `MAX_GROUP_LOOKBACK`:一轮里调用与结果是紧邻的,挪太多等于把分页削掉。
+ * 超过上限还配不上对(极少数畸形历史),退回"丢掉页首孤儿"的老行为 ——
+ * 那时宁可少渲染几行,也不要把一整页拉成没有边界。
  */
-const MAX_DROPPED_ORPHAN_RESULTS = 8;
+const MAX_GROUP_LOOKBACK = 24;
+
+/** 一条消息的 toolId(没有就是 null)。 */
+function toolIdOf(message: NormalizedMessage): string | null {
+  const id = (message as { toolId?: unknown }).toolId;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+/**
+ * 这一页开头有几条 `tool_result` 是配不上对的 —— 需要从更早的行里补回多少条。
+ *
+ * `older` 是紧邻这一页、**更早**的那些行(oldest-first);返回要从 `older`
+ * 末尾取几条拼到页首。取不到(超出上限 / older 不够)时返回 0,由调用方
+ * 退回丢弃策略。
+ */
+export function lookbackForToolGroups(
+  older: NormalizedMessage[],
+  page: NormalizedMessage[],
+): number {
+  const missing = new Set<string>();
+  for (const message of page) {
+    if (message.kind !== 'tool_result') break;   // 只看页首连续那一段
+    const toolId = toolIdOf(message);
+    if (toolId) missing.add(toolId);
+  }
+  if (missing.size === 0) return 0;
+
+  // 页内自己就有的调用不算缺(同一页里 result 在前、use 在后是不可能的,
+  // 但历史里出现过乱序,判一次比假设便宜)。
+  for (const message of page) {
+    if (message.kind === 'tool_use') {
+      const toolId = toolIdOf(message);
+      if (toolId) missing.delete(toolId);
+    }
+  }
+  if (missing.size === 0) return 0;
+
+  for (let taken = 1; taken <= Math.min(older.length, MAX_GROUP_LOOKBACK); taken += 1) {
+    const candidate = older[older.length - taken];
+    if (candidate.kind === 'tool_use') {
+      const toolId = toolIdOf(candidate);
+      if (toolId) missing.delete(toolId);
+    }
+    if (missing.size === 0) return taken;
+  }
+  return 0;   // 上限内配不齐:调用方退回丢弃
+}
 
 function dropLeadingOrphanToolResults(messages: NormalizedMessage[]): NormalizedMessage[] {
   const toolUseIds = new Set(
     messages
       .filter((message) => message.kind === 'tool_use')
-      .map((message) => (message as { toolId?: string }).toolId)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+      .map((message) => toolIdOf(message))
+      .filter((id): id is string => id !== null),
   );
   let start = 0;
   while (
     start < messages.length
-    && start < MAX_DROPPED_ORPHAN_RESULTS
+    && start < MAX_GROUP_LOOKBACK
     && messages[start].kind === 'tool_result'
   ) {
-    const toolId = (messages[start] as { toolId?: string }).toolId;
+    const toolId = toolIdOf(messages[start]);
     if (!toolId || toolUseIds.has(toolId)) break;
     start += 1;
   }
@@ -561,7 +625,29 @@ export const sessionsService = {
       // 活跃回合里每个 durable 帧落库都会打穿指纹缓存,此前每轮刷新都是一次
       // 全量重读 —— 长会话(数千行)一轮省一次整段读盘。
       if (limit !== null) {
-        const page = sessionMessagesDb.listTailPage(sessionId, limit, offset);
+        /**
+         * F37:**多取一段"更早的"用来补齐工具组**,再按边界切回去。
+         *
+         * 多取的那段只在页首缺 `tool_use` 时才用得上;用不上就原样丢掉,
+         * 这一页仍然是干净的 `limit` 条。
+         */
+        const extended = sessionMessagesDb.listTailPage(sessionId, limit + MAX_GROUP_LOOKBACK, offset);
+        const extraCount = Math.max(0, extended.messages.length - limit);
+        const older = extended.messages.slice(0, extraCount);
+        const natural = extended.messages.slice(extraCount);
+        const lookback = lookbackForToolGroups(older, natural);
+        const page = lookback > 0
+          ? {
+            messages: older.slice(older.length - lookback).concat(natural),
+            total: extended.total,
+            // 起点前移了 lookback 条,`hasMore` 要按新的起点算。
+            hasMore: extended.total - offset - (natural.length + lookback) > 0,
+          }
+          : {
+            messages: natural,
+            total: extended.total,
+            hasMore: extended.total - offset - natural.length > 0,
+          };
         /**
          * fj:**页首不许是一条孤儿 `tool_result`。**
          *
@@ -574,7 +660,8 @@ export const sessionsService = {
          * 边界往前挪几条,把 `tool_use` 一起带进来。上限 8 条:一轮里工具调用
          * 与结果是紧邻的,挪太多等于把分页的意义削掉。
          */
-        const trimmed = dropLeadingOrphanToolResults(page.messages);
+        // 补齐成功就不用再丢;上限内配不齐(极少数畸形历史)才退回丢弃。
+        const trimmed = lookback > 0 ? page.messages : dropLeadingOrphanToolResults(page.messages);
         return {
           messages: trimmed.map((message) => ({ ...message, sessionId })),
           total: page.total,
@@ -737,6 +824,31 @@ export const sessionsService = {
       throw new AppError(
         `会话 "${sessionId}" 正在跑一个回合 —— 先停止它再删除(否则后台仍会继续跑,而它已经没有归属了)。`,
         { code: 'SESSION_RUN_IN_PROGRESS', statusCode: 409 },
+      );
+    }
+
+    /**
+     * fl:**"在用"不只有"有 run 在跑"这一种。**
+     *
+     * fk 只挡住了 chat run,而另外两种同样会在删除之后继续往这条会话上写:
+     *   - **终端接管中**:PTY 里跑着 `claude --resume`,行删了、transcript 也删了,
+     *     它还在往一份不存在的文件里追加;
+     *   - **有排队消息**:回合一结束就会被 drain 出去,给一条已经不存在的会话
+     *     起新一轮。
+     * 两种都明确拒绝并说清楚该先做什么 —— 比"删了但后台还在动"好解释得多。
+     */
+    const shellHolder = currentConversationHolder(sessionId);
+    if (shellHolder) {
+      const who = shellHolder.username ? `(${shellHolder.username})` : '';
+      throw new AppError(
+        `会话 "${sessionId}" 正在终端里被接管${who} —— 关掉那个终端再删除。`,
+        { code: 'SESSION_HELD_BY_SHELL', statusCode: 409 },
+      );
+    }
+    if (hasPendingSendForSession(sessionId)) {
+      throw new AppError(
+        `会话 "${sessionId}" 还有一条排队中的消息 —— 先撤销它再删除(否则它会给一条已经不存在的会话起新一轮)。`,
+        { code: 'SESSION_HAS_QUEUED_MESSAGE', statusCode: 409 },
       );
     }
 

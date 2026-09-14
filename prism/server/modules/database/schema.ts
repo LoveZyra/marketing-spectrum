@@ -295,6 +295,11 @@ CREATE TABLE IF NOT EXISTS session_display_messages (
     kind TEXT NOT NULL,
     timestamp TEXT NOT NULL,
     payload TEXT NOT NULL,
+    -- fy(F14):这一行自己的**原生 assistant uuid**,「编辑重跑」的分叉锚点。
+    -- 只有 assistant 侧的行有值(见 server/shared/fork-anchor.ts):非空 =
+    -- 可以直接拿去 SDK 的 resumeSessionAt。老库靠迁移补列,历史行留 NULL,
+    -- 端点对它们退回扫 jsonl 的老路。
+    provider_assistant_uuid TEXT,
     UNIQUE (session_id, message_id)
 );
 

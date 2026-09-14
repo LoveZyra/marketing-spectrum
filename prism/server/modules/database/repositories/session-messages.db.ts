@@ -1,9 +1,11 @@
 import type { Statement } from 'better-sqlite3';
 
 import { getConnection } from '@/modules/database/connection.js';
+import { forkAnchorUuid } from '@/shared/fork-anchor.js';
 import type { MessageKind, NormalizedMessage } from '@/shared/types.js';
 import { generateMessageId } from '@/shared/utils.js';
 import { createLogger } from '@/shared/logger.js';
+
 const log = createLogger('db');
 
 type DisplayMessageRow = {
@@ -62,10 +64,15 @@ type PreparedCache = {
   clearTrimmed: Statement | null;
   readTrimmed: Statement | null;
   sessionTranscript: Statement | null;
+  /** fy(F14):按显示日志顺序往回找最近一个 assistant 原生 uuid。 */
+  forkAnchor: Statement | null;
+  /** fy(F14):目标消息在显示日志里的行号(自增 id,即写入顺序)。 */
+  rowOfMessage: Statement | null;
 };
 const prepared: PreparedCache = {
   db: null, append: null, count: null, list: null, tailPage: null, fingerprint: null, trim: null,
   markTrimmed: null, clearTrimmed: null, readTrimmed: null, sessionTranscript: null,
+  forkAnchor: null, rowOfMessage: null,
 };
 
 /**
@@ -99,8 +106,20 @@ function ensurePrepared() {
     prepared.db = db;
     prepared.append = db.prepare(`
       INSERT OR IGNORE INTO session_display_messages
-        (session_id, message_id, kind, timestamp, payload)
-      VALUES (?, ?, ?, ?, ?)
+        (session_id, message_id, kind, timestamp, payload, provider_assistant_uuid)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    // fy(F14):分叉锚点查询。`id < ?` 走的是现有的 (session_id, id) 索引,
+    // 不需要给新列单独建索引 —— 一条会话里能有值的行本来就密。
+    prepared.rowOfMessage = db.prepare(
+      'SELECT id FROM session_display_messages WHERE session_id = ? AND message_id = ?',
+    );
+    prepared.forkAnchor = db.prepare(`
+      SELECT provider_assistant_uuid AS uuid
+        FROM session_display_messages
+       WHERE session_id = ? AND id < ? AND provider_assistant_uuid IS NOT NULL
+       ORDER BY id DESC
+       LIMIT 1
     `);
     prepared.count = db.prepare('SELECT COUNT(*) AS total FROM session_display_messages WHERE session_id = ?');
     prepared.list = db.prepare('SELECT payload FROM session_display_messages WHERE session_id = ? ORDER BY id ASC');
@@ -160,8 +179,15 @@ function trimSession(sessionId: string): void {
     const row = cache.count!.get(sessionId) as { total?: number } | undefined;
     const total = Number(row?.total || 0);
     if (total <= limit || total % 64 !== 0) return;
-    // OFFSET limit-1 指向"保留窗口里最老的那条",<= 它的全删
-    const result = cache.trim!.run(sessionId, sessionId, limit - 1);
+    /**
+     * fl:`OFFSET limit`,不是 `limit - 1`。
+     *
+     * 语句是"删掉 id <= 第 N 新的那条"。要保住最新的 `limit` 条,N 必须是
+     * **第 limit+1 新**的那条,也就是 `OFFSET limit`。原来传 `limit - 1`
+     * 把保留窗口里最老的那条一起删了 —— 上限 2000 实际只留 1999。
+     * 差一条本身不致命,但它让"上限"这个词对不上账。
+     */
+    const result = cache.trim!.run(sessionId, sessionId, limit);
     if (result.changes > 0) {
       invalidateParsedList(sessionId);
       /**
@@ -238,7 +264,9 @@ function invalidateParsedList(sessionId: string): void {
  * fj:真正把一行写进表里 —— 不守门、不裁剪。`append`(带守门+裁剪)和
  * `appendForSeed`(两样都不要)共用它,避免两条路的去重键/剥 diff 逻辑分叉。
  */
-function writeDisplayRow(sessionId: string, message: NormalizedMessage): boolean {
+type WriteOutcome = 'inserted' | 'duplicate' | 'failed';
+
+function writeDisplayRow(sessionId: string, message: NormalizedMessage): WriteOutcome {
   /**
    * 去重键。
    *
@@ -279,12 +307,23 @@ function writeDisplayRow(sessionId: string, message: NormalizedMessage): boolean
       String(persisted.kind),
       String(persisted.timestamp || new Date().toISOString()),
       JSON.stringify(persisted),
+      // fy(F14):assistant 侧的行顺手记下自己的原生 uuid —— 「编辑重跑」的
+      // 分叉锚点。判据收在 shared/fork-anchor.ts,落库与端点共用同一个。
+      forkAnchorUuid({ id: messageId, kind: persisted.kind, role: (persisted as { role?: unknown }).role }),
     );
     if (result.changes > 0) invalidateParsedList(sessionId);
-    return result.changes > 0;
+    /**
+     * fl:**"重复"与"失败"要分得开。**
+     *
+     * 两者原来都返回 false。seed 那边据此判"抄成功没有",于是一次真正的写入
+     * 失败(磁盘满、SQLITE_BUSY)与"这条本来就抄过了"长得一模一样 ——
+     * 一份**部分成功**的日志会被判成 ready,而 `countForSession > 0` 让它
+     * 永远不再重抄。
+     */
+    return result.changes > 0 ? 'inserted' : 'duplicate';
   } catch (error) {
     log.warn('[display-log] append failed:', (error as Error)?.message || error);
-    return false;
+    return 'failed';
   }
 }
 
@@ -312,9 +351,9 @@ export const sessionMessagesDb = {
       return false;
     }
 
-    const written = writeDisplayRow(sessionId, message);
-    if (written) trimSession(sessionId);
-    return written;
+    const outcome = writeDisplayRow(sessionId, message);
+    if (outcome === 'inserted') trimSession(sessionId);
+    return outcome === 'inserted';
   },
 
   /**
@@ -325,8 +364,8 @@ export const sessionMessagesDb = {
    * 一份 5000 条的老会话**在抄写过程中就把自己裁到了 2000**;而返回的 `seeded`
    * 计的是插入次数(5000),不是活下来的行数,所以 seed 报成功、从此永不重抄。
    */
-  appendForSeed(sessionId: string, message: NormalizedMessage): boolean {
-    if (!sessionId || !isDurableDisplayMessage(message)) return false;
+  appendForSeed(sessionId: string, message: NormalizedMessage): WriteOutcome {
+    if (!sessionId || !isDurableDisplayMessage(message)) return 'duplicate';
     return writeDisplayRow(sessionId, message);
   },
 
@@ -345,12 +384,27 @@ export const sessionMessagesDb = {
     try {
       const db = getConnection();
       let seeded = 0;
+      let failed = 0;
       const run = db.transaction((items: NormalizedMessage[]) => {
         for (const message of items) {
-          if (sessionMessagesDb.appendForSeed(sessionId, message)) seeded += 1;
+          const outcome = sessionMessagesDb.appendForSeed(sessionId, message);
+          if (outcome === 'inserted') seeded += 1;
+          else if (outcome === 'failed') failed += 1;
         }
-        // 事务里先清戳:整批抄完的这一份是完整的。若随后的 trimSession 真的删了行,
-        // 它会再把戳盖回去 —— 顺序是对的。
+        /**
+         * fl:**一条都没失败**才清戳。
+         *
+         * fk 是无条件清 —— 而 `writeDisplayRow` 内部 catch 了异常、事务不会
+         * 因为单行失败而回滚,于是一份**部分成功**的日志照样被标成"完整",
+         * 回放从此拿它当权威,缺掉的那些永远补不回来(`countForSession > 0`
+         * 让 seed 也不会再抄一次)。
+         *
+         * 抛出去让事务回滚:整批要么都在,要么一行都不写 —— 那正是
+         * "要么日志完整、要么没有"这条不变式本身。
+         */
+        if (failed > 0) {
+          throw new Error(`display-log seed: ${failed} 行写入失败,整批回滚`);
+        }
         try { ensurePrepared().clearTrimmed!.run(sessionId); } catch { /* 清戳失败不回滚整批 */ }
       });
       run(messages);
@@ -490,6 +544,31 @@ export const sessionMessagesDb = {
     } catch (error) {
       log.warn('[display-log] tail-page read failed:', (error as Error)?.message || error);
       return { messages: [], total, hasMore: false };
+    }
+  },
+
+  /**
+   * fy(F14):**「编辑重跑」的分叉锚点** —— 这条消息之前最后一个原生 assistant uuid。
+   *
+   * 返回值三态,调用方要分得开:
+   * - `string` —— 找到了,直接拿去 SDK 的 `resumeSessionAt`;
+   * - `null` —— 日志里有这一行,但它**之前没有任何 assistant 行**(会话的第一句);
+   * - `undefined` —— 日志里**没有这一行**(老会话、或被 trim 掉了),
+   *   调用方应当退回扫 jsonl 的老路,而不是当成"没有锚点"。
+   *
+   * 把这三种揉成一个 null 就是下一个"静默降级"——fp 刚拆掉一个。
+   */
+  forkAnchorFor(sessionId: string, messageId: string): string | null | undefined {
+    if (!sessionId || !messageId) return undefined;
+    try {
+      const cache = ensurePrepared();
+      const row = cache.rowOfMessage!.get(sessionId, messageId) as { id?: number } | undefined;
+      if (!row || typeof row.id !== 'number') return undefined;
+      const anchor = cache.forkAnchor!.get(sessionId, row.id) as { uuid?: string } | undefined;
+      return typeof anchor?.uuid === 'string' && anchor.uuid ? anchor.uuid : null;
+    } catch (error) {
+      log.warn('[display-log] fork anchor lookup failed:', (error as Error)?.message || error);
+      return undefined;
     }
   },
 

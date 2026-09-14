@@ -1,8 +1,13 @@
+import fs from 'node:fs';
+
 import { getConnection } from '@/modules/database/connection.js';
 import { cachedPrepare } from '@/modules/database/prepared-cache.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
 import { buildProjectVisibilityClause, type VisibilityScope } from '@/modules/database/visibility-sql.js';
+import { createLogger } from '@/shared/logger.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
+
+const log = createLogger('db');
 
 type SessionRow = {
   session_id: string;
@@ -20,6 +25,40 @@ const SESSION_ROW_COLUMNS =
   'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at';
 
 const SQLITE_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+/**
+ * ga:**同一个项目,可能写成两个不一样的字符串。**
+ *
+ * `assignProviderSessionId` 的"同项目才合并"判据原来是原样字符串比,而两边的
+ * 来源根本不是一处:app 行存的是调用方给的路径,监视器那一行取的是 CLI 子进程
+ * 的 `process.cwd()` —— **内核已经把符号链接解析掉了**。只要项目路径里有任何
+ * 一段是软链(`/home` → `/var/home`、macOS 的 `/tmp`、把工作区挂到别处的部署),
+ * 两行就是"同一个项目、不同的字符串",于是真正的监视器合并被判成跨项目攻击。
+ *
+ * 误挡的后果比漏挡更严重:`provider_session_id` 永远是 NULL → 每一轮都是一段
+ * 全新对话,模型完全没有上文;工具审批点不动、预热 / 终端接管 / 编辑重跑全部
+ * 永久失效,而用户侧零提示。
+ *
+ * 所以先规范化字符串,再落到盘上解一次软链;路径不存在(测试、项目已删)时
+ * realpath 会抛,退回规范化后的字符串比 —— 判据只会比原来更宽,不会更松到
+ * 让"两个真的不同的项目"相等。
+ */
+function realProjectPath(projectPath: string): string {
+  try {
+    return fs.realpathSync.native(projectPath);
+  } catch {
+    return projectPath;
+  }
+}
+
+function isSameProjectPath(a: string | null, b: string | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const normalizedA = normalizeProjectPath(a);
+  const normalizedB = normalizeProjectPath(b);
+  if (normalizedA === normalizedB) return true;
+  return realProjectPath(normalizedA) === realProjectPath(normalizedB);
+}
 
 function normalizeTimestamp(value?: string): string | null {
   if (!value) return null;
@@ -192,8 +231,14 @@ export const sessionsDb = {
    * the duplicate is merged into the app row: its transcript path and name
    * are adopted and the duplicate row is removed. Runs in a transaction so
    * the sidebar can never observe both rows at once.
+   *
+   * ga:**返回值 = 这条映射到底落库了没有。** fz 的跨项目守卫走的是 `return`,
+   * 于是"被拒绝"和"写成功了"对调用方长得一模一样 —— 而调用方
+   * (`recordProviderSessionId`)紧跟着照样把映射写进内存,那段代码自己的注释
+   * 写的却是"先落库、成功了再改内存"。内存说有、库里是 NULL,本轮不会有第二帧
+   * 再试,谁都不知道。
    */
-  assignProviderSessionId(sessionId: string, providerSessionId: string): void {
+  assignProviderSessionId(sessionId: string, providerSessionId: string): boolean {
     const db = getConnection();
 
     const merge = db.transaction(() => {
@@ -205,6 +250,38 @@ export const sessionsDb = {
         )
         .get(providerSessionId, providerSessionId, sessionId) as SessionRow | undefined;
 
+      /**
+       * fz(安全):**合并只允许发生在同一个项目里。**
+       *
+       * 这段合并存在的唯一理由写在上面的注释里:文件监视器可能先于本次映射
+       * 把同一份 transcript 索引成了一行 —— 那一行与本行**必然同项目**
+       * (transcript 就落在那个项目目录下)。
+       *
+       * 而这个 DELETE 原本不带任何校验,于是它成了一条越权删除的落点:
+       * 攻击者在自己的会话里把 `newSessionId` 塞成别人的会话 id
+       * (`chat.send` 的 options 当时是整包透传的,见 pickClientRuntimeOptions),
+       * 运行时把这个 id 当成自己的 transcript id 回灌上来,这里就把**别人那一行
+       * 删掉**、并把它的 transcript 路径和名字并进攻击者自己那行。
+       *
+       * 跨项目正是攻击必需的条件(同项目会被 CLI 的 "already in use" 挡掉),
+       * 所以判据用"同项目才合并"既堵死了这条路,又一点不影响真正的监视器场景。
+       * 两处一起改:那边收窄入口,这里收窄后果 —— 只改一处就是又一次只堵一半。
+       */
+      const current = cachedPrepare(db, 'SELECT project_path FROM sessions WHERE session_id = ?')
+        .get(sessionId) as { project_path?: string | null } | undefined;
+      // ga:软链会让"同一个项目"写成两个字符串,见 isSameProjectPath。
+      const samePath = isSameProjectPath(duplicate?.project_path ?? null, current?.project_path ?? null);
+
+      if (duplicate && !samePath) {
+        // 不删、不并、也不认领这个 provider id —— 让本行保持没有映射的状态,
+        // 好过悄悄把两段无关的对话缝在一起。
+        log.warn(
+          `[sessions] 拒绝跨项目合并 provider 会话映射:${sessionId} 想认领 ${providerSessionId},`
+          + ' 但那个 id 属于另一个项目的会话行',
+        );
+        return false;
+      }
+
       if (duplicate) {
         cachedPrepare(db, 'DELETE FROM sessions WHERE session_id = ?').run(duplicate.session_id);
         cachedPrepare(db,
@@ -215,7 +292,7 @@ export const sessionsDb = {
              updated_at = CURRENT_TIMESTAMP
            WHERE session_id = ?`
         ).run(providerSessionId, duplicate.jsonl_path, duplicate.custom_name, sessionId);
-        return;
+        return true;
       }
 
       cachedPrepare(db,
@@ -224,9 +301,10 @@ export const sessionsDb = {
            updated_at = CURRENT_TIMESTAMP
          WHERE session_id = ?`
       ).run(providerSessionId, sessionId);
+      return true;
     });
 
-    merge();
+    return merge();
   },
 
   updateSessionCustomName(sessionId: string, customName: string): void {

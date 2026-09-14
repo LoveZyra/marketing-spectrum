@@ -202,6 +202,15 @@ export type MessageKind =
   | 'session_created'
   | 'interactive_prompt'
   | 'task_notification'
+  /**
+   * gd:后台任务的**进展**(SDK 的 `system/task_progress`)。
+   *
+   * 与 `task_notification` 分成两种 kind,不是洁癖:进展**每几秒一条**,
+   * 而 `task_notification` 在 durable 白名单里 —— 混成一种就等于把一条几秒一次的
+   * 洪流灌进显示日志。这一种**故意不进白名单**:直播看得见,刷新之后由最终那条
+   * `task_notification` 里的 usage 说明总量。
+   */
+  | 'task_progress'
   // prism additions: per-turn git checkpoints + changed-files summaries
   | 'checkpoint_created'
   | 'changed_files'
@@ -324,6 +333,19 @@ export type NormalizedMessage = {
   newSessionId?: string;
   status?: string;
   summary?: string;
+  /**
+   * gd:后台任务(SDK 的 task 生命周期通道)。`toolId` 复用既有字段 ——
+   * 它就是那次 Task/Agent 调用的 `tool_use_id`,也就是**子代理卡的身份**,
+   * 前端据此把进展与汇报归到卡上,而不是在主对话流里另起一行。
+   */
+  taskId?: string;
+  taskProgress?: {
+    toolUses?: number;
+    totalTokens?: number;
+    durationMs?: number;
+    lastToolName?: string;
+    subagentType?: string;
+  };
   tokenBudget?: unknown;
   subagentTools?: unknown;
   toolUseResult?: unknown;

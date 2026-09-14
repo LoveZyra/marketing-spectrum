@@ -1030,6 +1030,24 @@ export const runMigrations = (db: Database) => {
     removeSkillOptLeftovers(db);
 
     /**
+     * fy(F14):显示日志补 `provider_assistant_uuid` 列 —— 「编辑重跑」的分叉锚点。
+     *
+     * 可空、**加列即可**:不重建表、不改动任何既有行(历史行留 NULL,端点对它们
+     * 退回扫 jsonl 的老路)。不建索引 —— 查询是
+     * `WHERE session_id = ? AND id < ? AND provider_assistant_uuid IS NOT NULL
+     *  ORDER BY id DESC LIMIT 1`,现有的 (session_id, id) 正好吃得到。
+     */
+    if (tableExists(db, 'session_display_messages')) {
+      addColumnToTableIfNotExists(
+        db,
+        'session_display_messages',
+        getTableInfo(db, 'session_display_messages').map((column) => column.name),
+        'provider_assistant_uuid',
+        'TEXT',
+      );
+    }
+
+    /**
      * 显示日志的孤儿行 —— 每次启动收一次。
      *
      * `session_display_messages` 没有外键,而它指向的会话行有好几条路径会消失:

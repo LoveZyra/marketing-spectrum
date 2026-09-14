@@ -57,6 +57,12 @@ type MessageComponentProps = {
    * 那些信息时间轴的行上已经有了,再来一遍就是噪声。
    */
   bare?: boolean;
+  /**
+   * ga:滚动位置锚点用的稳定行标识。**只有顶层行才传** —— 展开区里嵌套的那些
+   * MessageComponent 不传,于是自然被排除在锚点集合之外(它们的出现/消失
+   * 此前会让"倒数第几行"整体错位)。
+   */
+  rowKey?: string;
 };
 
 type InteractiveOption = {
@@ -67,7 +73,7 @@ type InteractiveOption = {
 
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, onEditRerun, showRetry = false, onRetry, canRerun = false, turnOutputs, onFileOpenPath, outputsSessionId, bare = false }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, onEditRerun, showRetry = false, onRetry, canRerun = false, turnOutputs, onFileOpenPath, outputsSessionId, bare = false, rowKey }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = bare || (prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -134,6 +140,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
       <div
         ref={messageRef}
         data-message-timestamp={message.timestamp || undefined}
+        data-row-key={rowKey}
         className={`chat-message ${message.type} px-3 sm:px-0`}
       >
         <button
@@ -171,6 +178,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
     <div
       ref={messageRef}
       data-message-timestamp={message.timestamp || undefined}
+      /* ga:滚动位置锚点只认带这个标识的顶层行(见 useChatSessionState 的行选择器)。
+         **两处 return 都要带** —— 压缩摘要那一支漏掉的话,一条会话里只要出现过
+         一次上下文压缩,它前后的行数就与锚点集合对不上。 */
+      data-row-key={rowKey}
       className={`chat-message group/msg ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
     >
       {message.type === 'user' ? (

@@ -203,6 +203,7 @@ export default tseslint.config(
             "server/shared/project-display-name.ts", // 项目展示名:项目列表 / watcher / run-registry 三处共用,放叶子上防循环依赖(同 prism-internal-transcripts)
             "server/shared/websocket-state.ts", // 连接注册表与 readyState 常量:低层原语,放叶子上防循环依赖(barrel 强制会把 websocket/providers/projects 连成环)
             "server/shared/logger.ts", // 分级日志:几乎每个模块都要打日志,它自己零依赖,必须待在叶子上
+            "server/shared/fork-anchor.ts", // 「编辑重跑」分叉锚点的判据:落库(database)与端点(system)共用,纯函数零依赖,放叶子上
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },

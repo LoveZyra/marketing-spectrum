@@ -24,7 +24,7 @@ import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult } f
 import type { Project } from '../../../../types/app';
 import type { ToolGroupItem } from '../../utils/toolGrouping';
 import type { ActivityIconKey, ActivityVerb } from '../../utils/toolRowSummary';
-import { ACTIVITY_TAIL_ROWS, formatRunDuration, planActivityFold, summarizeActivityRun, summarizeToolRow, toolTarget } from '../../utils/toolRowSummary';
+import { ACTIVITY_TAIL_ROWS, collapsedVisibleCount, formatRunDuration, planActivityFold, summarizeActivityRun, summarizeToolRow, toolTarget } from '../../utils/toolRowSummary';
 import { cn } from '../../../../lib/utils';
 import { ClampedBlock } from '../../../../shared/view/ui';
 
@@ -48,8 +48,17 @@ interface ActivityTimelineProps {
   showRawParameters?: boolean;
   showThinking?: boolean;
   selectedProject?: Project | null;
-  /** 会话此刻还在跑吗 —— 决定没结果的工具行是「运行中」还是「已中断」。 */
+  /** 这一段属于正在跑的那一轮吗 —— 决定没结果的工具行是「运行中」还是「已中断」。 */
   sessionIsProcessing?: boolean;
+  /**
+   * 这一段要不要留着尾部三行不折。
+   *
+   * 判据在调用方(`focusActivityGroup` + `shouldKeepActivityTailOpen`)——
+   * 它要看整张列表才答得出"正文出现了没有",段内看不到。
+   */
+  keepTailOpen?: boolean;
+  /** 滚动位置锚点用的稳定行标识(见 useChatSessionState 里的 data-row-key)。 */
+  rowKey?: string;
 }
 
 const ICONS: Record<ActivityIconKey, LucideIcon> = {
@@ -127,10 +136,19 @@ function ActivityTimeline({
   showThinking,
   selectedProject,
   sessionIsProcessing = true,
+  keepTailOpen = false,
+  rowKey,
 }: ActivityTimelineProps) {
   const { t } = useTranslation('chat');
   const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(() => new Set<string>());
-  const [isRunOpen, setIsRunOpen] = useState(false);
+  /**
+   * 用户手动定过的展开状态,`null` = 跟着自动规则走。
+   *
+   * 以前这里是一个布尔 `isRunOpen`("是否展开全部"),自动规则一变它就表达不了
+   * "我手动收起来了" —— 抬头现在只要有一行就出现,而这一行可能一条都没折,
+   * 点它必须是**收起**,布尔那套只能在"展开全部 / 回到自动"之间来回。
+   */
+  const [manualFold, setManualFold] = useState<'open' | 'closed' | null>(null);
 
   const rows = useMemo(
     () => group.messages.map((message, index) => {
@@ -163,9 +181,26 @@ function ActivityTimeline({
   const hasRunning = rows.some((row) => row.summary?.status === 'running');
   // 抬头右端的整段耗时:把各行耗时加起来(没有一行报出耗时就不显示)。
   const runDuration = useMemo(() => formatRunDuration(group.messages), [group.messages]);
-  const keepTail = hasRunning || sessionIsProcessing;
-  const { visibleCount, foldedCount, canFold, showSummary } = planActivityFold(rows.length, keepTail);
-  const collapsedRows = visibleCount === 0 ? [] : rows.slice(rows.length - visibleCount);
+  // 自动规则(见 planActivityFold):正文没出现前留尾部三行,出现后整段收起。
+  const auto = planActivityFold(rows.length, keepTailOpen);
+  /**
+   * 手动定过就以手动为准 —— 用户明确点过的状态不该被下一次自动重算冲掉。
+   *
+   * gb:**手动"收起"的目标不再是写死的 0**,而是与自动规则同一个判据
+   * (`collapsedVisibleCount`):回合还在跑就留尾部三行,回合结束才收干净。
+   * 写死 0 时,一轮跑到几十步点一下收起,正在跑的那几步也一起没了,
+   * 而且这一轮剩下的全程都不再露出来(manualFold 压过自动规则)。
+   */
+  const collapsedCount = collapsedVisibleCount(rows.length, keepTailOpen);
+  const visibleCount = manualFold === 'open'
+    ? rows.length
+    : manualFold === 'closed'
+      ? collapsedCount
+      : auto.visibleCount;
+  const foldedCount = rows.length - visibleCount;
+  const { canFold, showSummary } = auto;
+  /** 全都摊开了 —— 抬头此时的动作是「收起」,不是「展开」。 */
+  const isFullyOpen = rows.length > 0 && visibleCount >= rows.length;
 
   /**
    * 收尾折叠走**高度过渡**,不是瞬间卸载。
@@ -175,10 +210,10 @@ function ActivityTimeline({
    * (grid 的收起技巧,不需要量高度),看着是收进抬头,而不是凭空不见。
    * 代价是每段多留 3 行不可见的 DOM,换一次不刺眼的收尾。
    */
-  const rowsCollapsed = !isRunOpen && visibleCount === 0;
-  const visibleRows = isRunOpen
+  const rowsCollapsed = visibleCount === 0;
+  const visibleRows = isFullyOpen
     ? rows
-    : (rowsCollapsed ? rows.slice(Math.max(0, rows.length - ACTIVITY_TAIL_ROWS)) : collapsedRows);
+    : rows.slice(Math.max(0, rows.length - Math.max(visibleCount, rowsCollapsed ? ACTIVITY_TAIL_ROWS : 0)));
 
   const toggle = (key: string) => {
     setExpandedKeys((current) => {
@@ -190,28 +225,35 @@ function ActivityTimeline({
   };
 
   return (
-    <div className="chat-message tool px-3 sm:px-0" data-message-timestamp={group.timestamp || undefined}>
-      {/* 整段小结:一句话说清这一轮干了什么。上面还压着更早的步骤时,
-          这一行就是那些步骤的入口(点开=展开全部,再点=收回到最新 3 步)。
+    <div
+      className="chat-message tool px-3 sm:px-0"
+      data-message-timestamp={group.timestamp || undefined}
+      /* ga:滚动位置恢复靠它精确找回"上次读到的那一行"(见 rowKey)。 */
+      data-row-key={rowKey}
+    >
+      {/* 整段小结:一句话说清这一轮干了什么,并且是这些步骤的**唯一入口**。
+          fw:**只要有一行就出现**。此前"少于三步不给抬头",于是一个回合刚开跑
+          时行光秃秃地摊着,等第三行落地抬头才凭空冒出来、整段还往下错一档。
+          点它 = 全摊开 / 全收起(半折状态点一次先摊开)。
           ei:**不套白框**。eg 那轮按 mockup 给它加了卡片外框,实机看下来那是给
           对话流凭空多加一层容器 —— 一轮里可能有好几段活动,几个白框摞在正文之间
           比内容本身还抢眼。回到一行次级墨色的纯文本(Cowork 的做法),
           容器交给消息本身。 */}
-      {showSummary && (canFold ? (
+      {showSummary && canFold && (
         <button
           type="button"
           data-activity-summary
-          onClick={() => setIsRunOpen((current) => !current)}
-          aria-expanded={isRunOpen}
+          onClick={() => setManualFold(isFullyOpen ? 'closed' : 'open')}
+          aria-expanded={isFullyOpen}
           className="group flex w-full items-center gap-2 py-1.5 text-left text-[13px] leading-5 text-muted-foreground transition-colors hover:text-foreground"
         >
-          {isRunOpen
+          {isFullyOpen
             ? <ChevronDown className="h-3.5 w-3.5 flex-none text-muted-foreground" aria-hidden />
             : <ChevronRight className="h-3.5 w-3.5 flex-none text-muted-foreground" aria-hidden />}
           <span className="min-w-0 flex-1 truncate">{summaryText}</span>
-          {/* 右端:跑完给整段耗时(设计稿),还在跑给进行中标记;
-              半折状态(上面还压着一截)则标出被折了多少。 */}
-          {runDuration && !isRunOpen && collapsedRows.length === 0 && (
+          {/* 右端只出一样东西,按优先级:
+              全摊开 → 「收起」;半折 → 被折了多少;整段收起 → 整段耗时。 */}
+          {runDuration && rowsCollapsed && (
             <span className="flex-none font-mono text-[11px] text-muted-foreground">{runDuration}</span>
           )}
           {hasRunning && (
@@ -220,22 +262,17 @@ function ActivityTimeline({
               {t('activity.running', { defaultValue: '运行中' })}
             </span>
           )}
-          {(isRunOpen || collapsedRows.length > 0) && (
+          {isFullyOpen ? (
             <span className="flex-none font-mono text-[11px] text-muted-foreground">
-              {isRunOpen
-                ? t('activity.collapseRun', { defaultValue: '收起' })
-                : t('activity.foldedCount', { count: foldedCount, defaultValue: '+{{count}}' })}
+              {t('activity.collapseRun', { defaultValue: '收起' })}
             </span>
-          )}
+          ) : foldedCount > 0 && !rowsCollapsed ? (
+            <span className="flex-none font-mono text-[11px] text-muted-foreground">
+              {t('activity.foldedCount', { count: foldedCount, defaultValue: '+{{count}}' })}
+            </span>
+          ) : null}
         </button>
-      ) : (
-        <div className="flex w-full items-center gap-2 py-1.5 pl-[22px] text-[13px] leading-5 text-muted-foreground">
-          <span className="min-w-0 flex-1 truncate">{summaryText}</span>
-          {runDuration && (
-            <span className="flex-none font-mono text-[11px] text-muted-foreground">{runDuration}</span>
-          )}
-        </div>
-      ))}
+      )}
 
       <div
         className={cn('prism-activity-rows', rowsCollapsed && 'is-collapsed')}

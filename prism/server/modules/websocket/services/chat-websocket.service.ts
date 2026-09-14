@@ -2,8 +2,9 @@ import path from 'node:path';
 
 import type { WebSocket } from 'ws';
 
-import { canViewerSeeSession, sessionMessagesDb, sessionsDb, userDb } from '@/modules/database/index.js';
-import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
+import { attachmentsDb, canViewerSeeSession, sessionMessagesDb, sessionsDb, userDb } from '@/modules/database/index.js';
+import { chatRunRegistry, setRunStartedHook} from '@/modules/websocket/services/chat-run-registry.service.js';
+import { noteMergedSend } from '@/modules/websocket/services/observed-run.service.js';
 import { seedDisplayLogFromTranscript } from '@/modules/providers/index.js';
 import { connectedClients, WS_OPEN_STATE } from '@/shared/websocket-state.js';
 import { currentHolder } from '@/modules/websocket/services/conversation-ownership.service.js';
@@ -17,6 +18,8 @@ import type {
 } from '@/shared/types.js';
 import { generateMessageId, parseIncomingJsonObject } from '@/shared/utils.js';
 import { createLogger } from '@/shared/logger.js';
+
+import { forgetSend, registerSend } from './chat-send-dedupe.js';
 const log = createLogger('ws-chat');
 
 /**
@@ -29,6 +32,17 @@ const log = createLogger('ws-chat');
  *
  * Exported for tests; `assetsRootOverride` exists only for them.
  */
+/**
+ * F08:无主附件(台账里查不到的老文件)要不要拒。
+ *
+ * 默认**放行** —— 直接拒会让老会话的编辑重跑 / 排队重放连自己的图都发不出去。
+ * 打开这个开关的环境按"没有归属证明就不给用"办。
+ */
+function strictAttachmentOwner(): boolean {
+  const raw = process.env.PRISM_STRICT_ATTACHMENT_OWNER;
+  return raw === '1' || raw === 'true';
+}
+
 export function filterImagesToUploadStore(
   images: unknown,
   assetsRootOverride?: string,
@@ -43,6 +57,32 @@ export function filterImagesToUploadStore(
    * 直接子文件与放行全局目录同一个安全水位;仍然只认**直接子文件**,不认子目录与穿越。
    */
   extraRoots: readonly string[] = [],
+  /**
+   * A7:**台账兜底** —— 路径不在任何允许的根下,但附件台账说它就是**这条会话**
+   * 上传的,照样放行。
+   *
+   * 为什么需要它:上传落盘的目录由**前端传的 projectId**(侧栏选中的项目)决定,
+   * 而这道门比的是 `sessions.project_path`。两者是两个不同来源的值,只要对不齐
+   * ——root 看别人的会话时尤其容易——图片就在这里被静默丢掉:页面上显示得
+   * 好好的(前端按侧栏 projectId 走 files/content 取原图),模型却一张都收不到。
+   *
+   * 台账是**服务端在落盘那一刻记的**(user_id / session_id / abs_path),
+   * 不是客户端说的,所以拿它当判据比路径形状更硬。它同时也把**已经传坏的
+   * 那些历史图**救回来了:目录改不了,但归属是有据可查的。
+   */
+  ledgerOwner?: (absPath: string) => { userId: number | null; sessionId: string | null } | undefined,
+  sessionId?: string | null,
+  /**
+   * F08:**发起这一轮的人是谁。**
+   *
+   * 全局图库(`~/.prism/assets`)是**所有用户共用的一个目录**,而这道门此前只判
+   * "在不在这个目录里" —— 知道别人的文件名(路径会出现在导出、日志、
+   * 甚至别人分享的截图里)就能把**别人的图**塞进自己的对话发给模型。
+   * 项目内的 `attachments/` 不在此列:那道门前面已经过了会话可见性。
+   *
+   * 传了 userId 才启用归属校验;不传(测试、外部调用)维持原行为。
+   */
+  actorUserId?: number | null,
 ): AnyRecord[] {
   const roots = [assetsRootOverride ?? getGlobalImageAssetsDir(), ...extraRoots]
     .filter((root): root is string => typeof root === 'string' && root.length > 0)
@@ -71,13 +111,59 @@ export function filterImagesToUploadStore(
    *
    * 判过之后就把它钉成绝对路径,后面没有第二次解析的机会。
    */
+  const globalRoot = path.resolve(assetsRootOverride ?? getGlobalImageAssetsDir());
+
   return normalizeImageDescriptors(images).flatMap((descriptor) => {
     const matchedRoot = roots.find((root) => isDirectChildOf(root, descriptor.path));
-    if (!matchedRoot) {
-      log.warn(`[Chat] Dropping image outside the upload store: ${descriptor.path}`);
-      return [];
+    if (matchedRoot) {
+      const resolved = path.resolve(matchedRoot, descriptor.path);
+
+      /**
+       * F08:**共用目录里的图要查归属。**
+       *
+       * 只对全局图库查 —— 它是所有用户共用的一个目录。项目内的 `attachments/`
+       * 不查:走到这里说明会话可见性已经过了,那个项目本来就读得到。
+       *
+       * 台账里没有记录的("加固之前"落盘的老文件)默认放行并单独记一行日志:
+       * 直接拒绝会让**老会话的编辑重跑 / 排队重放**连自己的图都发不出去。
+       * 想收紧的环境把 `PRISM_STRICT_ATTACHMENT_OWNER=1` 打开,无主文件一律拒。
+       */
+      if (ledgerOwner && actorUserId !== null && actorUserId !== undefined && isDirectChildOf(globalRoot, descriptor.path)) {
+        const owner = ledgerOwner(resolved);
+        if (!owner) {
+          if (strictAttachmentOwner()) {
+            log.warn(`[Chat] Dropping unledgered image under strict owner policy: ${resolved}`);
+            return [];
+          }
+          log.info(`[Chat] Image has no ledger row (pre-ledger upload), allowing: ${resolved}`);
+        } else if (owner.userId !== null && owner.userId !== actorUserId) {
+          // 台账明确说它是**别人的** —— 无论如何都不放行。
+          log.warn(
+            `[Chat] Dropping image owned by another user: ${resolved} `
+            + `(owner=${owner.userId}, actor=${actorUserId})`,
+          );
+          return [];
+        }
+      }
+
+      return [{ ...descriptor, path: resolved }];
     }
-    return [{ ...descriptor, path: path.resolve(matchedRoot, descriptor.path) }];
+
+    // 台账兜底:绝对路径 + 台账里记着它属于这条会话,才认。
+    if (ledgerOwner && sessionId && path.isAbsolute(descriptor.path)) {
+      const resolved = path.resolve(descriptor.path);
+      const owner = ledgerOwner(resolved);
+      if (owner && owner.sessionId === sessionId) {
+        log.info(`[Chat] Image accepted by attachment ledger (outside configured roots): ${resolved}`);
+        return [{ ...descriptor, path: resolved }];
+      }
+    }
+
+    log.warn(
+      `[Chat] Dropping image outside the upload store: ${descriptor.path} `
+      + `(roots=${roots.join(',')}; ledger=${ledgerOwner && sessionId ? 'checked' : 'skipped'})`,
+    );
+    return [];
   });
 }
 
@@ -110,6 +196,20 @@ type ChatWebSocketDependencies = {
     LLMProvider,
     (providerSessionId: string, context?: { runId?: string }) => boolean | Promise<boolean>
   >;
+  /**
+   * gc:**真合流** —— 会话忙着时,把用户这条话直接推进 provider 的命令队列,
+   * 而不是攒在 Prism 自己的 `pendingSends` 里等这一轮跑完。
+   *
+   * 可选注入:没接线、或者这一次不成立(没有常驻 runtime、正在自动压缩、
+   * 带了图片……)时**照旧走排队** —— 合流是增强,不是替换,退回去就是今天的行为。
+   */
+  mergeFns?: Partial<Record<
+    LLMProvider,
+    (
+      appSessionId: string,
+      options: { command: string; providerSessionId?: string | null },
+    ) => Promise<{ merged: boolean; reason?: string; uuid?: string }>
+  >>;
   /**
    * F14:把一段对话的常驻运行时先拉起来(可选注入)。
    *
@@ -177,6 +277,31 @@ function sendJson(ws: WebSocket, payload: unknown): void {
  * `error` message kind) so the frontend can distinguish "your request was
  * invalid" from "the model run produced an error" without inspecting text.
  */
+/**
+ * F09:收下这一条的回执。
+ *
+ * `accepted` = 这一轮已经登记 / 已经收进排队;`duplicate` = 同一个幂等键
+ * 之前收过,这次什么都没做。两者对前端是同一个意思:**服务端有了,别再发**。
+ * 分开写只是为了排查时能看出来是哪一种。
+ *
+ * 没有 `clientMessageId` 的请求不回 ACK —— 老客户端本来也不认它。
+ */
+function sendSendAck(
+  ws: WebSocket,
+  sessionId: string,
+  clientMessageId: string | null,
+  status: 'accepted' | 'duplicate',
+): void {
+  if (!clientMessageId) return;
+  sendJson(ws, {
+    kind: 'chat_ack',
+    sessionId,
+    clientMessageId,
+    status,
+    timestamp: new Date().toISOString(),
+  });
+}
+
 function sendProtocolError(
   ws: WebSocket,
   code: string,
@@ -219,6 +344,59 @@ type PendingSend = {
 };
 
 const pendingSends = new Map<string, PendingSend>();
+
+/**
+ * fz(安全):客户端 options **白名单** —— 只有这几个键能进运行时。
+ *
+ * ## 为什么是白名单,不是"把危险的删掉"
+ *
+ * 这里原来是 `{ ...clientOptions, ...服务端覆盖项 }`。覆盖名单是一份**黑名单**:
+ * 谁想起来了就往上加一条。`cwd` 就是这么补上的(客户端给了就赢 → 拿别人的项目
+ * 路径跑 Claude)。而漏掉的那两个更狠:
+ *
+ * - `oneShot` → 让这一轮走一次性路径;
+ * - `newSessionId` → 一次性路径把它**直接钉成 SDK 的 transcript id**
+ *   (`claude-sdk.js` 的 `mapCliOptionsToSDK`,优先级还高于 resume)。
+ *
+ * 于是:在自己的会话里发一条 `chat.send`,options 里塞
+ * `{ oneShot: true, newSessionId: "<别人的会话 id>" }` —— 流上第一条消息把这个 id
+ * 回灌给网关 → `assignProviderSessionId` 查到撞号的那一行 → **DELETE 掉别人的
+ * 会话行**,并把它的 transcript 路径和名字并进攻击者自己那行。会话 id 是 uuid,
+ * 就在浏览器地址栏里,不是密钥。
+ *
+ * 黑名单治不了这个病:运行时能读的键有二十来个(`ownerUserId` / `usageSource` /
+ * `resumeSessionId` / `runId` / `imageRoots`…),下一个人加一个新键,这里不会跟着改。
+ * 白名单反过来 —— 忘了加只会让一个新功能不生效(看得见),不会让一个新洞打开。
+ *
+ * 名单就是前端 `buildSendOptions` 真正会发的那几项。`images` / `forkFrom` /
+ * `hiddenContext` / `projectPath` **不在这里** —— 它们各自有专门的校验分支
+ * (重新落盘校验 / 归属校验 / 剥离 / 数据库优先),白名单放行反而会绕过那些分支。
+ */
+const CLIENT_RUNTIME_OPTION_KEYS = [
+  'model',
+  'effort',
+  'permissionMode',
+  'toolsSettings',
+  'skipPermissions',
+  'sessionSummary',
+] as const;
+
+export function pickClientRuntimeOptions(clientOptions: AnyRecord): AnyRecord {
+  const picked: AnyRecord = {};
+  for (const key of CLIENT_RUNTIME_OPTION_KEYS) {
+    if (clientOptions[key] !== undefined) picked[key] = clientOptions[key];
+  }
+  return picked;
+}
+
+/**
+ * fl:这条会话有没有排队中的消息 —— 删除会话前要看它。
+ *
+ * 排队的那条会在回合结束后被 drain 出去,给一条已经被删掉的会话起新一轮。
+ */
+export function hasPendingSendForSession(appSessionId: string): boolean {
+  return pendingSends.has(appSessionId) || drainingSends.has(appSessionId);
+}
 
 /**
  * fj:排队消息的定时清扫。
@@ -305,6 +483,13 @@ function attachSessionViewers(sessionId: string): void {
   if (viewers.size === 0) sessionViewers.delete(sessionId);
 }
 
+/**
+ * fz:注册到回合注册表 —— 四个 `startRun` 调用点(网页聊天、定时任务、
+ * 外部 API 同步/异步)从此走同一步。此前只有 `chat.send` 那条路 attach,
+ * 另外三条起的回合对**已经开着**这条会话的浏览器一帧都不推。
+ */
+setRunStartedHook(attachSessionViewers);
+
 /** 排队消息的存活上限。超时的不再发 —— 半小时前那句话的语境早就不在了。 */
 const PENDING_SEND_TTL_MS = 30 * 60 * 1000;
 
@@ -363,7 +548,7 @@ function queuedFrame(sessionId: string, pending: PendingSend) {
  * 丢弃一条排队消息并广播。`reason` 会显示给用户 —— "被撤销"和"因为你中止了
  * 回合"是两回事,不说清楚就变成消息凭空消失。
  */
-function dropPendingSend(sessionId: string, reason: 'cancelled' | 'aborted' | 'expired'): boolean {
+function dropPendingSend(sessionId: string, reason: 'cancelled' | 'aborted' | 'expired' | 'undeliverable'): boolean {
   const pending = pendingSends.get(sessionId);
   if (!pendingSends.delete(sessionId)) return false;
   // 被中止带走的那条要**把正文一起还回去** —— 前端会把它退回输入框。
@@ -373,7 +558,10 @@ function dropPendingSend(sessionId: string, reason: 'cancelled' | 'aborted' | 'e
   // 发不发交回给用户的下一次按键。
   // 撤销(cancelled)是用户自己点的删除,他不想要了,不退;
   // 过期(expired)半小时前的语境早就不在了,也不退,只留一句说明。
-  const content = reason === 'aborted' && typeof pending?.data?.content === 'string'
+  // fz:`undeliverable`(续发没能成立)同样退正文 —— 用户什么都没做错,
+  // 那段话不能凭空消失。
+  const content = (reason === 'aborted' || reason === 'undeliverable')
+    && typeof pending?.data?.content === 'string'
     ? pending.data.content
     : null;
   broadcastToSessionViewers(sessionId, {
@@ -500,6 +688,43 @@ async function handleChatSend(
     return;
   }
 
+  /**
+   * F09:幂等门。
+   *
+   * 放在可见性检查**之后** —— 否则任何已登录 socket 都能拿它探"这个会话 id
+   * 存不存在、这条消息发过没有"。
+   *
+   * 同一个 `clientMessageId` 第二次到达时:**只回 ACK,不执行**。
+   * 前端据此把 outbox 那条标成 acked、清掉排队记录,不会再重投。
+   */
+  const clientMessageId = typeof data.clientMessageId === 'string' ? data.clientMessageId : null;
+  /**
+   * **续发不过幂等门。**
+   *
+   * 排队那一条在收下时已经登记过它的键了(见下面 `pendingSends` 那支),
+   * 而续发是服务端拿着**同一份 data** 重新进这个函数 —— 按键判重会把它当成
+   * 重复的客户端重发,于是排队的消息永远发不出去。
+   *
+   * `drainToken` 只有续发路径会传,拿它区分"客户端又发了一次"和
+   * "服务端在续发自己已经收下的那一条"。
+   */
+  const isDrainReentry = Boolean(drainToken);
+  if (!isDrainReentry && !registerSend(sessionId, clientMessageId)) {
+    log.info(`[chat] duplicate send ignored for session ${sessionId} (clientMessageId=${clientMessageId})`);
+    sendSendAck(ws, sessionId, clientMessageId, 'duplicate');
+    return;
+  }
+  /**
+   * ga:**没回 ACK 的早退,必须把幂等键退回去。**
+   *
+   * 键在这里就登记了,可下面还有六条早退分支一条都不回 ACK(终端接管、
+   * provider 不支持、准备期被停止、抄历史之后的两道复检、排队位已满)。
+   * 按这张表自己写的契约("收到 ACK 才算发出去了"),遵守契约的重投会撞上
+   * 去重、拿到一个假的 `duplicate` ACK —— 这条消息既没执行也没有痕迹。
+   * 详见 chat-send-dedupe.ts 里 `forgetSend` 的说明。
+   */
+  const releaseSendKey = () => forgetSend(sessionId, clientMessageId);
+
   // 终端接管着这段对话时,chat 不能再往里写:那会变成两个进程追加同一份
   // transcript,谁也看不见谁。明确拒绝并说清楚怎么拿回来,比默默双写好。
   const holder = currentHolder(sessionId);
@@ -511,6 +736,7 @@ async function handleChatSend(
       `这段对话正在终端里被接管${who}。关掉那个终端后即可在这里继续 —— 两边同时写会互相覆盖。`,
       sessionId
     );
+    releaseSendKey();
     return;
   }
 
@@ -518,6 +744,7 @@ async function handleChatSend(
   const spawnFn = dependencies.spawnFns[provider];
   if (!spawnFn) {
     sendProtocolError(ws, 'UNSUPPORTED_PROVIDER', `Provider "${provider}" is not available.`, sessionId);
+    releaseSendKey();
     return;
   }
 
@@ -534,7 +761,27 @@ async function handleChatSend(
   // du:抄写结果要看。失败(读不动 transcript / 整批没落成)时**本轮整轮
   // 不落日志** —— 落哪怕一行,fetchHistory 就改判日志为权威,老会话几百条
   // 历史立刻从界面消失且不可恢复。这一轮继续走 transcript,下轮再抄一次。
-  const seedOutcome = await seedDisplayLogFromTranscript(sessionId);
+  /**
+   * fl:**直接发送的准备期也要能被停止。**
+   *
+   * `drainingSends` 只覆盖"排队消息续发"那条路;普通 `chat.send` 在这段 await
+   * (老会话读整份 transcript,能到秒级)里既没有 run、也没有排队记录,于是
+   * `chat.abort` 三个分支全落空,回 `NO_ACTIVE_RUN` —— 而 seed 返回之后这一轮
+   * 照常起跑。用户按了停止,机器却开始干活。
+   *
+   * 用同一张令牌桌:调用方传进来的(续发)优先,没有就自己登记一张。
+   */
+  const preparingToken = drainToken ?? { cancelled: false };
+  const ownsPreparingToken = !drainToken;
+  if (ownsPreparingToken) drainingSends.set(sessionId, preparingToken);
+  let seedOutcome;
+  try {
+    seedOutcome = await seedDisplayLogFromTranscript(sessionId);
+  } finally {
+    if (ownsPreparingToken && drainingSends.get(sessionId) === preparingToken) {
+      drainingSends.delete(sessionId);
+    }
+  }
   const persistDisplayLog = seedOutcome.status === 'ready';
   if (!persistDisplayLog) {
     log.warn(
@@ -549,7 +796,7 @@ async function handleChatSend(
   // 边):排队指示器"有一条在等"会一直挂到刷新,消息正文既不退回输入框、还会
   // 作为一条未知 kind 的行混进消息列表。复用已经接好的那条路 —— 清指示器 +
   // 正文退回输入框(见 useChatRealtimeHandlers 的 chat_queue_cancelled 分支)。
-  if (drainToken?.cancelled) {
+  if (preparingToken.cancelled) {
     const droppedContent = typeof data.content === 'string' ? data.content : null;
     broadcastToSessionViewers(sessionId, {
       kind: 'chat_queue_cancelled',
@@ -558,6 +805,7 @@ async function handleChatSend(
       ...(droppedContent ? { content: droppedContent } : {}),
       timestamp: new Date().toISOString(),
     });
+    releaseSendKey();
     return;
   }
 
@@ -574,6 +822,7 @@ async function handleChatSend(
    */
   if (!canViewerSeeSession(sessionId, authViewer)) {
     sendProtocolError(ws, 'SESSION_NOT_FOUND', `Session "${sessionId}" was not found.`, sessionId);
+    releaseSendKey();
     return;
   }
   const holderAfterSeed = currentHolder(sessionId);
@@ -585,6 +834,7 @@ async function handleChatSend(
       `这段对话刚被终端接管${who} —— 这一条没有发出去。关掉那个终端后可以重发。`,
       sessionId,
     );
+    releaseSendKey();
     return;
   }
 
@@ -598,10 +848,12 @@ async function handleChatSend(
   });
 
   if (run) {
-    // 这一轮的推流集合不只有发起方 —— 所有正在看这条会话的 socket 一并接上。
-    attachSessionViewers(sessionId);
+    // 推流集合由 `startRun` 的 runStartedHook 统一接(见 chat-run-registry),
+    // 四个调用点共用同一步 —— 这里不再单独调一次。
     // fj:续发到这里才算真的成立(所有早退分支都已经走完)。
     drainToken?.onAccepted?.();
+    // F09:回合已登记 = 服务端确实收下了这一条。
+    sendSendAck(ws, sessionId, clientMessageId, 'accepted');
   }
 
   if (!run) {
@@ -613,10 +865,76 @@ async function handleChatSend(
         '这条会话已经有一条消息在排队了。等它发出去,或者先撤销那一条。',
         sessionId,
       );
+      releaseSendKey();
       return;
     }
 
     const rawContent = typeof data.content === 'string' ? data.content : '';
+
+    /**
+     * gc:**先试真合流。**
+     *
+     * 排队这条路的问题不是它错,是它**攒着**:消息躺在 Prism 手里,画一张
+     * 「已排队」的卡片,要等当前这一轮彻底跑完才由 Prism 重新发起一轮。
+     * 而 provider 那边本来就有命令队列(后台任务通知走的就是它),
+     * 直接推进去,由 CLI 自己决定什么时候投递 —— 那才是"我打断你一句"的样子。
+     *
+     * 三条边界,任何一条不成立都**退回排队**(= 今天的行为,不是退步):
+     *   1. 带图片的不合流 —— 见 `mergeUserMessage` 的说明(那段顺序不动);
+     *   2. 已经有一条在排队的不合流 —— 否则"排队上限一条"这条契约会被绕过,
+     *      而且下面那条 QUEUE_FULL 的提示就变成谎话;
+     *   3. provider 侧不成立(没有常驻 runtime、正在自动压缩……)。
+     */
+    const mergeFn = dependencies.mergeFns?.[provider];
+    const clientImages = (data.options as AnyRecord | undefined)?.images;
+    const carriesImages = Array.isArray(clientImages) && clientImages.length > 0;
+    if (mergeFn && !carriesImages && !pendingSends.has(sessionId) && rawContent.trim()) {
+      let merged: { merged: boolean; reason?: string } = { merged: false, reason: 'not-attempted' };
+      try {
+        merged = await mergeFn(sessionId, {
+          command: rawContent,
+          providerSessionId: session.provider_session_id ?? null,
+        });
+      } catch (error) {
+        log.warn('[chat] 合流失败,退回排队:', (error as Error)?.message || error);
+      }
+      if (merged.merged) {
+        /**
+         * 用户这条消息**当场落库**。
+         *
+         * 与真回合那条路同一份写法(见下面 `hasUserContent` 那一段):只落库、
+         * **不外发帧** —— 在线端已有乐观气泡,再广播会双;刷新后前端的 `local_`
+         * 乐观行会被这份服务端拷贝正常去重。
+         *
+         * 这一笔比排队那条路**早得多**:排队期间刷新,那条乐观气泡就没了,
+         * 只剩一张卡片(今天的行为)。合流之后它一开始就在日志里。
+         */
+        if (persistDisplayLog) {
+          sessionMessagesDb.append(sessionId, {
+            id: generateMessageId('user'),
+            sessionId,
+            timestamp: new Date().toISOString(),
+            provider,
+            kind: 'text',
+            role: 'user',
+            content: rawContent,
+          } as Parameters<typeof sessionMessagesDb.append>[1]);
+        }
+        /**
+         * 告诉观测回合:**下一轮无主帧是用户自己发的**,不是后台任务触发的 ——
+         * 别给它盖「📬 这一轮由 Claude Code 自己发起」的标记。
+         *
+         * (合流的消息可能被 CLI 当场并进这一轮 —— 那时根本不会有无主帧,
+         * 这个标记会自己过期,见 noteMergedSend。)
+         */
+        noteMergedSend(sessionId);
+        drainToken?.onAccepted?.();
+        sendSendAck(ws, sessionId, clientMessageId, 'accepted');
+        return;
+      }
+      log.info(`[chat] ${sessionId} 这一条不合流(${merged.reason ?? 'unknown'}),走排队`);
+    }
+
     const pending: PendingSend = {
       ws,
       userId,
@@ -626,6 +944,8 @@ async function handleChatSend(
     };
     pendingSends.set(sessionId, pending);
     broadcastToSessionViewers(sessionId, queuedFrame(sessionId, pending));
+    // 排队也是"服务端收下了" —— 前端可以清掉本地那份,不必再投。
+    sendSendAck(ws, sessionId, clientMessageId, 'accepted');
     return;
   }
 
@@ -635,7 +955,14 @@ async function handleChatSend(
   const sessionAttachmentRoots = session.project_path
     ? [path.join(session.project_path, ATTACHMENT_DIR_NAME)]
     : [];
-  const sanitizedImages = filterImagesToUploadStore(clientOptions.images, undefined, sessionAttachmentRoots);
+  const sanitizedImages = filterImagesToUploadStore(
+    clientOptions.images,
+    undefined,
+    sessionAttachmentRoots,
+    (absPath) => attachmentsDb.ownerOf(absPath),
+    sessionId,
+    authUserId,
+  );
 
   /**
    * do:会话命名闭环。客户端每次发送都带 options.sessionSummary(新会话 =
@@ -677,7 +1004,16 @@ async function handleChatSend(
    */
   // du:`persistDisplayLog` 为 false(seed 失败)时这一行也不能写 —— 它正是
   // 会把空日志变成"有一行"的那一笔,历史就此从界面消失。
-  if (persistDisplayLog && command.trim()) {
+  /**
+   * fl:判据从"正文非空"改成"**这一条有没有内容**"。
+   *
+   * 只发图片(不打字)是合法的一条消息 —— 前端的提交路径也允许了 ——
+   * 但这里只在 `command.trim()` 非空时才写用户事件,于是那条消息**不进显示日志**:
+   * 刷新之后历史里只有助手的回答,没有"用户问了什么",回合配对也少一条。
+   */
+  const hasUserContent = Boolean(command.trim())
+    || (Array.isArray(sanitizedImages) && sanitizedImages.length > 0);
+  if (persistDisplayLog && hasUserContent) {
     sessionMessagesDb.append(sessionId, {
       id: generateMessageId('user'),
       sessionId,
@@ -708,7 +1044,7 @@ async function handleChatSend(
   const actorUsername = authUsername;
 
   const runtimeOptions: AnyRecord = {
-    ...clientOptions,
+    ...pickClientRuntimeOptions(clientOptions),
     actorUsername,
     // Image attachments are re-validated server-side: only files inside the
     // global upload store may reach the provider runtimes' file reads.
@@ -732,6 +1068,20 @@ async function handleChatSend(
      */
     cwd: session.project_path ?? undefined,
     projectPath: session.project_path ?? clientOptions.projectPath,
+    /**
+     * A7:这一轮图片允许来自哪些目录 —— **由这道门算一次,运行时照用**。
+     *
+     * 运行时那边原来自己再判一遍(全局图库 + cwd),判据与这里不同:
+     * 台账兜底放行的那些图(落在别的项目 attachments/ 下的历史文件)在这里
+     * 过了,到那边又被拒,而日志只说"outside allowed roots"。
+     * 把结论传过去,两道门从此说同一句话。
+     */
+    imageRoots: Array.from(new Set([
+      ...sessionAttachmentRoots,
+      ...sanitizedImages
+        .map((image) => (typeof image.path === 'string' ? path.dirname(image.path) : ''))
+        .filter((dir): dir is string => Boolean(dir)),
+    ])),
     // Prism: fork descriptor for edit-and-rerun (branch off a parent session).
     // Only honored when this session has no native id yet (fresh branch).
     // fj:**父会话要过归属校验**(见 resolveAuthorizedFork)。
@@ -787,9 +1137,11 @@ function scheduleDrainPendingSend(sessionId: string, dependencies: ChatWebSocket
       ? pending.ws
       : [...(sessionViewers.get(sessionId) ?? [])].find((viewer) => viewer.readyState === WS_OPEN_STATE)
         ?? pending.ws;
+    let accepted = false;
     const drainToken = {
       cancelled: false,
       onAccepted: () => {
+        accepted = true;
         broadcastToSessionViewers(sessionId, {
           kind: 'chat_queue_flushed',
           sessionId,
@@ -812,6 +1164,27 @@ function scheduleDrainPendingSend(sessionId: string, dependencies: ChatWebSocket
       })
       .finally(() => {
         if (drainingSends.get(sessionId) === drainToken) drainingSends.delete(sessionId);
+        /**
+         * fz:**续发没能成立时,得有人告诉界面一声。**
+         *
+         * 上面那句 `pendingSends.delete` 是"认领"—— 条目从此不在表里了。
+         * 而 `handleChatSend` 在真正开跑之前有六条早退(会话没了、可见性变了、
+         * 终端接管了、provider 不支持、seed 之后重判……),它们只给一个 socket
+         * 回一条协议错误,**既不广播,也走不到 `dropPendingSend`**(条目已经
+         * 不在表里,那个 delete 返回 false)。
+         *
+         * fj 那轮把 `chat_queue_flushed` 从"无条件先广播"挪到 `onAccepted`,
+         * 堵住了"卡片消失但消息没发";另一半没跟上 —— 现在是**卡片永远不消失,
+         * 而消息同样没发**,正文也没退回输入框。要刷新才能让它消失。
+         *
+         * 判据放在这里而不是逐条早退上打补丁:六条早退里漏一条,病就还在;
+         * 而"跑完一圈都没人说收下了"这一句,把将来新增的早退也一并覆盖。
+         */
+        if (!accepted && !drainToken.cancelled) {
+          // 条目已经被认领走了,先放回去,好让 dropPendingSend 走它那套广播与退正文。
+          pendingSends.set(sessionId, pending);
+          dropPendingSend(sessionId, 'undeliverable');
+        }
       });
   });
 }
@@ -1282,6 +1655,20 @@ export function handleChatConnection(
   (ws as typeof ws & { prismUserId?: string | number | null; prismUsername?: string | null }).prismUserId = userId;
   (ws as typeof ws & { prismUsername?: string | null }).prismUsername =
     typeof request?.user?.username === 'string' ? request.user.username : null;
+  /**
+   * fl:把**握手那一刻的 `token_version`** 也盖上。
+   *
+   * fj 的心跳复检只问"这个用户还在不在",而「退出所有设备」/ 改密码走的是
+   * **旋转 token_version**,用户行照样在 —— 于是那条已经建立的聊天连接一直有效,
+   * 还能继续发指令。用户以为撤销了所有设备,实际只撤销了"再拿新票据"的能力。
+   *
+   * 票据消费那条路已经比对 token_version(见 websocket-auth),这里补上"连接
+   * 建立之后"的那一半。
+   */
+  (ws as typeof ws & { prismTokenVersion?: number | null }).prismTokenVersion =
+    userId !== null && userId !== undefined
+      ? Number(userDb.getUserById(Number(userId))?.token_version ?? 0)
+      : null;
 
   ws.on('message', async (rawMessage) => {
     try {

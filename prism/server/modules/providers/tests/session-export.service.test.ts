@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { describe, test } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 
 import {
   renderHtmlExport,
@@ -171,5 +171,79 @@ describe('fj:导出的工具关联 id', () => {
       { includeTools: true },
     );
     assert.ok(md.includes('结果 · Read'), `结果块该显示工具名,实际:\n${md}`);
+  });
+});
+
+/**
+ * F38:导出要带**附件清单**和**原生会话 id**。
+ *
+ * 此前导出完全不提附件 —— 一条「看这张图,里面的报错是什么」导出来只剩那句话,
+ * 读的人无从知道当时还给了模型一张图;而 JSON 导出的自述目标是"喂给别的工具做
+ * 二次分析",少了附件那份分析建立在残缺的输入上。
+ *
+ * 原生 id 同理:transcript、检查点、工具日志全按它组织,导出里只有 app id,
+ * 拿着导出去对 jsonl 第一步就断了。
+ */
+describe('F38 · 附件清单与原生 id', () => {
+  const withAttachment = {
+    title: '带图的会话',
+    sessionId: 'app-1',
+    providerSessionId: 'prov-9',
+    exportedAt: '2026-09-09T10:00:00.000Z',
+    messages: [
+      {
+        kind: 'text',
+        role: 'user' as const,
+        content: '看这张图',
+        timestamp: '2026-09-09T10:00:00.000Z',
+        attachments: [
+          { name: 'shot.png', path: '/proj/attachments/shot.png', mimeType: 'image/png' },
+          { path: '/proj/attachments/no-name.png' },
+        ],
+      },
+    ],
+  };
+
+  it('Markdown 列出附件,但**不内嵌内容**', () => {
+    const md = renderMarkdownExport(withAttachment);
+    expect(md).toContain('附件(2)');
+    expect(md).toContain('shot.png');
+    // 没有名字的退回路径最后一段
+    expect(md).toContain('no-name.png');
+    // base64 塞进 Markdown 会让它打不开 —— 只列清单
+    expect(md).not.toContain('base64');
+  });
+
+  it('JSON 带原生 id,附件是清单不是内容', () => {
+    const payload = JSON.parse(renderJsonExport(withAttachment));
+    expect(payload.providerSessionId).toBe('prov-9');
+    expect(payload.messages[0].attachments).toEqual([
+      { name: 'shot.png', path: '/proj/attachments/shot.png', mimeType: 'image/png' },
+      { name: 'no-name.png', path: '/proj/attachments/no-name.png', mimeType: null },
+    ]);
+  });
+
+  it('没有原生 id 时是 null,不是 undefined(对外契约要稳定)', () => {
+    const payload = JSON.parse(renderJsonExport({ ...withAttachment, providerSessionId: undefined }));
+    expect(payload.providerSessionId).toBeNull();
+  });
+
+  it('没有附件的消息:JSON 里是空数组,Markdown 里不出现"附件"字样', () => {
+    const plain = { ...withAttachment, messages: [{ kind: 'text', role: 'user' as const, content: '你好' }] };
+    expect(JSON.parse(renderJsonExport(plain)).messages[0].attachments).toEqual([]);
+    expect(renderMarkdownExport(plain)).not.toContain('附件(');
+  });
+
+  it('HTML 里附件名要转义(文件名是用户可控的)', () => {
+    const nasty = {
+      ...withAttachment,
+      messages: [{
+        kind: 'text', role: 'user' as const, content: 'x',
+        attachments: [{ name: '<img src=x onerror=alert(1)>' }],
+      }],
+    };
+    const html = renderHtmlExport(nasty);
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img src=x');
   });
 });

@@ -310,3 +310,60 @@ describe('fj:分组身份不许撞 key', () => {
       .toBe(first.items.filter(isToolGroupItem)[0]?._key);
   });
 });
+
+
+/**
+ * fz:**内容相同但对象全换掉时,组身份必须还认得出来。**
+ *
+ * 每一轮 `complete` 都会触发 `refreshFromServer`,它把 `serverMessages` 整个
+ * 换成刚从接口 parse 出来的新对象;转换缓存也是 WeakMap,旧 key 一起没。
+ * 于是按对象引用的认亲全部落空 → `_key` 全变 → React 卸载重挂每一条时间轴 →
+ * 用户展开过的那一步自己收回去、页面蹿半屏。
+ *
+ * 老的三条用例(追加新步骤、窗口从头部长大、开关思考)全都传的是**同一批对象**,
+ * 所以这个洞一条都红不起来 —— 这次的输入必须是"深拷贝之后的新对象"。
+ */
+describe('组身份:对象被整体换掉之后', () => {
+  const row = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, type: 'assistant', isToolUse: true, toolName: 'Bash', content: '', timestamp: 1, ...extra,
+  }) as never;
+
+  it('**深拷贝一份重新分组,_key 必须继承**', () => {
+    const first = [row('u1', { type: 'user', isToolUse: false }), row('a1'), row('a2')];
+    const state0 = createGroupIdentityState();
+    const pass1 = stabilizeGroupIdentity(groupConsecutiveTools(first, true), state0);
+    const key1 = (pass1.items.find((item) => isToolGroupItem(item)) as { _key?: string })?._key;
+    expect(key1).toBeTruthy();
+
+    // 模拟 refreshFromServer:同样的内容,全新的对象
+    const reloaded = first.map((message) => ({ ...(message as object) })) as never[];
+    const pass2 = stabilizeGroupIdentity(groupConsecutiveTools(reloaded, true), pass1.next);
+    const key2 = (pass2.items.find((item) => isToolGroupItem(item)) as { _key?: string })?._key;
+
+    expect(key2).toBe(key1);
+  });
+
+  it('换对象 + 追加一步 —— 还是同一段', () => {
+    const first = [row('u1', { type: 'user', isToolUse: false }), row('a1')];
+    const pass1 = stabilizeGroupIdentity(groupConsecutiveTools(first, true), createGroupIdentityState());
+    const key1 = (pass1.items.find((item) => isToolGroupItem(item)) as { _key?: string })?._key;
+
+    const reloaded = [...first.map((m) => ({ ...(m as object) })), row('a2')] as never[];
+    const pass2 = stabilizeGroupIdentity(groupConsecutiveTools(reloaded, true), pass1.next);
+    const key2 = (pass2.items.find((item) => isToolGroupItem(item)) as { _key?: string })?._key;
+
+    expect(key2).toBe(key1);
+  });
+
+  it('真的是另一段活动 —— 该发新号还是发新号', () => {
+    const first = [row('u1', { type: 'user', isToolUse: false }), row('a1')];
+    const pass1 = stabilizeGroupIdentity(groupConsecutiveTools(first, true), createGroupIdentityState());
+    const key1 = (pass1.items.find((item) => isToolGroupItem(item)) as { _key?: string })?._key;
+
+    const second = [row('u2', { type: 'user', isToolUse: false }), row('b1')];
+    const pass2 = stabilizeGroupIdentity(groupConsecutiveTools(second, true), pass1.next);
+    const key2 = (pass2.items.find((item) => isToolGroupItem(item)) as { _key?: string })?._key;
+
+    expect(key2).not.toBe(key1);
+  });
+});

@@ -66,14 +66,47 @@ export function useQueuedMessageAutoSend({
           return;
         }
 
-        // The draft is only released once the frame is confirmed to have left the
-        // client. Clearing first and discovering the socket was closed afterwards
-        // would lose the message with nothing in the UI to show for it.
+        /**
+         * fz:**带上幂等键,带上图片,而且不再"发完就删"。**
+         *
+         * 这条路是**用户没在看的那些会话**的唯一投递者,也就是本地队列存在的
+         * 理由。它此前:
+         *
+         * 1. 不带 `clientMessageId` —— 服务端对没有幂等键的一律放行、
+         *    **也不回 ACK**。于是"发出去了"的判据退回到 F09 之前那一个:
+         *    `socket.send()` 没抛异常。写进发送缓冲就算数,而缓冲里的帧在
+         *    切网 / 休眠唤醒 / 代理超时时会连着连接一起没。
+         * 2. `images: []` 写死 —— 带图的排队消息一律当纯文本发出去。
+         * 3. 发完立刻 `clearQueuedMessage` —— 底稿当场撕掉,第 1 条一旦落空,
+         *    消息和记录一起消失,界面上还留着一个"在跑"的转圈。
+         *
+         * 现在:幂等键原样带上(服务端据此去重、并回 `chat_ack`),图片描述符
+         * 原样带上,**记录留到 ACK 到达再清** —— 没等到就靠 TTL 自然释放,
+         * 下一次还能重投,重投的是同一个幂等键,服务端认得出来不会发两遍。
+         */
         const sent = sendMessage({
           type: 'chat.send',
           sessionId,
+          ...(queued.clientMessageId ? { clientMessageId: queued.clientMessageId } : {}),
           content: queued.content,
-          options: { ...(queued.options ?? {}), images: [] },
+          options: {
+            ...(queued.options ?? {}),
+            images: Array.isArray(queued.images) ? queued.images : [],
+            /**
+             * ga:**分叉点与隐藏上下文也要带上。**
+             *
+             * 它们在盘上是顶层字段(`toStoredCommand`),fz 修好了"读回来别削掉"
+             * 还专门写了测试断言它们能穿过 localStorage —— **穿过来了,却没人用**。
+             * composer 自己那条投递路是带的,这条后台路漏了,又是"同一件事只写在
+             * 一部分入口上"。
+             *
+             * 漏掉的后果:排队中的「编辑重跑」切走再回来会变成**在当前对话末尾
+             * 接着说**(不分叉,带着全部旧上下文);而「让 Claude 建定时任务」
+             * 的票据与接口说明全在 hiddenContext 里,丢了模型就只收到一句人话。
+             */
+            ...(queued.forkFrom ? { forkFrom: queued.forkFrom } : {}),
+            ...(queued.hiddenContext ? { hiddenContext: queued.hiddenContext } : {}),
+          },
         });
         if (!sent) {
           // 没发出去就把戳摘掉,别让这条记录白白锁上一个 TTL。
@@ -81,7 +114,11 @@ export function useQueuedMessageAutoSend({
           return;
         }
 
-        clearQueuedMessage(sessionId);
+        // 没有幂等键的老记录收不到 ACK —— 它只能沿用旧行为当场清掉,
+        // 否则会一直重投。带键的那些交给 `chat_ack` 清 —— 注意那个清理点在
+        // **应用级**的实时帧处理器里(useChatRealtimeHandlers),不是 composer:
+        // composer 只存在于当前正看的那条会话上,而这条路服务的正是后台会话。
+        if (!queued.clientMessageId) clearQueuedMessage(sessionId);
         markSessionProcessing(sessionId, { statusText: null, canInterrupt: true });
       }).catch((error) => {
         console.error('排队消息发送失败:', error);

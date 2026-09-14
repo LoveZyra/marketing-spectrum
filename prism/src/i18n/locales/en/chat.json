@@ -90,7 +90,9 @@
       "loadAll": "Load all messages",
       "expandAll": "Expand all in view",
       "loadingAll": "Loading all messages...",
-      "allLoaded": "All messages loaded"
+      "allLoaded": "All messages loaded",
+      "loadFailed": "Couldn't load this conversation's messages.",
+      "retryLoad": "Try again"
     }
   },
   "shell": {
@@ -357,7 +359,7 @@
     "runningCount": "{{count}} running",
     "defaultTitle": "Subagent task",
     "promptLabel": "Prompt:",
-    "resultLabel": "Agent report",
+    "elapsed": "{{seconds}}s elapsed",
     "noStepsYet": "No steps yet — the agent is starting up.",
     "failed": "Agent failed:"
   },

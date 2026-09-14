@@ -142,3 +142,24 @@ export function turnOutputsFromServer(
   }
   return result;
 }
+
+/**
+ * fz:把这一段的产出并进本轮已攒的那一份。
+ *
+ * **没有新东西就原样返回旧引用** —— 这一句是给 `memo` 用的:
+ * `extractTurnOutputsCached` 特意用 WeakMap 挂在组对象上返回稳定引用、
+ * `NO_TURN_OUTPUTS` 也是模块级常量,都是为了不让 `turnOutputs` 这个 prop
+ * 把浅比较的 `MessageComponent` 打穿。此前子代理分支展开出来的是**每次渲染
+ * 都新建的字面量数组**,于是"派过子代理且写了文件"的那一轮,它后面那条长回答
+ * 在下一轮打字的全过程里每秒被重排十次(流式期间约 10Hz commit)。
+ */
+export function mergeTurnOutputs(
+  current: TurnOutputFile[],
+  incoming: readonly TurnOutputFile[],
+): TurnOutputFile[] {
+  if (incoming.length === 0) return current;
+  if (current.length === 0) return incoming as TurnOutputFile[];
+  const seen = new Set(current.map((file) => file.path));
+  const extra = incoming.filter((file) => !seen.has(file.path));
+  return extra.length === 0 ? current : [...current, ...extra];
+}

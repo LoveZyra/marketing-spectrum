@@ -16,6 +16,12 @@ import { extractSessionOutputs } from '../utils/sessionOutputs';
 import { turnOutputsFromServer } from '../utils/turnOutputs';
 import { changedFilesToMessages } from '../utils/workFrames';
 import { useSessionWorkFrames } from '../hooks/useSessionWorkFrames';
+import {
+  EMPTY_SERVER_QUEUE,
+  queuedForSession,
+  reduceServerQueue,
+  type ServerQueueMap,
+} from '../utils/serverQueue';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatFindBar from './subcomponents/ChatFindBar';
@@ -146,6 +152,8 @@ function ChatInterface({
     currentSessionId,
     markSessionEstablished,
     isLoadingSessionMessages,
+    chatViewState,
+    retryLoadSessionMessages,
     isLoadingMoreMessages,
     hasMoreMessages,
     totalMessages,
@@ -248,6 +256,7 @@ function ChatInterface({
     queuedDraft,
     editQueuedDraft,
     deleteQueuedDraft,
+    handleSendAcked,
     restoreQueuedContent,
     handleInputChange,
     handleKeyDown,
@@ -389,20 +398,29 @@ function ChatInterface({
    * 与 composer 自己那份浏览器内排队是两回事:这一份存在服务端,刷新页面、
    * 换设备、关掉标签页之后都还在,所以只能由服务端的帧驱动,不能靠本地推断。
    */
-  const [serverQueued, setServerQueued] = useState<{ sessionId: string; preview: string; enqueuedAt: string } | null>(null);
+  const [serverQueue, setServerQueue] = useState<ServerQueueMap>(EMPTY_SERVER_QUEUE);
 
   const handleServerQueueChange = useCallback(
     (sessionId: string, queued: { preview: string; enqueuedAt: string } | null) => {
-      setServerQueued(queued ? { sessionId, ...queued } : (current) => (current?.sessionId === sessionId ? null : current));
+      setServerQueue((current) => reduceServerQueue(current, sessionId, queued));
     },
     [],
   );
 
+  const viewedSessionId = selectedSession?.id ?? currentSessionId ?? null;
+  const serverQueued = queuedForSession(serverQueue, viewedSessionId);
+
   const handleCancelServerQueued = useCallback(() => {
-    const target = serverQueued?.sessionId;
-    if (!target) return;
-    sendMessage({ type: 'chat.cancel-queued', sessionId: target });
-  }, [serverQueued?.sessionId, sendMessage]);
+    /**
+     * B4:取消的是**正在看的**这条会话的排队,不是"状态里存着的那条"。
+     *
+     * 原来读的是 `serverQueued.sessionId` —— 卡片渲染出来之后、点下去之前
+     * 若有一帧别的会话的 queued 落地,状态就换成了那一条,这一点取消的是
+     * 另一条会话排队中的消息。
+     */
+    if (!viewedSessionId) return;
+    sendMessage({ type: 'chat.cancel-queued', sessionId: viewedSessionId });
+  }, [viewedSessionId, sendMessage]);
 
   useChatRealtimeHandlers({
     subscribe,
@@ -422,6 +440,7 @@ function ChatInterface({
     sessionStore,
     onChangedFiles: handleChangedFiles,
     onServerQueueChange: handleServerQueueChange,
+    onSendAcked: handleSendAcked,
     // 排队被中止带走时,正文退回输入框(只在当前正看着这条会话、且输入框为空时)。
     onServerQueueReturned: (sid, content) =>
       sid === (selectedSession?.id ?? currentSessionId) && restoreQueuedContent(content),
@@ -594,7 +613,7 @@ function ChatInterface({
 
   const composerElement = (
     <ChatComposer
-      serverQueued={serverQueued && serverQueued.sessionId === (selectedSession?.id ?? currentSessionId) ? serverQueued : null}
+      serverQueued={serverQueued}
       onCancelServerQueued={handleCancelServerQueued}
       pendingPermissionRequests={pendingPermissionRequests}
       handlePermissionDecision={handlePermissionDecision}
@@ -684,6 +703,8 @@ function ChatInterface({
           onWheel={handleScroll}
           onTouchMove={handleScroll}
           isLoadingSessionMessages={isLoadingSessionMessages}
+          chatViewState={chatViewState}
+          onRetryLoadMessages={retryLoadSessionMessages}
           isProcessing={isProcessing}
           hasActivityIndicator={hasActivityIndicator}
           streamingText={streamingText}

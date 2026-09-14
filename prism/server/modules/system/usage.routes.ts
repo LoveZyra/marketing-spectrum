@@ -4,9 +4,11 @@ import path from 'node:path';
 
 import express, { type RequestHandler, type Router } from 'express';
 
-import { canViewerSeeSession, projectsDb, sessionsDb, usageRecordsDb } from '@/modules/database/index.js';
+import { canViewerSeeSession, projectsDb, sessionMessagesDb, sessionsDb, usageRecordsDb } from '@/modules/database/index.js';
+import { nativeUuidFromMessageId } from '@/shared/fork-anchor.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
 import { createLogger } from '@/shared/logger.js';
+
 const log = createLogger('system');
 
 type UsageRouterDependencies = {
@@ -122,6 +124,27 @@ async function getTokenUsageTotals(jsonlPath: string): Promise<TokenUsageTotals>
  * index.js — they call server/claude-sdk.js, which the eslint boundaries
  * config does not allow modules to import.
  */
+/**
+ * F14:**从网页消息 id 里取出 provider 原生 uuid。**
+ *
+ * 网页那侧的 id 有两种来源,形状完全不同:
+ *   - 从 transcript 读来的历史行:id 就是 jsonl 的 `uuid`,有时带展示后缀
+ *     (`<uuid>_text` / `<uuid>_tr_<id>` / `<uuid>_images`)—— uuid 里没有下划线,
+ *     所以第一个 `_` 之前就是它;
+ *   - **fj 之后**显示日志成了权威来源,而它的 id 是应用自己生成的
+ *     (`text_<时间戳>_<随机>` / `local_*` 之类)—— 切出来是 `text` 这种垃圾。
+ *
+ * 第二种情况下扫描必然扫不到,而端点此前照样返回 `resumeSessionAt: null` + 200,
+ * 客户端拿着它开跑:**「编辑重跑」静默变成「整段历史从头重跑」**,而且没有任何提示。
+ *
+ * 所以先按形状判一次:不像 uuid 就直说定位不了,别拿一个注定扫不到的值去扫。
+ */
+/**
+ * fy:形状解析搬到 `shared/fork-anchor.ts`,与落库那边共用同一份
+ * (落库要用它算 assistant 行的锚点)。这里保留同名导出,老测试照旧钉得住。
+ */
+export const extractNativeUuid = nativeUuidFromMessageId;
+
 export function createUsageRouter(dependencies: UsageRouterDependencies): Router {
   const { authenticateToken } = dependencies;
   const router = express.Router();
@@ -152,7 +175,49 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
       // display suffix (`<uuid>_text`, `<uuid>_tr_<id>`, `<uuid>_images`).
       // uuids never contain underscores, so the part before the first "_"
       // is the native uuid.
-      const targetUuid = messageId ? messageId.split('_')[0] : '';
+      /**
+       * fy(F14):**先查显示日志里记下的分叉锚点。**
+       *
+       * 端点要的是"这条消息之前最后一个原生 assistant uuid"。此前只有一条路:
+       * 从消息 id 的前缀反推 uuid、再扫 jsonl 往回找。而实时对话里用户气泡的 id
+       * 是 `user_<随机>` —— **前缀根本不是 uuid**,那条路从一开始就走不通
+       * (fp 把它从"静默重跑整段历史"改成了明确 409,但仍然做不成)。
+       *
+       * 根子在于用户说的那句话没有对应的出站 SDK 帧,写它的时候手里没有 uuid。
+       * 但 assistant 帧**有**,而且是现成的 —— 所以 fy 起,assistant 侧的显示
+       * 日志行落库时顺手记下自己的原生 uuid,这里按日志顺序往回取第一条即可。
+       *
+       * 三态要分开(见 `forkAnchorFor` 的注释):`undefined` 是"日志里没这一行"
+       * (老会话 / 被 trim 掉),那才该退回扫 jsonl;`null` 是"确实没有前序
+       * assistant",那是真的分不了叉。
+       */
+      if (messageId) {
+        const anchor = sessionMessagesDb.forkAnchorFor(appSessionId, messageId);
+        if (typeof anchor === 'string') {
+          return res.json({
+            providerSessionId: row.provider_session_id,
+            projectPath: row.project_path || null,
+            resumeSessionAt: anchor,
+          });
+        }
+        if (anchor === null) {
+          return res.status(409).json({
+            error: '这条消息之前没有可分叉的回答(它是会话里的第一句)。',
+            code: 'FORK_POINT_NOT_FOUND',
+          });
+        }
+        // anchor === undefined → 显示日志里查不到这一行,退回下面扫 jsonl 的老路。
+      }
+
+      const targetUuid = messageId ? extractNativeUuid(messageId) : null;
+      if (messageId && !targetUuid) {
+        // 指名了消息却认不出它的原生 uuid —— 明确失败,别退回"从头重跑"。
+        return res.status(409).json({
+          error: '无法定位这条消息在原生 transcript 里的位置,这条会话可能只有显示日志。'
+            + '请改用「新建会话」重新提问。',
+          code: 'FORK_POINT_UNRESOLVED',
+        });
+      }
 
       let resumeSessionAt = null;
       if (targetUuid && row.jsonl_path) {
@@ -177,6 +242,20 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
         } catch (error) {
           log.warn('[Fork] Transcript scan failed:', (error as Error).message);
         }
+      }
+
+      /**
+       * F14:**指名了消息却没扫到,同样是失败。**
+       *
+       * `resumeSessionAt: null` 只有一个合法含义:调用方**没有指名消息**,
+       * 要从头分叉。指名了却扫不到还返回 null,等于把"定位失败"伪装成
+       * "从头开始" —— 用户点的是「编辑重跑」,拿到的是整段历史重跑一遍。
+       */
+      if (messageId && !resumeSessionAt) {
+        return res.status(409).json({
+          error: '在原生 transcript 里找不到这条消息,无法从这里分叉。',
+          code: 'FORK_POINT_NOT_FOUND',
+        });
       }
 
       res.json({

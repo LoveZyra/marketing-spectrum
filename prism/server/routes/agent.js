@@ -383,6 +383,38 @@ async function createGitHubPR(octokit, owner, repo, branchName, title, body, bas
 }
 
 /**
+ * F05:**续会话时,工作目录只能是这条会话登记的那个。**
+ *
+ * `finalProjectPath` 完全来自请求(`projectPath` / 克隆目标),而会话行里有它
+ * 自己的 `project_path` —— 两者可以不一样。不校验的后果是"续 A 会话的对话,
+ * 却在 B 目录里执行":transcript 记的是 A 的历史,改的却是 B 的文件,而侧栏、
+ * 检查点、附件归属全都按 A 记账。
+ *
+ * 网页那条路早就收口了(`cwd` **只从会话行取**,见 chat-websocket.service),
+ * 外部 API 这条一直没有。
+ *
+ * 三种结果:
+ *   - `{ ok: true, projectPath }` —— 用这个目录跑(会话登记的那个);
+ *   - `{ ok: false, conflict }` —— 调用方明确给了一个**不同的**目录,拒绝。
+ *     选择明确拒绝而不是静默改写:悄悄换掉一个调用方明明白白传进来的目录,
+ *     比报错更难查;
+ *   - 会话没登记路径(老行)→ 按请求那个跑,不拦。
+ *
+ * @param {string|null} sessionProjectPath 会话行里的 project_path(已归一)
+ * @param {string} requestedProjectPath 这次请求解析出来的路径(已归一)
+ * @param {boolean} callerSuppliedPath 调用方是不是显式给了 projectPath / githubUrl
+ */
+export function resolveResumeProjectPath(sessionProjectPath, requestedProjectPath, callerSuppliedPath) {
+  if (!sessionProjectPath) {
+    return { ok: true, projectPath: requestedProjectPath };
+  }
+  if (callerSuppliedPath && requestedProjectPath !== sessionProjectPath) {
+    return { ok: false, conflict: { sessionProjectPath, requestedProjectPath } };
+  }
+  return { ok: true, projectPath: sessionProjectPath };
+}
+
+/**
  * Clone a GitHub repository to a directory
  * @param {string} githubUrl - GitHub repository URL
  * @param {string} githubToken - Optional GitHub token for private repos
@@ -956,7 +988,21 @@ router.post('/sessions/:sessionId/abort', validateExternalApiKey, async (req, re
       }
     }
 
-    chatRunRegistry.completeRun(sessionId, { exitCode: success ? 0 : 1, aborted: true });
+    /**
+     * fz:**按这一次拿到的那个 run 收尾,不按会话键重查表。**
+     *
+     * 上面两个 `await` 最长要等 ~10 秒(两次 interruptWithTimeout 各 5 秒)。
+     * 这段时间里上一轮可能已经自己收尾、排队消息被续发、注册表里已经换成
+     * **新一轮**了。按会话 id 重查表拿到的就是那一轮 —— 给它盖上 aborted
+     * 之后,注册表对它的**每一帧**返回 null:既不推给浏览器,也不落显示日志。
+     *
+     * 用户端看到的是:停止按钮消失、转圈停了,像是这一轮结束了;可模型还在真跑,
+     * 还在改文件、执行命令,输出全部进黑洞;刷新之后历史里只有自己那句话。
+     *
+     * 网关侧的同功能路径早就改用 `completeRunIfCurrent` 并把危害逐条写在注释里,
+     * 这条外部 API 路径没跟上 —— 同一个判据,两处实现,只改了一处。
+     */
+    chatRunRegistry.completeRunIfCurrent(run, { exitCode: success ? 0 : 1, aborted: true });
     return res.json({ success: true, aborted: success, sessionId });
   } catch (error) {
     log.error('[Agent API] 中止失败:', error);
@@ -1299,6 +1345,22 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         targetPath = path.join(os.homedir(), '.claude', 'external-projects', repoHash);
       }
 
+      /**
+       * F05:**克隆这一支也要过归属门。**
+       *
+       * 下面那支(已存在 projectPath)有 `assertViewerMayCreateSessionAt`,
+       * 这一支只有工作区包含判定 —— 而 `cloneGitHubRepo` 在目标目录已存在、
+       * 且 remote 与请求的 URL 相同时会**直接把那个目录返回**(不重新克隆)。
+       *
+       * 于是:知道别人克隆过哪个仓库、放在哪个路径,就能用同一个 githubUrl +
+       * 他的 projectPath 走到这里 —— 克隆步骤原样返回**他的目录**,随后这一轮
+       * 以 bypassPermissions 在里面跑起来。工作区包含判定挡不住它,因为那条路径
+       * 本来就在工作区里。
+       *
+       * 与另一支同一道门、同样统一 404,不给"这个路径存不存在"的探针。
+       */
+      await assertViewerMayCreateSessionAt(readRequestViewer(req), targetPath);
+
       finalProjectPath = await cloneGitHubRepo(githubUrl.trim(), tokenToUse, targetPath);
     } else {
       // Use existing project path
@@ -1337,20 +1399,6 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
     finalProjectPath = normalizeProjectPath(finalProjectPath);
 
-    // Register project path in DB (or reuse existing active registration).
-    //
-    // owner 必须在这里就传对:这次预注册先落行,后面 createAppSession 内部的
-    // createProjectPath 走 ON CONFLICT 分支、按设计**不改归属** —— 也就是说
-    // 这里少传 owner,新路径的项目就永远无主。无主项目在现行可见性规则下
-    // 非公共目录仅 root 可见:API 调用者自己都打不开返回的 /session/<id> 链接;
-    // 恰在公共目录下则对全服务器公开。两个方向都不是"归调用者所有"的本意。
-    const registrationResult = projectsDb.createProjectPath(finalProjectPath, null, req.user.id);
-    if (registrationResult.outcome === 'active_conflict') {
-      log.info('Project registration already exists for:', finalProjectPath);
-    } else {
-      log.info('Project registered:', registrationResult.project);
-    }
-
     /**
      * 传进来的 `sessionId` 到底是什么意思 —— 判据只有一条:
      * **库里那行的 `provider_session_id` 空不空。**
@@ -1376,12 +1424,63 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         if (!canViewerSeeSession(sessionId, readRequestViewer(req))) {
           return res.status(404).json({ error: `Session "${sessionId}" was not found.` });
         }
+
+        /**
+         * F05:**续会话时,工作目录只能是这条会话登记的那个。**
+         *
+         * `finalProjectPath` 到这里为止完全来自请求(`projectPath` / 克隆目标),
+         * 而会话行里有它自己的 `project_path` —— 两者可以不一样。不校验的后果是
+         * "续 A 会话的对话,却在 B 目录里执行":transcript 记的是 A 的历史,
+         * 改的却是 B 的文件,而会话侧栏、检查点、附件归属全都按 A 记账。
+         *
+         * 网页那条路早就收口了(`cwd: session.project_path`,**只从会话行取**,
+         * 见 chat-websocket.service 里的说明),外部 API 这条一直没有。
+         *
+         * 这里选择**明确拒绝**而不是静默改写:调用方明明白白传了一个目录,
+         * 悄悄换掉比报错更难查。不传 projectPath 的调用不受影响 —— 那本来就是
+         * "按会话自己的路径跑"的意思。
+         */
+        const resolved = resolveResumeProjectPath(
+          row.project_path ? normalizeProjectPath(row.project_path) : null,
+          finalProjectPath,
+          Boolean(projectPath || githubUrl),
+        );
+        if (!resolved.ok) {
+          return res.status(409).json({
+            error: `Session "${sessionId}" is registered under ${resolved.conflict.sessionProjectPath}; `
+              + `refusing to run it in ${resolved.conflict.requestedProjectPath}. `
+              + `Omit projectPath/githubUrl to use the session's own path.`,
+          });
+        }
+        finalProjectPath = resolved.projectPath;
+
         if (row.provider_session_id) resumeProviderSessionId = row.provider_session_id;
         else createWithSessionId = sessionId;
       } else {
         return res.status(404).json({ error: `Session "${sessionId}" was not found.` });
       }
     }
+
+    /**
+     * 项目注册排在会话归属判定**之后**。
+     *
+     * 上面那段可能 409(会话登记的目录与请求给的对不上),而注册是有副作用的 ——
+     * 先注册再拒绝会给一次被驳回的请求留下一行项目记录。
+     */
+    // Register project path in DB (or reuse existing active registration).
+    //
+    // owner 必须在这里就传对:这次预注册先落行,后面 createAppSession 内部的
+    // createProjectPath 走 ON CONFLICT 分支、按设计**不改归属** —— 也就是说
+    // 这里少传 owner,新路径的项目就永远无主。无主项目在现行可见性规则下
+    // 非公共目录仅 root 可见:API 调用者自己都打不开返回的 /session/<id> 链接;
+    // 恰在公共目录下则对全服务器公开。两个方向都不是"归调用者所有"的本意。
+    const registrationResult = projectsDb.createProjectPath(finalProjectPath, null, req.user.id);
+    if (registrationResult.outcome === 'active_conflict') {
+      log.info('Project registration already exists for:', finalProjectPath);
+    } else {
+      log.info('Project registered:', registrationResult.project);
+    }
+
 
     /**
      * 异步模式:id 先走,回合后走。
@@ -1419,8 +1518,13 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       });
 
       if (!run) {
+        // ga:拒绝的原因有两种(在跑的回合 / 终端接管着),原来一律报前者。
+        const refusal = chatRunRegistry.explainRunRefusal(appSessionId);
         return res.status(409).json({
-          error: `Session "${appSessionId}" already has a run in progress.`,
+          error: refusal.code === 'HELD_BY_SHELL'
+            ? `Session "${appSessionId}" is held by an interactive terminal${refusal.holder ? ` (${refusal.holder})` : ''}.`
+            : `Session "${appSessionId}" already has a run in progress.`,
+          code: refusal.code,
           sessionId: appSessionId,
         });
       }
@@ -1499,8 +1603,13 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         userId: req.user.id,
       });
       if (!syncRun) {
+        // ga:同上 —— 终端接管着的时候别报"有回合在跑"(见 explainRunRefusal)。
+        const refusal = chatRunRegistry.explainRunRefusal(appSessionId);
         return res.status(409).json({
-          error: `Session "${appSessionId}" already has a run in progress.`,
+          error: refusal.code === 'HELD_BY_SHELL'
+            ? `Session "${appSessionId}" is held by an interactive terminal${refusal.holder ? ` (${refusal.holder})` : ''}.`
+            : `Session "${appSessionId}" already has a run in progress.`,
+          code: refusal.code,
           sessionId: appSessionId,
         });
       }

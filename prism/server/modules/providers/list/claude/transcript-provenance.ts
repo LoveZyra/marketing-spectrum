@@ -56,6 +56,23 @@ export const INTERNAL_CONTENT_PREFIXES = [
   // 工具调用被打断/移除时的占位说明。
   '[Tool use interrupted]',
   '[Tool use removed]',
+  /**
+   * gb:**CLI 自己发起的那一轮的注入帧。**
+   *
+   * 后台子代理完成、会话内定时任务(CronCreate)触发时,CLI 用自己的消息队列
+   * 注入一条 user 帧,内容是 `<task-notification>…</task-notification>` 的裸 XML。
+   *
+   * 结构判据**拦不住它**:实测两种形态并存 —— 一种带
+   * `origin:{"kind":"task-notification"}`(会被下面 origin 那条拦掉),
+   * 另一种**完全没有 origin 字段**,`isMeta` / `isSidechain` / `sourceToolUseID` /
+   * `turnCompanion` / `parent_tool_use_id` 也一个都不带。那一种在此之前
+   * 一条判据都不命中,只是因为整轮都被上游丢掉了才没露出来;
+   * 观测回合(gb)把这一轮接住之后,它会**原样渲染成一条用户气泡**。
+   *
+   * 所以这里补内容兜底,并且在下面的 `INJECTED_BLOCK_TAGS` 里也加一条 ——
+   * 注入块不一定在开头(CLI 会把它追加在别的内容后面)。
+   */
+  '<task-notification>',
 ] as const;
 
 /**
@@ -65,7 +82,7 @@ export const INTERNAL_CONTENT_PREFIXES = [
  * `startsWith` 的话,一条"用户原话 + 一大段 system-reminder"会原样渲染出来,
  * 提醒那段就明晃晃地混在用户气泡里。
  */
-const INJECTED_BLOCK_TAGS = ['system-reminder', 'local-command-caveat'] as const;
+const INJECTED_BLOCK_TAGS = ['system-reminder', 'local-command-caveat', 'task-notification'] as const;
 
 const INJECTED_BLOCK_PATTERNS = INJECTED_BLOCK_TAGS.map(
   (tag) => new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'g'),

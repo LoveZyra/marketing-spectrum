@@ -4,12 +4,23 @@ import type { MutableRefObject } from 'react';
 import { authenticatedFetch } from '../../../utils/api';
 import type { MarkSessionIdle, SessionActivityMap } from '../../../hooks/useSessionProtection';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
-import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import type { SessionStatus, SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage } from '../types/types';
 import {
+  EMPTY_SPOT_MEMORY,
+  EMPTY_WINDOW_MEMORY,
+  beginScrollRestore,
   initialWindowAfterLoadAll,
+  isUserInitiatedScroll,
+  recallSessionWindow,
+  rememberReadingSpot,
+  rememberSessionWindow,
   revealBatch,
+  stepScrollRestore,
   visibleCountForTarget,
+  type ScrollRestoreState,
+  type SessionSpotMemory,
+  type SessionWindowMemory,
 } from '../utils/messageWindow';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
 import { shouldKeepOrphanedSessionView } from '../utils/sessionViewGuard';
@@ -67,7 +78,7 @@ interface UseChatSessionStateArgs {
 /*  Helper: Convert a ChatMessage to a NormalizedMessage for the store */
 /* ------------------------------------------------------------------ */
 
-function chatMessageToNormalized(
+export function chatMessageToNormalized(
   msg: ChatMessage,
   sessionId: string,
   provider: LLMProvider,
@@ -104,7 +115,13 @@ function chatMessageToNormalized(
     } as NormalizedMessage;
   }
   if (msg.type === 'error') {
-    return { ...base, kind: 'error', content: msg.content || '' } as NormalizedMessage;
+    return {
+      ...base,
+      kind: 'error',
+      content: msg.content || '',
+      // ga:本地提示的标记要带过去(见 NormalizedMessage.isLocalNotice)。
+      ...(msg.isLocalNotice ? { isLocalNotice: true } : {}),
+    } as NormalizedMessage;
   }
   return {
     ...base,
@@ -120,6 +137,76 @@ function chatMessageToNormalized(
 /* ------------------------------------------------------------------ */
 /*  Hook                                                              */
 /* ------------------------------------------------------------------ */
+
+/**
+ * B3:**一条会话的正文此刻处于什么状态** —— 由槽位派生,不再由本地布尔量拼。
+ *
+ * 原来只有一个 `isLoadingSessionMessages`(视图级 `useState`),而"这条会话的
+ * 历史到底加载到哪一步"是**每条会话各自**的事。两者不匹配的地方全是 bug:
+ *
+ *   - `unknown` 与 `empty` 分不开:槽位还没落地时 `chatMessages.length === 0`,
+ *     渲染分支直接落到「起始卡片」——空会话与"还没开始加载"长得一模一样,
+ *     切会话的第一帧因此闪一下起始卡片再变成加载中;
+ *   - `error` 与 `empty` 也分不开:首屏拉取失败之后 loading 置回 false,
+ *     于是一条 5000 条的会话渲染成"这里还没有消息,开始聊天吧" —— 用户没有
+ *     任何线索知道那是一次网络失败,更没有重试入口;
+ *   - 布尔量由 `await` 之后的落地代码写,每一处都得自带换会话守卫,而其中
+ *     一处(离开会话到新会话页)当初就漏了,新会话页永久卡在「正在加载」。
+ *
+ * 派生之后这三件事都不成立:状态只有一个来源,而且天然按会话隔离。
+ */
+export type ChatViewState = 'unknown' | 'loading' | 'ready' | 'empty' | 'error';
+
+export function deriveChatViewState(
+  sessionId: string | null,
+  slot: { status: SessionStatus; fetchedAt: number; merged: unknown[] } | undefined,
+): ChatViewState {
+  // 新会话页:没有会话,也就没有历史要等。
+  if (!sessionId) return 'ready';
+  if (!slot) return 'unknown';
+  /**
+   * `fetchedAt > 0` = **这条会话至少落地过一页**。此后不再回到 loading:
+   * 刷新与补页都在已有内容之上进行,把整屏换成 shimmer 只会让人以为内容没了。
+   */
+  if (slot.fetchedAt > 0) return slot.merged.length === 0 ? 'empty' : 'ready';
+  if (slot.status === 'error') return 'error';
+  if (slot.status === 'loading') return 'loading';
+  /**
+   * 槽位建了但一页都还没拉过(实时帧先到、或 effect 还没跑)。算 `unknown` ——
+   * 调用方按"还在等"渲染,而不是按"空的"。**空会话必须先落地过一页才算空。**
+   */
+  return 'unknown';
+}
+
+/**
+ * 补一页更早的历史之后,这一页到底算什么。
+ *
+ * B2 把它单拎出来是因为原来的判据**测的是另一件事**:
+ * `slot.serverMessages.length === 0` 是**累计**已加载条数,只有空会话才成立
+ * —— 也就是说"这一页什么也没带回来"这个状态从来没被识别过。
+ *
+ * 而它是会发生的:流式期间新行不断落盘,补页按"已加载条数"算 offset 从尾部
+ * 取页,取回来的这一页可能与已加载窗口完全重叠(去重后净增 0),服务端却仍然
+ * 报 `hasMore: true`。此时若把它当成"加载成功",自动补页会认为自己在前进,
+ * 一路打满 30 次请求、界面一动不动、一声不吭。
+ *
+ * 四种结局各自要做的事不同,所以分成四个名字而不是一个 boolean:
+ *   - `failed`    请求失败(fetchMore 返回 null)→ 提示用户,别改任何分页状态
+ *   - `exhausted` 一条没多,服务端也说没有了 → 收尾:「全部到手」
+ *   - `stalled`   一条没多,服务端却说还有 → **不算成功**,停下,别再自动补
+ *   - `loaded`    真的多出来了 → 前插、放开可见窗口
+ */
+export type OlderPageResult = 'failed' | 'exhausted' | 'stalled' | 'loaded';
+
+export function classifyOlderPage(
+  slot: { serverMessages: unknown[]; hasMore: boolean } | null | undefined,
+  loadedBefore: number,
+): OlderPageResult {
+  if (!slot) return 'failed';
+  const gained = slot.serverMessages.length - loadedBefore;
+  if (gained > 0) return 'loaded';
+  return slot.hasMore ? 'stalled' : 'exhausted';
+}
 
 /**
  * 只要会话在跑就允许中止 —— **故意不看 `canInterrupt`**。
@@ -186,10 +273,7 @@ export function useChatSessionState({
    * 建立的",刚建的会话照旧保护,切走留下的残留一律清。
    */
   const establishedHereRef = useRef<string | null>(null);
-  const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
   const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
-  const [hasMoreMessages, setHasMoreMessages] = useState(false);
-  const [totalMessages, setTotalMessages] = useState(0);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const [tokenBudget, setTokenBudget] = useState<Record<string, unknown> | null>(null);
   const [visibleMessageCount, setVisibleMessageCount] = useState(INITIAL_VISIBLE_MESSAGES);
@@ -206,9 +290,43 @@ export function useChatSessionState({
   const wasNearTopRef = useRef(false);
   const [searchTarget, setSearchTarget] = useState<{ timestamp?: string; uuid?: string; snippet?: string } | null>(null);
   const searchScrollActiveRef = useRef(false);
-  const isLoadingSessionRef = useRef(false);
   const isLoadingMoreRef = useRef(false);
   const allMessagesLoadedRef = useRef(false);
+  /**
+   * 换会话时要把**离开那一刻**的窗口记下来,而 `visibleMessageCount` 是 state:
+   * effect 闭包里那份是上一次 commit 的值。记账走 ref。
+   */
+  const visibleMessageCountRef = useRef(INITIAL_VISIBLE_MESSAGES);
+  /** 按会话记住的渲染窗口(见 messageWindow.ts 里的 recallSessionWindow)。 */
+  const sessionWindowMemoryRef = useRef<SessionWindowMemory>(EMPTY_WINDOW_MEMORY);
+  /**
+   * 按会话记住的**阅读位置**。与上面那张表分开:位置每次 commit 都在写,
+   * 窗口只在离开那一刻写一次 —— 合成一张就是"同一条记录两个写者"。
+   */
+  const sessionSpotMemoryRef = useRef<SessionSpotMemory>(EMPTY_SPOT_MEMORY);
+  /** 正在进行的位置恢复(等行落地);null = 没有要恢复的。 */
+  const scrollRestoreRef = useRef<ScrollRestoreState | null>(null);
+  /** 等待恢复的这段时间里,用户自己滚过没有 —— 滚过就放弃恢复(见 stepScrollRestore)。 */
+  const scrollRestoreUserMovedRef = useRef(false);
+  /**
+   * ga:控制器**自己**最后写进去的那个 scrollTop —— 写完立刻读回(浏览器会夹到
+   * 合法区间,写进去的值和落定的值不一定一样)。
+   *
+   * fz 那条"等待恢复期间只要有滚动事件就是用户滚的"判据,理由写的是「恢复期间
+   * 我们一个 scrollTop 都不写」—— **这句话是错的**:恢复挂在 `wait` 上时
+   * `followBottom` 仍是 true,下面跟底那一句每次 commit 都在写。于是只要恢复
+   * 需要等超过一帧,就必然被自己写出去的滚动事件掐死 —— 这个功能实际从未生效。
+   *
+   * 现在拿这个值当基准:滚动事件的落点跟它一致 = 那一下是我们自己写的。
+   */
+  const programmaticScrollTopRef = useRef<number | null>(null);
+  /** ga:上一次 commit 时容器可见吗 —— 由不可见变可见的那一帧要特殊对待(见控制器)。 */
+  const containerWasVisibleRef = useRef(true);
+  /** 当前会话键 —— 恢复与记录都要比对它,免得把 A 的位置落到 B 身上。 */
+  const viewSessionKeyRef = useRef<string>('');
+  // 渲染期同步 —— 与 isProcessingRef 同一套写法。逐个 setter 旁边手动维护
+  // 迟早会漏一处(allMessagesLoadedRef 就是那么维护的,已经有 12 个写点)。
+  visibleMessageCountRef.current = visibleMessageCount;
   const scrollAnchorRef = useRef<{
     element: HTMLElement;
     /** 从**末尾**倒数第几行。前插不改变这个值,重挂载也不影响 —— 元素引用失效时靠它找回。 */
@@ -222,10 +340,23 @@ export function useChatSessionState({
   const holdAnchorRef = useRef(false);
   /** 是否处于跟底模式。直接由滚动事件写,不经过 state —— state 落后一次 commit。 */
   const followBottomRef = useRef(true);
-  const messagesOffsetRef = useRef(0);
   const loadAllFinishedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadAllOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastLoadedSessionKeyRef = useRef<string | null>(null);
+  /**
+   * N05:**已经拉过首屏的会话集合**,不是"上一次拉的那一条"。
+   *
+   * 原来这里是单个 key,判据是"当前 key 与它相等"。A→B→A 时它已经是 B 的 key,
+   * 于是回到 A 走了完整的重新加载分支:A 那 5000 条(用户刚点过「加载全部」)
+   * 被一次 `limit=20` 的首屏拉取**整份换掉**,只剩最后 20 条。用户看到的是
+   * "我刚加载的全部消息又没了"。
+   *
+   * 换成集合之后,回到 A 只要槽位还在且没过期就直接复用 —— 不重新拉页。
+   * 集合本身不需要清理:短路条件里还有 `sessionStore.has(id)`,槽位被 LRU
+   * 淘汰之后这里自然重新拉。
+   */
+  const loadedSessionKeysRef = useRef(new Set<string>());
+  /** 上一次**看的**是哪条(与"拉过没有"是两回事:换会话要重置窗口,哪怕不用重拉)。 */
+  const lastViewedSessionKeyRef = useRef<string | null>(null);
   /**
    * Tracks the last processed value from `useProjectsState.newSessionTrigger`.
    *
@@ -235,6 +366,30 @@ export function useChatSessionState({
    * reset pass in this local chat state domain.
    */
   const previousNewSessionTriggerRef = useRef(newSessionTrigger ?? 0);
+
+  /**
+   * fz:把**正要离开的那条会话**的窗口记下来。
+   *
+   * 保存原来只写在"会话 → 会话直切"那一条路上(判据是 `leavingKey`),而点项目行、
+   * 点「新建会话」都会先提交一次 `selectedSession = null`、把 `leavingKey` 清成
+   * null —— 那两条路一次都不保存。于是"A → 项目行 → A"回来时窗口砍回 30,
+   * 而阅读位置表(每次 commit 都在写)还记着几百行之外的位置,两张表对不上,
+   * 恢复只能等到宽限用完再放弃。
+   *
+   * 收成一个函数,三处调用(直切、回首页、新建会话)——
+   * 这一轮的教训就是"同一件事写在一部分入口上"。
+   */
+  const rememberLeavingWindow = useCallback((leavingKey: string | null) => {
+    if (!leavingKey) return;
+    sessionWindowMemoryRef.current = rememberSessionWindow(
+      sessionWindowMemoryRef.current,
+      leavingKey,
+      {
+        visibleCount: visibleMessageCountRef.current,
+        allLoaded: allMessagesLoadedRef.current,
+      },
+    );
+  }, []);
 
   const createDiff = useMemo<DiffCalculator>(() => createCachedDiffCalculator(), []);
 
@@ -261,14 +416,22 @@ export function useChatSessionState({
      * - No dependence on route/tab/session-object identity changes.
      * - No coupling to unrelated external update signals.
      */
-    // fj:只清**这一条**会话的缓冲 —— 全清会把后台正在流的会话拦腰截断。
-    resetStreamingState(currentSessionIdRef.current);
+    /**
+     * fl:**离开视图不清任何流式缓冲。**
+     *
+     * fj 把无差别全清收窄成"只清这一条",但那一条正是**刚离开的、很可能还在
+     * 后台跑的**会话 —— 于是问题反而更精准地打在了它身上:后续 delta 从空串
+     * 重新累积,而 `updateStreaming` 是全文替换语义,`stream_end` 时那半截被
+     * 当成完整回答提交;切回去看到的是一条残缺气泡,而服务端那份完整的随后
+     * 又被拉回来,两份并存且内容不同,连 prune 都清不掉。
+     *
+     * 缓冲的生命周期本来就由流自己管:`stream_end` / `complete` 各自
+     * `delete(sid)`(见 useChatRealtimeHandlers)。视图切换与它无关,
+     * 全清只保留在整体卸载那一处。
+     */
     setCurrentSessionId(null);
     establishedHereRef.current = null;
     setPendingUserMessage(null);
-    messagesOffsetRef.current = 0;
-    setHasMoreMessages(false);
-    setTotalMessages(0);
     
     setTokenBudget(null);
     setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
@@ -280,11 +443,12 @@ export function useChatSessionState({
     setLoadAllStuck(false);
     setViewHiddenCount(0);
     setSearchTarget(null);
-    // fj:显式新建也要把加载标志放下(见主加载 effect 里的同一句)。
-    setIsLoadingSessionMessages(false);
     wasNearTopRef.current = false;
     searchScrollActiveRef.current = false;
-    lastLoadedSessionKeyRef.current = null;
+    loadedSessionKeysRef.current.clear();
+    // fz:新建会话也是"离开当前这条" —— 窗口照记(见 rememberLeavingWindow)。
+    rememberLeavingWindow(lastViewedSessionKeyRef.current);
+    lastViewedSessionKeyRef.current = null;
 
     if (loadAllOverlayTimerRef.current) {
       clearTimeout(loadAllOverlayTimerRef.current);
@@ -294,7 +458,8 @@ export function useChatSessionState({
       clearTimeout(loadAllFinishedTimerRef.current);
       loadAllFinishedTimerRef.current = null;
     }
-  }, [newSessionTrigger, onSessionIdle, resetStreamingState]);
+    // rememberLeavingWindow 是 useCallback([], …),引用恒定,进依赖不会让 effect 多跑。
+  }, [newSessionTrigger, onSessionIdle, rememberLeavingWindow, resetStreamingState]);
 
   /* ---------------------------------------------------------------- */
   /*  Derive processing state for the viewed session                  */
@@ -311,6 +476,35 @@ export function useChatSessionState({
   }, []);
 
   const activeSessionId = selectedSession?.id || currentSessionId || null;
+
+  /**
+   * B2:**分页状态不再镜像进本地 state,直接从槽位读。**
+   *
+   * 原来 `hasMoreMessages` / `totalMessages` 是两个 `useState`,由 11 处
+   * `await` 之后的落地代码各自写一遍,每一处都得自带一句「期间会话切了没」
+   * 的守卫 —— 少写一处,A 会话的 `hasMore=false` 就写进 B 的视图,B 的
+   * 「看更早 / 加载全部」一起消失,而且**没有任何后续事件会把它改回来**
+   * (fi 修过一次落地竞态、fj 又修过一次,都是同一个形状)。
+   *
+   * 槽位本来就是这两个值的唯一真相,而 `getMessages` 早就是这么读的
+   * (见下面的 `storeMessages`)。改成派生之后:
+   *   - 落地代码少 11 处写入,守卫漏写这件事从"可能"变成"不可能";
+   *   - 切回一条读过的会话立刻知道还有没有更早的,不必等一次网络往返;
+   *   - 未落地的会话没有槽位 → `false / 0`,与原来的初始值一致。
+   *
+   * `messagesOffsetRef` 同时删掉:它有 5 处写入、**零处读取**,
+   * 真正的游标一直在 `slot.offset` 上(见 applyServerSnapshot)。
+   */
+  const viewSlot = activeSessionId ? sessionStore.getSessionSlot(activeSessionId) : undefined;
+  const hasMoreMessages = viewSlot?.hasMore ?? false;
+  const totalMessages = viewSlot?.total ?? 0;
+
+  /**
+   * B3:加载态同样派生。`unknown` 也算"在等" —— 槽位还没建起来的那一帧
+   * 若按"空的"渲染,就会闪一下起始卡片。
+   */
+  const chatViewState = deriveChatViewState(activeSessionId, viewSlot);
+  const isLoadingSessionMessages = chatViewState === 'loading' || chatViewState === 'unknown';
   /** 给搜索定位的重试循环看的"现在在看哪条会话"—— 换会话后旧循环要自行退出。 */
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
@@ -323,6 +517,8 @@ export function useChatSessionState({
    * 而且 `kind: 'error'` 那种永远清不掉。
    */
   const pendingUserMessageOriginRef = useRef<string | null>(null);
+  /** fl:暂存时所在的项目 —— 跨项目的 pending 一律不认(见 flush effect)。 */
+  const pendingUserMessageProjectRef = useRef<string | null>(null);
 
   // The activity indicator always reflects the latest status of the session
   // being viewed — never stale local UI state from the last time it was
@@ -410,15 +606,31 @@ export function useChatSessionState({
      * `establishedHereRef` 正是"这条 id 是本视图自己建立的"这个判据(fi 轮引入),
      * 这里复用它:对不上就把这条 pending 丢掉,而不是塞给一条无关的会话。
      */
+    /**
+     * fl:判据收紧成**只认"本视图亲手建立的那条 id"**。
+     *
+     * fj 留了一个 `|| establishedHereRef.current === null` 的兜底,本意是覆盖
+     * "路由先于 markSessionEstablished 落地"的那一帧。但那个状态**恰恰就是**
+     * 泄漏场景本身:新会话页上报了个错(从未创建过任何会话,所以
+     * establishedHere 一直是 null)→ 直接在侧栏点开会话 B → 兜底放行 →
+     * 那条错误行被写进 B。
+     *
+     * 而那一帧其实不存在:`markSessionEstablished` 同时设 ref 和
+     * `currentSessionId`,路由的 `selectedSession` 是它触发导航之后才到的 ——
+     * ref 一定先落。所以兜底可以直接去掉。
+     *
+     * 再加一道项目归属:跨项目的 pending 一律不认(新会话页在 P1 报的错,
+     * 不该出现在 P2 的会话里)。null 表示"未知",不是通配。
+     */
     const bornOnNewSessionPage = pendingUserMessageOriginRef.current === null;
+    const sameProject = pendingUserMessageProjectRef.current === (selectedProjectRef.current?.projectId ?? null);
     const belongsHere = bornOnNewSessionPage
-      && (establishedHereRef.current === activeSessionId
-        // 路由先于 markSessionEstablished 落地的那一帧:此时 currentSessionId 还没
-        // 被设过(本视图没建立过任何 id),这条 pending 仍然属于当下这条新会话。
-        || establishedHereRef.current === null);
+      && sameProject
+      && establishedHereRef.current === activeSessionId;
     if (!belongsHere) {
       setPendingUserMessage(null);
       pendingUserMessageOriginRef.current = null;
+      pendingUserMessageProjectRef.current = null;
       return;
     }
 
@@ -430,6 +642,7 @@ export function useChatSessionState({
 
     flushedPendingUserMessageRef.current = pendingUserMessage;
     pendingUserMessageOriginRef.current = null;
+    pendingUserMessageProjectRef.current = null;
     setPendingUserMessage(null);
   }, [activeSessionId, pendingUserMessage, sessionStore]);
 
@@ -479,6 +692,7 @@ export function useChatSessionState({
       // fj:同时记下"暂存时路由选中的是谁"(新会话页为 null)。冲队时据此判断
       // 这条 pending 到底属不属于当下这个视图,见 flush effect。
       pendingUserMessageOriginRef.current = selectedSessionRef.current?.id ?? null;
+      pendingUserMessageProjectRef.current = selectedProjectRef.current?.projectId ?? null;
       setPendingUserMessage(msg);
       return;
     }
@@ -515,11 +729,54 @@ export function useChatSessionState({
     scrollToBottom();
   }, [allMessagesLoaded, scrollToBottom]);
 
+  /**
+   * fz:**`allMessagesLoaded` 不许在槽位说"还有更早的"时留着为真。**
+   *
+   * 这个标记为真会让 `loadOlderMessages`、自动补页、「加载全部」浮层**全部**
+   * 直接 return;而两条顶栏横幅是互斥条件(一条看 `hasMore && !allLoaded`,
+   * 一条看 `!hasMore`)—— 两者同时为真时**一条都不显示**,用户手里既没有内容
+   * 也没有入口,只能瞎点「回到底部」或者切走再切回来才能恢复。
+   *
+   * 这个组合有两条产生路径,一条急性一条慢性:
+   *
+   * - 急性:回到一条过期的会话,窗口按旧槽位恢复成"全量在手",紧接着重拉把
+   *   正文换成尾部 20 条(上面 `willReuseSlot` 那处堵的就是它);
+   * - 慢性:点过「加载全部」之后继续对话,每轮结束的刷新用的是**固定的旧条数**
+   *   做窗口,而 `total` 在涨 → 服务端重新报 `hasMore: true`,最早的若干条被
+   *   甩出窗口,而这个标记还是 true。
+   *
+   * 与其把两条路各堵一次,不如把不变式本身钉在这儿:**只要槽位说还有更早的,
+   * 这个标记就必须是假的。** 谁把它弄成真的都一样。
+   */
+  useEffect(() => {
+    if (hasMoreMessages && allMessagesLoaded) {
+      setAllMessagesLoaded(false);
+      allMessagesLoadedRef.current = false;
+    }
+  }, [hasMoreMessages, allMessagesLoaded]);
+
   const isNearBottom = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return false;
     const { scrollTop, scrollHeight, clientHeight } = container;
     return scrollHeight - scrollTop - clientHeight < 50;
+  }, []);
+
+  /**
+   * 「更早的全都在手里了」这一刻要做的事。
+   *
+   * 原来这六行在 `loadOlderMessages` 里出现两次(两个分支各抄一遍),
+   * 而浮层定时器少清一次就会留下一个再也不会消失的「加载全部」浮层。
+   */
+  const markAllMessagesLoaded = useCallback(() => {
+    allMessagesLoadedRef.current = true;
+    setAllMessagesLoaded(true);
+    if (loadAllOverlayTimerRef.current) {
+      clearTimeout(loadAllOverlayTimerRef.current);
+      loadAllOverlayTimerRef.current = null;
+    }
+    setShowLoadAllOverlay(false);
+    setLoadAllStuck(false);
   }, []);
 
   const loadOlderMessages = useCallback(
@@ -539,54 +796,48 @@ export function useChatSessionState({
         // allMessagesLoaded —— 全是分页状态,盖到另一条会话上就是把它的
         // 「看更早」按死。判据读 ref,闭包里的 id 恒等于自己、守不住东西。
         const olderRequestSessionId = selectedSession.id;
+        /**
+         * B2:**这一页到底多带回来几条** —— 判据是加载前后的差值,不是总条数。
+         *
+         * 原来这里判的是 `slot.serverMessages.length === 0`(**累计**已加载
+         * 条数),那只有空会话才成立 —— 也就是说"这一页什么也没带回来"这件事
+         * 从来没被识别过。而服务端在流式期间可能返回重叠的一页(去重后净增 0)
+         * 却仍报 `hasMore: true`:此时返回 true 会让自动补页循环认为"还在
+         * 前进",一路打满 30 次请求。
+         */
+        const loadedBefore = sessionStore.getSessionSlot(olderRequestSessionId)?.serverMessages.length ?? 0;
         const slot = await sessionStore.fetchMore(selectedSession.id, {
           limit: MESSAGES_PER_PAGE,
         });
         if (activeSessionIdRef.current !== olderRequestSessionId) return false;
-        if (!slot) {
-          // fetchMore 现在会在失败时返回 null(以前是原样返回旧 slot,于是断网
-          // 被当成"加载成功、只是没有新内容",这条会话从此不再自动跟底)。
-          // 说一声再退出 —— 静默失败比失败本身更难查。
-          emitToast({ message: '加载更早的消息失败,请稍后重试。', variant: 'error' });
-          return false;
-        }
-        if (slot.serverMessages.length === 0) {
-          if (!slot.hasMore) {
-            setHasMoreMessages(false);
-            allMessagesLoadedRef.current = true;
-            setAllMessagesLoaded(true);
-            if (loadAllOverlayTimerRef.current) {
-              clearTimeout(loadAllOverlayTimerRef.current);
-              loadAllOverlayTimerRef.current = null;
-            }
-            setShowLoadAllOverlay(false);
-            setLoadAllStuck(false);
-          }
-          return false;
-        }
 
-        // 前插:声明这次位移不是用户造成的,控制器按上一帧的锚把视口校回原位。
-        holdAnchorRef.current = true;
-        setHasMoreMessages(slot.hasMore);
-        setTotalMessages(slot.total);
-        setVisibleMessageCount((prev) => prev + MESSAGES_PER_PAGE);
-        if (!slot.hasMore) {
-          allMessagesLoadedRef.current = true;
-          setAllMessagesLoaded(true);
-          if (loadAllOverlayTimerRef.current) {
-            clearTimeout(loadAllOverlayTimerRef.current);
-            loadAllOverlayTimerRef.current = null;
-          }
-          setShowLoadAllOverlay(false);
-          setLoadAllStuck(false);
+        // `hasMore` / `total` 不再由这里写:它们直接派生自槽位(见上面的 viewSlot)。
+        switch (classifyOlderPage(slot, loadedBefore)) {
+          case 'failed':
+            // fetchMore 失败时返回 null(以前是原样返回旧 slot,于是断网被当成
+            // "加载成功、只是没有新内容",这条会话从此不再自动跟底)。
+            // 说一声再退出 —— 静默失败比失败本身更难查。
+            emitToast({ message: '加载更早的消息失败,请稍后重试。', variant: 'error' });
+            return false;
+          case 'exhausted':
+            markAllMessagesLoaded();
+            return false;
+          case 'stalled':
+            // 这一页与已加载窗口完全重叠。不算成功 —— 否则自动补页会一直转。
+            return false;
+          case 'loaded':
+            // 前插:声明这次位移不是用户造成的,控制器按上一帧的锚把视口校回原位。
+            holdAnchorRef.current = true;
+            setVisibleMessageCount((prev) => prev + MESSAGES_PER_PAGE);
+            if (!slot!.hasMore) markAllMessagesLoaded();
+            return true;
         }
-        return true;
       } finally {
         isLoadingMoreRef.current = false;
         setIsLoadingMoreMessages(false);
       }
     },
-    [hasMoreMessages, isLoadingMoreMessages, selectedProject, selectedSession, sessionStore],
+    [hasMoreMessages, isLoadingMoreMessages, markAllMessagesLoaded, selectedProject, selectedSession, sessionStore],
   );
 
   /**
@@ -620,10 +871,31 @@ export function useChatSessionState({
   const loadOlderMessagesRef = useRef(loadOlderMessages);
   loadOlderMessagesRef.current = loadOlderMessages;
 
+  /**
+   * 容器现在看得见吗 —— 聊天区在别的页签下是 `display:none` 但仍然挂着,
+   * 那时所有尺寸都是 0。控制器与自动补页共用这一个判据(fz)。
+   */
+  const containerIsVisible = useCallback(() => {
+    const container = scrollContainerRef.current;
+    return Boolean(container) && !(container!.clientHeight === 0 && container!.scrollHeight === 0);
+  }, []);
+
   const canScrollUp = useCallback(() => {
     const container = scrollContainerRef.current;
+    /**
+     * fz:**看不见的容器不能拿来判"还滚不动"。**
+     *
+     * `display:none` 时是 `0 > 8` = false =「还滚不动」,而这正是自动补页循环
+     * **唯一的出口**("能滚了就把方向盘交回给用户")。在「文件 / 终端」页签上
+     * 点侧栏里的会话时(那条路不切页签),补页就整段跑在一个不可见的容器上:
+     * 30 轮请求全部打满、窗口涨到 600+、最后把「加载全部」浮层置成常驻不淡出。
+     * 用户切回聊天看到的是一屏真实 DOM 加一个撤不掉的浮层。
+     *
+     * 看不见时一律报"能滚"(=不需要补页),等真的看得见了再说。
+     */
+    if (!containerIsVisible()) return true;
     return !!container && container.scrollHeight > container.clientHeight + AUTO_FILL_SLACK_PX;
-  }, []);
+  }, [containerIsVisible]);
 
   /**
    * 补页放弃时的兜底出口。
@@ -750,12 +1022,34 @@ export function useChatSessionState({
   const handleScroll = useCallback(async () => {
     const container = scrollContainerRef.current;
     if (!container) return;
+    /**
+     * ga:**看不见的容器上的滚动事件一律不算数。**
+     *
+     * 聊天区在别的页签下是 `display:none`(仍然挂着),此时 `scrollTop` /
+     * `scrollHeight` / `clientHeight` 全是 0,这一整段拿 0 算出来的结论条条都错:
+     * `isNearBottom()` 恒真 → 跟底被打开;`scrollTop < 100` 恒真 → 在用户完全
+     * 看不见的地方一页页往前拉历史;顺带把待办的位置恢复判成"用户滚过了"。
+     * 量一本合着的书,量出来永远是第 0 页,不能拿它去改笔记。
+     */
+    if (!containerIsVisible()) return;
 
     const nearBottom = isNearBottom();
     setIsUserScrolledUp(!nearBottom);
     // 跟不跟底立刻定下来。**不能等 state** —— 流式期间每 ~100ms 一次 commit,
     // 用户刚滚上去而状态还没提交,那一帧就会拿着旧的 false 把视口钉回底部。
     followBottomRef.current = nearBottom;
+    /**
+     * 等待位置恢复的这段时间里,用户自己滚过没有。
+     *
+     * ga:判据由"有滚动事件就算用户滚的"改成"**落点跟我们自己写进去的那个值
+     * 对不上**才算用户滚的"。恢复挂起期间控制器仍在跟底写 scrollTop(见
+     * `programmaticScrollTopRef`),按旧判据等于每跟一次底就给自己判一次死刑。
+     * 留 2px 余量:亚像素和浏览器的夹取会让读回值与写入值差一点点。
+     */
+    if (scrollRestoreRef.current
+      && isUserInitiatedScroll(container.scrollTop, programmaticScrollTopRef.current)) {
+      scrollRestoreUserMovedRef.current = true;
+    }
     // 这里**不再取锚**:原来每个滚动事件都 querySelectorAll + 逐条 rect,
     // 拖动时 60~120Hz,几百条消息在 DOM 里就是滚不动。取锚交给控制器,
     // 它每次 commit 只做一次二分。
@@ -794,7 +1088,7 @@ export function useChatSessionState({
     if (!allMessagesLoadedRef.current && scrolledNearTop) {
       await loadOlderMessages(container);
     }
-  }, [hasMoreMessages, isNearBottom, loadOlderMessages]);
+  }, [containerIsVisible, hasMoreMessages, isNearBottom, loadOlderMessages]);
 
   /**
    * 换会话时重置滚动/分页状态。
@@ -823,6 +1117,24 @@ export function useChatSessionState({
     //     DOM 里按"最接近的时间戳"乱找一个元素滚过去。
     searchScrollActiveRef.current = false;
     setSearchTarget(null);
+
+    /**
+     * fx:**回到一条会话时,把离开时停的地方接回去。**
+     *
+     * 在这里武装(layout 阶段、换会话那一帧),而不是在下面那个被动的加载
+     * effect 里 —— 滚动控制器也是 layout effect 且声明在本 effect 之后,
+     * 同一次 commit 里它紧接着就跑;放到被动 effect 里会晚整整一帧,
+     * 那一帧控制器已经按"跟底"把视口钉到底部了,随后再跳回去就是可见的抽搐。
+     *
+     * 这里只**记下要恢复什么**,一个 scrollTop 都不写:那个 effect 是全局
+     * 唯一的写点,再多一个写者就是它注释里数落过的老毛病。
+     */
+    const viewKey = selectedSession?.id && selectedProject?.projectId
+      ? `${selectedSession.id}:${selectedProject.projectId}`
+      : '';
+    viewSessionKeyRef.current = viewKey;
+    scrollRestoreUserMovedRef.current = false;
+    scrollRestoreRef.current = beginScrollRestore(viewKey, sessionSpotMemoryRef.current.get(viewKey));
   }, [selectedProject?.projectId, selectedSession?.id]);
 
   // Main session loading effect — store-based
@@ -848,25 +1160,18 @@ export function useChatSessionState({
       }
       establishedHereRef.current = null;
 
-      // fj:只清**这一条**会话的缓冲 —— 全清会把后台正在流的会话拦腰截断。
-      resetStreamingState(currentSessionIdRef.current);
+      // fl:同上 —— 离开视图不清流式缓冲,那条会话可能还在后台跑。
       /**
-       * fj:离开会话时把加载标志放下。
-       *
-       * `setIsLoadingSessionMessages(false)` 只在下面那次拉取的 then/catch 里,
-       * 而那两处都在换会话守卫**之内** —— 守卫是为了防"A 的响应盖到 B 的视图上",
-       * 但它连 loading 标志一起挡住了。注释里说的"那是新会话自己那次拉取在管的"
-       * 只在切到**另一条会话**时成立;切到**没有会话**的页面时没有接手方,
-       * 于是新会话页永久渲染成「正在加载会话消息…」,起始卡片再也不出现,
-       * 自动补页与首屏第二帧一并停摆。
+       * B3:这里原来要显式把加载标志放下 —— fj 修过一次(漏掉它时新会话页
+       * 永久卡在「正在加载会话消息…」)。现在标志由槽位派生,而新会话页
+       * 没有 activeSessionId,`deriveChatViewState` 直接给 'ready',
+       * **这个漏点从此不可能再出现**。
        */
-      setIsLoadingSessionMessages(false);
       setCurrentSessionId(null);
-      messagesOffsetRef.current = 0;
-      setHasMoreMessages(false);
-      setTotalMessages(0);
       setTokenBudget(null);
-      lastLoadedSessionKeyRef.current = null;
+      // fz:回首页 / 点项目行同样是"离开当前这条",窗口照记。
+      rememberLeavingWindow(lastViewedSessionKeyRef.current);
+      lastViewedSessionKeyRef.current = null;
       return;
     }
 
@@ -893,8 +1198,90 @@ export function useChatSessionState({
       }
     };
 
-    // Skip if already loaded and fresh
-    if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(selectedSessionId) && !sessionStore.isStale(selectedSessionId)) {
+    /**
+     * 换会话就重置窗口 —— **哪怕不需要重新拉页**。
+     *
+     * 这一段原来在短路**之后**,也就是只有"要重新拉"的时候才跑。改成集合判定
+     * 之后回到旧会话不再重拉,可见窗口/「加载全部」这些视图状态却还留着上一条
+     * 会话的值:回到 A 会按 B 剩下的那点条数渲染。它们是**视图**状态,归属于
+     * "现在在看哪条",与"拉没拉过"无关,所以判据换成 lastViewedSessionKey。
+     */
+    if (lastViewedSessionKeyRef.current !== sessionKey) {
+      /**
+       * fv:**离开之前先把这条会话的窗口记下来。**
+       *
+       * 之前这里是无条件砍回首屏 —— 在 A 里点过「加载全部」、又「看更早」翻上去
+       * 几百条,切到 B 再切回 A,那几次翻页的结果全部作废。窗口是视图状态,
+       * 但它**属于哪条会话**是明确的,没有理由一切走就扔。
+       */
+      const leavingKey = lastViewedSessionKeyRef.current;
+      rememberLeavingWindow(leavingKey);
+      lastViewedSessionKeyRef.current = sessionKey;
+
+      // 换会话时清掉上一条的用量(顶栏数字不能挂着别人的)。
+      if (currentSessionId !== null && currentSessionId !== selectedSessionId) {
+        setTokenBudget(null);
+      }
+      setCurrentSessionId(selectedSessionId);
+      // 路由已经给出正式的 selectedSession —— 不管是刚建的那条跟上了,还是用户
+      // 切去了别的会话,"本视图建立的临时 id"这个保护都该结束。
+      establishedHereRef.current = null;
+
+      /**
+       * 恢复窗口。**两条不变式都收在 `recallSessionWindow` 里**,尤其是
+       * "`allLoaded` 只在手里现在还是全量时才恢复" —— 照记忆无脑恢复会把
+       * 「看更早」永久按死(判据与它为什么这么写,见那个函数的注释)。
+       */
+      const incomingSlot = sessionStore.getSessionSlot(selectedSessionId);
+      /**
+       * fz:**槽位马上要被换掉的话,它现在说什么都不算数。**
+       *
+       * `recallSessionWindow` 的那条不变式("allLoaded 只在手里现在还是全量时
+       * 才恢复")本身是对的,单测也钉住了 —— 但这里**喂给它的是重拉之前的槽位**。
+       * 它的注释点名要挡的三种情况里,"槽位被淘汰"挡住了(无槽位 → hasMore
+       * 兜底为 true),**"槽位过期"这一种恰好挡不住**:过期判断在下面几行,
+       * 在它之后。
+       *
+       * 于是:在长会话里点过「加载全部」→ 切走待 30 秒以上 → 切回来,
+       * `allLoaded` 按旧槽位恢复成 true,紧接着重拉把正文换成尾部 20 条、
+       * `hasMore` 变回 true。两条横幅是互斥条件,一个被 allLoaded 挡住、
+       * 一个被 hasMore 挡住,**同时消失**;`loadOlderMessages` / 自动补页 /
+       * 「加载全部」浮层又全都在 `if (allMessagesLoadedRef.current) return`
+       * 上直接退出 —— 4980 条取不回来,而且屏幕上一个入口都没有。
+       *
+       * 判据要读"落地之后的槽位"。这里先算出"这一次到底复不复用槽位",
+       * 不复用就当作"还有更早的",让 recall 自己把 allLoaded 降级。
+       */
+      const willReuseSlot = loadedSessionKeysRef.current.has(sessionKey)
+        && sessionStore.has(selectedSessionId)
+        && !sessionStore.isStale(selectedSessionId);
+      const recalled = recallSessionWindow({
+        memo: sessionWindowMemoryRef.current.get(sessionKey),
+        // 用 `merged`(server + realtime)—— `chatMessages` 就是从它派生的,
+        // 拿 serverMessages 会把上限压小,恢复出来的窗口比离开时窄一截。
+        loadedCount: incomingSlot?.merged.length ?? 0,
+        hasMore: willReuseSlot ? (incomingSlot?.hasMore ?? true) : true,
+        total: incomingSlot?.total ?? 0,
+        phase1: PHASE1_VISIBLE_MESSAGES,
+      });
+      setVisibleMessageCount(recalled.visibleCount);
+      visibleMessageCountRef.current = recalled.visibleCount;
+      setAllMessagesLoaded(recalled.allLoaded);
+      allMessagesLoadedRef.current = recalled.allLoaded;
+      setIsLoadingAllMessages(false);
+      setLoadAllJustFinished(false);
+      setShowLoadAllOverlay(false);
+      setViewHiddenCount(0);
+      wasNearTopRef.current = false;
+      if (loadAllOverlayTimerRef.current) clearTimeout(loadAllOverlayTimerRef.current);
+      if (loadAllFinishedTimerRef.current) clearTimeout(loadAllFinishedTimerRef.current);
+    }
+
+    // 已经拉过首屏、槽位还在、也没过期 → 复用,不重拉(N05)。
+    // fz:判据与上面那句 `willReuseSlot` **必须是同一句** —— 分成两处写就是
+    // 下一次"一处改了另一处没跟上"。这里重算一次而不是提到 if 外面,是因为
+    // 上面那段只在换会话那一拍进得去。
+    if (loadedSessionKeysRef.current.has(sessionKey) && sessionStore.has(selectedSessionId) && !sessionStore.isStale(selectedSessionId)) {
       subscribeToSelectedSession();
       return;
     }
@@ -903,31 +1290,10 @@ export function useChatSessionState({
     // 会话分桶,各刷各的 store —— 之前这里 resetStreamingState() 是无差别全清,把
     // 后台还在流式的会话(比如 A 正在回答时切去 B)的累积文本一起截断了。切回
     // A 只剩碎片。全清只该发生在整体卸载 / 新建会话(那两处仍调用)。
-    const sessionChanged = currentSessionId !== null && currentSessionId !== selectedSessionId;
-
-    // Reset pagination/scroll state
-    messagesOffsetRef.current = 0;
-    setHasMoreMessages(false);
-    setTotalMessages(0);
-    setVisibleMessageCount(PHASE1_VISIBLE_MESSAGES);
-    setAllMessagesLoaded(false);
-    allMessagesLoadedRef.current = false;
-    setIsLoadingAllMessages(false);
-    setLoadAllJustFinished(false);
-    setShowLoadAllOverlay(false);
-    setViewHiddenCount(0);
-    wasNearTopRef.current = false;
-    if (loadAllOverlayTimerRef.current) clearTimeout(loadAllOverlayTimerRef.current);
-    if (loadAllFinishedTimerRef.current) clearTimeout(loadAllFinishedTimerRef.current);
-
-    if (sessionChanged) {
-      setTokenBudget(null);
-    }
-
-    setCurrentSessionId(selectedSessionId);
-    // 路由已经给出正式的 selectedSession —— 不管是刚建的那条跟上了,还是用户
-    // 切去了别的会话,"本视图建立的临时 id"这个保护都该结束。
-    establishedHereRef.current = null;
+    //
+    // N05:`setCurrentSessionId` / `setTokenBudget` / `establishedHereRef` 这三样
+    // 挪到了上面那个"换会话"分支里 —— 它们随**看的是哪条**变,而这里(短路之后)
+    // 只剩"要重新拉一页"这一件事。原地留着会让 A→B→A 的复用路径不更新它们。
 
     // Subscribe to the session's live run (if any): the ack reconciles the
     // processing indicator, re-attaches a mid-flight stream to this socket,
@@ -936,10 +1302,10 @@ export function useChatSessionState({
     // since outdated.
     subscribeToSelectedSession();
 
-    lastLoadedSessionKeyRef.current = sessionKey;
+    loadedSessionKeysRef.current.add(sessionKey);
 
     // Fetch from server → store updates → chatMessages re-derives automatically
-    setIsLoadingSessionMessages(true);
+    // (加载态也一起派生:`fetchFromServer` 把槽位置为 loading,见 deriveChatViewState)
     /**
      * 首屏消息拉取。**必须带换会话守卫** —— 同一个文件里的 `loadAllMessages` 有
      * (第 910 行,还写了注释),`loadOlderMessages` 和这里都漏了。
@@ -963,16 +1329,14 @@ export function useChatSessionState({
         return;
       }
       if (slot) {
-        setHasMoreMessages(slot.hasMore);
-        setTotalMessages(slot.total);
         if (slot.tokenUsage) setTokenBudget(slot.tokenUsage as Record<string, unknown>);
       }
-      setIsLoadingSessionMessages(false);
     }).catch(() => {
-      if (activeSessionIdRef.current !== requestSessionId) return;
-      setIsLoadingSessionMessages(false);
+      // 加载态与失败态都记在槽位上(status='error'),这里不再有本地标志要放下。
     });
   }, [
+    // 引用恒定的 useCallback([], …) —— 进依赖不会让这个 effect 多跑一次。
+    rememberLeavingWindow,
     resetStreamingState,
     /**
      * fj:依赖是 **projectId**,不是 `selectedProject` 对象。
@@ -1062,26 +1426,38 @@ export function useChatSessionState({
 
     const scrollToTarget = async () => {
       if (!allMessagesLoadedRef.current && selectedSession && selectedProject) {
-          try {
-            // Load all messages into the store for search navigation
-            const slot = await sessionStore.fetchFromServer(selectedSession.id, {
-              limit: null,
-              offset: 0,
-            });
-            if (slot) {
-              setHasMoreMessages(false);
-              setTotalMessages(slot.total);
-              messagesOffsetRef.current = slot.total;
-              setVisibleMessageCount((prev) =>
-                visibleCountForTarget(chatMessagesRef.current, target, prev),
-              );
-              setAllMessagesLoaded(true);
-              allMessagesLoadedRef.current = true;
-              await new Promise(resolve => setTimeout(resolve, 300));
-            }
-          } catch {
-            // Fall through and scroll in current messages
+        /**
+         * F31:**搜索定位这条路也要有换会话守卫。**
+         *
+         * 同一个文件里 `loadAllMessages`、首屏拉取、`loadOlderMessages` 都有,
+         * 唯独这里没有 —— 而它恰恰是最慢的那一条(`limit: null` = 整份
+         * transcript)。切走之后落地的后果比别处更重:
+         *   - `setAllMessagesLoaded(true)` 写到**新会话**头上,它的
+         *     「看更早 / 加载全部」从此全部消失;
+         *   - 可见条数按 `chatMessagesRef.current`(已经是新会话的正文)算,
+         *     却是为旧会话的搜索目标算的,窗口停在一个毫无意义的位置。
+         */
+        const requestSessionId = selectedSession.id;
+        try {
+          // Load all messages into the store for search navigation
+          const slot = await sessionStore.fetchFromServer(requestSessionId, {
+            limit: null,
+            offset: 0,
+          });
+          if (activeSessionIdRef.current !== requestSessionId) return;
+          if (slot) {
+            setVisibleMessageCount((prev) =>
+              visibleCountForTarget(chatMessagesRef.current, target, prev),
+            );
+            setAllMessagesLoaded(true);
+            allMessagesLoadedRef.current = true;
+            await new Promise(resolve => setTimeout(resolve, 300));
+            // 这 300ms 里同样可能切走 —— 下面的放开窗口与滚动都不该再执行。
+            if (activeSessionIdRef.current !== requestSessionId) return;
           }
+        } catch {
+          // Fall through and scroll in current messages
+        }
       }
       // 只放开到**刚好盖住目标**的那一段,而不是整段进 DOM。定位不到时
       // visibleCountForTarget 会退回全长 —— 搜索跳转不能因为省 DOM 而跳不到。
@@ -1144,18 +1520,37 @@ export function useChatSessionState({
   }, [chatMessages.length, isLoadingSessionMessages, searchTarget]);
 
   // Initial token usage fetch for providers with file-backed usage data.
+  const tokenUsageProjectId = selectedProject?.projectId ?? null;
+  const tokenUsageSessionId = selectedSession?.id ?? null;
   useEffect(() => {
-    if (!selectedProject || !selectedSession?.id) {
+    if (!tokenUsageProjectId || !tokenUsageSessionId) {
       setTokenBudget(null);
       return;
     }
+    /**
+     * F31:**这条也要有换会话守卫。**
+     *
+     * 顶栏那枚用量芯片有两个来源:实时的 `token_budget` 帧(dk 那轮已经加了
+     * `sid === 正在看的会话` 的判据)和这次 REST 拉取 —— 而这一条一直没有。
+     * 切走之后落地的两种后果都真实可见:
+     *   - 成功:A 的用量数字写进 B 的顶栏,直到 B 下一帧用量才纠正;
+     *   - 失败/404:`setTokenBudget(null)` 把 B **刚刚**由实时帧填好的数字抹掉。
+     *
+     * 依赖同时从 `selectedProject` 对象换成 `projectId`:那个对象在
+     * `session_upserted` 上每次都是新的(见主加载 effect 的同一处说明),
+     * 于是项目里任何一条会话写盘都会让这个请求重发一次。
+     */
+    const requestSessionId = tokenUsageSessionId;
     const fetchInitialTokenUsage = async () => {
       try {
         // The backend resolves the provider from the indexed session row.
-        const url = `/api/projects/${selectedProject.projectId}/sessions/${selectedSession.id}/token-usage`;
+        const url = `/api/projects/${tokenUsageProjectId}/sessions/${requestSessionId}/token-usage`;
         const response = await authenticatedFetch(url);
+        if (activeSessionIdRef.current !== requestSessionId) return;
         if (response.ok) {
-          setTokenBudget(await response.json());
+          const usage = await response.json();
+          if (activeSessionIdRef.current !== requestSessionId) return;
+          setTokenBudget(usage);
         } else {
           setTokenBudget(null);
         }
@@ -1164,7 +1559,7 @@ export function useChatSessionState({
       }
     };
     fetchInitialTokenUsage();
-  }, [selectedProject, selectedSession?.id]);
+  }, [tokenUsageProjectId, tokenUsageSessionId]);
 
   const visibleMessages = useMemo(() => {
     if (chatMessages.length <= visibleMessageCount) return chatMessages;
@@ -1270,10 +1665,121 @@ export function useChatSessionState({
     const container = scrollContainerRef.current;
     if (!container) return;
 
-    // 搜索定位期间完全不插手 —— 平滑滚动还在跑,谁碰谁打断。
-    if (searchScrollActiveRef.current) return;
+    /**
+     * fz:**容器不可见就一步都别走。**
+     *
+     * 聊天区在别的页签下是 `display:none` 但**仍然挂着**(MainContent 有意为之:
+     * 它是默认页签,保持挂载才能不丢状态),而这个 effect 没有依赖数组,照跑。
+     * 此时容器和每一行的尺寸**全是 0**,于是:
+     *
+     * - `userMoved` 判成真 → 跟底被算成 true;
+     * - `captureAnchor` 的二分对每一行都为假 → 锚点落在第 0 行、偏移 0;
+     * - fx 新增的那段还照着把它**记进阅读位置表** —— 记成 `null`
+     *   ("回来跟底"),这条会话辛苦记了一路的位置当场作废。
+     *
+     * 也就是说:只要用户在别的页签待过,这条会话的位置恢复就永远不会生效。
+     * 量一本合着的书,量出来永远是第 0 页,不能拿它去改笔记。
+     */
+    if (!containerIsVisible()) {
+      containerWasVisibleRef.current = false;
+      return;
+    }
+    /**
+     * ga:**由不可见变回可见的那一帧,不能把它读成"用户滚过"。**
+     *
+     * `display:none` 期间浏览器把 `scrollTop` 归零(有些浏览器恢复显示时也不还原),
+     * 于是回来的第一次 commit 上:`scrollTop`(0)和锚点记的那个值对不上 →
+     * `userMoved` 判真 → 守位分支被跳过、跟底按"现在在顶上"算成 false。
+     * 表现就是从「文件 / 终端」页签切回聊天,视口钉在最上面,而且**再也不跟底**:
+     * 新消息在下面刷,屏幕不动。
+     *
+     * 借 `holdAnchorRef` 那条既有的语义:这一下位移不是用户造成的,按锚点校回去。
+     * 顺带把两笔隐藏期间可能被污染的账清掉。
+     *
+     * (补页循环也要在这时候被重新叫起来 —— 那件事交给下面那个 ResizeObserver,
+     * 不放在这里:这个 effect 没有依赖数组,在里面调 setState 就是一条没有护栏的
+     * 更新链。)
+     */
+    const becameVisible = !containerWasVisibleRef.current;
+    containerWasVisibleRef.current = true;
+    if (becameVisible) {
+      holdAnchorRef.current = true;
+      scrollRestoreUserMovedRef.current = false;
+      programmaticScrollTopRef.current = null;
+    }
 
-    const rows = container.querySelectorAll<HTMLElement>('.chat-message');
+    /**
+     * 搜索定位期间完全不插手 —— 平滑滚动还在跑,谁碰谁打断。
+     *
+     * fz:**顺手把待办的位置恢复也丢掉。** 这句早退在恢复分支之前,于是
+     * `stepScrollRestore` 一次都不被调用,两个刹车形同虚设 —— 一份 `wait`
+     * 状态能无限期挂着,等搜索定位一放手就落地,把视口从刚滚过去的命中项上
+     * 拽回"上次读到的地方",高亮闪在屏幕外。
+     *
+     * 判据不是"把刹车挪到前面",而是**谁的意图更强**:用户刚点了一条搜索结果,
+     * 那就是他现在要去的地方,"上次读到哪儿"这时候不该再有发言权。
+     */
+    if (searchScrollActiveRef.current) {
+      scrollRestoreRef.current = null;
+      return;
+    }
+
+    /**
+     * ga:**锚点只认顶层行。**
+     *
+     * `.chat-message` 会同时选中活动时间轴**展开区里嵌套**的那些 MessageComponent
+     * —— 展开一条工具行就多出一个,"倒数第几行"当场错位;流式气泡和运行指示器
+     * 也一样(它们出没得比谁都勤)。顶层行都带 `data-row-key`,那两类不带,
+     * 于是这一句同时解决了三个错位来源。
+     *
+     * 跟底与守位仍然看整段高度,不受这个筛选影响。
+     */
+    const rows = container.querySelectorAll<HTMLElement>('.chat-message[data-row-key]');
+    const rowKeyAt = (index: number) => rows[index]?.dataset.rowKey;
+
+    /**
+     * fx:会话位置恢复 —— **把记下的位置变成一个锚点**,交给下面的守位分支。
+     *
+     * 行是分批落地的(首屏 30 → 100,数据可能还在重拉),所以落不下去时要等;
+     * 但不能无限等 —— 一直挂着 `followBottom = false`,回到一条正在跑的会话
+     * 就不跟底了,新内容在下面刷而视口不动,那比不恢复还糟。两个刹车都在
+     * `stepScrollRestore` 里(总 commit 上限 + 行数不再增长后的宽限)。
+     *
+     * 等待期间**什么都不改**:`followBottom` 保持换会话时的 true,视口先待在
+     * 底部,能落下去了再一次到位 —— 好过先钉到顶部再往下跳。
+     */
+    if (scrollRestoreRef.current) {
+      const step = stepScrollRestore(
+        scrollRestoreRef.current,
+        viewSessionKeyRef.current,
+        rows.length,
+        {
+          // 等待期间用户自己滚过了 → 放弃(判据与它为什么必须有,见那个函数)。
+          userMoved: scrollRestoreUserMovedRef.current,
+          rowKeyAt,
+        },
+      );
+      if (step.action === 'apply') {
+        const row = rows[step.rowIndex];
+        if (row) {
+          scrollAnchorRef.current = {
+            element: row,
+            indexFromEnd: rows.length - 1 - step.rowIndex,
+            offset: step.offset,
+            // 用**当前**的 scrollTop:下面的 userMoved 拿它比对,
+            // 写成别的值会被判成"用户自己动过"而放弃守位。
+            scrollTop: container.scrollTop,
+          };
+          followBottomRef.current = false;
+        }
+        scrollRestoreRef.current = null;
+      } else if (step.action === 'wait') {
+        scrollRestoreRef.current = step.next;
+      } else {
+        scrollRestoreRef.current = null;
+      }
+    }
+
     const anchor = scrollAnchorRef.current;
     const hold = holdAnchorRef.current;
     holdAnchorRef.current = false;
@@ -1295,6 +1801,9 @@ export function useChatSessionState({
     if (followBottomRef.current && rows.length > 0) {
       // 跟底。写在 layout 阶段,绘制前完成 —— 不会出现"先画在上面再跳下去"。
       container.scrollTop = container.scrollHeight;
+      // ga:写完读回来记账 —— 浏览器会夹到合法区间,写进去的值不一定就是落定的值。
+      // 随之而来的滚动事件靠它认出"这一下是我们自己写的"(见 programmaticScrollTopRef)。
+      programmaticScrollTopRef.current = container.scrollTop;
     } else if (!userMoved && anchor) {
       // 守位:位移只可能来自 DOM 变化,把锚点校回它原来的偏移。
       // 元素可能被重挂载(前插一批会让列表整体重排),**倒数第几行**这个坐标
@@ -1306,12 +1815,36 @@ export function useChatSessionState({
         const target = row.offsetTop - anchor.offset;
         if (Math.abs(target - container.scrollTop) >= 1) {
           container.scrollTop = Math.max(0, target);
+          // ga:同上 —— 守位这一下也是程序化滚动,要记账。
+          programmaticScrollTopRef.current = container.scrollTop;
         }
       }
     }
 
     // 决策之后才重新取锚 —— 这一句必须留在最后。
     captureAnchor(container, rows);
+
+    /**
+     * fx:顺手记下"人现在停在哪儿",供下次回到这条会话时接回去。
+     *
+     * 跟底时记 `null` —— 那是"回来直接跟底"的意思,不是"没记过"。
+     * 恢复还在进行时**不记**:那会拿恢复前的位置把要恢复的目标覆盖掉。
+     */
+    if (!scrollRestoreRef.current && viewSessionKeyRef.current && rows.length > 0) {
+      const captured = scrollAnchorRef.current;
+      sessionSpotMemoryRef.current = rememberReadingSpot(
+        sessionSpotMemoryRef.current,
+        viewSessionKeyRef.current,
+        followBottomRef.current || !captured
+          ? null
+          : {
+            // ga:记那一行自己的标识 —— 回来时按它精确找回(见 resolveReadingSpot)。
+            rowKey: captured.element.dataset.rowKey,
+            indexFromEnd: captured.indexFromEnd,
+            offset: captured.offset,
+          },
+      );
+    }
   });
 
   useEffect(() => {
@@ -1321,8 +1854,66 @@ export function useChatSessionState({
     return () => container.removeEventListener('scroll', handleScroll);
   }, [handleScroll]);
 
+  /**
+   * ga:**容器重新看得见(或者变大了)的时候,把自动补页叫回来。**
+   *
+   * fz 给 `canScrollUp` 加了"看不见就报能滚"(为了挡住在隐藏容器上空跑 30 轮
+   * 补页),但**没有配套的重新唤起**:那个循环的依赖里没有任何随页签变化的量。
+   * 于是在「文件」页签里点开一条 694 条消息的会话(这条路不切页签),补页隔着
+   * "关着的卷帘门"量了一下什么也量不到,当成"货架已满"收工;切回聊天时首屏
+   * 十来行、不溢出 → 没有滚动条 → 永远不触发 scroll → `loadOlderMessages` 没人
+   * 调,而带按钮的横幅条件是 `!hasMoreMessages` 也不显示。**用户没有任何出口**,
+   * 只能切走再切回来自救。
+   *
+   * 这里用 `ResizeObserver` 而不是在滚动控制器里 `setAutoFillTick`:那个 effect
+   * 没有依赖数组,在里面调 setState 就是一条没有护栏的更新链(eslint 也会这么说)。
+   * 尺寸事件是这件事本来的形状 —— `display:none` 的容器量出来是 0×0,恢复显示
+   * 时浏览器会派发一次;窗口被拉大同样派发,而那也是一种"货架突然不满了"。
+   *
+   * 只在**由 0 变非 0** 时叫一次,所以不会自己咬自己的尾巴。
+   */
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    if (typeof ResizeObserver === 'undefined') return;
+    let wasEmpty = container.clientHeight === 0 && container.scrollHeight === 0;
+    const observer = new ResizeObserver(() => {
+      const isEmpty = container.clientHeight === 0 && container.scrollHeight === 0;
+      const cameBack = wasEmpty && !isEmpty;
+      wasEmpty = isEmpty;
+      if (!cameBack) return;
+      if (allMessagesLoadedRef.current) return;
+      setAutoFillTick((n) => n + 1);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
   // "Load all" overlay visibility is driven by scroll-to-top in handleScroll;
   // timers are cleared on session change via the reset effect above.
+
+  /**
+   * B3:首屏拉取失败之后的重试入口。
+   *
+   * 在此之前失败是**没有出口**的:loading 置回 false、正文空着,渲染分支
+   * 落到「起始卡片」—— 界面告诉用户"这条会话还没有消息",而实际上只是那一次
+   * 请求挂了。用户唯一的办法是切走再切回来(而且得等 30 秒的 isStale 窗口)。
+   *
+   * 立成规矩:界面任何时候都不允许进入一个没有出口的状态(同 canAbortSession)。
+   */
+  const retryLoadSessionMessages = useCallback(() => {
+    const requestSessionId = activeSessionIdRef.current;
+    if (!requestSessionId) return;
+    void sessionStore.fetchFromServer(requestSessionId, {
+      limit: MESSAGES_PER_PAGE,
+      offset: 0,
+    }).then((slot) => {
+      if (activeSessionIdRef.current !== requestSessionId) return;
+      if (slot?.tokenUsage) setTokenBudget(slot.tokenUsage as Record<string, unknown>);
+    }).catch(() => {
+      // 失败态已经记在槽位上(status='error'),重试入口照旧渲染。
+    });
+  }, [sessionStore]);
 
   const loadAllMessages = useCallback(async () => {
     if (!selectedSession || !selectedProject) return;
@@ -1364,9 +1955,6 @@ export function useChatSessionState({
           holdAnchorRef.current = true;
         }
 
-        setHasMoreMessages(false);
-        setTotalMessages(slot.total);
-        messagesOffsetRef.current = slot.total;
         // 「加载全部」= 把整段历史**拉到本地**,不等于一次性全部进 DOM。先显示一
         // 批,剩下的交给「看更早的」/「全部展开」。
         setVisibleMessageCount(initialWindowAfterLoadAll);
@@ -1432,6 +2020,8 @@ export function useChatSessionState({
     setCurrentSessionId,
     markSessionEstablished,
     isLoadingSessionMessages,
+    chatViewState,
+    retryLoadSessionMessages,
     isLoadingMoreMessages,
     hasMoreMessages,
     totalMessages,

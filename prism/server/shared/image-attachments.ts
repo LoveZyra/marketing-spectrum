@@ -29,6 +29,13 @@ export function getGlobalImageAssetsDir(): string {
   return path.join(getDataDir(), 'assets');
 }
 
+/**
+ * 项目内附件目录名。与 `shared/attachment-storage.ts` 的同名常量必须一致 ——
+ * 这里就地定义是为了不把配额/落盘那一整套依赖拖进 provider 侧的构建路径。
+ * 两处不一致会让"上传落哪"和"允许读哪"再次分家,所以那边有一条测试钉住它们相等。
+ */
+export const ATTACHMENT_DIR_NAME = 'attachments';
+
 export type ImageAttachmentDescriptor = {
   /** Project-relative (preferred) or absolute path to the stored image. */
   path: string;
@@ -120,14 +127,64 @@ function getDirectoryPathVariants(directory: string): string[] {
 }
 
 /**
+ * A7:**一张图片可以来自哪些目录 —— 只有这一个答案。**
+ *
+ * ## 事故
+ *
+ * 之前"合法的图片路径"在三个地方各定义了一遍,而且互不相同:
+ *
+ * | 位置 | 允许的根 | 依据来自 |
+ * |---|---|---|
+ * | 上传落盘(`POST /api/assets/images`) | `<项目根>/attachments/`,解析不到项目才回落全局 | 前端传的 `projectId`(侧栏选中的那个) |
+ * | `chat.send` 过滤 | 全局 + `session.project_path + '/attachments'` | `sessions` 表里那条会话的 `project_path` |
+ * | 组装给模型(这里) | 全局 + **本轮 cwd** | 运行时的工作目录 |
+ *
+ * 三个来源不一样,只要有一处对不齐,图片就在那一道门被**静默丢掉** ——
+ * 而界面照样显示得好好的(前端按侧栏的 projectId 走
+ * `/api/projects/:id/files/content` 取原图)。于是用户看到的是:
+ * **图在页面上,模型却说"传不进来"**,日志之外没有任何线索。
+ *
+ * 最容易踩到的是 root:它对所有项目可见,上传一定落进项目的 `attachments/`
+ * (普通用户看不见的项目会回落全局目录,反而三道门都认)。会话行里的
+ * `project_path` 与侧栏那个项目只要差一个字符,这一轮的图就全丢。
+ *
+ * ## 收口
+ *
+ * 现在只有 `imageSourceRoots()` 一个函数回答这个问题,三处都走它:
+ * 全局图库 + 本轮 cwd + **cwd 自己的 `attachments/`** + 显式传入的会话项目根
+ * 及其 `attachments/`。判据一致之后,"上传得进去、发不出来"这个组合不再成立。
+ *
+ * 安全水位不变:这些目录本来就是这个会话读得到的(cwd 是 agent 的工作目录,
+ * 项目 attachments/ 在项目里),`~/.ssh` 之类照旧拒绝。
+ */
+export function imageSourceRoots(cwd?: string, projectRoots: readonly string[] = []): string[] {
+  const workingDir = cwd || process.cwd();
+  const roots = [
+    getGlobalImageAssetsDir(),
+    workingDir,
+    path.join(workingDir, ATTACHMENT_DIR_NAME),
+  ];
+  for (const projectRoot of projectRoots) {
+    if (typeof projectRoot === 'string' && projectRoot.trim()) {
+      roots.push(projectRoot, path.join(projectRoot, ATTACHMENT_DIR_NAME));
+    }
+  }
+  return roots;
+}
+
+/**
  * Second layer of the image trust boundary (the first is the chat.send filter
  * in the websocket gateway): provider builders only reference files that live
- * in the global upload store or inside the run's working directory — places
- * the agent could already access on its own. Anything else (e.g. `~/.ssh`) is
- * refused, so a caller-supplied descriptor can never leak arbitrary files.
+ * in one of `imageSourceRoots()` — places the agent could already access on
+ * its own. Anything else (e.g. `~/.ssh`) is refused, so a caller-supplied
+ * descriptor can never leak arbitrary files.
  */
-export function isAllowedImageSourcePath(resolvedPath: string, cwd?: string): boolean {
-  return [getGlobalImageAssetsDir(), cwd || process.cwd()].some((directory) =>
+export function isAllowedImageSourcePath(
+  resolvedPath: string,
+  cwd?: string,
+  projectRoots: readonly string[] = [],
+): boolean {
+  return imageSourceRoots(cwd, projectRoots).some((directory) =>
     getDirectoryPathVariants(directory).some((directoryVariant) =>
       isPathInsideDirectory(resolvedPath, directoryVariant)
     )
@@ -160,6 +217,13 @@ export async function buildClaudeUserContent(
   prompt: string,
   images: unknown,
   cwd?: string,
+  /**
+   * A7:会话所属项目根 —— 与 `chat.send` 那道门用的是**同一个来源**。
+   *
+   * cwd 通常就是项目根,但不是必然:分叉出来的会话、外部 API 起的回合、
+   * 以及 cwd 被显式指过的运行时都会不一样。传进来才能保证两道门判据一致。
+   */
+  projectRoots: readonly string[] = [],
 ): Promise<ClaudeContentBlock[]> {
   const blocks: ClaudeContentBlock[] = [{ type: 'text', text: prompt }];
 
@@ -171,14 +235,14 @@ export async function buildClaudeUserContent(
     }
 
     const resolvedPath = resolveImageAbsolutePath(cwd, descriptor.path);
-    if (!isAllowedImageSourcePath(resolvedPath, cwd)) {
-      log.warn(`[Images] Refusing to read image outside allowed roots: ${descriptor.path}`);
+    if (!isAllowedImageSourcePath(resolvedPath, cwd, projectRoots)) {
+      log.warn(`[Images] Refusing to read image outside allowed roots: ${descriptor.path} (cwd=${cwd ?? '-'}, projectRoots=${projectRoots.join(',') || '-'})`);
       continue;
     }
 
     try {
       const canonicalPath = await fs.realpath(resolvedPath);
-      if (!isAllowedImageSourcePath(canonicalPath, cwd)) {
+      if (!isAllowedImageSourcePath(canonicalPath, cwd, projectRoots)) {
         log.warn(`[Images] Refusing to read symlinked image outside allowed roots: ${descriptor.path}`);
         continue;
       }
