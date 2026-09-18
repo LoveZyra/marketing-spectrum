@@ -10,6 +10,10 @@ import type { MarkSessionIdle, MarkSessionProcessing } from '../../../hooks/useS
 import { isCompactionActivity } from '../utils/compactionProgress';
 import { createDropWarner, learnRunSession, resolveEventSid } from '../utils/eventRouting';
 import { describeDroppedQueueMessage } from '../utils/serverQueue';
+import {
+  isSessionGoneProtocolError, removedInfoFromFrame, removedInfoFromNotFound,
+  takeQueuedTextForRemoval, type SessionRemovedInfo,
+} from '../utils/sessionRemoved';
 import type { PendingPermissionRequest } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
@@ -128,7 +132,7 @@ interface UseChatRealtimeHandlersArgs {
    * 刷新页面、换设备、甚至关掉标签页之后它都还在,也因此必须由服务端的帧来
    * 驱动显示,不能靠本地状态推断。
    */
-  onServerQueueChange?: (sessionId: string, queued: { preview: string; enqueuedAt: string } | null) => void;
+  onServerQueueChange?: (sessionId: string, queued: { preview: string; enqueuedAt: string; redacted?: boolean } | null) => void;
   /** 排队被中止带走时把正文退回输入框;回填成功返回 true(输入框非空时不覆盖)。 */
   onServerQueueReturned?: (sessionId: string, content: string) => boolean;
   /**
@@ -139,6 +143,13 @@ interface UseChatRealtimeHandlersArgs {
    * 重投(服务端按 id 去重,所以重投不会产生第二条消息)。
    */
   onSendAcked?: (sessionId: string, clientMessageId: string) => void;
+  /**
+   * gk:这条会话已被永久删除(服务端推的 `session_removed`),或者发送时发现它已经不在了
+   * (`chat.send` 的 `SESSION_NOT_FOUND`)。界面据此切「会话已被删除」态。
+   */
+  onSessionRemoved?: (sessionId: string, info: SessionRemovedInfo) => void;
+  /** gk:被删的会话又回来了(`session_restored`,或侧栏的 `session_upserted`)—— 撤掉「已被删除」态。 */
+  onSessionRestored?: (sessionId: string) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -175,6 +186,8 @@ export function useChatRealtimeHandlers({
   onServerQueueChange,
   onServerQueueReturned,
   onSendAcked,
+  onSessionRemoved,
+  onSessionRestored,
 }: UseChatRealtimeHandlersArgs) {
   // Session switches can send `chat.subscribe` before this effect has a chance
   // to rebind the websocket listener. Read the visible session id from a ref
@@ -318,7 +331,7 @@ export function useChatRealtimeHandlers({
           // 不能只活在发起它的那个标签页里。
           onServerQueueChange?.(
             sid,
-            (msg.queued as { preview: string; enqueuedAt: string } | null) ?? null,
+            (msg.queued as { preview: string; enqueuedAt: string; redacted?: boolean } | null) ?? null,
           );
 
           const isViewedSession = sid === activeViewSessionId;
@@ -342,6 +355,20 @@ export function useChatRealtimeHandlers({
           // 直接回话类帧:没带会话 id 时归到正在看的会话**展示**是合理的 ——
           // 它就是对这个客户端刚发出的动作的回应。只用于展示,不进游标。
           const errorSid = sid || activeViewSessionId;
+          /**
+           * gk:`chat.send` 撞到"会话不存在" → 这条会话已经被删了(或你已无权访问)。
+           *
+           * 不再把那句给开发者看的英文原样塞进对话、也不再给「重发上一条」(重发只会再撞
+           * 一次 —— 2026-09-14 生产截图里就是这样两条红字)。切成「会话已被删除」态,
+           * 顺手把挂在这条死会话上的排队消息清掉,免得后台续发空转。
+           */
+          if (errorSid && isSessionGoneProtocolError({ code: msg.code, request: msg.request })) {
+            onSessionIdle?.(errorSid);
+            // 排队的那句话先取出来再清 —— 它要跟着「新建会话继续」走。
+            const carried = takeQueuedTextForRemoval(errorSid, readQueuedMessage, clearQueuedMessage);
+            onSessionRemoved?.(errorSid, removedInfoFromNotFound(carried));
+            return;
+          }
           if (errorSid) {
             // 多数 protocol_error 意味着这一轮压根没开起来(也就不会有 complete),
             // 所以要顺手把转圈停掉。**但有两个 code 恰恰相反**:
@@ -401,6 +428,7 @@ export function useChatRealtimeHandlers({
           onServerQueueChange?.(sid, {
             preview: String(msg.preview ?? ''),
             enqueuedAt: String(msg.enqueuedAt ?? new Date().toISOString()),
+            redacted: Boolean(msg.redacted),
           });
           return;
         }
@@ -445,8 +473,36 @@ export function useChatRealtimeHandlers({
           return;
         }
 
+        /**
+         * gk:会话被永久删除了(进了最近删除)。侧栏那半由 useProjectsState 处理;
+         * 这里管对话区:停转圈、清掉这条会话的排队、切「会话已被删除」态。
+         */
+        /**
+         * gl:会话从最近删除里恢复了 —— 撤掉「已被删除」态。
+         *
+         * 这一条必须独立于下面 `session_upserted` 那一路:侧栏那条广播带着
+         * `if (row.isArchived) return` 的闸门,归档态的会话恢复时根本不发,
+         * 于是页面会永远停在删除态(gk 的实测缺陷)。
+         */
+        case 'session_restored': {
+          if (sid) onSessionRestored?.(sid);
+          return;
+        }
+
+        case 'session_removed': {
+          if (!sid) return;
+          onSessionIdle?.(sid);
+          // 排队的那句话先取出来再清 —— 它要跟着「新建会话继续」走。
+          const carried = takeQueuedTextForRemoval(sid, readQueuedMessage, clearQueuedMessage);
+          onSessionRemoved?.(sid, removedInfoFromFrame(msg as Record<string, unknown>, carried));
+          return;
+        }
+
         // Sidebar/global events — owned by useProjectsState.
         case 'session_upserted':
+          // gk:恢复之后它会再次 upsert —— 撤掉「已被删除」态(没标过的会话这一步是空操作)。
+          if (sid) onSessionRestored?.(sid);
+          return;
         case 'loading_progress':
           return;
 
@@ -696,5 +752,7 @@ export function useChatRealtimeHandlers({
     onServerQueueChange,
     onServerQueueReturned,
     onSendAcked,
+    onSessionRemoved,
+    onSessionRestored,
   ]);
 }

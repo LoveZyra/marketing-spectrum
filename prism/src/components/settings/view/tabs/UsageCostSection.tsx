@@ -136,7 +136,7 @@ export default function UsageCostSection() {
         <select
           value={by}
           onChange={(event) => setBy(event.target.value)}
-          className="rounded-md border border-border bg-card px-2 py-1.5 text-xs text-body focus:border-border-strong focus:outline-none"
+          className="rounded-md border border-border bg-card py-1.5 pl-2 pr-7 text-xs text-body focus:border-border-strong focus:outline-none"
         >
           {DIMENSIONS.map((dimension) => (
             <option key={dimension.key} value={dimension.key}>
@@ -147,7 +147,7 @@ export default function UsageCostSection() {
         <select
           value={days}
           onChange={(event) => setDays(Number(event.target.value))}
-          className="rounded-md border border-border bg-card px-2 py-1.5 text-xs text-body focus:border-border-strong focus:outline-none"
+          className="rounded-md border border-border bg-card py-1.5 pl-2 pr-7 text-xs text-body focus:border-border-strong focus:outline-none"
         >
           {RANGES.map((range) => (
             <option key={range} value={range}>

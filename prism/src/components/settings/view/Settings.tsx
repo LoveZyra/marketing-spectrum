@@ -47,7 +47,12 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[rgba(16,16,16,0.72)] md:p-4">
-      <div className="prism-modal-shadow flex h-full w-full flex-col overflow-hidden border border-border bg-background md:h-[90vh] md:max-w-4xl md:rounded-lg">
+      {/*
+        弹窗宽度:原来是 `max-w-4xl`(896px),减掉左侧导航与内边距,内容区只剩 ~540px ——
+        账号审批与操作记录那两张表在里面根本铺不开(「详情」列被挤成一条缝、「操作」列
+        被整个切掉)。放宽到 5xl,超宽屏再到 6xl;表格自己也做了响应式收列,两头一起让。
+      */}
+      <div className="prism-modal-shadow flex h-full w-full flex-col overflow-hidden border border-border bg-background md:h-[90vh] md:max-w-5xl md:rounded-lg xl:max-w-6xl">
         {/* Header */}
         <div className="flex flex-shrink-0 items-center justify-between border-b border-border px-4 py-3 md:px-5">
           <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>

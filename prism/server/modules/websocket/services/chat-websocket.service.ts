@@ -153,7 +153,8 @@ export function filterImagesToUploadStore(
     if (ledgerOwner && sessionId && path.isAbsolute(descriptor.path)) {
       const resolved = path.resolve(descriptor.path);
       const owner = ledgerOwner(resolved);
-      if (owner && owner.sessionId === sessionId) {
+      // gh:与上面全局库那条分支同口径 —— 台账记着它属于这条会话**且**是发送者自己传的。
+      if (owner && owner.sessionId === sessionId && (actorUserId === null || actorUserId === undefined || String(owner.userId) === String(actorUserId))) {
         log.info(`[Chat] Image accepted by attachment ledger (outside configured roots): ${resolved}`);
         return [{ ...descriptor, path: resolved }];
       }
@@ -207,7 +208,14 @@ type ChatWebSocketDependencies = {
     LLMProvider,
     (
       appSessionId: string,
-      options: { command: string; providerSessionId?: string | null },
+      options: {
+        command: string;
+        providerSessionId?: string | null;
+        /** gh:发送者身份与它这次的运行时选项 —— provider 侧据此核对"同一个人、同一个档位"。 */
+        actorUsername?: string | null;
+        ownerUserId?: number | null;
+        runtimeOptions?: AnyRecord;
+      },
     ) => Promise<{ merged: boolean; reason?: string; uuid?: string }>
   >>;
   /**
@@ -306,13 +314,20 @@ function sendProtocolError(
   ws: WebSocket,
   code: string,
   error: string,
-  sessionId?: string
+  sessionId?: string,
+  /**
+   * gk:这条错是在回哪种请求。同一个 code 在不同请求上意义不同(`SESSION_NOT_FOUND`
+   * 在 chat.send 上 = 这条会话已经没了;在 permission-response 上 = 没这条待批),
+   * 客户端只对 `chat.send` 那一种切「会话已被删除」态。
+   */
+  request?: 'chat.send' | 'chat.abort' | 'chat.subscribe' | 'permission-response' | 'chat.cancel-queued',
 ): void {
   sendJson(ws, {
     kind: 'protocol_error',
     code,
     error,
     sessionId: sessionId ?? null,
+    ...(request ? { request } : {}),
     timestamp: new Date().toISOString(),
   });
 }
@@ -515,6 +530,32 @@ function broadcastToSessionViewers(sessionId: string, payload: unknown): void {
 }
 
 /**
+ * gi:按查看者**分别**造帧的广播 —— 排队消息的正文只给排它的人,别人拿到的是脱敏版。
+ * `chat_queued` 的 preview 与 `chat_queue_cancelled` 退回的 content 都走这条。
+ */
+function broadcastToSessionViewersPerViewer(
+  sessionId: string,
+  build: (viewer: { userId?: string | number | null } | null) => unknown,
+): void {
+  for (const client of connectedClients) {
+    try {
+      const socket = client as unknown as WebSocket;
+      if (socket.readyState !== WS_OPEN_STATE) continue;
+      const viewer = readSocketViewer(socket);
+      if (!canViewerSeeSession(sessionId, viewer)) continue;
+      socket.send(JSON.stringify(build(viewer)));
+    } catch {
+      // 单个 socket 出错不影响其余
+    }
+  }
+}
+
+/** 这条排队消息是不是这个查看者自己排的。 */
+function isPendingOwner(pending: { userId: string | number | null | undefined }, viewer: { userId?: string | number | null } | null): boolean {
+  return String(pending.userId ?? '') === String(viewer?.userId ?? '');
+}
+
+/**
  * F14:某段对话的常驻进程被名额挤掉了,告诉正在看它的人一声。
  *
  * 被挤掉本身是正常且必要的(池子有上限),问题在于它**静默**:那段对话的下一条
@@ -534,11 +575,96 @@ export function broadcastRuntimeEvicted(payload: { sessionId: string; reason: st
   });
 }
 
-function queuedFrame(sessionId: string, pending: PendingSend) {
+/**
+ * gk:**会话被永久删除了,告诉所有还看得到它的人。**
+ *
+ * 两段式:删除之前先把"现在谁看得见这条会话"这份名单定下来(判定要靠 sessions 行,
+ * 行一删就判不出来了),行删掉之后再把帧发出去。发晚了的好处是客户端收到帧时
+ * 服务端状态已经一致 —— 它随后不管是刷侧栏还是重发,拿到的都是"已经没了"。
+ *
+ * 此前没有这条帧:别处删了,开着的页面要到**下一次发送**撞到 SESSION_NOT_FOUND 才知道,
+ * 而那句报错还是给开发者看的英文。
+ */
+export function prepareSessionRemovedBroadcast(sessionId: string): (payload: {
+  reason: 'deleted' | 'project_deleted';
+  deletedBy?: string | null;
+  sessionName?: string | null;
+  restorable?: boolean;
+}) => number {
+  const recipients: WebSocket[] = [];
+  for (const client of connectedClients) {
+    try {
+      const socket = client as unknown as WebSocket;
+      if (socket.readyState !== WS_OPEN_STATE) continue;
+      if (!canViewerSeeSession(sessionId, readSocketViewer(socket))) continue;
+      recipients.push(socket);
+    } catch {
+      // 单个 socket 出错不影响其余
+    }
+  }
+  return (payload) => {
+    const frame = JSON.stringify({
+      kind: 'session_removed',
+      sessionId,
+      reason: payload.reason,
+      deletedBy: payload.deletedBy ?? null,
+      sessionName: payload.sessionName ?? null,
+      restorable: payload.restorable !== false,
+      timestamp: new Date().toISOString(),
+    });
+    let sent = 0;
+    for (const socket of recipients) {
+      try {
+        if (socket.readyState !== WS_OPEN_STATE) continue;
+        socket.send(frame);
+        sent += 1;
+      } catch {
+        // 单个 socket 出错不影响其余
+      }
+    }
+    return sent;
+  };
+}
+
+/**
+ * gl:会话从最近删除里恢复了 —— 给所有**现在**看得见它的 socket 推一帧。
+ *
+ * 与 `prepareSessionRemovedBroadcast` 的区别在于名单什么时候定:删除要在动行**之前**
+ * 收名单(行没了就判不出可见性),恢复则相反 —— 行已经回来了,当场收即可。
+ *
+ * **不复用 `announceSessionUpsert`**:那条路带着 `if (row.isArchived) return`
+ * 的闸门(侧栏不该让归档会话弹回活跃列表),而恢复一条归档态的会话同样需要
+ * 通知前端撤掉「已被删除」态。gk 借用它,结果就是归档态恢复后页面永远卡在删除态。
+ */
+export function broadcastSessionRestored(sessionId: string): number {
+  const frame = JSON.stringify({
+    kind: 'session_restored',
+    sessionId,
+    timestamp: new Date().toISOString(),
+  });
+  let sent = 0;
+  for (const client of connectedClients) {
+    try {
+      const socket = client as unknown as WebSocket;
+      if (socket.readyState !== WS_OPEN_STATE) continue;
+      if (!canViewerSeeSession(sessionId, readSocketViewer(socket))) continue;
+      socket.send(frame);
+      sent += 1;
+    } catch {
+      // 单个 socket 出错不影响其余
+    }
+  }
+  return sent;
+}
+
+function queuedFrame(sessionId: string, pending: PendingSend, viewer: { userId?: string | number | null } | null = null) {
+  const own = isPendingOwner(pending, viewer);
   return {
     kind: 'chat_queued',
     sessionId,
-    preview: pending.preview,
+    // gi:正文预览只给排它的人;别人拿到空串 + redacted 标记(客户端据此显示占位,而不是把空串当"没正文")
+    preview: own ? pending.preview : '',
+    redacted: !own,
     enqueuedAt: new Date(pending.enqueuedAt).toISOString(),
     timestamp: new Date().toISOString(),
   };
@@ -564,13 +690,14 @@ function dropPendingSend(sessionId: string, reason: 'cancelled' | 'aborted' | 'e
     && typeof pending?.data?.content === 'string'
     ? pending.data.content
     : null;
-  broadcastToSessionViewers(sessionId, {
+  // gi:退回的正文**只退给排它的人** —— 共享会话里别人的输入框不该被灌进这段话。
+  broadcastToSessionViewersPerViewer(sessionId, (viewer) => ({
     kind: 'chat_queue_cancelled',
     sessionId,
     reason,
-    ...(content ? { content } : {}),
+    ...(content && pending && isPendingOwner(pending, viewer) ? { content } : {}),
     timestamp: new Date().toISOString(),
-  });
+  }));
   return true;
 }
 
@@ -643,11 +770,13 @@ async function handleChatSend(
 
   const session = sessionsDb.getSessionById(sessionId);
   if (!session) {
+    // gk:这句仍是给日志/开发者看的;客户端按 code + request 切成「这条会话已被删除」态,不再原样显示它。
     sendProtocolError(
       ws,
       'SESSION_NOT_FOUND',
       `Session "${sessionId}" was not found. Create it via POST /api/providers/sessions first.`,
-      sessionId
+      sessionId,
+      'chat.send',
     );
     return;
   }
@@ -684,7 +813,7 @@ async function handleChatSend(
   // 会话 id,就能往别人的对话里发消息、顺带把自己的权限模式按到别人的运行时上
   // —— 包括 bypassPermissions。
   if (!canViewerSeeSession(sessionId, authViewer)) {
-    sendProtocolError(ws, 'SESSION_NOT_FOUND', `Session "${sessionId}" was not found.`, sessionId);
+    sendProtocolError(ws, 'SESSION_NOT_FOUND', `Session "${sessionId}" was not found.`, sessionId, 'chat.send');
     return;
   }
 
@@ -821,7 +950,7 @@ async function handleChatSend(
    * `drainToken.cancelled` 已经覆盖了"停止"这一路,这里补上另外两路。
    */
   if (!canViewerSeeSession(sessionId, authViewer)) {
-    sendProtocolError(ws, 'SESSION_NOT_FOUND', `Session "${sessionId}" was not found.`, sessionId);
+    sendProtocolError(ws, 'SESSION_NOT_FOUND', `Session "${sessionId}" was not found.`, sessionId, 'chat.send');
     releaseSendKey();
     return;
   }
@@ -832,6 +961,26 @@ async function handleChatSend(
       ws,
       'SESSION_HELD_BY_SHELL',
       `这段对话刚被终端接管${who} —— 这一条没有发出去。关掉那个终端后可以重发。`,
+      sessionId,
+    );
+    releaseSendKey();
+    return;
+  }
+
+  /**
+   * gh:**分叉不能接在已有历史的会话后面 —— 明说,不再无声丢弃。**
+   *
+   * 下面 runtimeOptions 里 `forkFrom` 只在"目标会话没有原生 id"时才认,否则静默
+   * 置 undefined。composer 的同页提交会把 sessionId 清空(新开一支),但排队记录
+   * 恢复 / 后台续发那两条路此前把它钉回原会话 —— 编辑后的内容就这样**追加**进了
+   * 原对话,带着本该被丢弃的旧上下文,而客户端拿到的是 accepted。
+   * 前端两条路已改(不再钉原会话);这里是最后一道门:真到了这里就回一条协议错误。
+   */
+  if (session.provider_session_id && (data.options as AnyRecord | undefined)?.forkFrom) {
+    sendProtocolError(
+      ws,
+      'FORK_TARGET_HAS_HISTORY',
+      '「编辑重跑」要开一条新会话,不能接在已有历史的会话后面 —— 这一条没有发出去。',
       sessionId,
     );
     releaseSendKey();
@@ -886,14 +1035,30 @@ async function handleChatSend(
      *   3. provider 侧不成立(没有常驻 runtime、正在自动压缩……)。
      */
     const mergeFn = dependencies.mergeFns?.[provider];
-    const clientImages = (data.options as AnyRecord | undefined)?.images;
+    const mergeClientOptions = (data.options ?? {}) as AnyRecord;
+    const clientImages = mergeClientOptions.images;
     const carriesImages = Array.isArray(clientImages) && clientImages.length > 0;
+    /**
+     * gh:合流路径**不再丢 `hiddenContext`,也不再丢发送者的身份**。
+     *
+     * 「让 Claude 建定时任务」的票据与接口说明全在 hiddenContext 里,此前只有
+     * spawn 那条路拼进去,合流那条路把它整个扔了 —— 模型只收到那句人话,票据作废。
+     * 身份与策略(actorUsername / ownerUserId / 权限档位)交给 provider 侧核对:
+     * 与目标 runtime 不是同一个人、同一个档位,就不合流,退回排队。
+     * 与下面 spawn 那条路同一份截断/剥离规则(见 `hiddenContext` 的说明)。
+     */
+    const mergeHiddenContext = typeof mergeClientOptions.hiddenContext === 'string'
+      ? mergeClientOptions.hiddenContext.slice(0, 16_384).trim()
+      : '';
     if (mergeFn && !carriesImages && !pendingSends.has(sessionId) && rawContent.trim()) {
       let merged: { merged: boolean; reason?: string } = { merged: false, reason: 'not-attempted' };
       try {
         merged = await mergeFn(sessionId, {
-          command: rawContent,
+          command: mergeHiddenContext ? `${rawContent}\n\n${mergeHiddenContext}` : rawContent,
           providerSessionId: session.provider_session_id ?? null,
+          actorUsername: authUsername,
+          ownerUserId: authUserId,
+          runtimeOptions: pickClientRuntimeOptions(mergeClientOptions),
         });
       } catch (error) {
         log.warn('[chat] 合流失败,退回排队:', (error as Error)?.message || error);
@@ -942,8 +1107,20 @@ async function handleChatSend(
       enqueuedAt: Date.now(),
       preview: rawContent.slice(0, 120),
     };
+    /**
+     * gh:重新排队也是"服务端收下了"。
+     *
+     * drain 认领的那条若在这里重新排上,`.finally` 里那句"跑完一圈都没人说收下了"
+     * 会把它当 undeliverable 丢掉 —— 刚广播的 chat_queued 立刻跟一条 chat_queue_cancelled,
+     * 而排队的人若已关掉标签页,这条消息就此消失。
+     *
+     * **顺序**:`onAccepted` 会广播 `chat_queue_flushed`(上一条排队已被取走),所以要在
+     * 重新广播 `chat_queued` **之前**调 —— 反过来客户端最后收到的是"队列空了",而队列里
+     * 明明还有这一条。
+     */
+    drainToken?.onAccepted?.();
     pendingSends.set(sessionId, pending);
-    broadcastToSessionViewers(sessionId, queuedFrame(sessionId, pending));
+    broadcastToSessionViewersPerViewer(sessionId, (viewer) => queuedFrame(sessionId, pending, viewer));
     // 排队也是"服务端收下了" —— 前端可以清掉本地那份,不必再投。
     sendSendAck(ws, sessionId, clientMessageId, 'accepted');
     return;
@@ -1430,8 +1607,16 @@ function handleChatSubscribe(
       pendingPermissions,
       // F7:排队中的那条也要报出来 —— 刷新页面或换设备后,"有一条在等"这件事
       // 不能只活在发起它的那个标签页里。
+      /**
+       * gh:排队消息的**正文预览只给排它的人**。共享会话里其他查看者只需要知道
+       * "有一条在等"(用于排队卡与 QUEUE_FULL 的提示),不该看到别人还没发出去的话。
+       */
       queued: pending
-        ? { preview: pending.preview, enqueuedAt: new Date(pending.enqueuedAt).toISOString() }
+        ? {
+          preview: isPendingOwner(pending, readSocketViewer(ws)) ? pending.preview : '',
+          redacted: !isPendingOwner(pending, readSocketViewer(ws)),
+          enqueuedAt: new Date(pending.enqueuedAt).toISOString(),
+        }
         : null,
       timestamp: new Date().toISOString(),
     });

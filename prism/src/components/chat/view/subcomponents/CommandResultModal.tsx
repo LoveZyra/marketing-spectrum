@@ -37,6 +37,12 @@ type CommandResultModalProps = {
   providerModelsRefreshing: boolean;
   onHardRefreshProviderModels: () => void;
   currentSessionId: string | null;
+  /**
+   * 会话此刻用的**档位别名**(default / sonnet / opus …),也就是输入框那枚 chip
+   * 显示的那个。卡片的「当前」必须按它判,不能按 `data.current.model` ——
+   * 自定义网关下后者是解析后的真实模型名,与档名不是一个命名空间。
+   */
+  activeModelAlias?: string | null;
   onSelectProviderModel: (
     provider: LLMProvider,
     model: string,
@@ -281,6 +287,7 @@ function ModelsContent({
   providerModelsRefreshing,
   onHardRefreshProviderModels,
   currentSessionId,
+  activeModelAlias,
   onSelectProviderModel,
   onClose,
 }: {
@@ -289,6 +296,7 @@ function ModelsContent({
   providerModelsRefreshing: boolean;
   onHardRefreshProviderModels: () => void;
   currentSessionId: string | null;
+  activeModelAlias?: string | null;
   onSelectProviderModel: CommandResultModalProps['onSelectProviderModel'];
   onClose: () => void;
 }) {
@@ -372,6 +380,16 @@ function ModelsContent({
     }
   };
   const currentModel = data?.current?.model || 'Unknown';
+  /**
+   * 卡片上的「当前」按**档位别名**判,不按 `data.current.model`。
+   *
+   * 自定义网关下 `data.current.model` 是解析后的真实模型名(这台机器上是
+   * `deepseek-v4.1-flash-…`),而 `option.value` 是档名(default / sonnet / opus)——
+   * 两个命名空间,于是 `option.value === currentModel` 永远不成立:**七张卡片一张
+   * 都不高亮**,打开挑模型的框反而看不出自己现在用的是哪一档(2026-09-15 实测)。
+   * 官方 API 下两者本来就相等,`activeModelAlias` 缺省时回落到原判据。
+   */
+  const currentAlias = activeModelAlias || currentModel;
   const providerLabel = data?.current?.providerLabel || getProviderLabel(currentProvider);
   const liveDefinition = providerModelCatalog[currentProvider];
   const availableOptions = useMemo<ModelOption[]>(() => {
@@ -446,7 +464,7 @@ function ModelsContent({
           </p>
           <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <span className="break-all font-mono text-sm font-semibold text-foreground">{currentModel}</span>
-            {pendingSessionModel && pendingSessionModel !== currentModel && (
+            {pendingSessionModel && pendingSessionModel !== currentAlias && (
               <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground dark:text-primary">
                 {t('commandResult.nextBadge', { model: pendingSessionModel })}
               </span>
@@ -506,7 +524,7 @@ function ModelsContent({
         <div className="scrollbar-thin -mr-1 min-h-0 flex-1 overflow-y-auto pr-1">
           <div className="grid gap-2 md:grid-cols-2">
             {filteredOptions.map((option, index) => {
-              const isCurrent = option.value === currentModel;
+              const isCurrent = option.value === currentAlias;
               const isPendingSelection = option.value === pendingSessionModel;
               const isChanging = option.value === changingModel;
               // 卡片第一行是**这一档实际会用到的模型**(settings.json 里配的那个),
@@ -731,7 +749,7 @@ function StatusContent({ data }: { data: StatusCommandData }) {
   const memoryRssMb = data.memoryUsage?.rssMb;
   const unknown = t('commandResult.unknown');
   const rows = [
-    { label: t('commandResult.status.package'), value: data.packageName || 'claude-code-ui', icon: Package },
+    { label: t('commandResult.status.package'), value: data.packageName || 'prism', icon: Package },
     { label: t('commandResult.status.version'), value: data.version || unknown, icon: BadgeCheck, tone: 'success' as const },
     { label: t('commandResult.status.uptime'), value: data.uptime || unknown, icon: Timer },
     { label: t('commandResult.status.provider'), value: getProviderLabel(data.provider, data.provider || unknown), icon: Server, tone: 'primary' as const },
@@ -773,6 +791,7 @@ export default function CommandResultModal({
   providerModelsRefreshing,
   onHardRefreshProviderModels,
   currentSessionId,
+  activeModelAlias,
   onSelectProviderModel,
 }: CommandResultModalProps) {
   const { t } = useTranslation('chat');
@@ -862,6 +881,7 @@ export default function CommandResultModal({
               providerModelsRefreshing={providerModelsRefreshing}
               onHardRefreshProviderModels={onHardRefreshProviderModels}
               currentSessionId={currentSessionId}
+              activeModelAlias={activeModelAlias}
               onSelectProviderModel={onSelectProviderModel}
               onClose={onClose}
             />

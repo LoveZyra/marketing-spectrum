@@ -3,6 +3,7 @@ import fs, { promises as fsPromises } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import archiver from 'archiver';
 import express, { type RequestHandler, type Router } from 'express';
 import mime from 'mime-types';
 import multer from 'multer';
@@ -22,7 +23,14 @@ import {
 } from '@/modules/files/services/path-validation.service.js';
 import { searchProjectFiles } from '@/modules/files/services/project-search.service.js';
 import { validateWorkspacePath, WORKSPACES_ROOT } from '@/shared/utils.js';
+import { setDownloadHeaders, attachmentDisposition } from '@/shared/download-headers.js';
+import {
+  issueProjectFileTicket,
+  issueProjectZipTicket,
+  readDownloadTicket,
+} from '@/shared/download-tickets.js';
 import { createLogger } from '@/shared/logger.js';
+import { recoverUploadFilename } from '@/shared/upload-filename.js';
 const log = createLogger('files');
 
 // The file tree can browse above the project root (see the ?path= parameter on
@@ -60,6 +68,14 @@ export function isInlineSafeContentType(mimeType: string): boolean {
   if (type === 'image/svg+xml') return false;
   return type.startsWith('image/') || type.startsWith('audio/') || type.startsWith('video/');
 }
+
+/**
+ * 一次打包最多收多少个**顶层**条目(目录仍然整棵打进去,不计入这个数)。
+ *
+ * 这不是内存保护 —— 打包是边压边发的,多少个条目都不占内存。它挡的是签票那一步:
+ * 每个条目都要 stat 一次,前端要是把一整棵树的路径全贴过来,签票请求本身会卡住。
+ */
+const MAX_DOWNLOAD_ENTRIES = 500;
 
 const MAX_FILE_UPLOAD_SIZE_MB = 1024;
 const MAX_FILE_UPLOAD_SIZE_BYTES = MAX_FILE_UPLOAD_SIZE_MB * 1024 * 1024;
@@ -166,6 +182,185 @@ const chunkUploadMiddleware = multer({
   }),
   limits: { fileSize: UPLOAD_CHUNK_REQUEST_BYTES, files: 1 },
 });
+
+/**
+ * 一个条目在压缩包里叫什么。
+ *
+ * 用**相对项目根**的路径,而不是 basename:多选到两个不同目录下的同名文件时,
+ * basename 会在包里撞车 —— 后一个把前一个覆盖掉,而且不报错。
+ *
+ * 开了 `PRISM_FILETREE_ALLOW_EXTERNAL_READ` 的部署能读到项目根之外,那时相对路径
+ * 是一串 `../`。zip 条目名里的 `../` 是路径穿越,解压工具要么警告要么直接拒绝,
+ * 所以这种情况退回 basename。分隔符一律用 `/` —— zip 规范只认这一个。
+ */
+const zipEntryName = (projectRoot: string, absPath: string): string => {
+  const rel = path.relative(projectRoot, absPath);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+    return path.basename(absPath);
+  }
+  return rel.split(path.sep).join('/');
+};
+
+/**
+ * 项目文件的**直传**路由:`/api/downloads` 下的 `/file` 与 `/zip`。
+ *
+ * 单独成一个 router,并且**不接受 `authenticateToken`**(连注入口都不留)——
+ * 这是本次唯一新增的、不带登录态的接口面,把它们收在一个工厂里,审计时一眼能数清。
+ *
+ * 挂在 `/api/downloads` 而不是 `/api/projects` 的理由见 download-ticket 那条路由里的注释:
+ * index.js 有一句排在前面的 `app.use('/api/projects', authenticateToken, …)`,
+ * 会把一条靠票据的链接直接 401 掉,失败形态还和"票过期"一模一样。
+ */
+export function createFileDownloadRouter(): Router {
+  const router = express.Router();
+  /**
+   * GET /api/downloads/file?ticket=…
+   *
+   * 路径不在查询串里,它在票里:反代日志拿到的就只是一串 5 分钟后作废的随机数。
+   */
+  router.get('/file', async (req, res) => {
+    try {
+      const payload = readDownloadTicket(req.query.ticket as string, 'project-file');
+      if (!payload) {
+        return res.status(401).json({ error: '下载链接已过期,请重新点一次下载。' });
+      }
+      const projectId = payload.projectId;
+
+      // 票只证明"是谁",可见性和路径重跑一遍 —— 这 5 分钟里权限可能已经变了。
+      const projectRoot = resolveVisibleProjectRoot(payload.viewer, projectId);
+      if (!projectRoot) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+      const validation = await resolveReadablePath(projectRoot, payload.filePath);
+      if (!validation.valid) {
+        return res.status(403).json({ error: validation.error });
+      }
+
+      const resolved = validation.resolved;
+      let stat;
+      try {
+        stat = await fsPromises.stat(resolved);
+      } catch {
+        return res.status(404).json({ error: 'File not found' });
+      }
+      if (!stat.isFile()) {
+        return res.status(404).json({ error: 'File not found' });
+      }
+
+      /**
+       * 这条口**永远是附件** —— 与 `files/content` 的 inline 白名单不同。
+       * 那条口要服务图片查看器和媒体预览,所以位图/音视频允许内联;这条口的存在
+       * 理由就是"存到硬盘",一个 MP4 在标签页里播起来是彻底的答非所问。
+       */
+      setDownloadHeaders(res, {
+        fileName: path.basename(resolved),
+        size: stat.size,
+        mimeType: mime.lookup(resolved) || 'application/octet-stream',
+      });
+
+      // **必须给 source 挂 error**:pipe() 只给 dest 挂,ReadStream 自己的 'error'
+      // 无监听就是 EventEmitter 抛 → uncaughtException → 整个进程退出。
+      const fileStream = fs.createReadStream(resolved);
+      fileStream.on('error', (error) => {
+        log.error('Error streaming download:', error);
+        if (!res.headersSent) res.status(500).end();
+        else res.destroy();
+      });
+      return fileStream.pipe(res);
+    } catch (error) {
+      log.error('Error serving download:', error);
+      if (!res.headersSent) {
+        return res.status(500).json({ error: (error as Error).message });
+      }
+      return res.destroy();
+    }
+  });
+
+  /**
+   * GET /api/downloads/zip?ticket=…
+   *
+   * **边压边发**:浏览器侧内存占用接近零,点完立刻开始传。代价是压完才知道多大,
+   * 所以**不写 `Content-Length`,也就没有百分比**,只有"已下载 XX MB"。
+   * 写一个猜的长度比不写糟得多 —— 浏览器会在到达那个数字时提前判定完成,
+   * 用户拿到一个截断的包。JupyterLab 下文件夹同样没有百分比。
+   *
+   * 顺带修掉一个旧缺陷:以前的 ZIP 是拿**前端已加载的那棵树**打的,而那棵树有
+   * 深度上限和条目预算,超出的子目录会被静默吞掉(所以才有 folderDownloadedPartial
+   * 那句"有 N 个子目录未包含")。archiver 走的是真实文件系统,不存在这个问题。
+   */
+  router.get('/zip', async (req, res) => {
+    const payload = readDownloadTicket(req.query.ticket as string, 'project-zip');
+    /**
+     * `entries` 这个形状检查看着多余(kind 已经核过了),但它换掉的是一个**挂死**:
+     * 这段没有 try/catch 的时候,`for…of undefined` 抛出去就是一个未处理的 rejection,
+     * express 不会回任何东西 —— 请求永远悬着,浏览器的下载栏一直转。
+     * 反向验证里把 kind 检查摘掉之后,这条测试正是**超时**而不是报错才发现的。
+     */
+    if (!payload || !Array.isArray(payload.entries)) {
+      return res.status(401).json({ error: '下载链接已过期,请重新点一次下载。' });
+    }
+
+    const projectRoot = resolveVisibleProjectRoot(payload.viewer, payload.projectId);
+    if (!projectRoot) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // 每个条目的路径**重新校验一遍**,不信票里那份。
+    const entries: { absPath: string; entryName: string; isDirectory: boolean }[] = [];
+    for (const entry of payload.entries) {
+      const validation = await resolveReadablePath(projectRoot, entry.absPath);
+      if (!validation.valid) {
+        return res.status(403).json({ error: validation.error });
+      }
+      entries.push({ ...entry, absPath: validation.resolved });
+    }
+
+    try {
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', attachmentDisposition(payload.zipName));
+
+    const archive = archiver('zip', { zlib: { level: 6 } });
+
+    /**
+     * 打包开始之后**头已经发出去了**,再也改不成一个错误状态码。所以这里的规矩是:
+     * 单个条目出问题(打包期间被删、权限变了)记一条警告继续打,整体出错就掐断
+     * 连接 —— 让浏览器把这次下载判成失败,而不是收下一个悄悄残缺的包。
+     */
+    archive.on('warning', (error) => {
+      log.warn('[download-zip] 跳过一个条目:', (error as Error)?.message || error);
+    });
+    archive.on('error', (error) => {
+      log.error('[download-zip] 打包失败:', error);
+      if (!res.headersSent) res.status(500).end();
+      else res.destroy();
+    });
+    // 客户端取消下载时把打包也停掉,否则它会继续读盘直到整棵目录走完。
+    res.on('close', () => {
+      if (!res.writableEnded) archive.abort();
+    });
+
+    archive.pipe(res);
+    for (const entry of entries) {
+      if (entry.isDirectory) {
+        archive.directory(entry.absPath, entry.entryName);
+      } else {
+        archive.file(entry.absPath, { name: entry.entryName });
+      }
+    }
+    return await archive.finalize();
+    } catch (error) {
+      log.error('Error serving download-zip:', error);
+      if (!res.headersSent) {
+        return res.status(500).json({ error: (error as Error).message });
+      }
+      return res.destroy();
+    }
+  });
+
+
+  return router;
+}
 
 type FilesRouterDependencies = {
   /**
@@ -484,6 +679,132 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       if (!res.headersSent) {
         res.status(500).json({ error: (error as Error).message });
       }
+    }
+  });
+
+
+  /**
+   * ## 交给浏览器自己下:签票 + 直传两条路由
+   *
+   * 上面那条 `files/content` 是**页面自己 fetch**用的:整份字节先进内存拼成 blob,
+   * 再交给 `a[download]`。代价是没有进度条、切页就断、大文件把标签页撑崩 ——
+   * 下载这件事本来就该归浏览器的下载管理器管。
+   *
+   * 想让浏览器自己去下,就得让它**导航**到一个 URL,而**一次普通导航设不了
+   * `Authorization` 头**。仓里同一堵墙撞过两次(EventSource、沙箱 iframe),
+   * 解法都是短命票据。这里是第三次。
+   *
+   * 拆成两条而不是一条的理由:
+   * - **签票这条带登录校验**,并且把可见性、路径、存在性**全部前移到这一步**。
+   *   导航失败不会弹应用内提示(浏览器只会在下载栏里显示"失败"),所以失败必须
+   *   发生在用户按下去的那一瞬间、还在 fetch 语境里的时候。
+   * - **直传这条不挂 `authenticateToken`**。不去扩 auth 中间件里那个 `?ticket=`
+   *   分支 —— 那会让下载票变成一张通用凭据,能打任何认证路由。它只认自己签的票,
+   *   而且**拿票里的身份把可见性和路径又跑了一遍**:票能证明"是谁在下",
+   *   不能证明"现在还能下"。
+   */
+
+  /**
+   * POST /api/projects/:projectId/files/download-ticket
+   *   body: { paths: string[] }
+   *
+   * 单个文件 → `kind: 'file'`,直传;其余(目录、或多选)→ `kind: 'zip'`,打包。
+   */
+  router.post('/api/projects/:projectId/files/download-ticket', authenticateToken, async (req, res) => {
+    try {
+      const projectId = req.params.projectId as string;
+      const viewer = readRequestViewer(req);
+
+      const projectRoot = resolveVisibleProjectRoot(viewer, projectId);
+      if (!projectRoot) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      const raw: unknown = (req.body as { paths?: unknown })?.paths;
+      const requested = Array.isArray(raw)
+        ? raw.filter((p): p is string => typeof p === 'string' && p.length > 0)
+        : [];
+      if (requested.length === 0) {
+        return res.status(400).json({ error: 'Invalid file path' });
+      }
+      if (requested.length > MAX_DOWNLOAD_ENTRIES) {
+        return res.status(413).json({ error: `一次最多下载 ${MAX_DOWNLOAD_ENTRIES} 项` });
+      }
+
+      const entries: { absPath: string; entryName: string; isDirectory: boolean; size: number }[] = [];
+      for (const requestedPath of requested) {
+        const validation = await resolveReadablePath(projectRoot, requestedPath);
+        if (!validation.valid) {
+          return res.status(403).json({ error: validation.error });
+        }
+        let stat;
+        try {
+          stat = await fsPromises.stat(validation.resolved);
+        } catch {
+          return res.status(404).json({ error: 'File not found' });
+        }
+        if (!stat.isFile() && !stat.isDirectory()) {
+          // 设备文件、FIFO:读起来会永久挂住整条连接。
+          return res.status(403).json({ error: 'Unsupported file type' });
+        }
+        entries.push({
+          absPath: validation.resolved,
+          entryName: zipEntryName(projectRoot, validation.resolved),
+          isDirectory: stat.isDirectory(),
+          size: stat.size,
+        });
+      }
+
+      /**
+       * 直传口挂在 `/api/downloads` 下,**不在 `/api/projects` 下** —— 这不是口味问题。
+       *
+       * `server/index.js` 里有一句 `app.use('/api/projects', authenticateToken, …)`,
+       * 它排在文件路由**之前**。任何挂在 `/api/projects/...` 上的路由,不管自己挂不挂
+       * authenticateToken,请求都要先过那一道 —— 一条**靠票据、不带 JWT** 的下载链接
+       * 会被它直接 401 掉,而且失败形态和"票过期"一模一样,极难排查。
+       *
+       * 换个前缀之后,注册顺序怎么变都影响不到它,而且"不带登录态的路由"全部集中在
+       * `/api/downloads` 这一个前缀下,审计时一眼能数清。
+       */
+      const base = '/api/downloads';
+
+      // 单个文件才走直传 —— 只有它能事先算出 Content-Length,也就只有它有百分比。
+      if (entries.length === 1 && !entries[0].isDirectory) {
+        const ticket = issueProjectFileTicket({
+          viewer,
+          projectId,
+          filePath: entries[0].absPath,
+        });
+        return res.json({
+          kind: 'file',
+          name: path.basename(entries[0].absPath),
+          size: entries[0].size,
+          url: `${base}/file?ticket=${ticket}`,
+        });
+      }
+
+      const zipName = entries.length === 1
+        ? `${path.basename(entries[0].absPath)}.zip`
+        : `${path.basename(projectRoot) || 'download'}.zip`;
+      const ticket = issueProjectZipTicket({
+        viewer,
+        projectId,
+        zipName,
+        entries: entries.map(({ absPath, entryName, isDirectory }) => ({
+          absPath,
+          entryName,
+          isDirectory,
+        })),
+      });
+      return res.json({
+        kind: 'zip',
+        name: zipName,
+        count: entries.length,
+        url: `${base}/zip?ticket=${ticket}`,
+      });
+    } catch (error) {
+      log.error('Error issuing download ticket:', error);
+      return res.status(500).json({ error: (error as Error).message });
     }
   });
 
@@ -1001,8 +1322,17 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         log.debug('Processing files:', uploadedRequestFiles.map(f => ({ originalname: f.originalname, path: f.path })));
         for (let i = 0; i < uploadedRequestFiles.length; i++) {
           const file = uploadedRequestFiles[i];
-          // Use relative path if provided (for folder uploads), otherwise use originalname
-          const fileName = (filePaths && filePaths[i]) ? filePaths[i] : file.originalname;
+          /**
+           * Use relative path if provided (for folder uploads), otherwise use originalname.
+           *
+           * `originalname` 要过一道编码恢复:multer 把 multipart 的 filename 按 latin1
+           * 读,`报告.docx` 到这里是 `æ¥å.docx`,而这一行的名字**会直接落到用户的
+           * 项目文件树上** —— 传完在自己的文件夹里再也认不出那个文件。
+           *
+           * `filePaths` 不过这道:它来自 multipart 的**字段值**(`relativePaths`),
+           * busboy 按 utf8 解,本来就是对的;再套一层只会白担误伤的风险。
+           */
+          const fileName = (filePaths && filePaths[i]) ? filePaths[i] : recoverUploadFilename(file.originalname);
           log.debug('Processing file:', fileName, '(originalname:', file.originalname + ')');
           const destPath = path.join(resolvedTargetDir, fileName);
 

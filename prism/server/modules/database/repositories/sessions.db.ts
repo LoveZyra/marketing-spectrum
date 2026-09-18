@@ -52,8 +52,9 @@ function realProjectPath(projectPath: string): string {
 }
 
 function isSameProjectPath(a: string | null, b: string | null): boolean {
-  if (a === b) return true;
+  // gh:任一侧为空就不算同一项目 —— 两个还没归属的行不该因为"都是空"被并成一行。
   if (!a || !b) return false;
+  if (a === b) return true;
   const normalizedA = normalizeProjectPath(a);
   const normalizedB = normalizeProjectPath(b);
   if (normalizedA === normalizedB) return true;
@@ -282,7 +283,31 @@ export const sessionsDb = {
         return false;
       }
 
+      /**
+       * gk:**只吞"监视器裸行"。**
+       *
+       * 这段合并存在的唯一理由(见上)是监视器抢先把同一份 transcript 索引成了一行 ——
+       * 那一行的样子是固定的:`session_id = provider_session_id`(按 provider id 建的键)、
+       * 还没有任何显示日志。一条有人聊过的真会话不长这样。
+       *
+       * 此前判据只看"是不是另一行":同项目里任何一条会话,只要它的 id 被这次映射
+       * 认领,就会被连行删掉(显示日志还留着,成了孤儿,启动时被清理 —— 证据也没了)。
+       * 2026-09-14 生产排查时把它列成了一条"理论上能吞掉真会话"的路,这里堵上。
+       * 不满足的一律不删、不并、不认领,只打 warn —— 与跨项目的处理一致。
+       */
       if (duplicate) {
+        const bareWatcherRow = duplicate.session_id === duplicate.provider_session_id;
+        const historyRow = cachedPrepare(db,
+          'SELECT COUNT(*) AS count FROM session_display_messages WHERE session_id = ?',
+        ).get(duplicate.session_id) as { count: number } | undefined;
+        const hasHistory = Number(historyRow?.count ?? 0) > 0;
+        if (!bareWatcherRow || hasHistory) {
+          log.warn(
+            `[sessions] 拒绝合并 provider 会话映射:${sessionId} 想认领 ${providerSessionId},`
+            + ` 但那个 id 对应的是一条有历史的真会话行(${duplicate.session_id}),不是监视器裸行`,
+          );
+          return false;
+        }
         cachedPrepare(db, 'DELETE FROM sessions WHERE session_id = ?').run(duplicate.session_id);
         cachedPrepare(db,
           `UPDATE sessions SET

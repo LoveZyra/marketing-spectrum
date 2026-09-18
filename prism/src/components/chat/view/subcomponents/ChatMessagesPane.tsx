@@ -207,6 +207,20 @@ function ChatMessagesPane({
   const getGroupKey = (item: ToolGroupItem | SubagentGroupItem) =>
     // `_key` 由 stabilizeGroupIdentity 保证存在;兜底只为类型完备。
     item._key ?? `${item.messages.length}-${String(item.timestamp)}`;
+  /**
+   * gh:**滚动锚点用的行标识必须跨会话稳定 —— 不能用 `_key`。**
+   *
+   * `_key` 是 `group_${流水号}`,只在"上一次渲染的登记表里认得出"时沿用;登记表
+   * 不分会话,切到别的会话再回来,这条会话的每个组都是新面孔、全部换号。于是
+   * ga 按 rowKey 找回阅读位置这件事,只要上次停在一个活动组/子代理组上就必然失败
+   * (`resolveReadingSpot` 找不到 rowKey 直接放弃)—— 编码会话里约一半的行是组。
+   * React 的 `key` 仍用 `_key`(那是为了组件身份保持);**DOM 上的 data-row-key
+   * 改用尾成员的内在 key**:尾成员在头部补页时不变,跨会话也不变。
+   */
+  const getGroupRowKey = (item: ToolGroupItem | SubagentGroupItem) => {
+    const last = item.messages[item.messages.length - 1];
+    return (last && getIntrinsicMessageKey(last)) || getGroupKey(item);
+  };
 
   // Stable, deterministic keys for the messages rendered this pass.
   //
@@ -360,7 +374,17 @@ function ChatMessagesPane({
 
           {(() => {
             let prevMessage: ChatMessage | null = null;
-            const lastItem = groupedVisibleMessages[groupedVisibleMessages.length - 1];
+            /**
+             * gi 自查:「最后一条」跳过回执行。定时任务的「✅ 执行完成」落在模型回复之后,
+             * 若把它当最后一条,真正的最后一条回复/报错就失去「重发上一条」的控制。
+             */
+            let lastItem = groupedVisibleMessages[groupedVisibleMessages.length - 1];
+            for (let i = groupedVisibleMessages.length - 1; i >= 0; i -= 1) {
+              const candidate = groupedVisibleMessages[i];
+              if ((candidate as ChatMessage).isTaskNotification) continue;
+              lastItem = candidate;
+              break;
+            }
             /**
              * **哪一段属于"正在跑的这一轮",以及它的正文写了没有。**
              *
@@ -430,7 +454,7 @@ function ChatMessagesPane({
                 return (
                   <SubagentGroupCard
                     key={`subagents-${getGroupKey(item)}`}
-                    rowKey={`subagents-${getGroupKey(item)}`}
+                    rowKey={`subagents-${getGroupRowKey(item)}`}
                     group={item}
                     getMessageKey={getMessageKey}
                     isCurrentTurn={isProcessing && renderedIndex > turnBoundaryIndex}
@@ -463,7 +487,7 @@ function ChatMessagesPane({
                 return (
                   <ActivityTimeline
                     key={`activity-${getGroupKey(item)}`}
-                    rowKey={`activity-${getGroupKey(item)}`}
+                    rowKey={`activity-${getGroupRowKey(item)}`}
                     group={item}
                     prevMessage={groupPrevMessage}
                     createDiff={createDiff}

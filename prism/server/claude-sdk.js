@@ -1441,6 +1441,20 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
       const transformedMessage = transformMessage(message);
       const sid = capturedSessionId || sessionId || null;
 
+      /**
+       * gh:**一次性路径也接任务生命周期通道。**
+       *
+       * `taskLifecycleMessage` 此前只在常驻回合与无主帧两处调用;定时任务与外部
+       * Agent API 走的是这条一次性路径(`oneShot: true`),`system/task_*` 交给
+       * `normalizeMessage` 直接变成 `[]` —— 那类会话里转后台的 Bash / 子代理,
+       * 那一行永远停在"running in the background"那个 tool_result 上。
+       */
+      const taskRowOneShot = taskLifecycleMessage(message, sid);
+      if (taskRowOneShot) {
+        ws.send(taskRowOneShot);
+        continue;
+      }
+
       // Use adapter to normalize SDK events into NormalizedMessage[]
       const normalized = sessionsService.normalizeMessage('claude', transformedMessage, sid);
       for (const msg of normalized) {
@@ -1452,7 +1466,8 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
       }
 
       // Extract and send token budget updates from assistant/result usage payloads
-      const tokenBudgetData = extractTokenBudget(message);
+      // gh:子代理帧不刷主上下文环(与常驻路径同一条理由)。
+      const tokenBudgetData = message?.parent_tool_use_id ? null : extractTokenBudget(message);
       if (tokenBudgetData) {
         ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       }
@@ -1655,6 +1670,7 @@ async function abortClaudeSDKSession(sessionId, context = {}) {
     // classified as aborts rather than failures.
     abortedSessionIds.add(sessionId);
     if (runEntry) runEntry.aborted = true;
+    disarmForeignResultGuard(runEntry?.runtime || getPersistentRuntime(sessionId));
 
     try {
       await interruptWithTimeout(session.instance, `session ${sessionId}`);
@@ -1789,10 +1805,34 @@ function getPendingApprovalsForSession(sessionId) {
 
 const PERSISTENT_ENABLED = process.env.PRISM_PERSISTENT_SESSIONS !== '0';
 const CHECKPOINTS_ENABLED = process.env.PRISM_CHECKPOINTS !== '0';
+/**
+ * gt:**压缩这件事交还给 CLI。**
+ *
+ * 在此之前 Prism 自己盯着占比、自己推 `/compact`,跑在一个 `internal` 的维护回合里。
+ * 那条路有三个硬伤,2026-09-15 生产上全撞上了:
+ *
+ *   1. 维护回合的看门狗是 idle 90s,而 `includePartialMessages = false` 意味着
+ *      **整个压缩期间流上一帧都不会有** —— 那 90s 名义上是 idle,实际是压缩的总预算。
+ *      CLI 内部遇到 "prompt too long" 还会丢消息重试,每次都是一整次模型调用,
+ *      90 秒根本不是一个量级;
+ *   2. 压缩失败后 `runtime.lastContextUsage` 不失效,占比仍然过线 ——
+ *      **每个回合结束都跟着一次注定失败的 90 秒压缩**,用户每发一条消息白等 90 秒;
+ *   3. 而 CLI 的自动压缩**本来就默认开着**(CLI 二进制里 `autoCompactEnabled:!0`,
+ *      读取处缺省 true)。也就是说一直是两套机制并存,Prism 只是总抢在前面。
+ *
+ * 现在:Prism 不再推 `/compact`,只做三件事 —— 读 `getContextUsage` 画用量环、
+ * 接住 CLI 自己发的压缩帧画进度、用户手打 `/compact` 时照常走。
+ * 压缩发生在**用户回合内部**,用的是用户回合的预算(idle 60min / 绝对上限默认关闭),
+ * 那个 90s 从定义上就够不着它。
+ *
+ * "什么时候压"的旋钮没有交出去 —— 通过下面两个环境变量透传给 CLI 自己的开关。
+ */
+/** `0` = 让 CLI 关掉自动压缩(不再有任何自动压缩);默认跟随 CLI(开)。 */
 const AUTO_COMPACT_ENABLED = process.env.PRISM_AUTO_COMPACT !== '0';
-const AUTO_COMPACT_RATIO = (() => {
-  const parsed = parseFloat(process.env.PRISM_AUTO_COMPACT_RATIO);
-  return Number.isFinite(parsed) && parsed > 0 && parsed < 1 ? parsed : 0.8;
+/** CLI 的自动压缩窗口(token 数)。不配 = 用 CLI 自己的默认。 */
+const AUTO_COMPACT_WINDOW = (() => {
+  const parsed = parseInt(process.env.PRISM_AUTO_COMPACT_WINDOW, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 })();
 /**
  * 常驻运行时上限 —— **整台服务器**的,不是每人的。
@@ -2025,6 +2065,15 @@ function readMaintenanceWatchdogConfig(env = process.env) {
     toolSilenceMaxMs: 0,
   };
 }
+/**
+ * gt 起**没有任何回合再传 `internal: true`** —— Prism 自己那两处压缩(维护窗口、
+ * 发送前兜底)都删了,压缩归 CLI 且发生在用户回合内部,用的是 TURN_WATCHDOG。
+ *
+ * 这份配置与 `internal` 参数一并保留:`internal` 是"这一轮不属于用户"的通用概念,
+ * 将来再有维护类回合仍然要它。**但别再把压缩塞回来** —— 90s 的 idle 在
+ * `includePartialMessages = false` 下测不出"活着",只会把慢压缩误杀,
+ * 这正是 2026-09-15 那次事故的机理(见 AUTO_COMPACT_ENABLED 的说明)。
+ */
 const MAINTENANCE_WATCHDOG = readMaintenanceWatchdogConfig();
 
 /**
@@ -2048,6 +2097,20 @@ export function runtimeIsIdle(runtime) {
 function collectToolUseDelta(message) {
   const adds = [];
   const removes = [];
+  /**
+   * gh:**子代理的工具不算主 CLI 的"在途"。**
+   *
+   * 这张集合唯一的用途是回答"这个 CLI 能不能接新活"(runtimeIsIdle /
+   * runtimeForSend 的重建判据)。而子代理的 tool_use/tool_result 帧(SDK 默认就
+   * 转发,信封上带 `parent_tool_use_id`)也会走到这里 —— 后台子代理只要正在跑一条
+   * 工具,主 CLI 就被判成"还有工具在途",用户一发消息 `runtimeForSend` 就
+   * dispose+resume,**把整个 CLI 进程连同后台子代理一起杀掉**,而那张卡片从此
+   * 永远转圈(task_notification 再也不会来)。
+   *
+   * 子代理的在途另记一张表(runtime.subagentToolUses),只给观测回合的看门狗
+   * 判"还有没有东西在跑"用,不参与"能不能复用"。
+   */
+  if (message?.parent_tool_use_id) return { adds, removes };
   const content = message?.message?.content;
   if (Array.isArray(content)) {
     for (const part of content) {
@@ -2057,6 +2120,39 @@ function collectToolUseDelta(message) {
     }
   }
   return { adds, removes };
+}
+
+/** gh:子代理内部工具的开始/结束(带 parent_tool_use_id 的帧),只喂看门狗。 */
+function collectSubagentToolUseDelta(message) {
+  const adds = [];
+  const removes = [];
+  const parent = message?.parent_tool_use_id;
+  if (!parent) return { adds, removes };
+  const content = message?.message?.content;
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      if (!part || typeof part !== 'object') continue;
+      if (part.type === 'tool_use' && typeof part.id === 'string') adds.push({ id: part.id, parent: String(parent) });
+      if (part.type === 'tool_result' && typeof part.tool_use_id === 'string') removes.push(part.tool_use_id);
+    }
+  }
+  return { adds, removes };
+}
+
+/**
+ * gi 自查:**子代理的在途要能清空。**
+ *
+ * 子代理跑到一半被中止,它内部那些 tool_use 不会有对应的 tool_result(CLI 只给顶层
+ * 工具合成"interrupted"结果),于是这张表永远非空 → 观测回合的看门狗一直"只续不杀"。
+ * 父任务收工(顶层 tool_result / task_notification)时把它名下的全部清掉;中止时全清。
+ */
+function settleSubagentTools(runtime, parentToolUseId) {
+  const table = runtime?.subagentToolUses;
+  if (!(table instanceof Map)) return;
+  if (!parentToolUseId) { table.clear(); return; }
+  for (const [innerId, parent] of table) {
+    if (parent === String(parentToolUseId)) table.delete(innerId);
+  }
 }
 
 /** Resident runtimes keyed by provider-native session id (or pending:<uuid>). */
@@ -2110,6 +2206,28 @@ function createInputQueue() {
 
 function isTurnResult(message) {
   return message?.type === 'result' && !message?.parent_tool_use_id;
+}
+
+/**
+ * gh:这条 result 是不是 CLI 自己那一轮的收尾(而不是本回合的)。
+ * push 时 CLI 的一轮开着,且本回合还没收到过任何一帧 —— 只可能是它的。
+ */
+export function shouldIgnoreForeignResult(turn) {
+  return Boolean(turn?.expectForeignResult) && !turn?.sawFrame;
+}
+
+/**
+ * gi 自查:**中止之后,第一个 result 必须结束用户回合,不管它是谁的。**
+ *
+ * 用户在 CLI 自己那轮还开着时发了消息(expectForeignResult=true),随即按「停止」:
+ * interrupt 让 CLI 把自己那轮收掉、发出 result —— 若仍按"外来的"忽略,用户回合
+ * 就永远等不到自己的 result(CLI 要么把排队的消息接着跑,帧全被丢;要么丢掉它,
+ * 回合挂到看门狗),期间每次发送都撞 "A turn is already running"。
+ */
+function disarmForeignResultGuard(runtime) {
+  if (runtime?.turn) runtime.turn.expectForeignResult = false;
+  // 中止 = 子代理也停了;它们内部那些工具不会再有结果(见 settleSubagentTools)。
+  settleSubagentTools(runtime, null);
 }
 
 /* ── gb:CLI 自己发起的那一轮 ─────────────────────────────────────── */
@@ -2285,8 +2403,56 @@ export function taskLifecycleMessage(message, sessionId) {
  * 这里只做三件事:记账、归一化、交给钩子。开不开观测回合、怎么收尾,
  * 全在 websocket 层(见 observed-run.service.ts)—— 这一层不认识 run。
  */
+/**
+ * gh:**"工具还在跑"的心跳也算活动。**
+ *
+ * SDK 的 `tool_progress`(以及 system/task_progress)不是内容帧,gb 在第一行就把它
+ * 扔了 —— 于是观测回合的 60 秒静默看门狗在一条跑 90 秒的后台命令面前必然到点:
+ * 假失败的 complete、转圈一闪一闪。这类帧不落库也不广播,只用来**续期**。
+ */
+function isActivityHeartbeat(message) {
+  if (message?.type === 'tool_progress') return true;
+  /**
+   * gi 自查:**带 `tool_use_id` 的 task_progress 不是纯心跳** —— 它要经
+   * `taskLifecycleMessage` 变成卡片的进展行(gd)。gi 一度把它整个当心跳吞掉,
+   * 后台子代理的卡片在主回合结束后就再也收不到步数/活标签了。
+   * 只有没有归属(没有 tool_use_id)的进展才只当心跳。
+   */
+  return message?.type === 'system' && message?.subtype === 'task_progress' && !message?.tool_use_id;
+}
+
 export function routeOrphanMessage(runtime, message) {
-  if (!isContentfulFrame(message) && message?.type !== 'system') return;
+  const heartbeat = isActivityHeartbeat(message);
+  if (!heartbeat && !isContentfulFrame(message) && message?.type !== 'system') return;
+
+  /**
+   * gh:记住"CLI 自己的一轮开着没有"。有内容的无主帧 = 开着;它的 result = 关上。
+   * runPersistentTurn 读这个位来决定要不要提防一个外来的 result(见读循环)。
+   */
+  if (isTurnResult(message)) runtime.orphanTurnOpen = false;
+  // 只有**顶层**的有内容帧才算"CLI 自己的一轮开着";子代理内部帧(带 parent id)
+  // 不会带来顶层 result,若也算进去,这个位会卡在 true,让下一次用户回合误吞自己的 result。
+  else if (isContentfulFrame(message) && !message?.parent_tool_use_id) runtime.orphanTurnOpen = true;
+
+  if (heartbeat) {
+    const appSessionId = runtime.appSessionId;
+    if (!orphanTurnHook || !appSessionId) return;
+    try {
+      orphanTurnHook({
+        appSessionId,
+        providerSessionId: runtime.sessionId || null,
+        userId: runtime.ownerUserId ?? null,
+        provider: 'claude',
+        messages: [],
+        trigger: 'unknown',
+        turnEnded: false,
+        toolsInFlight: runtime.pendingToolUses.size + (runtime.subagentToolUses?.size ?? 0) > 0,
+      });
+    } catch (error) {
+      log.error('[Claude SDK] 无主心跳转发失败:', error?.message || error);
+    }
+    return;
+  }
 
   orphanStats.frames += 1;
   const now = Date.now();
@@ -2341,6 +2507,8 @@ export function routeOrphanMessage(runtime, message) {
       messages,
       trigger: looksLikeTaskNotification(message) ? 'task-notification' : 'unknown',
       turnEnded: isTurnResult(message),
+      // gh:看门狗据此在到点时"只续不杀"(见 observed-run.service)。
+      toolsInFlight: runtime.pendingToolUses.size + (runtime.subagentToolUses?.size ?? 0) > 0,
     });
     if (accepted) orphanStats.observed += 1;
   } catch (error) {
@@ -2564,6 +2732,34 @@ function buildPersistentSdkOptions(options, runtime) {
   sdkOptions.systemPrompt = { type: 'preset', preset: 'claude_code' };
   sdkOptions.settingSources = ['project', 'user', 'local'];
   sdkOptions.includePartialMessages = false;
+  /*
+   * gu:自动压缩的开关与窗口**交给 CLI 自己**(见 AUTO_COMPACT_ENABLED 的说明)。
+   *
+   * ⚠️ **这两个字段属于 `Settings`,不属于 `Options`** —— 必须走 `options.settings`。
+   * gt 里直接写成 `sdkOptions.autoCompactEnabled` / `sdkOptions.autoCompactWindow`,
+   * SDK **静默忽略**,两个旋钮都是死的(测试环境上把窗口调到 3 万也压不出来,
+   * 就是这个原因)。`sdkOptions` 是个纯 JS 对象,没有类型检查会拦住这种错。
+   *
+   *   sdk.d.ts:5401  autoCompactWindow?: number    → interface Settings
+   *   sdk.d.ts:5600  autoCompactEnabled?: boolean  → interface Settings
+   *   sdk.d.ts:1803  settings?: string | Settings  → type Options   ← 入口在这
+   *
+   * `settings` 是"flag 层",优先级在 user/project/local 之上、managed policy 之下 ——
+   * 正是运维旋钮该在的位置:压得过 `~/.claude/settings.json` 里的用户偏好。
+   * 有 `settings-shape.test.js` 盯着这三条,SDK 换版把字段挪走就会变红。
+   */
+  const compactSettings = {};
+  if (!AUTO_COMPACT_ENABLED) compactSettings.autoCompactEnabled = false;
+  if (AUTO_COMPACT_WINDOW) compactSettings.autoCompactWindow = AUTO_COMPACT_WINDOW;
+  if (Object.keys(compactSettings).length > 0) {
+    // 已经有 settings 就合并;是路径字符串(string | Settings)就不动它,只警告 ——
+    // 悄悄把用户指定的 settings 文件换成对象,比旋钮失效更糟。
+    if (typeof sdkOptions.settings === 'string') {
+      log.warn('[Claude SDK] options.settings 是路径字符串,自动压缩旋钮这次不生效:', sdkOptions.settings);
+    } else {
+      sdkOptions.settings = { ...(sdkOptions.settings || {}), ...compactSettings };
+    }
+  }
   /**
    * ge:**子代理的完整对话要转发过来 —— 卡片里那条嵌套时间轴靠它。**
    *
@@ -2756,6 +2952,8 @@ function buildPersistentSdkOptions(options, runtime) {
 async function readPersistentRuntime(runtime) {
   try {
     for await (const message of runtime.query) {
+      // gi 自查:runtime 被换掉(dispose+resume)后缓冲里残余的帧不再转发 —— 否则会灌进新回合。
+      if (runtime.disposed) break;
       runtime.lastUsed = Date.now();
 
       // Capture / track the provider-native session id.
@@ -2774,6 +2972,16 @@ async function readPersistentRuntime(runtime) {
       const toolDelta = collectToolUseDelta(message);
       for (const id of toolDelta.adds) runtime.pendingToolUses.add(id);
       for (const id of toolDelta.removes) runtime.pendingToolUses.delete(id);
+      // gh:子代理的在途另记一张(见 collectToolUseDelta 的说明)。
+      const subagentDelta = collectSubagentToolUseDelta(message);
+      if (!(runtime.subagentToolUses instanceof Map)) runtime.subagentToolUses = new Map();
+      for (const { id, parent } of subagentDelta.adds) runtime.subagentToolUses.set(id, parent);
+      for (const id of subagentDelta.removes) runtime.subagentToolUses.delete(id);
+      // 父任务收工:顶层 tool_result 到了 → 它名下的子代理在途一并清掉
+      for (const parentId of toolDelta.removes) settleSubagentTools(runtime, parentId);
+      if (message?.type === 'system' && message?.subtype === 'task_notification' && message.tool_use_id) {
+        settleSubagentTools(runtime, message.tool_use_id);
+      }
 
       const turn = runtime.turn;
       if (!turn) {
@@ -2800,6 +3008,30 @@ async function readPersistentRuntime(runtime) {
        * 回合**内**也会来 —— 前台起的后台任务(Ctrl+B 转后台的 Bash、workflow)
        * 就在这一轮里报 `task_started`。
        */
+      /**
+       * gh:**CLI 自己那一轮的 result 不算用户回合的结束。**
+       *
+       * `runPersistentTurn` 明知 CLI 可能正跑着它自己发起的一轮(后台任务通知),
+       * 仍以 `priority:'now'` 把用户消息推进去。若 CLI 先把自己那轮跑完,它的 result
+       * 会在这里 resolve 用户的 turn:发 complete、把 CLI 那轮的用量记在用户名下、
+       * 可能在用户消息前插 /compact;而用户真正的回答随后成了无主帧。
+       *
+       * 判据:push 时 CLI 的一轮开着(turn.expectForeignResult),且这条 result 到达前
+       * **本回合还没收到过任何一帧** —— 那它只能是 CLI 自己那轮的收尾。收到过帧之后
+       * 就不再提防(没有 uuid 对应关系,能做到的只有这一层)。
+       */
+      if (isTurnResult(message)) {
+        if (shouldIgnoreForeignResult(turn)) {
+          turn.expectForeignResult = false;
+          runtime.orphanTurnOpen = false;
+          log.info(`[Claude SDK] Runtime ${runtime.key}:忽略 CLI 自己那一轮的 result,用户回合继续`);
+          touchTurnActivity(runtime, turn);
+          continue;
+        }
+      } else {
+        turn.sawFrame = true;
+      }
+
       const taskRowInTurn = taskLifecycleMessage(message, runtime.sessionId || null);
       if (taskRowInTurn) {
         touchTurnActivity(runtime, turn);
@@ -2863,6 +3095,23 @@ async function readPersistentRuntime(runtime) {
           const duration = readNumber(meta.duration_ms);
           if (duration) turn.compaction.durationMs = duration;
         }
+        /*
+         * gt:**压缩的硬数据落一行日志。**
+         *
+         * `pre_tokens` / `post_tokens` / `duration_ms` 一直解析出来喂给界面,
+         * 日志里却一个字都没有 —— 2026-09-15 查"压缩到底跑了多久、从多少压到多少"
+         * 时,这三个数一个也拿不到,只能靠前后两条 WARN 的时间戳去减。
+         * 现在压一次记一行,这类问题下次不用再猜。
+         */
+        const pre = readNumber(meta.pre_tokens);
+        const post = readNumber(meta.post_tokens);
+        const ms = readNumber(meta.duration_ms);
+        log.info(
+          `[Claude SDK] 压缩 runtime=${runtime.key} trigger=${meta.trigger === 'manual' ? 'manual' : 'auto'}`
+          + ` tokens=${pre ?? '?'}→${post ?? '?'}`
+          + `${pre && post ? `(-${Math.round((1 - post / pre) * 100)}%)` : ''}`
+          + ` 耗时=${ms ? `${Math.round(ms / 1000)}s` : '?'}`
+        );
       }
 
       const transformedMessage = transformMessage(message);
@@ -2880,7 +3129,12 @@ async function readPersistentRuntime(runtime) {
         turn.ws.send(msg);
       }
 
-      const tokenBudgetData = extractTokenBudget(message, runtime);
+      /**
+       * gh:子代理的帧**不刷主上下文环**。它们带着自己那一小段对话的 usage,
+       * 不过滤的话主代理 120k 的环会被子代理 8k 的 usage 盖一下、下一帧再跳回来,
+       * 整个子代理运行期间一直闪。记账(accumulateUsage)照旧 —— 那是真花的钱。
+       */
+      const tokenBudgetData = message?.parent_tool_use_id ? null : extractTokenBudget(message, runtime);
       if (tokenBudgetData && !turn.internal) {
         turn.ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: sid, provider: 'claude' }));
       }
@@ -2891,6 +3145,9 @@ async function readPersistentRuntime(runtime) {
       accumulateUsage(turn.usage, message);
 
       if (isTurnResult(message)) {
+        // gh:任何顶层 result 过了这里,CLI 那边就没有"开着的一轮"了 —— 不清的话这个位会
+        // 卡在 true,让下一次用户回合误把自己的 result 当外来的(回合挂到看门狗)。
+        runtime.orphanTurnOpen = false;
         recordTurnUsage(turn.usage, message, {
           /**
            * fj:落 **app 会话 id**,不是 provider 原生 id。
@@ -3084,9 +3341,40 @@ async function disposePersistentRuntime(runtime) {
  * @param {string} runId - Gateway run identifier (app session id)
  * @returns {Promise<boolean>} True when an abort was delivered or recorded
  */
+/** gh:按 app 会话 id 找常驻 runtime(观测回合没有 activeChatRuns 登记,只能这么找)。 */
+function findRuntimeByAppSessionId(appSessionId) {
+  if (!appSessionId) return null;
+  for (const runtime of claudeRuntimes.values()) {
+    if (!runtime.disposed && runtime.appSessionId === appSessionId) return runtime;
+  }
+  return null;
+}
+
 async function abortClaudeSDKRun(runId) {
   const entry = runId ? activeChatRuns.get(runId) : null;
-  if (!entry) return false;
+  if (!entry) {
+    /**
+     * gh:**「停止」要能停掉 CLI 自己发起的那一轮。**
+     *
+     * 观测回合(gb)不经过 runPersistentTurn,`activeChatRuns` 里没有它;两轮之间
+     * `activeSessions` 里也没有。于是停止按钮两条路都返回 false,而 websocket 层
+     * 照样把观测回合标成完成 —— CLI 继续跑,它接下来那一批帧被观测回合丢掉。
+     * 这里按 app 会话 id 找到 runtime,直接 interrupt 它。
+     */
+    const runtime = findRuntimeByAppSessionId(runId);
+    if (!runtime || runtime.turn) return false;
+    try {
+      log.info(`[Claude SDK] Aborting CLI-initiated turn of ${runId} via runtime interrupt`);
+      await interruptWithTimeout(runtime.query, `run ${runId} (observed)`);
+      runtime.orphanTurnOpen = false;
+      settleSubagentTools(runtime, null);
+      return true;
+    } catch (error) {
+      log.warn(`[Claude SDK] Interrupting CLI-initiated turn of ${runId} failed:`, error?.message || error);
+      try { runtime.abortController?.abort(); } catch { /* best effort */ }
+      return false;
+    }
+  }
   entry.aborted = true;
 
   const runtime = entry.runtime;
@@ -3115,6 +3403,7 @@ async function abortClaudeSDKRun(runId) {
   try {
     if (runtime && !runtime.disposed && runtime.turn) {
       log.info(`[Claude SDK] Aborting run ${runId} via runtime interrupt`);
+      disarmForeignResultGuard(runtime);
       await interruptWithTimeout(runtime.query, `run ${runId} (runtime)`);
       return true;
     }
@@ -3252,6 +3541,14 @@ async function createPersistentRuntime(key, options, settings) {
     // 见读循环:CLI 那边还没回结果的 tool_use id。**忙不忙以它为准**,
     // 因为 runtime.turn 只是 Prism 自己的记账,CLI 的实际状态不归它管。
     pendingToolUses: new Set(),
+    /** gh:子代理内部在途的工具 innerId → parentToolUseId,只给看门狗用,不参与复用判据。 */
+    subagentToolUses: new Map(),
+    /**
+     * gh:CLI 自己发起的一轮此刻是否"开着"(收到过无主的有内容帧、还没等到它的 result)。
+     * runPersistentTurn 据此知道"我 push 进去时 CLI 正跑着自己的一轮",
+     * 于是它自己那轮的 result 不能被当成用户回合的结束(见读循环里 expectForeignResult)。
+     */
+    orphanTurnOpen: false,
     // 被强撕/看门狗收尾、且当时还有工具在途 —— 我们对这个 CLI 的认知已经不可信,
     // 不再复用(runtimeForSend 会换新)。留着这个标记只为把原因打进日志。
     suspect: false,
@@ -3501,6 +3798,14 @@ async function runPersistentTurn(runtime, { command, images, cwd, imageRoots = [
     // 输入递交之后 CLI 可能已把用户消息写进 transcript,盲目重放=重复消息。
     startedAtMs: Date.now(),
     inputDelivered: false,
+    /**
+     * gh:push 那一刻 CLI 是否正跑着它自己发起的一轮(见 runtime.orphanTurnOpen)。
+     * 是的话,本回合收到的**第一个** result 若在任何帧之前到达,就是 CLI 自己那轮的
+     * 收尾,不能当成本回合结束(见读循环)。
+     */
+    expectForeignResult: Boolean(runtime.orphanTurnOpen),
+    /** 本回合收到过至少一帧(result 之外的任何帧)。 */
+    sawFrame: false,
     /** fg:这一回合的 token 累加器。见 createUsageAccumulator。 */
     usage: createUsageAccumulator(),
     // 这一回合用哪套预算。维护回合(自动压缩)走短预算,和用户回合分开 ——
@@ -3588,7 +3893,34 @@ async function readRuntimeContextUsage(runtime) {
     const totalTokens = readNumber(usage.totalTokens ?? usage.total_tokens);
     const maxTokens = readNumber(usage.maxTokens ?? usage.max_tokens);
     if (!totalTokens || !maxTokens) return null;
-    const normalized = { totalTokens, maxTokens, ratio: totalTokens / maxTokens, at: Date.now() };
+    const normalized = {
+      totalTokens,
+      maxTokens,
+      ratio: totalTokens / maxTokens,
+      at: Date.now(),
+      /*
+       * gt:这三个字段 SDK 一直在返回,此前被整个扔掉。
+       *
+       * 2026-09-15 查压缩问题时,为了确认"CLI 到底开没开自动压缩",只能去读
+       * CLI 二进制里的默认值 —— 而答案本来就在每一次 getContextUsage 的返回里。
+       * 现在读出来并在**每个 runtime 第一次拿到时打一行日志**,下次不用再翻二进制。
+       *
+       * `maxTokens` 是**自动压缩的触发线**,`rawMaxTokens` 才是真模型窗口 ——
+       * 两者的差就是 CLI 给压缩留的余量。
+       */
+      rawMaxTokens: readNumber(usage.rawMaxTokens ?? usage.raw_max_tokens) || null,
+      autoCompactEnabled: typeof usage.isAutoCompactEnabled === 'boolean' ? usage.isAutoCompactEnabled : null,
+      autoCompactThreshold: readNumber(usage.autoCompactThreshold) || null,
+    };
+    if (!runtime.contextUsageShapeLogged) {
+      runtime.contextUsageShapeLogged = true;
+      log.info(
+        `[Claude SDK] Runtime ${runtime.key} 上下文:${totalTokens}/${maxTokens}`
+        + `(真窗口 ${normalized.rawMaxTokens ?? '?'})`
+        + ` · CLI 自动压缩 ${normalized.autoCompactEnabled === null ? '未知' : (normalized.autoCompactEnabled ? '开' : '关')}`
+        + ` · 阈值 ${normalized.autoCompactThreshold ?? '默认'}`
+      );
+    }
     runtime.lastContextUsage = normalized;
     return normalized;
   } catch (error) {
@@ -3598,7 +3930,7 @@ async function readRuntimeContextUsage(runtime) {
 }
 
 /**
- * @param {Object|null} runtime - 带上它才能报告"压缩被推迟"(见 compactionDeferred)
+ * @param {Object|null} runtime - 目前只用于日志/调试;用量本身全在 `usage` 里。
  */
 function sendContextUsageEvent(ws, sessionId, usage, runtime = null) {
   if (!usage) return;
@@ -3612,13 +3944,16 @@ function sendContextUsageEvent(ws, sessionId, usage, runtime = null) {
       outputTokens: 0,
       contextExact: true,
       breakdown: { input: usage.totalTokens, output: 0 },
-      // 分母是**自动压缩的触发线**(CLI 的 autoCompactWindow),不是模型窗口 ——
-      // 越过它是正常且预期的状态,所以百分比会出现 ≥100%。把阈值一起送过去,
-      // 界面才能把"过线"说成过线,而不是渲染成一个荒谬的数字。
-      autoCompactRatio: AUTO_COMPACT_RATIO,
-      // 过线了、但 CLI 还在跑工具,压缩被推迟。此前这条路径**只有一行 warn**,
-      // 用户看到的是"过了 80% 却什么都不发生"。
-      compactionDeferred: Boolean(runtime?.compactionDeferred) || undefined,
+      /*
+       * 分母是**自动压缩的触发线**(CLI 的 autoCompactWindow),不是模型窗口 ——
+       * 越过它是正常且预期的状态,所以百分比会出现 ≥100%。
+       *
+       * gt:这里原来送的是 Prism 自己那条 0.8 的线;Prism 不再自己压之后,
+       * 过线的定义就是 CLI 的那条 —— 也就是 `total` 本身,比值 1。
+       * 真模型窗口一并送过去,界面想解释"还有多少余量"时用得上。
+       */
+      autoCompactRatio: 1,
+      rawTotal: usage.rawMaxTokens ?? undefined,
     },
     sessionId: sessionId || null,
     provider: 'claude',
@@ -3706,69 +4041,13 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
     return { sessionId: sid };
   };
 
-  // ---- 80% high-water auto-compact (before pushing the user's message) ----
-  // 发送前压缩现在只是**兜底**:正常情况下上一回合结束时的维护窗口已经压过了
-  // (见 runMaintenanceCompaction)。它留着是为了"从上个进程恢复出来、一上来
-  // 占比就过线"这种情况。
-  //
-  // `runtimeIsIdle` 这道闸门是必须的:CLI 还在跑工具时绝不能往它嘴里塞 /compact,
-  // 那条消息只会排在工具后面,界面上就是"正在压缩"转到天荒地老。
-  // (runtimeForSend 已经会把不闲的 runtime 换掉,这里是第二道保险。)
-  const shouldAutoCompact = AUTO_COMPACT_ENABLED
-    && !options.skipAutoCompact
-    && typeof command === 'string'
-    && !command.trimStart().startsWith('/')
-    && runtime.lastContextUsage
-    && runtime.lastContextUsage.ratio >= AUTO_COMPACT_RATIO
-    && runtimeIsIdle(runtime);
-
-  if (AUTO_COMPACT_ENABLED && !shouldAutoCompact && !runtimeIsIdle(runtime)
-      && runtime.lastContextUsage && runtime.lastContextUsage.ratio >= AUTO_COMPACT_RATIO) {
-    log.warn(`[Claude SDK] Skipping pre-send compaction for ${runtime.key}: the CLI is not idle`);
-  }
-
-  if (shouldAutoCompact) {
-    ws.send(createNormalizedMessage({
-      kind: 'status',
-      text: `Context at ${Math.round(runtime.lastContextUsage.ratio * 100)}% — compacting before sending…`,
-      statusKind: 'compacting',
-      canInterrupt: false,
-      sessionId: runtime.sessionId || sessionId || null,
-      provider: 'claude',
-    }));
-    try {
-      await runPersistentTurn(runtime, {
-        command: '/compact',
-        images: [],
-        cwd: options.cwd,
-        ws,
-        sessionSummary,
-        isNewSession: false,
-        internal: true,
-        // 发送前兜底:用户的消息在等它 —— 这一次是占用等待时间的。
-        compactionTrigger: 'presend',
-      });
-      if (!wasRunAborted()) {
-        const usage = await readRuntimeContextUsage(runtime);
-        runtime.compactionDeferred = null;
-        sendContextUsageEvent(ws, runtime.sessionId || sessionId || null, usage, runtime);
-        // 压缩完成不再往流里发播报正文。压缩是维护动作,不是对话内容 ——
-        // 进行中已经有状态行在转,完事直接接着干活就行;上下文占比也已经
-        // 通过 sendContextUsageEvent 更新到那个环上了。
-      }
-    } catch (error) {
-      log.warn('[Claude SDK] Auto-compact failed, continuing with the user turn:', error?.message || error);
-    }
-    // A user abort that landed DURING the internal /compact turn cancels the
-    // whole run — never silently proceed to the real turn.
-    if (wasRunAborted()) {
-      return finishAborted();
-    }
-    if (runtime.disposed) {
-      runtime = await runtimeForSend({ ...runtimeOptions, sessionId: runtime.sessionId || sessionId });
-      if (runEntry) runEntry.runtime = runtime;
-    }
-  }
+  /*
+   * gt:**发送前的自动压缩已经删掉。**
+   *
+   * 它原本是"从上个进程恢复出来、一上来占比就过线"的兜底,推一轮 `internal` 的
+   * `/compact` 挡在用户消息前面。现在压缩归 CLI —— 上下文真过线时它会在这一轮里
+   * 自己压,走用户回合的预算,不会被那个 90s 杀掉,也不占额外的一轮。
+   */
 
   // Abort may also land between chat.send and the first input push (the
   // runId registry makes that window abortable) — bail out before running.
@@ -3798,19 +4077,18 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
   let usage = await readRuntimeContextUsage(runtime);
   sendContextUsageEvent(ws, finalSessionId || sessionId || null, usage, runtime);
 
-  // ---- 维护窗口:趁 CLI 真闲着压缩,而不是等下一条消息来了再压 ----
-  if (!wasAborted) {
-    const compacted = await runMaintenanceCompaction(runtime, {
-      ws,
-      sessionId: finalSessionId || sessionId || null,
-      sessionSummary,
-      cwd: options.cwd,
-    });
-    // 压了要刷新真值;没压也要再发一次 —— 那一帧携带的是"压缩被推迟",
-    // 而它恰好是上面那次 usage 事件发出**之后**才决定的。
-    if (compacted) usage = await readRuntimeContextUsage(runtime);
-    sendContextUsageEvent(ws, finalSessionId || sessionId || null, usage, runtime);
-  }
+  /*
+   * gt:**维护窗口的压缩已经删掉。**
+   *
+   * 它原本是"回合答完、CLI 闲着时顺手压一次",初衷是不占用户等待时间 ——
+   * 但它跑在 `internal` 回合里,而 `includePartialMessages = false` 下压缩
+   * 全程无帧,于是那道 idle 90s 变成了压缩的总预算,必然超时;超时后占比没降,
+   * 下一回合结束又来一次。结果是**每答完一条就白等 90 秒,还压不成**。
+   *
+   * 现在这件事归 CLI:它会在自己该压的时候、在用户回合内部压,
+   * 走用户回合的预算。上面那次 `readRuntimeContextUsage` + `sendContextUsageEvent`
+   * 仍然保留 —— 用量环要的是真值,与谁压无关。
+   */
 
   // 压缩期间用户可能按了停止 —— 那就按中止收尾,别再发 complete。
   //
@@ -3832,64 +4110,6 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
   });
 
   return { sessionId: finalSessionId || sessionId || null };
-}
-
-/**
- * 维护窗口:一回合刚跑完、CLI 确实闲着的时候压缩上下文。
- *
- * 为什么挪到这里 —— 原来是"发送前压缩":用户发一条消息,得先干等压缩跑完,
- * 消息才被受理。而这里是回合已经答完、用户手上已经有结果的时刻,压缩不占
- * 任何人的关键路径。
- *
- * 为什么仍然放在 complete **之前**:这样压缩还在这一 run 的生命周期里 ——
- * 停止按钮管得着它,期间用户再发的消息走正常排队,不会撞上
- * "A turn is already running"。放到 complete 之后就变成一段没人管的野生任务了。
- *
- * @returns {Promise<boolean>} 真的压了才返回 true
- */
-async function runMaintenanceCompaction(runtime, { ws, sessionId, sessionSummary, cwd }) {
-  if (!AUTO_COMPACT_ENABLED) return false;
-  const ratio = runtime.lastContextUsage?.ratio;
-  if (typeof ratio !== 'number' || ratio < AUTO_COMPACT_RATIO) return false;
-  if (!runtimeIsIdle(runtime)) {
-    log.warn(`[Claude SDK] Skipping maintenance compaction for ${runtime.key}: the CLI is not idle`);
-    // 记下来,让用量芯片能说出"已过线,等 CLI 空闲后压缩" —— 沉默地跳过,
-    // 就是用户看到占比一路往上爬却毫无解释的原因。
-    runtime.compactionDeferred = { ratio, since: Date.now(), reason: 'cli-busy' };
-    return false;
-  }
-  runtime.compactionDeferred = null;
-
-  ws.send(createNormalizedMessage({
-    kind: 'status',
-    text: `Context at ${Math.round(ratio * 100)}% — compacting…`,
-    statusKind: 'compacting',
-    // 只影响按钮提示的措辞(中止会连带丢掉什么),不再决定能不能中止。
-    canInterrupt: false,
-    sessionId: runtime.sessionId || sessionId || null,
-    provider: 'claude',
-  }));
-
-  try {
-    await runPersistentTurn(runtime, {
-      command: '/compact',
-      images: [],
-      cwd,
-      ws,
-      sessionSummary,
-      isNewSession: false,
-      internal: true,
-      // 维护窗口:回合已经答完,用户没在等 —— 低调显示。
-      compactionTrigger: 'maintenance',
-    });
-    runtime.compactionDeferred = null;
-    return true;
-  } catch (error) {
-    // 压缩失败/超时都不该影响用户 —— 这一回合的答复早就送出去了。
-    // 下一回合带着未压缩的上下文继续跑,顶多是发送前那道兜底再试一次。
-    log.warn(`[Claude SDK] Maintenance compaction failed for ${runtime.key}:`, error?.message || error);
-    return false;
-  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -4436,14 +4656,43 @@ function runtimeForMerge(appSessionId, providerSessionId) {
  * `imageRoots` —— 那两样在 `chat.send` 里是**在这条早退分支之后**才算出来的。
  * 为了不把那段顺序动了,带图的消息照旧走排队(今天就是这么走的,没有退步)。
  */
-export function mergeRefusalReason(runtime, command) {
+export function mergeRefusalReason(runtime, command, options = {}) {
   if (typeof command !== 'string' || !command.trim()) return 'empty';
   if (!runtime) return 'no-runtime';
   if (runtime.disposed) return 'disposed';
   // 它还在跑东西而 Prism 已经不再跟踪了 —— 往里推等于往一个不认识的进程里塞话。
   if (runtime.suspect) return 'suspect';
+  /**
+   * gh:**没有用户回合在跑,就不合流。**
+   *
+   * 合流的定义是"并进正在跑的用户回合"。而 `chat.send` 走到合流的前提只是
+   * "注册表说忙",两者有两段对不上的窗口:回合起点(run 已登记、`runtime.turn`
+   * 还没赋值)与回合末尾(`turn` 已置 null、`complete` 还没发)。这两段里合流进去的
+   * 消息,回复会走无主帧路径,而观测回合因为用户的 run 还在而开不了 ——
+   * **整批既不广播也不落库**。退回排队,drain 会在 complete 之后正常起新一轮。
+   */
+  if (!runtime.turn) return 'no-turn';
   // 维护回合(自动压缩)正在重写这段对话的上下文,不是插话的时候。
-  if (runtime.turn?.internal) return 'maintenance-turn';
+  if (runtime.turn.internal) return 'maintenance-turn';
+  /**
+   * gh:**发送者必须就是这个 runtime 的主人,策略档位也要一致。**
+   *
+   * 正常发送每次都按发送者重算策略(`runtimeSettingsFromOptions` →
+   * `applyServerToolPolicy`)并覆写 runtime.settings;合流此前一样都不做 ——
+   * 共享会话里 B 的消息会以 A 的 bypass 档跑,A 记住的放行也跟着生效,
+   * 用量还记在 A 名下。这里不重算,只要求"同一个人、同一个档位",不一致就退回排队
+   * (排队 drain 之后会走正常发送那条路,按 B 自己的策略起新一轮)。
+   */
+  if (options.actorUsername !== undefined || options.ownerUserId !== undefined) {
+    const sameOwner = String(runtime.ownerUserId ?? '') === String(options.ownerUserId ?? '');
+    const sameActor = String(runtime.actorUsername ?? '') === String(options.actorUsername ?? '');
+    if (!sameOwner || !sameActor) return 'actor-mismatch';
+    const policed = runtimeSettingsFromOptions({
+      ...(options.runtimeOptions || {}),
+      actorUsername: options.actorUsername,
+    });
+    if (policed.permissionMode !== runtime.settings?.permissionMode) return 'policy-mismatch';
+  }
   return null;
 }
 
@@ -4451,7 +4700,7 @@ export async function mergeUserMessage(appSessionId, options = {}) {
   if (!PERSISTENT_ENABLED) return { merged: false, reason: 'persistent-disabled' };
   const command = typeof options.command === 'string' ? options.command : '';
   const runtime = runtimeForMerge(appSessionId, options.providerSessionId ?? null);
-  const refusal = mergeRefusalReason(runtime, command);
+  const refusal = mergeRefusalReason(runtime, command, options);
   if (refusal) return { merged: false, reason: refusal };
 
   const uuid = crypto.randomUUID();
@@ -4653,6 +4902,7 @@ export {
   INTERRUPT_TIMEOUT_MS,
   userTurnReachedTranscript,
   collectToolUseDelta,
+  collectSubagentToolUseDelta,
   queryClaudeSDK,
   prewarmClaudeSession,
   releaseClaudeSession,

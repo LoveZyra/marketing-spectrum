@@ -6,6 +6,7 @@ import Sidebar from '../sidebar/view/Sidebar';
 import MainContent from '../main-content/view/MainContent';
 import CommandPalette from '../command-palette/CommandPalette';
 import { useAuth } from '../auth/context/AuthContext';
+import { canPermanentlyDeleteSession } from '../../utils/sessionDeletePermission';
 import { usePendingApprovalCount } from '../../hooks/usePendingApprovalCount';
 import { useWebSocket } from '../../contexts/WebSocketContext';
 import { PaletteOpsProvider, usePaletteOpsRegister } from '../../contexts/PaletteOpsContext';
@@ -15,6 +16,7 @@ import { useUiPreferences } from '../../hooks/useUiPreferences';
 import { useProjectsState } from '../../hooks/useProjectsState';
 import { useQueuedMessageAutoSend } from '../../hooks/useQueuedMessageAutoSend';
 import { api } from '../../utils/api';
+import { describeDeleteFailure } from '../sidebar/utils/deleteFailure';
 import { pullAccountSettings } from '../../utils/accountSettings';
 import ErrorBoundary from '../../shared/view/ErrorBoundary';
 import SettingsModalHost from '../settings/view/SettingsModalHost';
@@ -157,8 +159,19 @@ function AppContentInner() {
   }, [refreshProjectsSilently]);
 
   const handleHeaderDeleteSession = useCallback((targetSessionId: string, sessionTitle: string) => {
-    setSessionDeleteTarget({ sessionId: targetSessionId, sessionTitle });
-  }, []);
+    // 顶栏「…」这条路同样要按"是不是项目负责人"决定画不画那枚红按钮
+    // (与侧栏那条同一个判据,见 utils/sessionDeletePermission)。
+    setSessionDeleteTarget({
+      sessionId: targetSessionId,
+      sessionTitle,
+      canDeletePermanently: canPermanentlyDeleteSession({
+        isRoot: Boolean(authUser?.isRoot),
+        viewerUserId: authUser?.id ?? null,
+        projectOwnerUserId: selectedProject?.ownerUserId ?? null,
+        projectKnown: Boolean(selectedProject),
+      }),
+    });
+  }, [authUser?.id, authUser?.isRoot, selectedProject]);
 
   const confirmHeaderDeleteSession = useCallback(async (hardDelete: boolean) => {
     const target = sessionDeleteTarget;
@@ -166,13 +179,20 @@ function AppContentInner() {
     if (!target) return;
     try {
       const response = await api.deleteSession(target.sessionId, hardDelete);
-      if (!response.ok) return;
+      if (!response.ok) {
+        // gk:403(只有项目负责人可以永久删)/ 409(正在跑)这两种"重试也没用"的原因要说出来;
+        // 其余失败仍不弹窗:列表下一次刷新会把真实状态带回来。
+        if (response.status === 403 || response.status === 409) {
+          alert(describeDeleteFailure(await response.text(), tSidebar('messages.deleteSessionFailed')));
+        }
+        return;
+      }
       if (sessionId === target.sessionId) navigate('/');
       await refreshProjectsSilently();
     } catch {
       // 失败不弹窗:列表下一次刷新会把真实状态带回来。
     }
-  }, [navigate, refreshProjectsSilently, sessionDeleteTarget, sessionId]);
+  }, [navigate, refreshProjectsSilently, sessionDeleteTarget, sessionId, tSidebar]);
 
   const lastAutoCollapseTabRef = useRef(activeTab);
   useEffect(() => {
@@ -368,6 +388,7 @@ function AppContentInner() {
           onDeleteSession={handleHeaderDeleteSession}
           externalMessageUpdate={externalMessageUpdate}
           newSessionTrigger={newSessionTrigger}
+          onStartNewSession={handleNewSession}
           jupyterTarget={jupyterTarget}
         />
       </div>

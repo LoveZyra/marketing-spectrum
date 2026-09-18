@@ -61,13 +61,23 @@ describe('reduceServerQueue', () => {
     expect(two).not.toBe(one);
   });
 
-  test('只保留 preview / enqueuedAt —— 帧里多带的字段不进状态', () => {
+  test('只保留 preview / enqueuedAt / redacted —— 帧里多带的字段不进状态', () => {
     const queue = reduceServerQueue(
       EMPTY_SERVER_QUEUE,
       'A',
       { preview: 'x', enqueuedAt: 't', extra: 'ignored' } as unknown as { preview: string; enqueuedAt: string },
     );
-    expect(queuedForSession(queue, 'A')).toEqual({ preview: 'x', enqueuedAt: 't' });
+    // gi:redacted 归一成布尔(没带就是 false),别的字段照旧不进状态
+    expect(queuedForSession(queue, 'A')).toEqual({ preview: 'x', enqueuedAt: 't', redacted: false });
+  });
+
+  test('gi:redacted 变了也算变化 —— 同一条从"别人的"变成"自己的"要重渲染', () => {
+    const base = reduceServerQueue(EMPTY_SERVER_QUEUE, 'A', { preview: '', enqueuedAt: 't', redacted: true });
+    const same = reduceServerQueue(base, 'A', { preview: '', enqueuedAt: 't', redacted: true });
+    expect(same).toBe(base);
+    const flipped = reduceServerQueue(base, 'A', { preview: '', enqueuedAt: 't', redacted: false });
+    expect(flipped).not.toBe(base);
+    expect(queuedForSession(flipped, 'A')?.redacted).toBe(false);
   });
 });
 

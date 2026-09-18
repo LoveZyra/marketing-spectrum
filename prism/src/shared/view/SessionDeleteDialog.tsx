@@ -9,6 +9,14 @@ export type SessionDeleteTarget = {
   sessionTitle: string;
   /** 已经在归档里 —— 只给「永久删除」,不再提供「归档」。 */
   isArchived?: boolean;
+  /**
+   * 当前用户能不能永久删除这条(判据见 `utils/sessionDeletePermission`)。
+   *
+   * `false` 时**不画**那枚红色「永久删除」按钮 —— 否则就是给用户一个必然撞
+   * 403 的主按钮(2026-09-15 非 root 实测)。不传 = 老行为(画出来,服务端拦),
+   * 这样没来得及接线的调用方不会因此少一个按钮。
+   */
+  canDeletePermanently?: boolean;
 };
 
 type Props = {
@@ -28,6 +36,10 @@ type Props = {
  */
 export default function SessionDeleteDialog({ target, onCancel, onConfirm, t }: Props) {
   if (!target) return null;
+
+  const mayDelete = target.canDeletePermanently !== false;
+  // 归档态 + 不能永久删除 = 这个框里一件事也做不了。与其给个空框,不如直接说清楚。
+  const nothingToDo = Boolean(target.isArchived) && !mayDelete;
 
   return ReactDOM.createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(16,16,16,0.72)] p-4">
@@ -53,6 +65,14 @@ export default function SessionDeleteDialog({ target, onCancel, onConfirm, t }: 
                   ? t('deleteConfirmation.archivedSessionNotice', 'This session is already archived. You can keep it hidden or delete it permanently.')
                   : t('deleteConfirmation.archiveSessionNotice', 'Archive keeps the session out of the active list while preserving its history.')}
               </p>
+              {/* gk:永久删除 = 进「最近删除」,保留期内可恢复;只有项目负责人 / 管理员可以做。说在按钮上方,别让人以为是彻底销毁。 */}
+              <p className="mt-2 text-xs text-muted-foreground">
+                {mayDelete
+                  ? t('deleteConfirmation.permanentDeleteNotice', '永久删除会把会话(含对话记录)移入「最近删除」,保留期内可由项目负责人恢复;只有项目负责人或管理员可以永久删除。')
+                  : nothingToDo
+                    ? t('deleteConfirmation.archivedAndCannotDelete', '这条会话已经在归档里。永久删除只有项目负责人或管理员能做,所以这里没有可执行的操作。')
+                    : t('deleteConfirmation.cannotDeletePermanently', '你不是这个项目的负责人,所以只能归档 —— 归档后它从活跃列表里消失,记录都还在。')}
+              </p>
             </div>
           </div>
         </div>
@@ -67,16 +87,18 @@ export default function SessionDeleteDialog({ target, onCancel, onConfirm, t }: 
               {t('deleteConfirmation.archiveSession', 'Archive session')}
             </Button>
           )}
-          <Button
-            variant="destructive"
-            className="w-full justify-start bg-destructive text-destructive-foreground hover:bg-destructive"
-            onClick={() => onConfirm(true)}
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            {t('deleteConfirmation.deleteSessionPermanently', 'Delete permanently')}
-          </Button>
+          {mayDelete && (
+            <Button
+              variant="destructive"
+              className="w-full justify-start bg-destructive text-destructive-foreground hover:bg-destructive"
+              onClick={() => onConfirm(true)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              {t('deleteConfirmation.deleteSessionPermanently', 'Delete permanently')}
+            </Button>
+          )}
           <Button variant="ghost" className="w-full" onClick={onCancel}>
-            {t('actions.cancel')}
+            {nothingToDo ? t('actions.close', '关闭') : t('actions.cancel')}
           </Button>
         </div>
       </div>

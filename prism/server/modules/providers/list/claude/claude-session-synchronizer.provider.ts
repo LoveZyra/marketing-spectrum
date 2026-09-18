@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { open, readFile, stat } from 'node:fs/promises';
 
-import { sessionsDb } from '@/modules/database/index.js';
+import { sessionTrashDb, sessionsDb } from '@/modules/database/index.js';
 import { isPrismInternalTranscript } from '@/shared/prism-internal-transcripts.js';
 import {
   buildLookupMap,
@@ -113,6 +113,10 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       if (!parsed) {
         continue;
       }
+      // gk:躺在最近删除里的会话,它的 transcript 不许再被索引成一条"新会话"。
+      if (sessionTrashDb.hasProviderSessionId(parsed.sessionId)) {
+        continue;
+      }
 
       const timestamps = await readFileTimestamps(filePath);
       const lastActivity = await this.extractLastActivityFromEnd(filePath);
@@ -145,6 +149,17 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     const nameMap = await this.cachedHistoryNameMap();
     const parsed = await this.processSessionFile(filePath, nameMap);
     if (!parsed) {
+      return null;
+    }
+    /**
+     * gk:**在最近删除里的会话,transcript 不再索引。**
+     *
+     * 永久删除把 transcript 搬走了,但删除后的几秒里常驻 CLI 退出时可能按老路径再写一个
+     * 空壳(2026-09-14 生产实例:362 字节、两行收尾记录)。空壳没有 `cwd` 行,
+     * `processSessionFile` 本来就会跳过;这道门挡的是**带 cwd 的**情况 —— 比如文件搬失败
+     * 留在了原地。不挡的话,删掉的会话会以一条"CLI 自己开的"新会话的样子回到侧栏。
+     */
+    if (sessionTrashDb.hasProviderSessionId(parsed.sessionId)) {
       return null;
     }
 

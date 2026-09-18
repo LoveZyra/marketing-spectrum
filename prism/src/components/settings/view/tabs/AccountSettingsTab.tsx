@@ -6,6 +6,7 @@ import { useAuth } from '../../../auth/context/AuthContext';
 import { api, isValidRefreshedToken } from '../../../../utils/api';
 
 import AttachmentUsageCard from './AttachmentUsageCard';
+import AuditLogList from './accounts-settings/AuditLogList';
 
 /**
  * 我的账号:当前登录身份 + 退出登录/切换账号 + 退出所有设备。
@@ -86,13 +87,27 @@ export default function AccountSettingsTab() {
   };
 
   return (
-    <div className="max-w-xl space-y-6">
-      {/* 当前身份 */}
-      <div className="flex items-center gap-3 rounded-lg border border-border p-4">
+    /*
+      gn:这里原来是 `max-w-xl`(576px)。设置弹窗放宽之后,别的页签(账号 / 外观 /
+      通知 / 关于)都跟着铺开,只有「我的账号」停在 576px,右边空出一大条
+      (2026-09-15 用户截图)。与其余页签同口径:不在页面这一层设上限,
+      由弹窗自己的宽度决定。
+    */
+    <div className="space-y-6">
+      {/*
+        当前身份 + 两个退出入口。
+
+        gp:「退出登录」与「退出所有设备」原来是页面**最下面两张独立卡片**,各占一整块,
+        把「附件空间」「修改密码」这些真正要读的内容顶下去;而它们本来就是"对当前这个
+        账号做的事",跟身份行放在一起才好找(2026-09-15 用户提的)。
+        两张卡片的标题与说明没有丢 —— 都进了按钮的 `title`,悬停照样看得到。
+        窄屏时按钮组整体换行到下一行(`flex-wrap` + `basis-full sm:basis-auto`)。
+      */}
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border p-4">
         <div className="bg-primary/8 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-primary">
           <UserRound className="h-5 w-5" />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-foreground">
             {user?.username ?? '—'}
             {user?.isRoot && (
@@ -102,6 +117,50 @@ export default function AccountSettingsTab() {
             )}
           </p>
           <p className="text-xs text-muted-foreground">{t('account.signedInAs')}</p>
+        </div>
+
+        <div className="flex basis-full flex-wrap items-center justify-end gap-2 sm:basis-auto">
+          <button
+            type="button"
+            onClick={handleLogout}
+            title={`${t('account.logoutTitle')} — ${t('account.logoutHelp')}`}
+            aria-label={t('account.logoutButton')}
+            className="inline-flex flex-none items-center gap-2 whitespace-nowrap rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <LogOut className="h-4 w-4" />
+            {t('account.logoutButton')}
+          </button>
+
+          {/* 调色板里没有红:二次确认靠文案切换 + 主按钮态表达,不再用 destructive 底色 */}
+          <button
+            type="button"
+            onClick={handleRevokeAll}
+            disabled={revoking}
+            title={`${t('account.revokeAllTitle')} — ${t('account.revokeAllHelp')}`}
+            aria-label={t('account.revokeAllButton')}
+            className={`inline-flex flex-none items-center gap-2 whitespace-nowrap rounded-md border px-4 py-2 text-sm font-medium transition-colors disabled:opacity-60 ${
+              confirmRevoke
+                ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
+                : 'border-border text-body hover:bg-card hover:text-foreground'
+            }`}
+          >
+            <ShieldOff className="h-4 w-4" />
+            {revoking
+              ? t('account.revokeAllWorking')
+              : confirmRevoke
+                ? t('account.revokeAllConfirm')
+                : t('account.revokeAllButton')}
+          </button>
+
+          {confirmRevoke && !revoking && (
+            <button
+              type="button"
+              onClick={() => setConfirmRevoke(false)}
+              className="flex-none whitespace-nowrap rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+            >
+              {t('account.revokeAllCancel')}
+            </button>
+          )}
         </div>
       </div>
 
@@ -193,63 +252,16 @@ export default function AccountSettingsTab() {
         </form>
       </div>
 
-      {/* 退出登录 / 切换账号 */}
-      <div className="overflow-hidden rounded-lg border border-border">
-        <div className="border-b border-border bg-card px-4 py-2.5">
-          <h3 className="text-sm font-medium text-foreground">{t('account.logoutTitle')}</h3>
-        </div>
-        <div className="p-4">
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            {t('account.logoutHelp')}
-          </p>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="mt-3 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            <LogOut className="h-4 w-4" />
-            {t('account.logoutButton')}
-          </button>
-        </div>
-      </div>
-
-      {/* 退出所有设备 */}
-      <div className="overflow-hidden rounded-lg border border-border">
-        <div className="border-b border-border bg-card px-4 py-2.5">
-          <h3 className="text-sm font-medium text-foreground">{t('account.revokeAllTitle')}</h3>
-        </div>
-        <div className="p-4">
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            {t('account.revokeAllHelp')}
-          </p>
-          {/* 调色板里没有红:二次确认靠文案切换 + 主按钮态表达,不再用 destructive 底色 */}
-          <button
-            type="button"
-            onClick={handleRevokeAll}
-            disabled={revoking}
-            className={`mt-3 inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium transition-colors disabled:opacity-60 ${
-              confirmRevoke
-                ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
-                : 'border-border text-body hover:bg-card hover:text-foreground'
-            }`}
-          >
-            <ShieldOff className="h-4 w-4" />
-            {revoking
-              ? t('account.revokeAllWorking')
-              : confirmRevoke
-                ? t('account.revokeAllConfirm')
-                : t('account.revokeAllButton')}
-          </button>
-          {confirmRevoke && !revoking && (
-            <button
-              type="button"
-              onClick={() => setConfirmRevoke(false)}
-              className="ml-2 mt-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
-            >
-              {t('account.revokeAllCancel')}
-            </button>
-          )}
-        </div>
+      {/*
+        gk:与我有关的操作记录。此前审计列表只在 root 的「账号管理」页上,普通用户
+        没有任何入口 —— 被删的人在页面里什么都看不到,删除记了也等于白记。
+        服务端裁范围:非 root = 我做的 + 对我做的(对我做的行 ip 已抹掉)。
+      */}
+      <div className="rounded-lg border border-border bg-card p-4">
+        <p className="mb-3 text-xs text-muted-foreground">
+          {t('audit.mineHint', '包括你自己的登录、删除等操作,以及别人对你负责的项目里的会话做的删除 / 归档 / 恢复。')}
+        </p>
+        <AuditLogList title={t('audit.mineTitle', '与我有关的操作记录')} />
       </div>
     </div>
   );

@@ -22,6 +22,8 @@ import {
   reduceServerQueue,
   type ServerQueueMap,
 } from '../utils/serverQueue';
+import { carryDraftKey, type SessionRemovedInfo } from '../utils/sessionRemoved';
+import { safeLocalStorage } from '../utils/chatStorage';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatFindBar from './subcomponents/ChatFindBar';
@@ -30,6 +32,7 @@ import ChangedFilesCard from './subcomponents/ChangedFilesCard';
 import type { ChangedFilesState, ChangedFileEntry } from './subcomponents/ChangedFilesCard';
 import CheckpointHistoryPanel from './subcomponents/CheckpointHistoryPanel';
 import ChatWorkPanel from './subcomponents/ChatWorkPanel';
+import SessionRemovedNotice from './subcomponents/SessionRemovedNotice';
 /**
  * G3:斜杠命令的结果弹窗(/models、/cost 这类)带着模型卡片、实测按钮、一整套
  * 表格渲染,而它只在用户真的敲了斜杠命令时才出现 —— 打包进聊天主块等于让每个人
@@ -56,6 +59,7 @@ function ChatInterface({
   sendByCtrlEnter,
   externalMessageUpdate,
   newSessionTrigger,
+  onStartNewSession,
 }: ChatInterfaceProps) {
   const { subscribe } = useWebSocket();
   const { t } = useTranslation('chat');
@@ -311,6 +315,52 @@ function ChatInterface({
     }
   }, [resendUserMessage]);
 
+  /**
+   * gk:「这条会话已被删除」态,按会话分键。
+   *
+   * 两条路进来:服务端推的 `session_removed`(别处永久删除)、`chat.send` 撞到
+   * `SESSION_NOT_FOUND`(页面开着的时候行没了)。恢复后的 `session_upserted` 撤掉它。
+   * 处于这个态的会话:输入框换成说明卡、错误行不给「重发」、「新建会话继续」把草稿带走。
+   */
+  const [removedSessions, setRemovedSessions] = useState<Map<string, SessionRemovedInfo>>(() => new Map());
+  const handleSessionRemoved = useCallback((sessionId: string, info: SessionRemovedInfo) => {
+    setRemovedSessions((current) => {
+      const next = new Map(current);
+      next.set(sessionId, info);
+      return next;
+    });
+  }, []);
+  const handleSessionRestored = useCallback((sessionId: string) => {
+    setRemovedSessions((current) => {
+      if (!current.has(sessionId)) return current;
+      const next = new Map(current);
+      next.delete(sessionId);
+      return next;
+    });
+  }, []);
+  const viewedRemovedInfo = (() => {
+    const id = selectedSession?.id ?? currentSessionId ?? null;
+    return id ? removedSessions.get(id) ?? null : null;
+  })();
+
+  /**
+   * 「新建会话继续」:没发出去的那段话先写进新建会话页的草稿键(项目键),
+   * 再让应用切到新建会话 —— composer 的换草稿 effect 会从那个键把它恢复到输入框。
+   */
+  const handleStartNewSessionFromRemoved = useCallback(() => {
+    if (!selectedProject || !onStartNewSession) return;
+    /**
+     * 要带走的可能是两段:输入框里正在打的,和**切态时排队卡上那条**
+     * (回合跑着时回车排进去的那句;切态会把它从盘上清掉,所以由 info 带过来)。
+     * 两段都有就都带上 —— 丢掉任何一段都是"我明明打了字"。
+     */
+    const parts = [viewedRemovedInfo?.queuedText ?? '', input].map((part) => part.trim()).filter(Boolean);
+    const draft = parts.join('\n\n');
+    const key = carryDraftKey(selectedProject.projectId);
+    if (draft && key) safeLocalStorage.setItem(key, draft);
+    onStartNewSession(selectedProject);
+  }, [input, onStartNewSession, selectedProject, viewedRemovedInfo?.queuedText]);
+
   // On WebSocket reconnect, re-fetch the current session's messages from the
   // server so missed streaming events are shown, then re-subscribe — the
   // `chat_subscribed` ack restores or clears the activity indicator, replays
@@ -401,7 +451,7 @@ function ChatInterface({
   const [serverQueue, setServerQueue] = useState<ServerQueueMap>(EMPTY_SERVER_QUEUE);
 
   const handleServerQueueChange = useCallback(
-    (sessionId: string, queued: { preview: string; enqueuedAt: string } | null) => {
+    (sessionId: string, queued: { preview: string; enqueuedAt: string; redacted?: boolean } | null) => {
       setServerQueue((current) => reduceServerQueue(current, sessionId, queued));
     },
     [],
@@ -444,6 +494,8 @@ function ChatInterface({
     // 排队被中止带走时,正文退回输入框(只在当前正看着这条会话、且输入框为空时)。
     onServerQueueReturned: (sid, content) =>
       sid === (selectedSession?.id ?? currentSessionId) && restoreQueuedContent(content),
+    onSessionRemoved: handleSessionRemoved,
+    onSessionRestored: handleSessionRestored,
   });
 
   useEffect(() => {
@@ -461,6 +513,17 @@ function ChatInterface({
       // 的问答面板里、或 /models 这类弹窗里按 Esc,会直接把整轮 run 中止掉。
       // 有它们在场就放行,让各自的 Esc 生效,不抢。查找条同理。
       if (document.querySelector('[role="dialog"], [data-interactive-prompt="true"], [data-find-bar-open="true"]')) {
+        return;
+      }
+
+      // gq:**行内改名的输入框同理,但判据是事件源不是"在不在场"。**
+      // 侧栏改项目名/会话名、文件树改文件名时按 Esc,本意是"取消这次改名";
+      // 而它们既不是 dialog 也没有遮罩,上面那条拦不住 —— 于是一边取消了改名,
+      // 一边把正在跑的那一轮也中止了(`canAbortSession` 为真时必然发生)。
+      // 用 closest 而不是 querySelector:别的地方开着改名框,不该影响你在
+      // 输入框外按 Esc 中止本轮。
+      const from = event.target as HTMLElement | null;
+      if (from?.closest?.('[data-inline-rename="true"]')) {
         return;
       }
 
@@ -736,7 +799,7 @@ function ChatInterface({
           showThinking={showThinking}
           selectedProject={selectedProject}
           onEditRerun={startEditRerun}
-          onRetryLastTurn={handleRetryLastTurn}
+          onRetryLastTurn={viewedRemovedInfo ? undefined : handleRetryLastTurn}
           isHome={isHome}
           serverTurnOutputs={serverTurnOutputs}
           />
@@ -775,7 +838,14 @@ function ChatInterface({
             </div>
           )}
 
-          {composerElement}
+          {viewedRemovedInfo ? (
+            <SessionRemovedNotice
+              info={viewedRemovedInfo}
+              // 排队卡上那条也算"还没发出去的字"——「新建会话继续」两段都带走。
+              pendingDraft={[viewedRemovedInfo.queuedText ?? '', input].filter((part) => part.trim()).join('\n\n')}
+              onStartNewSession={selectedProject && onStartNewSession ? handleStartNewSessionFromRemoved : null}
+            />
+          ) : composerElement}
         </div>
       </div>
 
@@ -824,6 +894,7 @@ function ChatInterface({
         providerModelsRefreshing={providerModelsRefreshing}
         onHardRefreshProviderModels={hardRefreshProviderModels}
         currentSessionId={currentSessionId || selectedSession?.id || null}
+        activeModelAlias={activeSessionModel ?? claudeModel}
         onSelectProviderModel={selectProviderModel}
       />
       </Suspense>

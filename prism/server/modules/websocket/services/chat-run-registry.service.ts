@@ -423,6 +423,14 @@ export function setRunStartedHook(hook: ((appSessionId: string) => void) | null)
 
 export const chatRunRegistry = {
   /**
+   * gk:让侧栏知道"这条会话(重新)出现了" —— 从最近删除恢复之后用。
+   * 走的是 run 收尾时那条现成的按可见范围广播的路,不另写一份。
+   */
+  announceSessionUpsert(appSessionId: string): Promise<void> {
+    return broadcastCanonicalSessionUpsert(appSessionId);
+  },
+
+  /**
    * Starts tracking a run and returns it, or `null` when a run is already in
    * progress for the session (callers must reject the duplicate send).
    */

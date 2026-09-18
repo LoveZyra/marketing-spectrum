@@ -326,7 +326,15 @@ export function fromStoredCommand(
       //(那次本来就没带 id),但从现在起这条命令是幂等的。
       clientMessageId: isClientMessageId(stored.clientMessageId) ? stored.clientMessageId : undefined,
       sessionKey: context.sessionKey,
-      sessionId: context.sessionId,
+      /**
+       * gh:**带分叉点的命令不能钉回原会话。**
+       *
+       * composer 的同页提交把带 forkFrom 的命令的 sessionId 清空(另起一支),
+       * 可落盘不存 sessionId,恢复时这里又用 context.sessionId(= 原会话)填回去 ——
+       * 服务端一看目标会话有原生 id 就把 forkFrom 丢掉,编辑后的内容**追加**进原对话。
+       * 与提交那一刻同一条规则:有 forkFrom 就 sessionId 为空,由投递路径新开一支。
+       */
+      sessionId: stored.forkFrom ? null : context.sessionId,
       projectId: context.projectId,
       text: stored.content,
       namingText: typeof stored.namingText === 'string' ? stored.namingText : stored.content,

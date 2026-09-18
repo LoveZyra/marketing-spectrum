@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../../lib/utils';
 import { api } from '../../../../utils/api';
+import { startBrowserDownload } from '../../../../utils/browserDownload';
 import type { TurnOutputFile } from '../../utils/turnOutputs';
 
 import FileTypeIcon from './FileTypeIcon';
@@ -30,22 +31,19 @@ export default function TurnOutputsCard({ files, onFileOpen, sessionId }: Props)
   const { t } = useTranslation('chat');
   const [busyPath, setBusyPath] = useState<string | null>(null);
 
+  /**
+   * 下载:签票 + 让浏览器自己下(理由见 ChatWorkPanel 里那段)。文件名由服务端的
+   * `Content-Disposition` 给,不再在前端从路径里切 basename —— 那份带 RFC 5987
+   * 的中文名,前端自己写一个只会和它对不上。
+   */
   const download = async (file: TurnOutputFile) => {
     if (!sessionId) return;
     setBusyPath(file.path);
     try {
-      const response = await api.sessionOutputBlob(sessionId, file.path);
+      const response = await api.issueSessionOutputDownloadTicket(sessionId, file.path);
       if (!response.ok) return;
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = file.path.split(/[\\/]/).pop() || 'download';
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      // 释放放到下一拍 —— 有些浏览器在 click 返回时还没开始读这个 URL。
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      const { url } = await response.json() as { url: string };
+      startBrowserDownload(url);
     } finally {
       setBusyPath(null);
     }

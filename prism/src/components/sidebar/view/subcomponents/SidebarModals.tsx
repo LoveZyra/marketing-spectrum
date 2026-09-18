@@ -7,6 +7,8 @@ import { Button } from '../../../../shared/view/ui';
 import SessionDeleteDialog from '../../../../shared/view/SessionDeleteDialog';
 import type { DeleteProjectConfirmation, SessionDeleteConfirmation } from '../../types/types';
 import { ModalLoadingFallback } from '../../../../shared/view/LazyPanel';
+import { useAuth } from '../../../auth/context/AuthContext';
+import { canArchiveOrDeleteProject } from '../../../../utils/sessionDeletePermission';
 
 /**
  * 侧栏自己的弹窗。
@@ -44,6 +46,9 @@ export default function SidebarModals({
   onConfirmDeleteSession,
   t,
 }: SidebarModalsProps) {
+  // 项目的归档 / 删除按钮要按"这个人是不是项目负责人"决定画不画。
+  const { user: currentUser } = useAuth();
+
   // 空闲时预取新建项目向导的代码块,免得第一次点开先闪一下 fallback 遮罩。
   useEffect(() => {
     let cancelled = false;
@@ -72,6 +77,19 @@ export default function SidebarModals({
       }
     };
   }, []);
+
+  /*
+    gn:项目的归档与永久删除都收紧到"负责人 / 管理员"了(服务端
+    `canArchiveProject === canDeleteProject`)。界面按同一条算 —— 不是负责人就
+    两枚按钮都不画,而不是给两个必然撞 403 的按钮。
+  */
+  const mayRemoveProject = deleteConfirmation
+    ? canArchiveOrDeleteProject({
+      isRoot: Boolean(currentUser?.isRoot),
+      viewerUserId: currentUser?.id ?? null,
+      projectOwnerUserId: deleteConfirmation.project.ownerUserId ?? null,
+    })
+    : false;
 
   return (
     <>
@@ -108,31 +126,40 @@ export default function SidebarModals({
                     </p>
                     {deleteConfirmation.sessionCount > 0 && (
                       <p className="mt-2 text-sm text-muted-foreground">
-                        {t('deleteConfirmation.sessionCount', { count: deleteConfirmation.sessionCount })}
+                        {t('deleteConfirmation.sessionCount', { count: deleteConfirmation.sessionCount, defaultValue: '这个项目下有 {{count}} 条会话。' })}
+                      </p>
+                    )}
+                    {!mayRemoveProject && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {t('deleteConfirmation.cannotRemoveProject', '你不是这个项目的负责人 —— 归档和删除整个项目都只有负责人或管理员能做。你可以归档自己的会话。')}
                       </p>
                     )}
                   </div>
                 </div>
               </div>
               <div className="flex flex-col gap-2 border-t border-border bg-card p-4">
-                <Button
-                  variant="outline"
-                  className="w-full justify-start"
-                  onClick={() => onConfirmDeleteProject(false)}
-                >
-                  <EyeOff className="mr-2 h-4 w-4" />
-                  {t('deleteConfirmation.archiveProject', 'Archive project')}
-                </Button>
-                <Button
-                  variant="destructive"
-                  className="w-full justify-start bg-destructive text-destructive-foreground hover:bg-destructive"
-                  onClick={() => onConfirmDeleteProject(true)}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  {t('deleteConfirmation.deleteAllData')}
-                </Button>
+                {mayRemoveProject ? (
+                  <>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start"
+                      onClick={() => onConfirmDeleteProject(false)}
+                    >
+                      <EyeOff className="mr-2 h-4 w-4" />
+                      {t('deleteConfirmation.archiveProject', 'Archive project')}
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      className="w-full justify-start bg-destructive text-destructive-foreground hover:bg-destructive"
+                      onClick={() => onConfirmDeleteProject(true)}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      {t('deleteConfirmation.deleteAllData')}
+                    </Button>
+                  </>
+                ) : null}
                 <Button variant="ghost" className="w-full" onClick={onCancelDeleteProject}>
-                  {t('actions.cancel')}
+                  {mayRemoveProject ? t('actions.cancel') : t('actions.close', '关闭')}
                 </Button>
               </div>
             </div>
@@ -147,6 +174,7 @@ export default function SidebarModals({
             sessionId: sessionDeleteConfirmation.sessionId,
             sessionTitle: sessionDeleteConfirmation.sessionTitle,
             isArchived: sessionDeleteConfirmation.isArchived,
+            canDeletePermanently: sessionDeleteConfirmation.canDeletePermanently,
           }
           : null}
         onCancel={onCancelDeleteSession}

@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Edit3, Folder, Globe, Lock, Share2, ShieldCheck, Star, Trash2, UserCheck, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -237,6 +237,35 @@ function SidebarProjectItem({
       user?.id != null &&
       String(project.ownerUserId) === String(user.id));
 
+  /**
+   * gq:改名时**点行外关闭**。
+   *
+   * 原来项目行改名只有 Enter / Esc / ✓ / ✕ 四条出路 —— 点到别处那一行就一直
+   * 停在编辑态,而它上面既没有遮罩也没有焦点提示,看上去像界面卡住了。
+   * 会话行早就有这个行为(`SidebarSessionItem`),两边现在一致:**点外面 = 取消**,
+   * 不是保存 —— 误点一下就把项目改名了,比丢掉几个字糟得多。
+   *
+   * 手机卡片与桌面行各一个 ref:同一时刻只有一个在 DOM 里,但两边都要认。
+   */
+  const mobileRowRef = useRef<HTMLDivElement>(null);
+  const desktopRowRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!isEditing) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (mobileRowRef.current?.contains(target)) return;
+      if (desktopRowRef.current?.contains(target)) return;
+      onCancelEditingProject();
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [isEditing, onCancelEditingProject]);
+
   const toggleProject = () => onToggleProject(project.projectId);
   const toggleStarProject = () => onToggleStarProject(project.projectId);
 
@@ -267,6 +296,7 @@ function SidebarProjectItem({
       <div className="md:group group">
         <div className="md:hidden">
           <div
+            ref={mobileRowRef}
             className={cn(
               'p-3 mx-3 my-1 rounded-md border border-border active:translate-y-px',
               isSelected && !selectionMode && 'bg-muted',
@@ -325,10 +355,15 @@ function SidebarProjectItem({
                       onChange={(event) => onEditingNameChange(event.target.value)}
                       className="w-full rounded-md border border-primary/40 bg-background px-3 py-2 text-sm text-foreground transition-colors focus:border-primary focus:outline-none"
                       placeholder={t('projects.projectNamePlaceholder')}
+                      title={project.fullPath}
                       autoFocus
                       autoComplete="off"
+                      // 行内改名的统一标记:Esc 在这里是"取消改名",不能顺带把
+                      // 正在跑的那一轮也中止掉(见 ChatInterface 的全局 Esc)。
+                      data-inline-rename="true"
                       onClick={(event) => event.stopPropagation()}
                       onKeyDown={(event) => {
+                        event.stopPropagation();
                         if (event.key === 'Enter') {
                           saveProjectName();
                         }
@@ -434,9 +469,13 @@ function SidebarProjectItem({
         </div>
 
         <Button
+          ref={desktopRowRef}
           variant="ghost"
           className={cn(
             'relative hidden md:flex w-full justify-between rounded-md px-2.5 py-2 h-auto font-normal hover:bg-muted',
+            // 编辑态里内容从 ~20px 的标题行变成 26px 的输入框,这里把上下内边距
+            // 从 8px 收到 5px 抵掉 —— 前后都是 36px,改名时下面的行不会被顶下去。
+            isEditing && 'py-[5px]',
             isSelected && !selectionMode && 'prism-panel bg-card dark:bg-muted',
             selectionMode && isSelectedForBulk && 'bg-accent',
           )}
@@ -468,27 +507,35 @@ function SidebarProjectItem({
             />
             <div className="min-w-0 flex-1 text-left">
               {isEditing ? (
-                <div className="space-y-1">
-                  <input
-                    type="text"
-                    value={editingName}
-                    onChange={(event) => onEditingNameChange(event.target.value)}
-                    className="w-full rounded border border-border bg-background px-2 py-1 text-sm text-foreground focus:ring-2 focus:ring-primary/20"
-                    placeholder={t('projects.projectNamePlaceholder')}
-                    autoFocus
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        saveProjectName();
-                      }
-                      if (event.key === 'Escape') {
-                        onCancelEditingProject();
-                      }
-                    }}
-                  />
-                  <div className="truncate text-xs text-muted-foreground" title={project.fullPath}>
-                    {project.fullPath}
-                  </div>
-                </div>
+                /* gq:改名也是**单行**。
+                   原来这里是 `space-y-1`:输入框下面再挂一行完整路径,行高从 36px
+                   涨到 ~70px,底下的项目全被顶下去一截。而这一行的既定设计就是
+                   「完整路径进 title,不再占第二行」(见下面非编辑分支的注释)——
+                   编辑分支是那次改动漏下的。路径进输入框的 title,悬停照样看得到。 */
+                <input
+                  type="text"
+                  value={editingName}
+                  onChange={(event) => onEditingNameChange(event.target.value)}
+                  className="h-[26px] w-full rounded border border-border bg-background px-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  placeholder={t('projects.projectNamePlaceholder')}
+                  title={project.fullPath}
+                  autoFocus
+                  autoComplete="off"
+                  // 行内改名的统一标记,含义同手机端那个。
+                  data-inline-rename="true"
+                  // 整行是个 <Button>(点一下 = 选中并展开)。不拦住的话,
+                  // 点进输入框改个错字,项目就在脚下折叠/展开了一次。
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => {
+                    event.stopPropagation();
+                    if (event.key === 'Enter') {
+                      saveProjectName();
+                    }
+                    if (event.key === 'Escape') {
+                      onCancelEditingProject();
+                    }
+                  }}
+                />
               ) : (
                 <div>
                   <div className="flex items-center gap-1.5">

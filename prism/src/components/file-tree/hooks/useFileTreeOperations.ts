@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import JSZip from 'jszip';
 
 import { api } from '../../../utils/api';
+import { startBrowserDownload } from '../../../utils/browserDownload';
 import { copyTextToClipboard } from '../../../utils/clipboard';
 import type { FileTreeNode } from '../types/types';
 import type { Project } from '../../../types/app';
@@ -11,10 +11,17 @@ import type { Project } from '../../../types/app';
 const INVALID_FILENAME_CHARS = /[<>:"/\\|?*\x00-\x1f]/;
 const RESERVED_NAMES = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
 
+
 export type ToastMessage = {
   message: string;
-  /** `warning` 用于"做完了,但结果不完整" —— 例如 ZIP 少打了没加载到的子目录。 */
-  type: 'success' | 'error' | 'warning';
+  /**
+   * `warning` 用于"做完了,但结果不完整" —— 例如 ZIP 少打了没加载到的子目录。
+   *
+   * `info` 是"正在做,还没好"。它**不自动消失**(见 FileTree.tsx 的自动隐藏),
+   * 由随后的成功/失败提示顶掉 —— 一条 3 秒就走的"正在准备"对一个 40 秒的下载
+   * 毫无意义,用户只会在剩下的 37 秒里继续以为"点了没反应"。
+   */
+  type: 'success' | 'error' | 'warning' | 'info';
 };
 
 export type DeleteConfirmation = {
@@ -61,6 +68,8 @@ export type UseFileTreeOperationsResult = {
   // Other operations
   handleCopyPath: (item: FileTreeNode) => void;
   handleDownload: (item: FileTreeNode) => Promise<void>;
+  /** 批量下载用:一次把选中的全部路径交给服务端,打成**一个**包。 */
+  downloadPaths: (paths: string[], label: string) => Promise<void>;
 
   // Loading state
   operationLoading: boolean;
@@ -275,40 +284,6 @@ export function useFileTreeOperations({
     );
   }, [showToast, t]);
 
-  const triggerBrowserDownload = useCallback((blob: Blob, fileName: string) => {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-
-    anchor.href = url;
-    anchor.download = fileName;
-
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-
-    URL.revokeObjectURL(url);
-  }, []);
-
-  // Download file or folder
-  const handleDownload = useCallback(async (item: FileTreeNode) => {
-    if (!selectedProject) return;
-
-    setOperationLoading(true);
-    try {
-      if (item.type === 'directory') {
-        // Download folder as ZIP
-        await downloadFolderAsZip(item);
-      } else {
-        // Download single file
-        await downloadSingleFile(item);
-      }
-    } catch (err) {
-      showToast((err as Error).message, 'error');
-    } finally {
-      setOperationLoading(false);
-    }
-  }, [selectedProject, showToast]);
-
   /**
    * 把下载失败的 HTTP 状态翻成一句能看懂的中文。
    *
@@ -327,104 +302,64 @@ export function useFileTreeOperations({
     return t('fileTree.download.failed', { name, status, defaultValue: `下载「${name}」失败(HTTP ${status})` });
   }, [t]);
 
-  // Download a single file
-  const downloadSingleFile = useCallback(async (item: FileTreeNode) => {
-    if (!selectedProject) return;
+  /**
+   * 换票 → 交给浏览器。三个入口(单文件、目录、批量多选)共用这一条。
+   *
+   * 服务端按"传进来的是什么"自己决定直传还是打包:一个文件 → 直传;目录或多个
+   * 路径 → 一个 ZIP。前端不替它判断 —— 判断需要知道每个路径是不是目录,
+   * 而那只有服务端 stat 过才算数。
+   */
+  const downloadPaths = useCallback(async (paths: string[], label: string) => {
+    if (!selectedProject || paths.length === 0) return;
 
-    // Use the binary streaming endpoint so downloads preserve raw bytes.
-    const response = await api.readFileBlob(selectedProject.projectId, item.path);
-
+    const response = await api.issueDownloadTicket(selectedProject.projectId, paths);
     if (!response.ok) {
-      throw new Error(describeDownloadFailure(response.status, item.name));
+      throw new Error(describeDownloadFailure(response.status, label));
     }
+    const { url, kind } = await response.json() as { url: string; kind: 'file' | 'zip' };
 
-    const blob = await response.blob();
-    triggerBrowserDownload(blob, item.name);
-  }, [selectedProject, triggerBrowserDownload, describeDownloadFailure]);
+    // 打包要先在服务端走一遍目录才开始出字节,慢一点;给一句话填上这段静默。
+    // 直传不需要 —— 下载栏是立刻出现的,那本身就是最好的反馈。
+    if (kind === 'zip') {
+      showToast(
+        t('fileTree.toast.downloadPreparing', {
+          name: label,
+          defaultValue: `正在打包「${label}」,浏览器下载栏里可以看到进度…`,
+        }),
+        'info',
+      );
+    }
+    startBrowserDownload(url);
+  }, [selectedProject, describeDownloadFailure, showToast, t]);
 
   /**
-   * 打包下载目录(D6:残缺必须说出来)。
+   * 下载:**签一张票,然后让浏览器自己去下。**
    *
-   * ZIP 是拿**前端已经加载的那棵树**打的,而那棵树不是全量:服务端的目录遍历
-   * 有深度上限(超过就不带 `children`)和条目预算(超了整棵树打截断标记),
-   * node_modules/.git 这类目录则压根不进树。原来这些情况一律静默跳过 ——
-   * 用户拿到一个看着正常、其实少了整棵子树的包,而且无从知道。
+   * 以前是 fetch → blob → `a[download]`:整份文件先落进标签页内存,拼完才弹保存框。
+   * 下载是右键菜单里的一项,点完菜单立刻收起、行上没有任何变化 —— 大文件那几十秒
+   * 界面完全是静的,体感就是"点了没反应";几 GB 的文件还会直接把标签页撑崩。
+   * 目录更糟:以前是在**浏览器里**逐个文件读进内存再打 ZIP,峰值约 2× 目录大小。
    *
-   * 现在:未加载的子目录被记下来,并且**照样在包里建出空目录**(保住结构),
-   * 打完给一条"少了什么、去哪儿拿"的提示。真正的修法是服务端流式 zip
-   * (中期),但在那之前,残缺至少不能是无声的。
+   * 现在两步:先 POST 换一张 5 分钟失效、只指向这一个目标的票(权限、路径、
+   * 文件存在与否全在这一步挡掉,**失败还在 fetch 语境里,弹得出提示**),
+   * 再把带票的 URL 交给浏览器 —— 下载栏立刻出现,进度条是浏览器画的。
+   *
+   * 单个文件 → 直传,有百分比;目录或多选 → 服务端边压边发,只有"已下载 XX MB"
+   * (边压边发算不出总大小,JupyterLab 下文件夹也是这样)。
    */
-  const downloadFolderAsZip = useCallback(async (folder: FileTreeNode) => {
+  const handleDownload = useCallback(async (item: FileTreeNode) => {
     if (!selectedProject) return;
-
-    const zip = new JSZip();
-    const skippedDirectories: string[] = [];
-
-    // Recursively get all files in the folder
-    const collectFiles = async (node: FileTreeNode, currentPath: string) => {
-      const fullPath = currentPath ? `${currentPath}/${node.name}` : node.name;
-
-      if (node.type === 'file') {
-        const response = await api.readFileBlob(selectedProject.projectId, node.path);
-        if (!response.ok) {
-          throw new Error(describeDownloadFailure(response.status, node.name));
-        }
-
-        // Store raw bytes in the archive so binary files stay intact.
-        const fileBytes = await response.arrayBuffer();
-        zip.file(fullPath, fileBytes);
-        return;
-      }
-
-      if (node.type !== 'directory') return;
-
-      // `children === undefined` = 服务端遍历到深度上限就没往下走(不是"空目录",
-      // 空目录给的是 `[]`)。这才是真正被吞掉的那部分。
-      if (!node.children) {
-        skippedDirectories.push(fullPath);
-        zip.folder(fullPath);
-        return;
-      }
-
-      // 空目录也显式建出来,否则 JSZip 只按文件路径推目录,空的就没了。
-      if (node.children.length === 0) {
-        zip.folder(fullPath);
-        return;
-      }
-
-      for (const child of node.children) {
-        await collectFiles(child, fullPath);
-      }
-    };
-
-    // If the folder has children, process them
-    if (folder.children && folder.children.length > 0) {
-      for (const child of folder.children) {
-        await collectFiles(child, '');
-      }
+    setOperationLoading(true);
+    try {
+      await downloadPaths([item.path], item.name);
+    } catch (err) {
+      // 右键菜单这条路没有别的接错处 —— 这里不接就是一个未处理的 rejection,
+      // 用户什么都看不到。批量那条走 downloadPaths,它照常抛出去给调用方汇总。
+      showToast((err as Error).message, 'error');
+    } finally {
+      setOperationLoading(false);
     }
-
-    // Generate ZIP file
-    const zipBlob = await zip.generateAsync({ type: 'blob' });
-    triggerBrowserDownload(zipBlob, `${folder.name}.zip`);
-
-    if (skippedDirectories.length > 0) {
-      const preview = skippedDirectories.slice(0, 3).join('、');
-      showToast(
-        t('fileTree.toast.folderDownloadedPartial', {
-          // 用 skipped 而不是 count:i18next 见到 count 会走复数键(_one/_other),
-          // 这条文案不需要复数变体。
-          skipped: skippedDirectories.length,
-          preview,
-          defaultValue: `已打包,但 ${skippedDirectories.length} 个子目录未包含(层级太深没加载):${preview}${skippedDirectories.length > 3 ? ' 等' : ''}。进入该子目录后再单独下载可拿到完整内容。`,
-        }),
-        'warning',
-      );
-      return;
-    }
-
-    showToast(t('fileTree.toast.folderDownloaded', 'Folder downloaded as ZIP'), 'success');
-  }, [selectedProject, showToast, t, triggerBrowserDownload, describeDownloadFailure]);
+  }, [selectedProject, downloadPaths, showToast]);
 
   return {
     // Rename operations
@@ -455,6 +390,7 @@ export function useFileTreeOperations({
     // Other operations
     handleCopyPath,
     handleDownload,
+    downloadPaths,
 
     // Loading state
     operationLoading,

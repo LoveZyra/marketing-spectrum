@@ -52,6 +52,7 @@ import {
   quotaExceededMessage,
 } from '../shared/attachment-storage.js';
 import { readRequestViewer } from '../shared/project-visibility.js';
+import { recoverUploadFilename } from '../shared/upload-filename.js';
 import { resolveVisibleProjectRoot } from '../modules/database/project-access.js';
 
 const router = express.Router();
@@ -109,33 +110,8 @@ const HTML_STAGING_DIR = path.join(os.homedir(), 'html-server', 'staging');
 // half-written files it holds stay out of globs over the staging dir.
 const HTML_STAGING_INCOMING_DIR = path.join(HTML_STAGING_DIR, '.incoming');
 
-// multer/busboy reads multipart filename params as latin1 by default, so a
-// UTF-8 filename (e.g. Chinese) arrives as mojibake (each UTF-8 byte becomes a
-// latin1 char in 0x80-0xFF). Re-interpret those bytes as UTF-8 to recover the
-// real name. Safe for ASCII (unchanged) and already-correct Unicode (codepoints
-// > 0xFF left alone); only re-decodes when the round-trip is lossless, so true
-// single-byte latin1 names are not corrupted.
-function fixFilename(name) {
-  if (!name) return name;
-  let needsFix = false;
-  for (const ch of name) {
-    const cp = ch.codePointAt(0);
-    if (cp > 0xFF) return name; // already proper unicode — don't touch
-    if (cp >= 0x80) needsFix = true;
-  }
-  if (!needsFix) return name;
-  try {
-    const buf = Buffer.from(name, 'latin1');
-    const decoded = buf.toString('utf8');
-    if (Buffer.from(decoded, 'utf8').equals(buf)) return decoded;
-    return name;
-  } catch {
-    return name;
-  }
-}
-
 // Lands any file (html or otherwise) to the staging dir FAITHFULLY: keep the
-// original (fixFilename-recovered) name + an 8-hex prefix for uniqueness. No
+// original (recoverUploadFilename-recovered) name + an 8-hex prefix for uniqueness. No
 // slugify here — naming for the public URL is the agent's job at publish time
 // (upload.sh translates the name to English). Staging is not served, so a real
 // (e.g. Chinese) name on disk is fine; Node fs handles UTF-8. Named landHtmlFile
@@ -675,7 +651,7 @@ router.post('/parse', upload.single('document'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No document uploaded' });
 
-    const name = fixFilename(req.file.originalname || 'document');
+    const name = recoverUploadFilename(req.file.originalname || 'document');
     const ext = path.extname(name).toLowerCase();
 
     // HTML attachments are staged, not parsed: land the original file in a
@@ -788,7 +764,7 @@ const landUpload = multer({
         cb(error, '');
       }
     },
-    // A neutral temp name: the real (fixFilename-recovered) name is only applied
+    // A neutral temp name: the real (recoverUploadFilename-recovered) name is only applied
     // once the upload has completed, so a half-written file is never mistakable
     // for a landed one.
     filename: (_req, _file, cb) => cb(null, `incoming_${crypto.randomBytes(8).toString('hex')}`),
@@ -829,7 +805,7 @@ router.post('/land', (req, res) => {
     if (!req.file) return res.status(400).json({ error: '没有收到文件' });
 
     try {
-      const name = fixFilename(req.file.originalname || 'file');
+      const name = recoverUploadFilename(req.file.originalname || 'file');
       const target = resolveAttachmentTarget(req);
       const landed = landStagedFile(name, req.file.path, target.dir);
       const commit = commitAttachmentWithinQuota({
@@ -987,7 +963,11 @@ router.post('/land/start', (req, res) => {
     return res.status(500).json({ error: error.message });
   }
   chunkSessions.set(uploadId, {
-    name: fixFilename(typeof req.body?.name === 'string' ? req.body.name : 'file') || 'file',
+    // 这条路的名字来自 **JSON body**(见前端 landFileInChunks 的 JSON.stringify),
+    // express.json 早就按 UTF-8 解好了 —— 不能再套 recoverUploadFilename:
+    // 它的判据对"本身就是合法 UTF-8 序列的双字符"(`Ã©`)会误伤,而这里本来没病。
+    // multipart 那条路(/land 直传)才需要恢复,见上面 req.file.originalname 处。
+    name: (typeof req.body?.name === 'string' ? req.body.name : '') || 'file',
     partPath,
     received: 0,
     declaredSize,

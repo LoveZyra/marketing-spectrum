@@ -45,12 +45,14 @@
     "processingSessionIndicator": "Session running",
     "exportSessionFailed": "Failed to export session. Please retry.",
     "selectProjects": "Select projects",
-    "exitSelection": "Exit selection"
+    "exitSelection": "Exit selection",
+    "deleteSessionOptions": "Archive or permanently delete this session"
   },
   "actions": {
     "settings": "Settings",
     "cancel": "Cancel",
-    "save": "Save"
+    "save": "Save",
+    "close": "Close"
   },
   "status": {
     "active": "Active",
@@ -69,8 +71,8 @@
     "restoreProjectError": "Error restoring project. Please try again.",
     "restoreSessionFailed": "Failed to restore session. Please try again.",
     "restoreSessionError": "Error restoring session. Please try again.",
-    "bulkDeleteConfirm": "Permanently delete the {{count}} selected archived sessions? This cannot be undone.",
-    "emptyTrashConfirm": "Emptying the trash permanently deletes {{count}} archived sessions. This cannot be undone. Continue?",
+    "bulkDeleteConfirm": "Permanently delete the {{count}} selected archived sessions? They go to Recently Deleted first and can be restored during the retention period.",
+    "emptyTrashConfirm": "Emptying the archive moves {{count}} archived sessions to Recently Deleted (only those in projects you own are affected). They can be restored during the retention period. Continue?",
     "bulkActionFailed": "Bulk action failed, please try again."
   },
   "search": {
@@ -84,13 +86,27 @@
     "modeArchived": "Archived",
     "switchMode": "Switch search scope",
     "runningPlaceholder": "Search running sessions...",
-    "archivedPlaceholder": "Search archived sessions..."
+    "archivedPlaceholder": "Search archived sessions...",
+    "archiveOnlyTooltip": "Archive only",
+    "matches": "{{count}} matches",
+    "projectsScanned": "Scanned {{count}}",
+    "runningTooltip": "Running sessions"
   },
   "deleteConfirmation": {
     "deleteProject": "Remove Project",
     "deleteSession": "Delete Session",
     "confirmDelete": "What would you like to do with",
-    "deleteAllData": "Delete all data permanently"
+    "deleteAllData": "Delete all data permanently",
+    "permanentDeleteNotice": "Deleting permanently moves the session (with its history) to Recently Deleted, where the project owner can restore it during the retention period. Only the project owner or an administrator can delete permanently.",
+    "archiveProject": "Archive project",
+    "sessionCount": "This project has {{count}} sessions.",
+    "archiveSession": "Archive session",
+    "archiveSessionNotice": "Archive keeps the session out of the active list while preserving its history.",
+    "archivedSessionNotice": "This session is already archived. You can keep it hidden or delete it permanently.",
+    "deleteSessionPermanently": "Delete permanently",
+    "cannotDeletePermanently": "You are not this project's owner, so you can only archive it — archiving hides it from the active list and keeps every message.",
+    "archivedAndCannotDelete": "This session is already archived. Only the project owner or an administrator can delete it permanently, so there is nothing to do here.",
+    "cannotRemoveProject": "You are not this project's owner — archiving or deleting a whole project is limited to its owner and administrators. You can still archive your own sessions."
   },
   "project": {
     "permissions": {
@@ -135,10 +151,43 @@
     "loadMore": "Load more ({{total}} total)",
     "loadingMore": "Loading…",
     "select": "Select",
-    "emptyTrash": "Empty trash",
+    "emptyTrash": "Empty archive",
     "selectedCount": "{{count}} selected",
     "bulkRestore": "Restore selected",
     "bulkDelete": "Delete selected",
-    "clearSelection": "Clear"
+    "clearSelection": "Clear",
+    "deletePermanently": "Delete permanently",
+    "emptyDescription": "Archived workspaces and sessions will appear here when you hide them from the active list.",
+    "emptyTitle": "No archived items",
+    "loadingDescription": "Fetching hidden workspaces and sessions you can restore later.",
+    "loadingTitle": "Loading archive…",
+    "noMatchingSessions": "No matching archived items",
+    "projectArchived": "Project archived",
+    "restore": "Restore session",
+    "restoreProject": "Restore workspace",
+    "tryDifferentSearch": "Try a different search term."
+  },
+  "recentlyDeleted": {
+    "title": "Recently deleted",
+    "retention": "kept {{days}} days",
+    "retentionForever": "never auto-purged",
+    "loading": "Loading…",
+    "empty": "No recently deleted sessions. Permanently deleted sessions land here first and can be restored during the retention period.",
+    "messageCount": "{{count}} messages",
+    "projectGone": "project deleted",
+    "deletedBy": "deleted by {{who}} at {{when}}",
+    "deletedAt": "deleted at {{when}}",
+    "purgeIn": "purged in {{days}} days",
+    "noTranscript": "no transcript",
+    "restore": "Restore",
+    "cannotRestore": "Only the project owner, an administrator or the person who deleted it can restore it",
+    "restoreFailed": "Restore failed. Please try again later.",
+    "more": "Showing the most recent {{shown}} of {{total}}"
+  },
+  "running": {
+    "emptyDescription": "Active work will appear here while a provider is processing.",
+    "emptyTitle": "No sessions running",
+    "noMatchingSessions": "No running sessions match this search.",
+    "title": "Running now"
   }
 }

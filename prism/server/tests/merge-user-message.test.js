@@ -19,10 +19,53 @@ import { mergeRefusalReason, mergeUserMessage } from '../claude-sdk.js';
  * **一个不该收它的 runtime**。
  */
 describe('mergeRefusalReason', () => {
-  const liveRuntime = { disposed: false, suspect: false, turn: null, input: { push() {} } };
+  /**
+   * gh:"正常"的 runtime 是**正跑着一个用户回合**的 —— 合流的定义就是并进正在跑的回合。
+   * `turn: null` 的 runtime 处在两段危险窗口里(回合起点 / 末尾),合流进去的回复会整批丢失。
+   */
+  const liveRuntime = {
+    disposed: false,
+    suspect: false,
+    turn: { internal: false },
+    input: { push() {} },
+    ownerUserId: 7,
+    actorUsername: 'alice',
+    settings: { permissionMode: 'acceptEdits', allowedTools: [], disallowedTools: [] },
+  };
 
   it('一切正常 → 不拒绝', () => {
     assert.equal(mergeRefusalReason(liveRuntime, '把配置也改一下'), null);
+  });
+
+  it('gh:没有用户回合在跑 → 退回排队(回合起点/末尾那两段窗口里合流进去的回复会整批丢失)', () => {
+    assert.equal(mergeRefusalReason({ ...liveRuntime, turn: null }, 'x'), 'no-turn');
+  });
+
+  it('gh:发送者不是这个 runtime 的主人 → 退回排队(不能借别人的 bypass 档跑命令)', () => {
+    assert.equal(
+      mergeRefusalReason(liveRuntime, 'rm -rf /', { actorUsername: 'bob', ownerUserId: 8 }),
+      'actor-mismatch',
+    );
+    // 同名不同 id / 同 id 不同名,都不算同一个人
+    assert.equal(
+      mergeRefusalReason(liveRuntime, 'x', { actorUsername: 'alice', ownerUserId: 8 }),
+      'actor-mismatch',
+    );
+    assert.equal(
+      mergeRefusalReason(liveRuntime, 'x', { actorUsername: 'bob', ownerUserId: 7 }),
+      'actor-mismatch',
+    );
+  });
+
+  it('gh:同一个人、同一档位 → 合流;同一个人换了档位 → 退回排队', () => {
+    const same = { actorUsername: 'alice', ownerUserId: 7, runtimeOptions: { permissionMode: 'acceptEdits' } };
+    assert.equal(mergeRefusalReason(liveRuntime, 'x', same), null);
+    const switched = { actorUsername: 'alice', ownerUserId: 7, runtimeOptions: { permissionMode: 'plan' } };
+    assert.equal(mergeRefusalReason(liveRuntime, 'x', switched), 'policy-mismatch');
+  });
+
+  it('gh:不带身份的老调用方照旧只看回合状态(兼容)', () => {
+    assert.equal(mergeRefusalReason(liveRuntime, 'x', {}), null);
   });
 
   it('空正文不合流 —— 只发图片那条路这一版走排队', () => {
@@ -76,7 +119,8 @@ describe('合流的接线', () => {
     const { fileURLToPath } = await import('node:url');
     const sdk = readFileSync(fileURLToPath(new URL('../claude-sdk.js', import.meta.url)), 'utf8');
     const fn = sdk.slice(sdk.indexOf('export async function mergeUserMessage'));
-    expect(fn.slice(0, 900)).toMatch(/const refusal = mergeRefusalReason\(runtime, command\);/);
+    // gh:第三个参数是发送者身份与运行时选项 —— 判据仍只有这一处
+    expect(fn.slice(0, 900)).toMatch(/const refusal = mergeRefusalReason\(runtime, command, options\);/);
     expect(fn.slice(0, 900)).toMatch(/if \(refusal\) return \{ merged: false, reason: refusal \};/);
   });
 

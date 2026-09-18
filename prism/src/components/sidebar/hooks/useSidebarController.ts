@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 
 import { api } from '../../../utils/api';
+import { describeDeleteFailure } from '../utils/deleteFailure';
 import { useToast } from '../../../shared/view/ui';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
+import { useAuth } from '../../auth/context/AuthContext';
+import { canPermanentlyDeleteSession } from '../../../utils/sessionDeletePermission';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionActivityMap } from '../../../hooks/useSessionProtection';
 import type {
@@ -120,6 +123,8 @@ export function useSidebarController({
 }: UseSidebarControllerArgs) {
   const paletteOps = usePaletteOps();
   const { toast } = useToast();
+  // 删除确认框要按"这个人是不是项目负责人"决定画不画那枚红按钮。
+  const { user: currentUser } = useAuth();
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [editingProject, setEditingProject] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
@@ -147,6 +152,15 @@ export function useSidebarController({
   const [archivedSessionsTotal, setArchivedSessionsTotal] = useState(0);
   const [archivedSessionsHasMore, setArchivedSessionsHasMore] = useState(false);
   const [isLoadingMoreArchivedSessions, setIsLoadingMoreArchivedSessions] = useState(false);
+  /**
+   * gk:「最近删除」那一段自己拉数据,它不知道这边刚永久删了什么 —— 每做一次
+   * 会往回收站里放东西的操作就 +1,让它重拉。
+   *
+   * 少了这个计数,「清空归档」之后同一屏上那一段还写着"没有最近删除的会话",
+   * 而确认弹窗刚说过「移入最近删除,保留期内可恢复」—— 用户看到的是"它真删了"。
+   */
+  const [trashReloadToken, setTrashReloadToken] = useState(0);
+  const bumpTrashReload = useCallback(() => { setTrashReloadToken((value) => value + 1); }, []);
   /** F8:回收站多选。攒到几百条时一条条点纯粹是体力活。 */
   const [selectedArchivedIds, setSelectedArchivedIds] = useState<Set<string>>(new Set());
   const [isBulkArchiving, setIsBulkArchiving] = useState(false);
@@ -782,15 +796,28 @@ export function useSidebarController({
         isArchived?: boolean;
       } = {},
     ) => {
+      /*
+        gk 的权限规则在服务端拦得很干净,但界面没跟上:说明文字写着「只有项目
+        负责人或管理员可以永久删除」,红色主按钮照样可点,点下去撞 403
+        (2026-09-15 非 root 实测)。在这里就把结论算出来,按钮该不画就不画。
+        找不到项目时传 projectKnown:false —— 回到老行为,由服务端兜底。
+      */
+      const project = projectId ? projects.find((candidate) => candidate.projectId === projectId) : undefined;
       setSessionDeleteConfirmation({
         projectId,
         sessionId,
         sessionTitle,
         provider,
         isArchived: Boolean(options.isArchived),
+        canDeletePermanently: canPermanentlyDeleteSession({
+          isRoot: Boolean(currentUser?.isRoot),
+          viewerUserId: currentUser?.id ?? null,
+          projectOwnerUserId: project?.ownerUserId ?? null,
+          projectKnown: Boolean(project),
+        }),
       });
     },
-    [],
+    [currentUser?.id, currentUser?.isRoot, projects],
   );
 
   const confirmDeleteSession = useCallback(async (hardDelete = false) => {
@@ -806,6 +833,7 @@ export function useSidebarController({
 
       if (response.ok) {
         onSessionDelete?.(sessionId);
+        if (hardDelete) bumpTrashReload();
         await fetchArchivedSessions();
       } else {
         const errorText = await response.text();
@@ -813,13 +841,15 @@ export function useSidebarController({
           status: response.status,
           error: errorText,
         });
-        alert(t('messages.deleteSessionFailed'));
+        // gk:服务端给了原因(403 只有项目负责人可以永久删、409 正在跑……)就原样告诉用户,
+        // 不再一律「删除失败,请重试」—— 重试对这两种情况都没用。
+        alert(describeDeleteFailure(errorText, t('messages.deleteSessionFailed')));
       }
     } catch (error) {
       console.error('[Sidebar] Error deleting session:', error);
       alert(t('messages.deleteSessionError'));
     }
-  }, [fetchArchivedSessions, onSessionDelete, sessionDeleteConfirmation, t]);
+  }, [bumpTrashReload, fetchArchivedSessions, onSessionDelete, sessionDeleteConfirmation, t]);
 
   const requestProjectDelete = useCallback(
     (project: Project) => {
@@ -945,7 +975,7 @@ export function useSidebarController({
     if (action === 'delete'
       && !window.confirm(t('messages.bulkDeleteConfirm', {
         count: ids.length,
-        defaultValue: `永久删除选中的 ${ids.length} 条归档会话?此操作不可撤销。`,
+        defaultValue: `永久删除选中的 ${ids.length} 条归档会话?它们会先进入「最近删除」,保留期内可恢复。`,
       }))) {
       return;
     }
@@ -961,6 +991,7 @@ export function useSidebarController({
         console.warn(`[Sidebar] 批量${action}:请求 ${ids.length} 条,实际 ${done} 条`);
       }
       clearArchivedSelection();
+      if (action === 'delete') bumpTrashReload();
       await Promise.all([Promise.resolve(onRefresh()), fetchArchivedSessions()]);
     } catch (error) {
       console.error('[Sidebar] 批量操作失败:', error);
@@ -968,14 +999,14 @@ export function useSidebarController({
     } finally {
       setIsBulkArchiving(false);
     }
-  }, [selectedArchivedIds, isBulkArchiving, clearArchivedSelection, fetchArchivedSessions, onRefresh, t]);
+  }, [selectedArchivedIds, isBulkArchiving, bumpTrashReload, clearArchivedSelection, fetchArchivedSessions, onRefresh, t]);
 
-  /** F8:清空回收站。不可逆,所以确认里写清会删多少条。 */
+  /** F8:清空归档。gk 起被清掉的会话先进「最近删除」,保留期内可恢复;确认里写清会动多少条。 */
   const emptyArchive = useCallback(async () => {
     if (isBulkArchiving) return;
     if (!window.confirm(t('messages.emptyTrashConfirm', {
       count: archivedSessionsTotal,
-      defaultValue: `清空回收站将永久删除 ${archivedSessionsTotal} 条归档会话,此操作不可撤销。继续?`,
+      defaultValue: `清空归档会把 ${archivedSessionsTotal} 条归档会话移入「最近删除」(只有你负责的项目里的会被处理),保留期内可恢复。继续?`,
     }))) {
       return;
     }
@@ -985,6 +1016,7 @@ export function useSidebarController({
       const response = await api.emptyArchivedSessions();
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       clearArchivedSelection();
+      bumpTrashReload();
       await Promise.all([Promise.resolve(onRefresh()), fetchArchivedSessions()]);
     } catch (error) {
       console.error('[Sidebar] 清空回收站失败:', error);
@@ -992,7 +1024,7 @@ export function useSidebarController({
     } finally {
       setIsBulkArchiving(false);
     }
-  }, [isBulkArchiving, archivedSessionsTotal, clearArchivedSelection, fetchArchivedSessions, onRefresh, t]);
+  }, [isBulkArchiving, archivedSessionsTotal, bumpTrashReload, clearArchivedSelection, fetchArchivedSessions, onRefresh, t]);
 
   const restoreArchivedSession = useCallback(async (sessionId: string) => {
     try {
@@ -1090,6 +1122,9 @@ export function useSidebarController({
     archivedSessionsCount: archivedProjects.length + archivedSessions.length,
     archivedSessionsTotal,
     archivedSessionsHasMore,
+    /** gk:「最近删除」那一段的重拉信号(永久删除 / 批量删除 / 清空归档之后 +1)。 */
+    trashReloadToken,
+    bumpTrashReload,
     isLoadingMoreArchivedSessions,
     loadMoreArchivedSessions,
     isArchivedSessionsLoading,

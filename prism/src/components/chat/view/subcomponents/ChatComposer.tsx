@@ -87,7 +87,7 @@ interface ChatComposerProps {
    * 与上面那份浏览器内的排队并存 —— 一份是"我主动排的",一份是"服务端替我
    * 兜住的",来源不同,能做的操作也不同(服务端那条只能撤销,不能编辑)。
    */
-  serverQueued?: { preview: string; enqueuedAt: string } | null;
+  serverQueued?: { preview: string; enqueuedAt: string; redacted?: boolean } | null;
   onCancelServerQueued?: () => void;
   onEditQueuedDraft: () => void;
   onDeleteQueuedDraft: () => void;
@@ -493,7 +493,11 @@ function ChatComposer({
 
       {serverQueued && (
         <QueuedMessageCard
-          content={serverQueued.preview}
+          /* gi:预览正文只给排它的人(#25)。占位按服务端的 redacted 标记走 ——
+             自己排的一条只有图片没正文时 preview 也是空串,不能拿空串当"别人排的"。 */
+          content={serverQueued.redacted
+            ? t('input.queue.othersPreview', { defaultValue: '(另一位成员排队的消息)' })
+            : (serverQueued.preview || t('input.queue.imageOnly', { defaultValue: '(仅图片)' }))}
           label={t('input.queue.serverLabel', { defaultValue: '服务端已收下' })}
           hint={t('input.queue.serverHint', { defaultValue: '本轮结束后自动发送 · 关掉页面也有效' })}
           onDelete={onCancelServerQueued ?? (() => {})}

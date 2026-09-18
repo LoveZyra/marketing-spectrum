@@ -4,7 +4,8 @@
     "account": "Account",
     "permissions": "Permissions",
     "mcpServers": "MCP Servers",
-    "skills": "Skills"
+    "skills": "Skills",
+    "projects": "Projects"
   },
   "account": {
     "signedInAs": "Signed in as",
@@ -32,7 +33,19 @@
     },
     "language": "Language",
     "languageLabel": "Language",
-    "languageDescription": "Which language the interface is shown in"
+    "languageDescription": "Which language the interface is shown in",
+    "attachments": {
+      "byProject": "By project",
+      "count": "{{count}} attachments",
+      "empty": "No attachments uploaded yet.",
+      "expiring": "Expiring first",
+      "failed": "Could not read usage:",
+      "help": "Images and files you attach in chat live in the attachments/ folder of the session’s project and are cleaned up after {{days}} days. Files you put there yourself are left alone.",
+      "loading": "Loading…",
+      "noProject": "(no project)",
+      "refresh": "Refresh",
+      "title": "Attachment storage"
+    }
   },
   "quickSettings": {
     "title": "Quick Settings",
@@ -365,8 +378,51 @@
         "auth": "Sign-in & accounts",
         "projects": "Project changes",
         "skills": "Skill install/remove",
-        "credentials": "Credentials & tickets"
+        "credentials": "Credentials & tickets",
+        "deletions": "Session & project deletions"
       }
+    },
+    "mineTitle": "Activity involving me",
+    "mineHint": "Your own logins and deletions, plus deletions / archives / restores other people made in projects you own.",
+    "event": {
+      "session_deleted": "permanently deleted session",
+      "session_archived": "archived session",
+      "sessions_bulk_deleted": "bulk-deleted",
+      "sessions_bulk_archived": "bulk-archived",
+      "archived_sessions_emptied": "emptied the archive into Recently deleted:",
+      "project_deleted": "permanently deleted project",
+      "project_archived": "archived project",
+      "session_trash_restored": "restored session from Recently deleted",
+      "session_trash_purged": "purged session from Recently deleted"
+    },
+    "entry": {
+      "session": "from the sidebar, ",
+      "bulk": "in a bulk action, ",
+      "empty_archived": "while emptying the archive, ",
+      "project": "while deleting the project, ",
+      "retention": "archive retention expired, ",
+      "api": "via the external API, ",
+      "restore": "",
+      "purge": ""
+    },
+    "detail": {
+      "quoted": " “{{value}}”",
+      "project": "project{{name}}",
+      "projectPath": "project {{path}}",
+      "lastActivity": "last active {{when}}",
+      "transcriptMoved": "transcript moved to Recently deleted",
+      "transcriptKept": "transcript left in place",
+      "transcriptRestored": "transcript restored",
+      "separator": "; ",
+      "withExtras": "{{head}} ({{extras}})",
+      "nameList": ": {{names}}",
+      "sessionId": " {{id}}",
+      "sessionHead": "{{entry}}{{verb}}{{target}}",
+      "sessionCount": "{{count}} session(s)",
+      "bulkHead": "{{verb}} {{count}}{{names}}",
+      "movedToTrashCount": ", {{count}} session(s) moved to Recently deleted",
+      "projectHead": "{{verb}}{{name}}{{count}}{{names}}",
+      "truncated": "(detail truncated) {{raw}}"
     }
   },
   "models": {
@@ -490,6 +546,8 @@
       "input": "Input",
       "output": "Output",
       "cost": "Cost"
-    }
+    },
+    "lastDays": "Last {{count}} days",
+    "totalLine": "{{cost}} · {{runs}} runs"
   }
 }

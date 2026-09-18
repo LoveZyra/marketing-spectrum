@@ -925,6 +925,17 @@ export function useSessionStore() {
 
     try {
       const response = await authenticatedFetch(url);
+      /*
+        gn:404 = 这条会话已经不在了(被别处永久删除)。这**不是"加载失败"**,
+        是"没有更多历史可加载"。gk 把**发送**那条路换成了友好的说明卡,
+        **加载历史**这条却还在往控制台打 `HTTP 404`(排查时是噪声),而且因为
+        返回 null 被判成失败,自动补页还会一直重试。落下 hasMore、当"到头了"返回。
+      */
+      if (response.status === 404) {
+        slot.hasMore = false;
+        notify(sessionId);
+        return slot;
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await response.json();
       const data = body?.data ?? body;

@@ -43,6 +43,8 @@ export type MainContentProps = {
   onDeleteSession?: (sessionId: string, sessionTitle: string) => void;
   externalMessageUpdate: number;
   newSessionTrigger: number;
+  /** gk:「这条会话已被删除」卡片上的「新建会话继续」。 */
+  onStartNewSession?: (project: Project) => void;
   /** 「在 JupyterLab 打开」的目标;nonce 变化触发 notebook 标签页重新定位。 */
   jupyterTarget?: { path: string | null; nonce: number };
 };

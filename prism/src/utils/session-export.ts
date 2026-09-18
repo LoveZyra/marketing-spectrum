@@ -48,5 +48,7 @@ export async function downloadSessionExport(
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  URL.revokeObjectURL(url);
+  // 释放放到下一拍 —— 有些浏览器在 click 返回时还没开始读这个 URL,
+  // 同步撤销会把下载掐死且不抛错。长会话的导出文件不小,这里同样会中招。
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }

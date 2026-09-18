@@ -827,14 +827,21 @@ const rebuildUsersTableWithCaseInsensitiveUsername = (db: Database): void => {
         token_version INTEGER NOT NULL DEFAULT 0,
         approval_status TEXT NOT NULL DEFAULT 'approved',
         approved_at DATETIME,
-        reviewed_by INTEGER
+        reviewed_by INTEGER,
+        -- gs:**这一列 2026-09-15 被这段重建吞过一次。**
+        -- 它不在 schema.ts 的建表语句里(是迁移后加的),而这份清单是写死的 ——
+        -- 加列的人没回头补这里,于是生产首启时"先加上、再被重建抹掉",
+        -- 账号管理页当场 500,每人的配额覆盖值一起没了。
+        -- **以后再给 users 加列,这份清单和下面的 INSERT 必须同步改**,
+        -- 文件尾的 verifyRebuiltTableColumns 会在漏改时当场喊出来。
+        attachment_quota_mb INTEGER
       )
     `);
     db.exec(`
       INSERT INTO users__new (
         id, username, password_hash, created_at, last_login, is_active,
         git_name, git_email, has_completed_onboarding, token_version,
-        approval_status, approved_at, reviewed_by
+        approval_status, approved_at, reviewed_by, attachment_quota_mb
       )
       SELECT
         id,
@@ -849,7 +856,8 @@ const rebuildUsersTableWithCaseInsensitiveUsername = (db: Database): void => {
         ${has('token_version') ? 'COALESCE(token_version, 0)' : '0'},
         ${has('approval_status') ? "COALESCE(approval_status, 'approved')" : "'approved'"},
         ${pick('approved_at', 'NULL')},
-        ${pick('reviewed_by', 'NULL')}
+        ${pick('reviewed_by', 'NULL')},
+        ${pick('attachment_quota_mb', 'NULL')}
       FROM users
       WHERE username IS NOT NULL AND trim(username) <> ''
     `);
@@ -931,6 +939,54 @@ const addProjectStarsTable = (db: Database): void => {
   }
 };
 
+/**
+ * **重建过的表,列不许少 —— 这一道是用来防"下一次"的。**
+ *
+ * 2026-09-15 的教训:`rebuildUsersTableWithCaseInsensitiveUsername` 里那份
+ * `CREATE TABLE users__new (…)` 的列是**写死的**,而 `attachment_quota_mb` 是后来
+ * 由迁移加的 —— 加列的人没回头补那份清单,于是生产首启时这一列连同数据被抹掉。
+ * 没有任何自检拦住它:表在、行数对、用户名对,**只有列集合不对**,
+ * 而没人比对过列集合。等到「账号管理」页 500 才发现,已经晚了。
+ *
+ * 这里把"应该有哪些列"写成一份显式清单,迁移末尾比对一次。
+ * **不抛异常**:列缺了固然是 bug,但让服务起不来是更大的事故,
+ * 而且上面那层"重建后补跑加列"通常已经把它加回来了 —— 这一道的职责是
+ * **让它在日志里无法被忽略**,不是当刹车。
+ *
+ * 加新列时:改 `REQUIRED_COLUMNS`,顺带检查重建函数那份清单。测试钉着这两者一致。
+ */
+export const REQUIRED_COLUMNS: Record<string, string[]> = {
+  users: [
+    'id', 'username', 'password_hash', 'created_at', 'last_login', 'is_active',
+    'git_name', 'git_email', 'has_completed_onboarding', 'token_version',
+    'approval_status', 'approved_at', 'reviewed_by', 'attachment_quota_mb',
+  ],
+};
+
+/** @returns 每张表缺了哪些列(全齐时是空对象) */
+export const findMissingColumns = (db: Database): Record<string, string[]> => {
+  const missing: Record<string, string[]> = {};
+  for (const [table, required] of Object.entries(REQUIRED_COLUMNS)) {
+    if (!tableExists(db, table)) continue;
+    const actual = new Set(
+      (db.prepare(`PRAGMA table_info(${table})`).all() as TableInfoRow[]).map((c) => c.name)
+    );
+    const gaps = required.filter((name) => !actual.has(name));
+    if (gaps.length > 0) missing[table] = gaps;
+  }
+  return missing;
+};
+
+const verifyRebuiltTableColumns = (db: Database): void => {
+  const missing = findMissingColumns(db);
+  for (const [table, gaps] of Object.entries(missing)) {
+    log.error(
+      `[MIGRATION] 表 ${table} 缺列:${gaps.join(', ')} —— `
+      + '多半是某个重建迁移的写死列清单漏了它。查 REQUIRED_COLUMNS 与对应的 rebuild* 函数。'
+    );
+  }
+};
+
 export const runMigrations = (db: Database) => {
   try {
     const usersTableInfo = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
@@ -985,6 +1041,32 @@ export const runMigrations = (db: Database) => {
     // 用户名大小写不敏感 —— 修一个未登录即可利用的提权,详见函数注释。
     // 放在前面:它重建 users 表,而后面的迁移可能读用户行。
     rebuildUsersTableWithCaseInsensitiveUsername(db);
+
+    /*
+     * gs:**重建之后再补一次 users 的加列 —— 自愈层。**
+     *
+     * 上面那批 addColumn 跑在重建**之前**,而重建是 DROP + 按写死的清单重建。
+     * 清单漏一列,先加上的列就被抹掉,而且这一趟迁移里再没人补回来 ——
+     * 2026-09-15 生产就是这样丢了 `attachment_quota_mb`:界面 500,
+     * 要重启一次才自己好(下一次启动 addColumn 又跑在前面,把列加回来)。
+     *
+     * 三层防线,各治一种死法,少一层都不行:
+     *   ① 上面补全了重建的列清单        → 列和**数据**都不丢(最要紧的一层);
+     *   ② 这里重建后再跑一遍(幂等)     → 万一将来又漏改清单,列当场回来,
+     *                                     不用等下一次重启(数据仍然会丢);
+     *   ③ 文件尾的 verifyRebuiltTableColumns → 真漏了立刻在日志里喊出来,
+     *                                     而不是等某个页面 500。
+     */
+    const usersAfterRebuild = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[])
+      .map((column) => column.name);
+    addColumnToTableIfNotExists(db, 'users', usersAfterRebuild, 'git_name', 'TEXT');
+    addColumnToTableIfNotExists(db, 'users', usersAfterRebuild, 'git_email', 'TEXT');
+    addColumnToTableIfNotExists(db, 'users', usersAfterRebuild, 'has_completed_onboarding', 'BOOLEAN DEFAULT 0');
+    addColumnToTableIfNotExists(db, 'users', usersAfterRebuild, 'token_version', 'INTEGER NOT NULL DEFAULT 0');
+    addColumnToTableIfNotExists(db, 'users', usersAfterRebuild, 'approval_status', "TEXT NOT NULL DEFAULT 'approved'");
+    addColumnToTableIfNotExists(db, 'users', usersAfterRebuild, 'approved_at', 'DATETIME');
+    addColumnToTableIfNotExists(db, 'users', usersAfterRebuild, 'reviewed_by', 'INTEGER');
+    addColumnToTableIfNotExists(db, 'users', usersAfterRebuild, 'attachment_quota_mb', 'INTEGER');
 
     db.exec(PROJECTS_TABLE_SCHEMA_SQL);
     rebuildProjectsTableWithPrimaryKeySchema(db);
@@ -1048,6 +1130,23 @@ export const runMigrations = (db: Database) => {
     }
 
     /**
+     * gk:审计日志补 `target_user_id` 列 —— "这条记录对谁做的"。
+     *
+     * 可空、加列即可,历史行留 NULL(它们本来也没有受影响者这个概念)。
+     * 非 root 的审计可见范围据此扩成"我做的 OR 对我做的"(见 audit-log.ts)。
+     * 索引在最后的 INDEX_SCHEMA_SQL 里统一建 —— 那时这一列一定已经在了。
+     */
+    if (tableExists(db, 'audit_log')) {
+      addColumnToTableIfNotExists(
+        db,
+        'audit_log',
+        getTableInfo(db, 'audit_log').map((column) => column.name),
+        'target_user_id',
+        'INTEGER',
+      );
+    }
+
+    /**
      * 显示日志的孤儿行 —— 每次启动收一次。
      *
      * `session_display_messages` 没有外键,而它指向的会话行有好几条路径会消失:
@@ -1085,6 +1184,10 @@ export const runMigrations = (db: Database) => {
     db.exec(INDEX_SCHEMA_SQL);
 
     db.exec(LAST_SCANNED_AT_SQL);
+
+    // gs:重建过的表,列不许少(见函数说明)。放在最后 —— 那时所有加列都跑过了。
+    verifyRebuiltTableColumns(db);
+
     log.info('Database migrations completed successfully');
   } catch (error: any) {
     log.error('Error running migrations:', error.message);

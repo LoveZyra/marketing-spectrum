@@ -4,6 +4,7 @@ import { Ban, Check, KeyRound, RefreshCw, Undo2, X } from 'lucide-react';
 
 import { useAuth } from '../../../../auth/context/AuthContext';
 import { useAccountApprovals, type AdminUser } from '../../../hooks/useAccountApprovals';
+import { middleTruncate } from '../../../../../utils/middleTruncate';
 
 import AuditLogList from './AuditLogList';
 
@@ -88,15 +89,23 @@ export default function AccountsSettingsTab() {
         </div>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-border">
+      {/*
+        这里原来是 `overflow-hidden` —— 窗口一窄,「操作」那一列被**直接切掉**,
+        而且没有任何办法滚过去看(2026-09-15 用户实测截图)。旁边的审计表一直是
+        `overflow-x-auto`,这张漏了。放不下时给一条横向滚动,东西至少够得着;
+        下面几列的响应式收起负责让"放不下"尽量别发生。
+      */}
+      <div className="overflow-x-auto rounded-lg border border-border">
         <table className="w-full text-sm">
           <thead className="border-b border-border bg-card text-xs text-muted-foreground">
             <tr>
               <th className="px-3 py-2 text-left font-medium">{t('accounts.columns.username', '用户名')}</th>
               <th className="px-3 py-2 text-left font-medium">{t('accounts.columns.status', '状态')}</th>
               <th className="px-3 py-2 text-left font-medium">{t('accounts.columns.registered', '注册时间')}</th>
-              <th className="px-3 py-2 text-left font-medium">{t('accounts.columns.reviewer', '审批人')}</th>
-              <th className="px-3 py-2 text-right font-medium">{t('accounts.columns.actions', '操作')}</th>
+              {/* 审批人:这张表里最不要紧的一列,窄屏让位给「操作」 */}
+              <th className="hidden px-3 py-2 text-left font-medium lg:table-cell">{t('accounts.columns.reviewer', '审批人')}</th>
+              {/* 其余四列都是 text-left,这一列原来是 text-right —— 表头对不齐,统一成左对齐 */}
+              <th className="px-3 py-2 text-left font-medium">{t('accounts.columns.actions', '操作')}</th>
             </tr>
           </thead>
           <tbody>
@@ -111,25 +120,39 @@ export default function AccountsSettingsTab() {
             {users.map((user) => (
               <Fragment key={user.id}>
                 <tr className={`border-t border-border ${user.is_active ? '' : 'opacity-60'}`}>
-                  <td className="px-3 py-2 font-medium">
-                    {user.username}
+                  <td className="max-w-48 px-3 py-2 font-medium">
+                    {/*
+                      用户名可能很长。尾部省略会把 `zhangsan-2024` 和 `zhangsan-2025`
+                      截成同一个名字,所以用中间省略;全名放 title,悬停还能看到。
+                    */}
+                    <span className="whitespace-nowrap" title={user.username}>
+                      {middleTruncate(user.username, 18)}
+                    </span>
                     {!user.is_active && (
                       <span className="ml-2 rounded-sm border border-border px-1.5 py-px text-[10px] leading-[14px] text-muted-foreground">
                         {t('accounts.disabled', '已停用')}
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2">
-                    <span className={`rounded px-1.5 py-0.5 text-xs ${STATUS_STYLES[user.approval_status]}`}>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {/*
+                      `-ml-1.5` 抵掉徽标自己的 `px-1.5`:不抵的话这一列的文字比表头「状态」
+                      右移 6px(2026-09-15 实测 375.8 → 381.8),一眼就看得出没对齐,
+                      而左右两列(用户名、注册时间)都是严丝合缝的。
+                    */}
+                    <span className={`-ml-1.5 whitespace-nowrap rounded px-1.5 py-0.5 text-xs ${STATUS_STYLES[user.approval_status]}`}>
                       {t(`accounts.status.${user.approval_status}`, user.approval_status)}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">{formatDate(user.created_at)}</td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">
-                    {user.reviewed_by_username ?? '—'}
+                  <td className="whitespace-nowrap px-3 py-2 text-xs tabular-nums text-muted-foreground">{formatDate(user.created_at)}</td>
+                  <td className="hidden max-w-40 px-3 py-2 text-xs text-muted-foreground lg:table-cell">
+                    <span className="block truncate" title={user.reviewed_by_username ?? ''}>
+                      {user.reviewed_by_username ? middleTruncate(user.reviewed_by_username, 16) : '—'}
+                    </span>
                   </td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center justify-end gap-1.5">
+                  {/* 操作列按内容定宽(w-px + nowrap),按钮文字不再被折成两行 */}
+                  <td className="w-px whitespace-nowrap px-3 py-2">
+                    <div className="flex items-center justify-start gap-1.5">
                       {busyUserId === user.id ? (
                         <span className="h-4 w-4 flex-none rounded-full border-[1.5px] border-primary" aria-hidden />
                       ) : (
@@ -138,20 +161,24 @@ export default function AccountsSettingsTab() {
                             <button
                               type="button"
                               onClick={() => void decide(user.id, 'approve')}
-                              className="hover:bg-primary/8 inline-flex items-center gap-1 rounded border border-primary/30 px-2 py-1 text-xs text-card-foreground transition-colors dark:text-primary"
+                              title={t('accounts.actions.approve', '通过')}
+                              aria-label={t('accounts.actions.approve', '通过')}
+                              className="hover:bg-primary/8 inline-flex flex-none items-center gap-1 whitespace-nowrap rounded border border-primary/30 px-2 py-1 text-xs text-card-foreground transition-colors dark:text-primary"
                             >
                               <Check className="h-3 w-3" />
-                              {t('accounts.actions.approve', '通过')}
+                              <span className="hidden xl:inline">{t('accounts.actions.approve', '通过')}</span>
                             </button>
                           )}
                           {user.approval_status !== 'rejected' && (
                             <button
                               type="button"
                               onClick={() => void decide(user.id, 'reject')}
-                              className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-body transition-colors hover:bg-card hover:text-foreground"
+                              title={t('accounts.actions.reject', '驳回')}
+                              aria-label={t('accounts.actions.reject', '驳回')}
+                              className="inline-flex flex-none items-center gap-1 whitespace-nowrap rounded border border-border px-2 py-1 text-xs text-body transition-colors hover:bg-card hover:text-foreground"
                             >
                               <X className="h-3 w-3" />
-                              {t('accounts.actions.reject', '驳回')}
+                              <span className="hidden xl:inline">{t('accounts.actions.reject', '驳回')}</span>
                             </button>
                           )}
                           <button
@@ -162,10 +189,11 @@ export default function AccountsSettingsTab() {
                               setResetTargetId(resetTargetId === user.id ? null : user.id);
                             }}
                             title={t('accounts.actions.resetPassword', '重置密码')}
-                            className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-body transition-colors hover:bg-card hover:text-foreground"
+                            aria-label={t('accounts.actions.resetPassword', '重置密码')}
+                            className="inline-flex flex-none items-center gap-1 whitespace-nowrap rounded border border-border px-2 py-1 text-xs text-body transition-colors hover:bg-card hover:text-foreground"
                           >
                             <KeyRound className="h-3 w-3" />
-                            {t('accounts.actions.resetPassword', '重置密码')}
+                            <span className="hidden xl:inline">{t('accounts.actions.resetPassword', '重置密码')}</span>
                           </button>
                           {user.is_active ? (
                             user.id !== Number(currentUser?.id) && (
@@ -173,10 +201,11 @@ export default function AccountsSettingsTab() {
                                 type="button"
                                 onClick={() => void setActive(user.id, false)}
                                 title={t('accounts.actions.deactivate', '停用')}
-                                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-body transition-colors hover:bg-card hover:text-foreground"
+                                aria-label={t('accounts.actions.deactivate', '停用')}
+                                className="inline-flex flex-none items-center gap-1 whitespace-nowrap rounded border border-border px-2 py-1 text-xs text-body transition-colors hover:bg-card hover:text-foreground"
                               >
                                 <Ban className="h-3 w-3" />
-                                {t('accounts.actions.deactivate', '停用')}
+                                <span className="hidden xl:inline">{t('accounts.actions.deactivate', '停用')}</span>
                               </button>
                             )
                           ) : (
@@ -184,10 +213,11 @@ export default function AccountsSettingsTab() {
                               type="button"
                               onClick={() => void setActive(user.id, true)}
                               title={t('accounts.actions.activate', '启用')}
-                              className="hover:bg-primary/8 inline-flex items-center gap-1 rounded border border-primary/30 px-2 py-1 text-xs text-card-foreground transition-colors dark:text-primary"
+                              aria-label={t('accounts.actions.activate', '启用')}
+                              className="hover:bg-primary/8 inline-flex flex-none items-center gap-1 whitespace-nowrap rounded border border-primary/30 px-2 py-1 text-xs text-card-foreground transition-colors dark:text-primary"
                             >
                               <Undo2 className="h-3 w-3" />
-                              {t('accounts.actions.activate', '启用')}
+                              <span className="hidden xl:inline">{t('accounts.actions.activate', '启用')}</span>
                             </button>
                           )}
                         </>
@@ -202,7 +232,7 @@ export default function AccountsSettingsTab() {
                           去页面上找"用户名框"填,落到侧栏搜索框上。包进 form,带上被重置账号的
                           隐藏用户名,标 new-password:既不串位,保存提示也会指向正确的账号。 */}
                       <form
-                        className="flex items-center justify-end gap-2"
+                        className="flex flex-wrap items-center justify-start gap-2"
                         onSubmit={(event) => {
                           event.preventDefault();
                           if (resetValue.length >= 6 && busyUserId !== user.id) void submitReset(user);

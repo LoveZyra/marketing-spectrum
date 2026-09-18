@@ -8,6 +8,887 @@
 
 ---
 
+## 2026-09-16 · gw — 下载交给浏览器:原生进度条,大文件不再"点了没反应"
+
+**没有迁移。但这一轮动了 `package.json` / `package-lock.json`,部署要 `npm ci`。**
+
+### 起因
+
+用户报:文件树里下大文件点了没反应,同样的文件从对话区下就有反应。
+
+两条根因,一大一小:
+
+**小的那条是一行 bug。** `triggerBrowserDownload` 在 `anchor.click()` 之后**同步**调用
+`URL.revokeObjectURL(url)`。`click()` 只是把下载排进队列就返回,部分浏览器此时还没开始读
+这个 blob URL —— 撤销就把下载掐死在起跑线上,**而且不抛任何错**。小文件常常抢在撤销前
+读完所以看着正常,大文件几乎必挂。这就是"小文件能下、大文件没反应"的直接原因。
+
+第一次收这条时我写的结论是"只有文件树没跟上",**错的** —— 那次只比对了对话区两处。
+全仓扫完是 **3 处**:文件树、编辑器「下载文件」、以及 **`utils/session-export.ts`**。
+最后一处尤其要紧:长会话的导出文件不小,而它是"导出会话"唯一的出口。
+
+**大的那条是架构。** 全仓的下载都是 `fetch` → `response.blob()` → `a[download]`:
+整份文件**先落进标签页的内存**,拼完才弹保存框。于是没有进度条、切页就断、
+几 GB 的文件直接把标签页撑崩。文件夹更糟 —— 在**浏览器里**逐个文件读进内存再打 ZIP,
+峰值约 2× 目录大小。
+
+### 为什么 notebook 有进度条,Prism 没有
+
+差别不在服务端,在**谁去发这个请求**。JupyterLab 把浏览器**导航**到
+`…/files/<path>?download=1`,凭据靠 cookie 或 `?token=` 带,字节直接进浏览器的
+下载管理器边收边落盘;服务端那条 handler 自带 `Content-Length` 和 Range 支持,
+所以有百分比、有速度、有剩余时间。
+
+卡住这件事的硬约束是:**一次普通导航设不了 `Authorization` 头**。这堵墙这个仓撞过两次
+(`sse-tickets.js` —— EventSource;`preview-tickets.js` —— 沙箱 iframe),解法都是短命票据。
+下载是第三次,不需要发明新东西。
+
+### 改了什么
+
+**服务端**
+
+- `server/shared/download-tickets.js`(新):5 分钟失效、可重复消费、**载荷限定到一个目标**。
+  不复用 SSE 票 —— 那张只带 userId,拼进 URL 等于一把"60 秒内能读这个账号任意文件"的钥匙,
+  而 URL 会进反代日志。这张票泄了只泄那一个文件。**目标路径放在票里,不放在查询串上**,
+  路径本身也就不进日志。
+- `server/shared/download-headers.js`(新):`Content-Length`(进度条唯一的硬前提)+
+  RFC 5987 的中文文件名 + ASCII 回落 + 控制字符过滤(文件名里的换行会把一个响应头劈成两个)。
+- 三条**不带登录态**的直传路由,全部挂在 `/api/downloads` 下:`/file`、`/zip`、`/session-output`;
+  对应三条带登录态的签票路由。**权限、路径、文件存在与否全部前移到签票那一步** ——
+  导航失败只会在下载栏里留一行"失败",弹不出应用内提示,所以失败必须发生在用户按下去
+  的那一瞬间、还在 `fetch` 语境里的时候。
+- `/zip` 用 `archiver` **边压边发**:浏览器侧内存占用接近零,点完立刻开始传。
+  顺带修掉一个旧缺陷 —— 以前的 ZIP 是拿**前端已加载的那棵树**打的,而那棵树有深度上限和
+  条目预算,超出的子目录会被静默吞掉(所以才有「有 N 个子目录未包含」那句话)。
+  archiver 走真实文件系统,不存在这个问题。
+
+**客户端**
+
+- 五个入口改成"签票 + 导航":文件树单文件 / 文件夹 / 批量下载、对话工作面板、产出卡片。
+- **批量下载从"逐个串行下"变成"一次请求一个包"。** 顺带发现它的失败汇总
+  (「有 N 项下载失败」)是**死代码**:靠 `catch { failed += 1 }` 计数,而 `handleDownload`
+  自己就 try/catch 弹提示、从不外抛,所以 `failed` 恒为 0,那句话一次都没显示过。
+- 导航用**隐藏 iframe**,不是 `a.click()`:点 `<a href>` 是先导航过去,看到
+  `Content-Disposition: attachment` 才转成下载。响应不是附件的时候(票存在服务端内存里,
+  一次发版就全没了 → 401 JSON),**页面就真的跳走了**,用户的整个 SPA 状态跟着没。
+- 前端不再引 `JSZip`(服务端 `documents.js` 那个是 `await import` 动态加载的,不受影响)。
+
+**两个入口故意不改**
+
+- **编辑器「下载文件」**下的是**编辑器缓冲区**(可能含未保存改动),服务器上那份是旧的 ——
+  改成给链接会静默下到旧版本。这是数据事故,不是优化。
+- **会话导出**的内容由服务端整份渲染后直接发,没有一个"现成文件"可指;
+  它本来就在服务端全量缓冲,改了只是浏览器少存一份。
+
+两处都留着 blob,但同步撤销的 bug 已修。
+
+### 为什么门禁差点没拦住:第一版挂错了前缀
+
+第一版把直传口挂在 `/api/projects/:id/files/download` 上。**隔离测试 15 条全绿,
+真实 app 里每一次下载都是 401。**
+
+原因是 `server/index.js` 里有一句排在前面的
+`app.use('/api/projects', authenticateToken, projectModuleRoutes)` —— 它是**前缀中间件**,
+任何 `/api/projects/...` 的请求都要先过它。一条靠票据、不带 JWT 的链接被它直接挡掉,
+而且**失败形态和"票过期"一模一样**,线上极难排查。
+
+测试没拦住,是因为它自己搭的 app 里**没有复刻那道前缀中间件**。两处都改了:
+
+- 路由挪到 `/api/downloads`,与注册顺序彻底无关,顺带把"无认证面"收敛成一个能一眼数清的前缀;
+- 测试 harness **照抄了那道前缀中间件**,并且额外钉住真实装配文件
+  (`index.js` 里必须是 `app.use('/api/downloads', …)`,且不许有人给这个前缀套上
+  `authenticateToken` —— 套上就等于这条路彻底失效,而表现只是"下载点了没反应")。
+
+另一处也是反向验证捞出来的:摘掉票据的 kind 检查之后,那条测试是**超时**而不是报错 ——
+说明一张用途不符的票打到打包口会让请求**永远悬着**(没有 try/catch 的 `for…of undefined`
+抛出去是未处理的 rejection,express 什么都不回)。现在那段有 try/catch 和形状检查。
+
+### 门禁
+
+typecheck 0;eslint 0 错误 / 22 警告(少一条,是删掉的那个 `exhaustive-deps`);
+vitest **2147**(+36);双端构建通过。新增守卫全部做过反向验证 ——
+逐条改回老写法后对应测试转红,包括"把路由挪回 `/api/projects`"这一条。
+
+### 依赖
+
+`archiver` 提为直接依赖,**钉在树里已有的 `^5.3.2`**(exceljs 的传递依赖),
+所以运行时**一个新包都没有**;`@types/archiver@^5.3.4` 进 devDependencies(构建要 tsc)。
+`package-lock.json` 已重新生成 —— **部署必须 `npm ci`**。
+
+---
+
+## 2026-09-16 · gv — CHANGELOG 补齐 gq~gu;上游品牌名残留清掉(**归属一个字不动**)
+
+**没有迁移、不用重装依赖。**
+
+### 上游品牌名:分三类,处理方式完全不同
+
+全库扫 `claudecodeui` / `claude-code-ui` / `Claude Code UI` / `cloudcli`,一共 26 处。
+一刀切改成 prism 会同时犯两个错 —— 违反许可证,以及弄坏老部署的数据迁移。所以先分类:
+
+| 类别 | 处理 | 为什么 |
+|---|---|---|
+| **许可证义务**:`LICENSE` §7 附加条款要求的署名、`NOTICE`、`README.upstream.md` 全文、`README.md` 的「基于 claudecodeui 构建」、`package.json` 的 description | **一个字不动** | AGPL 要求保留上游署名。改掉等于违反许可证;而且「基于 prism 构建」这句话本身就荒谬 |
+| **功能性**:`runtime-paths.js` 的 `LEGACY_DATA_DIR_NAME = '.cloudcli'` 及描述这条迁移的注释 | **一个字不动** | 它是 `~/.cloudcli → ~/.prism` 一次性迁移的**来源路径**。改了老部署的数据就迁不过来 |
+| **真正的残留** | 改 | 见下 |
+
+### 改掉的 5 处
+
+- `CommandResultModal.tsx`:`/status` 面板里包名的兜底值 `'claude-code-ui'` → `'prism'`
+  —— **唯一用户看得见的一处**,以前那里显示的是别人的产品名;
+- `types.ts` / `ChatMessageImages.tsx`:两句注释还写着附件在 `.cloudcli/assets`,
+  **早就不对了** —— 项目内是 `attachments/`(`ATTACHMENT_DIR_NAME`),全局是 `~/.prism/assets`;
+- 两处测试夹具里的路径字符串与临时目录名(纯样例,不影响语义)。
+
+**故意留下的两条注释**:`image-attachments.test.ts` 与 `image-assets.service.test.ts` 里
+「以前这里写死过 `~/.cloudcli/assets`,于是存储目录搬走之后测试照样通过、什么都没测」——
+那是一次真实失效的记录,是"为什么现在这么写"的证据,删了就丢掉教训。
+
+### 新增守卫 `server/tests/brand-name-leftovers.test.js`
+
+**两个方向都钉**,这是关键:
+
+1. `src/` 与 `server/` 的非白名单文件里不许出现上游品牌名 —— 防回流;
+2. **`LICENSE` / `NOTICE` / `README.md` 里那几处归属必须还在** —— 防有人把归属**当残留删掉**。
+
+白名单里每一条都写了理由。反向验证两组:让品牌名回流(第 1 条红)、
+把 `LICENSE` 的署名换成 Prism(第 2 条红)。
+
+### 顺带
+
+CHANGELOG 从 gq 起漏了五轮,这一版一次补齐(就是下面那五条)。
+
+---
+
+## 2026-09-15 · gu — gt 那两个旋钮写错了层,被 SDK 静默忽略
+
+**没有迁移、不用重装依赖。**
+
+gt 把自动压缩的两个旋钮写成了 `sdkOptions.autoCompactEnabled` /
+`sdkOptions.autoCompactWindow`。**这两个字段属于 `Settings`,不属于 `Options`** ——
+SDK 拿到不认识的顶层字段**静默忽略**,不报错不警告:
+
+```
+sdk.d.ts:5401  autoCompactWindow?: number    → interface Settings
+sdk.d.ts:5600  autoCompactEnabled?: boolean  → interface Settings
+sdk.d.ts:1803  settings?: string | Settings  → type Options    ← 入口在这
+```
+
+后果:`PRISM_AUTO_COMPACT=0` 什么也不关,`PRISM_AUTO_COMPACT_WINDOW=30000` 压不出来
+(测试环境上"触发不出压缩"就是它)。gt 的主目标 —— 不再自己压、不再有 90 秒空转 ——
+**是生效的**,那部分是删代码。
+
+**为什么门禁没拦住**:`server/claude-sdk.js` 是 `.js`,`sdkOptions` 是纯对象 ——
+多写一个不存在的字段,typecheck / eslint / 2105 条测试**一条都不会红**。
+更糟的是 gt 为这两行加的守卫断言的正是 `sdkOptions.autoCompactEnabled`,
+**它把错误一起绿了过去** —— 钉错位置的测试给的是假的信心,比没有测试更坏。
+
+**修法**:走 `options.settings`(flag 层,优先级在 user/project/local 之上,
+正是运维旋钮该在的位置);`settings` 已是路径字符串时只警告不覆盖。
+新增 `server/tests/settings-shape.test.js`,**对着 SDK 的 `.d.ts` 断言** ——
+既钉"我们写进了 `options.settings`",也钉"这两个字段确实在 `Settings` 上"。
+SDK 换版挪了位置就变红。vitest 2109。
+
+---
+
+## 2026-09-15 · gt — 上下文压缩交还给 CLI(那个"每答完一条白等 90 秒"的循环)
+
+**没有迁移、不用重装依赖。**
+
+### 病根
+
+Prism 自己盯占比、自己推 `/compact`,跑在 `internal` 的维护回合里,而那种回合的
+看门狗是 **idle 90s**。可 `includePartialMessages = false` 意味着**整个压缩期间
+流上一帧都不会有** —— 那 90s 名义上是 idle,**实际是压缩的总预算**。
+CLI 内部遇到 "prompt too long" 还会丢消息重试,每次都是一整次模型调用,
+90 秒根本不是一个量级。
+
+压缩失败后 `runtime.lastContextUsage` 不失效(全仓唯一的写入点只在成功时写),
+占比仍然过线 —— 而回合结束时那句 `readRuntimeContextUsage` 是**无条件**的,
+每回合都把 ≥0.8 填回来。于是**每答完一条就跟着一次注定失败的 90 秒压缩**,
+循环没有上界。生产日志:
+
+```
+23:13:34 Maintenance compaction failed …: produced no output for 90s
+23:15:22 Maintenance compaction failed …: produced no output for 90s
+23:17:58 Maintenance compaction failed …: produced no output for 90s
+```
+
+而 CLI 的自动压缩**本来就默认开着**(CLI 二进制里 `autoCompactEnabled:!0`,
+读取处缺省 true)—— 一直是两套机制并存,Prism 只是总抢在前面。
+
+### 改法
+
+- 删掉 `runMaintenanceCompaction`、发送前兜底、Prism 那条 0.8 的判据、`compactionDeferred`;
+  **没有任何回合再传 `internal: true`**;
+- 压缩由 CLI 在**用户回合内部**做,走用户回合的预算(idle 60min / 绝对上限默认关闭)——
+  那个 90s **从定义上够不着它**;
+- `PRISM_AUTO_COMPACT` 语义改为透传 CLI 的开关;新增 `PRISM_AUTO_COMPACT_WINDOW`
+  透传 `autoCompactWindow`,**"什么时候压"的旋钮留在手上**;
+- 压缩落日志:`压缩 runtime=… trigger=… tokens=…→…(-…%) 耗时=…s`;
+  `getContextUsage` 返回的 `isAutoCompactEnabled` / `autoCompactThreshold` / `rawMaxTokens`
+  不再被扔掉,每个 runtime 第一次拿到时打一行。
+
+### 时间轴不会因此被截断(专门查过并钉了测试)
+
+时间轴读的是 Prism 自己的 `session_display_messages`,不是 CLI 的 transcript;
+压缩相关的帧**根本进不了这张表**(`normalizeMessage` 对 `type:'system'` 产出 0 条;
+`status` 不在 `DURABLE_KINDS` 白名单里)。全仓删显示日志的四条路径没有一条与压缩有关。
+**这个不变量此前一条测试都没有** —— 新增 `compaction-keeps-timeline.test.ts` 钉住。
+vitest 2105。
+
+---
+
+## 2026-09-15 · gs — `users` 表重建吞掉了一列(生产事故根治)
+
+**没有新迁移、不用重装依赖。**
+
+`runMigrations` 里顺序是反的,而重建的列清单是写死的:
+
+```
+addColumnToTableIfNotExists(users, 'attachment_quota_mb')   ← 先加列
+  ⋮
+rebuildUsersTableWithCaseInsensitiveUsername(db)            ← 后 DROP + 重建
+```
+
+重建的 `CREATE TABLE users__new (…)` 只有 13 列,**没有 `attachment_quota_mb`** ——
+先加上的列被连列带数据抹掉。后果:「账号管理」页 **500**
+(`no such column: u.attachment_quota_mb`),每人的附件配额覆盖值一起没了。
+
+**测试环境永远碰不到**:重建开头有守卫,`username` 已是 `COLLATE NOCASE` 就直接返回,
+而只有从 ex 这类老库升上来才是 BINARY。这就是"测试全绿、生产一升就坏"的全部原因。
+
+**三层防线**,各治一种死法:① 补全重建的写死列清单 + `INSERT … SELECT` 一起搬
+(列和数据都不丢);② 重建**之后**再跑一遍 users 的加列(将来又漏改清单时列当场回来);
+③ 新增 `REQUIRED_COLUMNS` + 迁移末尾的 `verifyRebuiltTableColumns`(漏了立刻在日志里喊,
+而不是等某个页面 500)。回归测试造一张 BINARY username 的老库跑全套迁移。vitest 2094。
+
+**自检的缺口也一并记下**:那次部署我查了新加的两个列、查了 users 的行数和用户名,
+**唯独没查 users 的列集合** —— 而出事的恰恰是一张被重建过的表。
+**重建过的表,要比对的是整份列清单,不是行数。**
+
+---
+
+## 2026-09-15 · gr — 项目改名四条;行内改名按 Esc 不再中止正在跑的那一轮
+
+**没有迁移、不用重装依赖。**
+
+回头看项目行,gq 那条"旧名字露在旁边"的病**它没有**(输入框本来就是顶替标题的,
+悬停浮层也被 `!isEditing` 关掉)。但另有三条,外加一条更要紧的连带伤:
+
+- **点行外关不掉**:只有 Enter / Esc / ✓ / ✕ 四条出路,点到别处就一直停在编辑态。
+  现在与会话行一致 —— **点外面 = 取消**(误点一下就改名,比丢几个字糟)。
+  文件树那边仍是 `onBlur` 保存,**没动**;
+- **点进输入框会把项目折叠/展开一次**:整行是个 `<Button>`,桌面端那个输入框没拦 click;
+- **改名时行高从 36px 涨到 ~70px**:编辑分支里输入框下面还挂着一行完整路径,
+  而这一行的既定设计就是「完整路径进 title,不再占第二行」——编辑分支是那次改动漏下的;
+- **`Esc` 会把正在跑的那一轮也中止掉**:`ChatInterface` 的全局 Esc 挂在 document 的
+  **capture 阶段**,比输入框自己的 `onKeyDown` 先跑,原本只放行 dialog / 交互面板 / 查找条。
+  现在三处行内改名输入框统一打 `data-inline-rename="true"`,全局 Esc 按**事件源**
+  (`closest`,不是 `querySelector`)放行。vitest 2088。
+
+---
+
+## 2026-09-15 · gq — 侧栏改会话名时,输入框左边露出半截旧名字
+
+**没有迁移、不用重装依赖。**
+
+### 不是对齐没调好,是两样东西同时在画
+
+改名的输入框原来是一个 `absolute right-2 top-1/2` 的小面板**浮在行右侧**,
+它底下那条 `<a>` 标题行照常渲染 —— 于是输入框盖住右半截,左半截旧标题露在外面。
+窄侧栏更明显,因为输入框固定 `w-32`。
+
+**修法**:编辑态**顶替整行**,不是盖在上面。输入框 `flex-1` 吃掉剩余宽度,
+行高钉成 **31px**(与未编辑时 `py-[7px]` + `leading-[17px]` 算出来的一致),
+左内边距同为 `px-2.5` —— 进出编辑态既不跳高也不错位。
+
+### i18n 守卫补上一个缺口 —— 上一轮「英文按钮」的真正根因
+
+go 部署后删除框仍是中英混排,而守卫是绿的。原因:`SessionDeleteDialog` 的 `t` 是
+**父组件传下来的 prop**(来自 AppContent 的 `useTranslation('sidebar')`),
+键只在 `sidebar.json` 里找;而 go 补键时那几条只加进了 `common.json`。
+守卫的判据是"任意命名空间里有就算有",于是全绿放行。
+
+补齐 24 条到正确的命名空间,并给守卫加一张 `PROP_T_NAMESPACES`:
+把**收 `t` 当 prop** 的 14 个文件逐个登记它拿到的是谁的 `t`,严格查;
+表本身也有自检(多登记或漏登记都会让构建变红)。
+
+> 中途试过一条更宽的「同名分组对齐」规则,报出 **242 条**,绝大多数是合理差异
+> (`skills` 在 chat 与 settings 下本来就不一样)。**一个天天误报的守卫等于没有守卫**,
+> 整段推翻。vitest 2075。
+
+---
+
+## 2026-09-15 · gp — 根地址一直在发两周前的前端;「我的账号」的两个退出入口挪到身份行
+
+**没有迁移、不用重装依赖。**
+
+### 根地址发的是 2026-09-02 的前端,而深链发的是当天的
+
+go 部署完之后,用户报"有时页面又变回老版了"。实测到的是**同一台机器、同一个进程**
+分成两条路:
+
+| 打开的地址 | 谁先答 | index.html 日期 | 结果 |
+|---|---|---|---|
+| `/` 或 `/index.html` | `express.static(APP_ROOT/public)` | **2026-09-02** | 两周前的前端 |
+| `/session/xxx`、`/settings` 等无扩展名深链 | `app.get('*')` → `dist/index.html` | 当天构建 | 新前端 |
+
+四组响应头把它坐实了(都带 `x-powered-by: Express`、同一套安全头,**没有反向代理**):
+
+```
+/assets/<go 的 hash>.js   cache-control: …immutable       last-modified: 当天
+/assets/<9-2 的 hash>.js  cache-control: public,max-age=0  last-modified: 2026-09-02
+/                         public,max-age=0                 2026-09-02
+/settings                 no-cache,no-store                当天
+```
+
+**根因**:`public/` 里躺着一份**手工拷进去的旧构建**(`index.html` + `assets/`),
+而 `express.static(public)` 挂在 `express.static(dist)` **前面** —— 凡是 public 里有的
+同名文件,一律把真正的应用盖掉。发布包里没有这两个路径(仓库的 `public/` 本来也没有),
+所以 `tar --overwrite` 永远删不掉它,每次部署都完好地绕过去。
+更阴的是 public 那层没有 `setHeaders`,老快照走 `max-age=0` + 弱 ETag,
+网络面板里只看得到 200/304,看不出自己吃的是哪一份 —— 这事藏了两周。
+
+**修法**:
+
+- `dist` 的静态挂载**提到 `public` 前面**,`public` 再加 `{ index: false }`
+  —— 以后 `public/` 里再出现同名文件也盖不住应用;
+- 开机检查 `public/index.html` / `public/assets/`,有残留就在 `prism.log` 里**把路径念出来**
+  (它不来自发布包、升级时不会被覆盖,不提醒就得再查一次);
+- `server/tests/static-mount-order.test.js` 钉住顺序、`index: false` 与 dist 那层的缓存头。
+
+> 服务器上那份残留要手工移走(包里删不掉它):
+> `cd /home/ubuntu/prism/public && mkdir -p ../_stale_public_20260915 && mv index.html assets ../_stale_public_20260915/`
+
+### 「我的账号」:两个退出入口挪到身份行右侧
+
+「退出登录 / 切换账号」与「退出所有设备」原来是页面**最下面两张独立卡片**,各占一整块,
+把「附件空间」「修改密码」这些真正要读的内容顶下去。它们本来就是"对当前这个账号做的事"
+—— 挪到身份行(`test · 当前登录账号`)的右侧。
+
+两张卡片的标题与说明**没有丢**,进了按钮的 `title`,悬停照样看得到;两个按钮各带
+`aria-label`;二次确认的「取消」一起搬过来(不然确认态下取消不掉);
+窄屏时按钮组整体换行(`basis-full sm:basis-auto`)。
+`accountTabLayout.test.ts` 钉住这五件事。
+
+### 门禁
+
+typecheck 0;eslint 0 错误 / 23 警告;vitest **2069**(go 2060,+9);双端构建通过。
+反向验证 2 组:把 public 挪回 dist 前面(挂载顺序测试变红)、把按钮组的
+`basis-full sm:basis-auto` 去掉(版面测试变红)。
+
+---
+
+## 2026-09-15 · go — 把剩下的都收了:69 个 i18n 键 + 构建守卫、项目归档权限、404 静默、回收站实时刷新、设置页宽度统一
+
+一天里的第五包,也是**这一轮遗留清单的清零**。**没有迁移、不用重装依赖。**
+
+### 界面不再半中半英:69 个缺失的 i18n 键 + 一道构建期守卫
+
+`t('x', '兜底')` 在键缺失时**静默**回落到兜底串 —— 开发时看不出任何异常,只有换了
+语言才现形。最刺眼的现场是删除确认框:用户要在"藏起来"和"不可逆的永久删除"之间
+做选择,而**这两个按钮都是英文**。全仓 69 个这样的键,其中 9 个连兜底都没有,
+界面上直接画出 `search.matches` 这样的键名。
+
+zh-CN 与 en 两侧**都**补齐(只补中文正是这次的病根之一),涉及
+`chat` / `common` / `settings` / `sidebar` 四个命名空间。
+
+补一次不解决问题,所以加了 `scripts/check-i18n-keys.mjs`,挂进 `prebuild`
+(和 `check-retired-files.mjs` 同一个位置、同一套思路):扫 `t('…')` 的字面量键,
+两个 locale 里都没有就**中断构建**。判据上有两处刻意的取舍:
+
+- **模板串一律跳过**(`t(\`tabs.${x}\`)`)—— 取值范围要靠人看,不是扫描能定的;
+- **不猜命名空间**:一个键只要在该语言的任意命名空间里存在就算有。`t` 经常是从
+  父组件传下来的 prop(`SidebarSessionItem` 就是),文件里根本没有 `useTranslation`
+  可读;按文件猜会造出**上百条误报**,而天天误报的守卫等于没有守卫。这道闸门管的是
+  "这个键压根不存在",那 69 个全属于此类。
+
+首次跑:260 个文件、1309 处字面量键,两个 locale 都有。
+
+### 项目归档收紧到与永久删除同一条规则
+
+非 owner 能归档**别人的整个项目**,项目从所有人的活跃侧栏消失 —— 2026-09-15
+用非 root 账号实测到的。可一键还原、不丢数据,但它是所有人都看得见的变化,
+而按钮上没有任何"这不是你的项目"的提示。
+
+服务端:新增 `canArchiveProject`(**故意委托给 `canDeleteProject`**,不复制判据 ——
+复制出来的第二份迟早会漂),单条路由与**批量**入口都走它(只收单条那条路,
+批量就是同一件事的后门)。无主项目不受影响:它没有"负责人"这一档,看得见就能归档,
+否则普通用户连自己在终端里开出来的项目都归档不了。
+
+客户端:不是负责人就**两枚按钮都不画**,换成一句"你不是这个项目的负责人 ——
+归档和删除整个项目都只有负责人或管理员能做。你可以归档自己的会话。"
+
+> gk 那条断言"删除跳过、**归档照常**"的测试跟着改了,并在注释里写清为什么。
+
+### F6 · 「已被删除」态下向上滚不再打 404
+
+会话被别处永久删除之后向上滚,`fetchMore` 拿到 404 → 走 throw → `console.error`,
+而且返回 null 被判成失败,自动补页一直重试。404 不是"加载失败",是**没有更多历史
+可加载**:单独处理、落下 `hasMore`、当"到头了"返回。
+
+### F7 · 「最近删除」跟着**别人**的操作刷新
+
+gk 只做了"自己操作后刷新";别人删了 / 恢复了一条,你开着的侧栏一直是旧数据,
+要切走再切回来。`session_removed` / `session_restored` 两帧在 `useProjectsState`
+收下、计数往下传(和 `externalMessageUpdate` 一个路数),与侧栏自己的
+`trashReloadToken` 相加 —— 两边任意一个动了就重拉一次。
+
+### 设置页宽度统一
+
+弹窗放宽之后,「我的账号」「模型映射」「服务器」三页的内容仍停在原地,右边空出
+一大条 —— 这三页各自在页面根容器上设了 `max-w-xl` / `max-w-2xl` / `max-w-3xl`,
+而别的页签一个都没有。三个上限全部去掉,由弹窗自己的宽度决定;
+新增 `settingsTabWidth.test.ts` 扫所有 `*Tab.tsx` 的根容器,再有人加回来就变红。
+
+### 门禁
+
+typecheck 0;eslint 0 错误 / 23 警告;vitest **2060**(gn 2049,+11);双端构建通过
+(prebuild 里那道 i18n 守卫已经在跑)。
+
+反向验证 5 组:归档权限改回只拦 force(authz 变红)、批量归档放回旧口径(变红)、
+表格外框改回 `overflow-hidden`(变红)、抽掉两个 locale 键(构建守卫变红)、
+「我的账号」加回 `max-w-xl`(宽度测试变红)。
+
+---
+
+## 2026-09-15 · gn — 非 root 账号实测:那枚必然撞 403 的红按钮
+
+用户给了测试环境的非 root 账号,gk 权限收紧这一整条终于在**真账号**上走了一遍。
+**服务端一条没漏**;漏的是界面。**没有迁移、不用重装依赖。**
+
+### 服务端的权限:逐条实测通过
+
+以非 root 的 `test`(id 4)登录,在**别人的项目**(`lqm`,owner 2)与**自己的项目**上各走一遍:
+
+| 动作 | 结果 |
+|---|---|
+| 别人项目里的会话 → 永久删除 | **403** `SESSION_DELETE_FORBIDDEN`,文案「只有项目负责人或管理员可以永久删除这条会话;你可以把它归档。」 |
+| 同一条 → 归档 | **200**(共享用户只能归档 —— 正是设计) |
+| 自己项目里的会话 → 永久删除 | **200**,进「最近删除」,`canRestore: true` |
+| 「最近删除」→ 立即清除 | **403** `TRASH_PURGE_FORBIDDEN`「只有 root 可以立即清除…」 |
+| 「最近删除」→ 恢复 | **200** |
+| 批量永久删除(别人项目里那条) | **200** 但结果是 `skipped`,一条没删 |
+| `/api/admin/audit-log`、`/api/admin/users` | **403** Administrator access required |
+| 「与我有关的操作记录」 | 200,58 条**全是自己的**,没有一条别人的 |
+| 回收站列表 | 只列出自己删的那条 |
+
+### 界面没跟上:一枚必然失败的红色主按钮
+
+删除确认框里那段说明白纸黑字写着「**只有项目负责人或管理员可以永久删除**」,
+而下面那枚**红色主按钮**「永久删除」照样可点 —— 点下去只会撞 403。
+给用户一个必然失败的红色主按钮比不给还糟:它把"这事你做不了"藏在一次失败之后,
+而这枚按钮长得恰恰像"这就是你要点的那个"。
+
+修法:新增纯判据 `utils/sessionDeletePermission.ts`(`canPermanentlyDeleteSession`),
+逐条对着服务端那份写 —— root 全放行、项目 owner 放行、**无主项目**没有"负责人"
+这一档所以回落到可见性。两条入口(侧栏会话行、顶栏「…」)都在建确认对象时算好:
+
+- 不能永久删除 → **不画**那枚红按钮,说明换成「你不是这个项目的负责人,所以只能归档
+  —— 归档后它从活跃列表里消失,记录都还在」;
+- **已归档 + 不能永久删除** → 这个框里一件事也做不了,直接说清楚,按钮只剩「关闭」;
+- **拿不到项目信息**时回到老行为(画出来,由服务端 403 兜底)—— 不因为一次加载时序把按钮藏错。
+
+服务端仍然是权威:这里算的只是"要不要把按钮画出来"。两边规则必须一致,
+所以判据里逐条注了出处,改一边就得改另一边。
+
+配套补了 `deleteConfirmation.cannotDeletePermanently` / `archivedAndCannotDelete`
+与 `actions.close` 三个键(zh-CN + en 都填了,不留只有兜底的键)。
+
+### 顺手记下的两件事
+
+- **非 owner 可以归档别人的项目**,项目会从所有人的活跃侧栏里消失(实测:`test`
+  把 root 的 `lqm` 归档了,一键「Restore workspace」原样恢复,一条会话没丢)。
+  不破坏数据、可一键还原,**但它是所有人都看得见的变化**,而归档按钮没有任何
+  "这不是你的项目"的提示。这一包不改行为(共享项目的写权限本来就按"看得见就能归档"
+  设计),只把它记在这里。
+- 非 owner 点「永久删除」之后**确实**会看到原因 —— 走的是 `alert()`。
+  (自动化浏览器把原生弹窗屏蔽了,所以我一开始误以为是静默失败,查证后推翻。)
+  这也再次说明原生 `confirm` / `alert` 该统一到应用自己的对话框。
+
+### 门禁
+
+typecheck 0;eslint 0 错误 / 23 警告;vitest **2049**(gm 2043,+6);双端构建通过。
+
+---
+
+## 2026-09-15 · gm — 设置里那两张表:够得着、对得齐、不再被切掉
+
+gl 打完包之后,用户在自己屏幕上又看了一眼账号审批表 —— 这一包是那几条的收口。
+**没有迁移、不用重装依赖**,与 gl 一样只是解包重建。
+
+### 「操作」列被整个切掉,而且没法滚过去
+
+账号审批表的外框是 `overflow-hidden`:窗口 877px 时表格要 625px、容器只有 555px,
+**那 70px 看不见也够不着**(实测 `scrollWidth 625 / clientWidth 555`)。
+旁边的审计表一直是 `overflow-x-auto`,这张漏了。
+
+更要命的是 gl 刚把各列锁成 `whitespace-nowrap`(治"到处换行")—— 表变宽了,
+于是"换行"换成了"被切掉"。所以这一包把两件事一起做:
+
+- **放不下时够得着**:外框换成 `overflow-x-auto`;
+- **尽量别放不下**:「审批人」列窄屏收起(`hidden lg:table-cell`,同审计表的 IP 列);
+  五个操作按钮窄屏**只留图标**(`hidden xl:inline` 包住文字),并给每个补上
+  `title` 与 `aria-label` —— 文字能被收起,提示就不能少;
+- **两头一起让**:设置弹窗从 `max-w-4xl`(896px)放宽到 `5xl`,超宽屏再到 `6xl`。
+  减掉左侧导航与内边距,内容区原来只有 ~540px,这两张表在里面根本铺不开。
+
+实测:同样 877px 宽度下,改完 `scrollWidth === clientWidth`,一格都不切,
+「操作」列从 232px 收到 124px。
+
+### 对齐
+
+- **「操作」表头原来是 `text-right`**,而其余四列全是 `text-left` —— 一张表里
+  四个靠左一个靠右。统一成左对齐,按钮组跟着从 `justify-end` 改成 `justify-start`。
+- **状态徽标比表头右移 6px**(实测表头文字左边 375.8、徽标文字左边 381.8)——
+  差的正是徽标自己的 `px-1.5`。加 `-ml-1.5` 抵掉,量到的差从 6px 变 **0**。
+  审计表「事件」列的徽标同一个病,一起改。
+
+### 顶栏标题不再写死一个英文 Project
+
+`getTabTitle` 除了 files / notebook 之外一律返回写死的 `'Project'` ——
+中文界面下点开「定时任务」或「终端」,顶栏就大写着一个英文 Project(实测)。
+侧栏那排页签早有 `tabs.*` 这组键、两个 locale 都全,直接用它。
+顺手把这个纯函数从组件文件里拆到 `tabTitle.ts`(留在组件文件里会触发
+`react-refresh/only-export-components`,把警告基线从 23 顶到 24)。
+
+### 门禁
+
+typecheck 0;eslint 0 错误 / 23 警告;vitest **2043**(gl 2031,+12);双端构建通过。
+反向验证 2 组:把外框改回 `overflow-hidden`(布局测试变红)、把顶栏标题改回
+`'Project'`(标题测试变红)。
+
+新增的两个测试都是**对源码断言**(vitest 这边没有 jsdom,挂不起组件,而这一轮
+出错的地方全在 class 上):表格外框必须可横向滚动、两张表的五个表头必须全是
+`text-left`、审批人列的表头与单元格必须一起收、五个动作按钮的文字必须包在可收起的
+span 里且各自带 `title` / `aria-label`;以及每个页签在两个 locale 里都真有键、
+中文界面下没有一个页签回落成英文 `Project`。
+
+---
+
+## 2026-09-15 · gl — 浏览器实测的收口:附件中文名乱码、顶栏改名不同步、模型框不高亮;表格锁一行、下拉箭头压字
+
+### 起因:gk 部署到测试环境之后,在浏览器里把对话模式从头到尾点了一遍
+
+先逐条验证 gk 的承诺(删除 / 恢复 / 权限 / 审计 / 已删除态 / 排队四连)—— **全部通过**;
+然后继续走完整的对话模式:子代理、后台任务(`run_in_background`)、附件加对话、活动时间轴的
+折叠与展开、检查点与改动卡、导出会话、会话重命名、命令面板、模型与权限档位切换。
+功能面全部正常,但抓到三条**与 gk 无关的老问题**,连同用户截图里的三处排版一起修在这一包。
+
+### 服务端
+
+- **附件中文名不再乱码。** multer(busboy)解 multipart 的 `filename` 参数用的默认字符集是
+  **latin1**,浏览器发的是 UTF-8 字节,于是 `附件.png` 到 `file.originalname` 上变成
+  `é™„ä»¶.png`(六个 UTF-8 字节变六个字符)。这个坑的解法(`fixFilename`)本来就在仓库里,
+  但**全仓只有文档上传那条路在用** —— 图片附件(`assets.routes.ts`)与文件树上传
+  (`files.routes.ts`)都是拿 `originalname` 原样用,于是**以乱码名落盘**:实测
+  `/home/ubuntu/<项目>/attachments/gk-test-éä»¶-x0evgg.png`,在文件树、命令面板、会话历史与
+  导出的 JSON 里全是乱码,**按中文名一条都搜不到**。判据提到
+  `server/shared/upload-filename.ts`(`recoverUploadFilename`),三条路共用一份:
+  - 图片附件:落盘名(`buildAttachmentFilename`)与回给前端的显示名(`buildStoredImageRecords`)
+    走**同一道**恢复 —— 两个名字漂开比两个都乱码更难查;
+  - 文件树上传:只恢复 `originalname`,**不碰 `relativePaths`**(它是 multipart 的字段值,
+    busboy 按 utf8 解,本来就是对的;再套一层只会白担启发式误伤的风险);
+  - `/land/start` 那处过度应用去掉 —— 它的名字来自 JSON body,express.json 早就解好了。
+  - 测试里真跑了一遍 multer(不是模拟):`附件.png` 出来的码点就是 `e9 99 84 e4 bb b6`,
+    并把断言写成"恢复之后拿回真名字"这个**不变量**,哪天 multer 改了默认字符集也不会误报。
+- **恢复归档态的会话:新增一帧 `session_restored`**。gk 的恢复只发 `session_upserted`,
+  而它在客户端被 `chat-run-registry` 的 `if (!row || row.isArchived) return;` 挡掉 ——
+  归档态的会话恢复出来,页面上那张「这条会话已被删除」的说明卡**一帧都收不到、撤不掉**。
+  一条广播扛两个语义是根因:`session_upserted` 是"列表里这条变了",`session_restored` 是
+  "它回来了"。名单仍在发之前按 `canViewerSeeSession` 收,陌生人收不到。
+
+### 前端
+
+- **顶栏那支铅笔改完名,顶栏自己不跟着走。** 侧栏当场是新名字(它走 `handleSidebarRefresh`,
+  那条会重挑一次 `selectedSession`),顶栏还挂着旧标题 —— 没有 summary 的会话就是那句写死的
+  "New Session",一直到手动点一次「刷新项目和会话」才对上。根因是 URL→`selectedSession` 那个
+  effect 的判据只有 **id 与 provider**,而改名两样都不动;顶栏读的正是 `selectedSession.summary`。
+  判据放宽到"标题也算"(`selectedSessionNeedsSync`),但**不**放宽成整对象比对 ——
+  `messageCount` / `lastActivity` 每来一条消息就变,那样会在流式输出期间把整棵聊天子树重渲一遍。
+  空标题不许覆盖已有标题,与 `upsertSessionIntoProject` 同一条规矩。
+- **模型选择框里看不出自己现在用的是哪一档。** 卡片的「当前」是拿 `option.value`(档名:
+  default / sonnet / opus)比 `data.current.model`,而自定义网关下后者是**解析后的真实模型名**
+  (这台机器上是 `deepseek-v4.1-flash-…`)—— 两个命名空间,于是**七张卡片一张都不高亮**。
+  改成按输入框那枚 chip 显示的**档位别名**判(`activeModelAlias`);官方 API 下两者本来相等,
+  缺省时回落原判据。「下一次生效」那枚徽标同样改成与别名比,不再逢选必显示。
+- **四个原生 `<select>` 的下拉箭头压在文字上**(用量统计的两个 + 操作记录的两个):
+  只给了 `px-2`,浏览器画在右侧的箭头没有让位。统一成 `py-1.5 pl-2 pr-7`。
+- **账号审批与操作记录两张表锁成一行**,不再到处换行:
+  - 新增 `middleTruncate`(中间省略,`a-very-long-user-name` → `a-very…r-name`):
+    用户名列 18 字、审批人列 16 字、操作记录的用户列 14 字,完整值进 `title`;
+  - 状态 / 注册时间 / 事件 / 操作四列 `whitespace-nowrap`,时间列 `tabular-nums`;
+  - 操作记录的 IP 列窄屏隐藏(`lg` 以上才出),省下的宽度给详情列 —— 那一列才是要读的。
+- 「最近删除」里"谁删的 · 几天后清除"那一行补 `title`:侧栏只有 ~158px,它必然被截断,
+  而这一行正是整个功能存在的理由(上面两行早就有 title,这一行漏了)。
+- 审计详情的入口标签补连接词:`bulk` → 批量操作中、`empty_archived` → 清空归档时、
+  `retention` → 归档保留期到期时 —— 不再拼出「清空归档永久删除了会话」这种少一个字的句子。
+
+### 不是问题(实测排除,记下来省得下次再查)
+
+- 自动化发出的 `Ctrl+K` / `Backspace` 到不了页面(`event.key` 空或不投递),不是命令面板的问题:
+  面板的 `keydown` 判据本身没问题,鼠标入口与 Esc 关闭都正常,中文搜索也能搜到会话。
+- 活动时间轴展开后"只看到思考、看不到命令"是误读:工具行的一句人话用的是工具自带的
+  `description`(那一行就是它),点进去照样有 `$ 命令` 与输出。
+- Write 工具那张卡默认收起,**点标题是打开文件、点箭头才是展开 diff** —— diff 在(`New` / `+ hello gk`)。
+- 「产出」卡里点文件名会打开文件编辑器(全屏面板,没有 `role="dialog"`),不是点了没反应。
+
+### 门禁
+
+typecheck 0;eslint 0 错误 / 23 警告(与 gk 同基线);vitest **2031**(gk 2009,+22);双端构建通过。
+反向验证 3 组:把附件名恢复从 `image-assets.service` 摘掉(两条断言变红)、把
+`session_restored` 帧移除(session-trash-flow 变红)、把"空标题不许覆盖已有标题"那一条去掉(变红)。
+
+---
+
+## 2026-09-15 · gk — 误删事故的收口:最近删除、删前收 runtime、权限、审计、推送、已删除态;排队链路加固
+
+### 起因:生产 ex 上一条跑了一天的会话被人永久删除
+
+排查结论(项目文档 `排查_生产ex_SESSION_NOT_FOUND_20260914.md`):行、显示日志、transcript
+三样一起没了;删完半小时后空闲的常驻 CLI 被回收,退出时按老路径写了两行收尾记录,同名文件
+"复活"成 362 字节的空壳;次日用户在还开着的页面里发消息撞到 `SESSION_NOT_FOUND`,页面原样显示
+一句给开发者看的英文,还给了一个只会再撞一次的「重发上一条」。**谁删的查不出来**:ex 没有访问
+日志、删除不写审计;而且能看见项目的任何账号都能永久删里面任何一条会话。
+
+### 服务端
+
+- **永久删除 = 进「最近删除」**(`session_trash` / `session_trash_messages` 两张新表 +
+  `<数据目录>/trash/<日期>/<会话 id>/`):`sessions` 行、显示日志(**原 id**)、裁剪标记、transcript
+  与它的 `<id>/` 目录整体搬走,`PRISM_TRASH_RETENTION_DAYS`(默认 30,0 = 永不)之后清扫。
+  恢复原样搬回(项目行没了按快照建回、owner 不丢);活表里已有同 id / 同 provider id 时拒绝。
+  `deletedFromDisk=false` 仍接受(= transcript 留原地不搬)。归档保留期到点也改成进最近删除。
+- **删前先收 runtime**(`setSessionRuntimeReleaser`,组合根接 `releaseClaudeSession`):
+  回合在飞收不掉就 409;空闲常驻的收掉再动文件。搬完 8 秒回头看一眼老路径,复活的空壳
+  (没有 `cwd` 行、≤4KB)收进回收站目录。监视器对 provider id 在回收站里的 transcript 一律不索引。
+- **权限**:永久删除(单条 / 批量 / 清空归档 / 删项目)只给项目 owner 与 root(`canViewerManageSession`);
+  共享给的用户只能归档,403 的原因原样给前端看。**无主(公共)项目没有"负责人"这一档,回到旧口径
+  (看得见就能永久删)** —— 无主的可见性本身是收着的(仅公共目录下才对所有人可见),所以这不放开
+  任何原本看不见的东西,但避免了公共目录部署下普通用户删不掉自己会话。删项目先整体预检:任何一条
+  在用就整个拒绝、一条不动;循环中途有一条失败也停下报 409(已进回收站的可恢复),绝不硬删。
+- **审计**:新增 `session_deleted / session_archived / sessions_bulk_deleted / sessions_bulk_archived /
+  archived_sessions_emptied / project_deleted / project_archived / session_trash_restored /
+  session_trash_purged`,detail 是 JSON(入口、会话名、项目、最后活动、transcript 去向);
+  `audit_log` 加列 `target_user_id`(被删会话所属项目的 owner),非 root 的可见范围扩成
+  "我做的 OR 对我做的"(对我做的行抹掉 ip / ua);删除类事件不参与常规 5000 行裁剪,另设
+  `PRISM_AUDIT_LOG_MAX_DURABLE_ROWS`(默认 20000)。`prism.log` 也打一行。
+- **推送**:删除时给所有还看得见这条会话的 socket 推 `session_removed`(名单在删行之前定、帧在删完
+  之后发);恢复后推 `session_upserted`。`chat.send` 上的 `SESSION_NOT_FOUND` 带 `request:'chat.send'`。
+- **合并只吞裸行**:`assignProviderSessionId` 只允许吞"监视器裸行"(`session_id = provider_session_id`
+  且没有显示日志),否则不删不并不认领只 warn —— 排查时列出的那条"理论上能吞掉真会话"的路堵上。
+- `clientIp` 搬到 `shared/client-ip.js`(modules 层按边界规则碰不到 middleware);`rate-limit.js` 转出去。
+
+### 前端
+
+- **「这条会话已被删除」态**:收到 `session_removed`、或 `chat.send` 撞到 `SESSION_NOT_FOUND`,
+  输入框换成说明卡(谁、几点、从哪删的;东西在最近删除里),错误行不再给「重发」,
+  「新建会话继续」把没发出去的草稿带到新会话;清掉挂在这条死会话上的排队。侧栏只拿掉列表项,
+  不跳走。恢复后的 `session_upserted` 撤掉这个态。
+- **最近删除**:归档视图底部新增一段(谁、几点、几条消息、几天后清除、恢复按钮);
+  「清空回收站」改名「清空归档」(它现在是"移入最近删除",不是真删)。
+- 永久删除确认框写清"移入最近删除、保留期内可由项目负责人恢复;只有负责人或管理员可以永久删除";
+  删除失败时 403 / 409 的原因原样显示。
+- 审计页新增「会话与项目删除」分组,detail 翻成人话;个人「账号」页新增「与我有关的操作记录」
+  (此前普通用户没有任何审计入口)。
+
+### 排队链路加固(2026-09-15 测试环境反馈:取消了还发出去、正常发送变排队、同一句发了四遍、回复后多出的消失)
+
+四个症状的共同病根是"取消不是权威的、冲队的锁不覆盖清盘、同一条命令重投一次就画一个气泡":
+
+- **取消当场生效**:`deleteQueuedDraft` / `editQueuedDraft` / 停止并回 三处都立即清盘 + 把幂等键记成
+  已作废;换会话恢复与冲队认领两处都拒绝已作废 / 已发过的键。
+- **冲队的锁盖住"投递 → 清盘"整段**:回调改成 `await` 投递收尾;认领到的盘上记录若与内存里要投的
+  不是同一条,按盘上重装、不投内存这条。
+- **同一个幂等键只画一次回声**(重投是设计允许的,气泡不该跟着叠)。
+- **冲队封顶**:同一条命令一分钟内自动投递最多 5 次,超了停下、正文退回输入框、提示一句
+  (后台会话那条路 gh 就封了 3 次,这条路一直没有上限)。
+- **跨标签页对齐**:监听 `storage` 事件 —— 别的标签页删了 / 换了盘上那条,这边内存那条跟着撤 / 重装
+  (此前 B 标签页的落盘 effect 会把 A 已取消的那条**写回盘上**)。
+- `handleSendAcked` 的身份判断改读 `outboxRef`(updater 里置的标志在紧跟的 `if` 里永远是 false)。
+
+### 对抗式复审(gj→gk 完整 diff 交给两路"只找回归"的子代理,再逐条核实)
+
+与 gj 同一套做法。抓到 **17 处**,全部是 gk 自己引进来的,当场修掉;每一处都补了会因为改回原样
+而变红的测试(见下方"验证")。
+
+| 处 | gk 引进来的错 | 后果 |
+|---|---|---|
+| S1 | 回收站桶名直接用 `session_id` 当路径段 | `session_id` 是从磁盘 transcript 里读出来的、校验正则允许点号 —— 一条 id 为 `..` 的会话被删时,清扫的 `rm -rf` 会端掉**所有人**的回收站目录 |
+| S2 | 删项目时"进回收站失败"的那几条靠后面的 `deleteSessionsByProjectPath` 兜底 | 等于连显示日志一起硬删:回收站里没副本、没审计、runtime 没收 —— 正是 gk 要消灭的那种"东西凭空没了" |
+| S3 | 无主(公共)项目也判成"只有 root 能永久删" | 公共目录部署下普通用户删不掉自己在终端里开出来的会话(403),「清空归档」逐条跳过、返回 `{deleted:0}`,界面上像点了没反应 |
+| S4 | 恢复时重建项目行丢掉 `visibility` | 一个 `public` 项目恢复后变回默认语义,原来看得见的人当场看不到这条会话 |
+| S5 | 恢复"先改库,再搬文件" | 搬不动时(原目录被删 / 只读盘)回收站行已经没了,那份 transcript 再没有任何记录指向它,接口却回 `restored: true` |
+| S6 | `startTrashSweeper()` 在模块顶层跑 | 早于 `initializeDatabase()`:升级后第一次开机必撞 `no such table` 且被 `.catch(() => {})` 吞掉 —— "启动跑一次"在最需要的那次从没跑过 |
+| S7 | 收 runtime 失败一律当"回合在飞"回 409 | dispose 自己抛错也是 `released:false` → 这条会话**永远删不掉**,而用户看到的是"它没在跑啊" |
+| S8 | `PRISM_TRASH_RETENTION_DAYS` 写不成数时按 0 处理 | `=30d` 这种手滑静默关掉整个清扫器(0 = 连定时器都不建),回收站无声长到满盘,而配置看着像设了 30 天。改成回默认 30 + 警告 |
+| S9 | 删除后 8 秒的空壳回查不看"这条还在不在回收站里" | 8 秒内被恢复时,刚搬回去的文件可能被当空壳收进一个没有行指向的桶。改成先确认仍在回收站 + 恢复时撤掉定时器 |
+| S10 | 列表 / 清扫的 SQL 把 `datetime()` 包在列上 | `idx_session_trash_deleted_at` 用不上,清扫每 6 小时全表扫 + 临时排序 |
+| S11 | transcript 当初没搬成、清扫又把回收站行删掉 | 监视器那道"在回收站里就不索引"的门跟着消失,已永久删除的对话可能作为新会话重新出现。至少留一行指名文件的日志 |
+| C1 | ACK 清盘只看会话、不看是哪一条命令 | fz 修过的坑复活一半:两个标签页时,旧命令的第二次 accepted 把**另一条**排队消息从盘上删掉,紧接着 storage 事件让那边内存也撤 —— 卡片凭空消失、正文不退回、消息从没发出去 |
+| C2 | 跨标签页 `resync` / `drop` 静默丢掉内存那条的正文 | 排队槽一个会话只有一个,后写的覆盖先写的;先写的那句连提示都没有 |
+| C3 | 切「已被删除」态时把排队记录直接清掉 | 回合跑着时排进去的那句话在盘上和内存里同时消失,说明卡上"你刚才输入的内容还在"只对输入框里的字成立 |
+| C4 | 「最近删除」那一段只在进归档视图时拉一次 | 「清空归档」之后同一屏上它还写着"没有最近删除的会话",而弹窗刚说过"移入最近删除" |
+| C5 | `auditDetail` 把中文写死在代码里 | 英文界面下审计表格的「事件」「详情」两列突然变中文(而 gk 其它审计文案都走 locale);此前这两列是语言无关的 `session_deleted` + 原始 JSON |
+| C6 | 投递封顶只退正文、不提图片 | 用户按提示重发,发出去的是一条指着不存在的图片的消息 |
+
+顺手收的几处:审计 detail 被服务端截到 1000 字符时明说"详情过长已被截断"而不是打一格半截 JSON;
+`not_found` 态不再断言"它已进入最近删除"(那条路有两个来源是"你已无权访问",去回收站里根本找不到);
+`audit_log` 两档上限改成每次裁剪时读环境变量(写死在模块顶层没法测,于是"第二档到底裁不裁"一直没测);
+记幂等键的几个集合封顶(页面开一整天会一直涨)。
+
+### 验证
+
+typecheck 0 · eslint 0 错误 / 23 警告(基线不变)· vitest **2009** 通过(245 文件,+21 条)·
+双端构建通过。另外在构建产物上真跑了一遍:全新库迁移、建项目 / 建会话、永久删除 → 最近删除列表 →
+恢复(含 transcript 与子目录)→ root 立即清除、非 owner 的 403 / 批量跳过 / 清空归档跳过、
+审计行的 `target_user_id` 与非 owner 脱敏、以及"原路径被占住导致恢复失败"回 409 且东西全留在回收站。
+
+### 迁移与变量
+
+新表 `session_trash` / `session_trash_messages`(加表,可回滚);`audit_log` 加列 `target_user_id`
+(加列,可回滚)。**schema / migrations 变了,升级前备份库。** 新变量 `PRISM_TRASH_RETENTION_DAYS`、
+`PRISM_AUDIT_LOG_MAX_DURABLE_ROWS`,都在 `.env.example`。
+
+---
+
+## 2026-09-14 · gj — 对 gi 做了一次对抗式复审,又抓到 8 处,gi 作废
+
+问"这一轮真的没引入新 bug 吗"之后,把 gg→gi 的完整 diff 交给两路**只找回归**的子代理
+(服务端 / 前端各一路),我再逐条核实。抓到 **8 处**,全部是 gh/gi 自己引进来的,当场修掉:
+
+| 处 | gi 引进来的错 | 后果 |
+|---|---|---|
+| S1 | 带 `tool_use_id` 的 `task_progress` 被当纯心跳吞掉 | 后台子代理的卡片在主回合结束后再也收不到步数/活标签 —— **把 gd 修的「2 步 ✓」又带回来了** |
+| S2 | 「停止」不解除"外来 result"的提防 | 用户消息刚推进去就按停止:CLI 收掉自己那轮的 result 被忽略,用户回合挂到看门狗,期间每次发送都撞 "A turn is already running" |
+| S3 | 子代理在途表永远清不空 | 子代理被中止后内部工具没有 tool_result → `toolsInFlight` 恒真 → 观测回合看门狗"只续不杀"长达 2 小时 |
+| S4 | `enqueueCommand` 合并时把带分叉的命令钉回原会话 | 撞上新加的 `FORK_TARGET_HAS_HISTORY`,正文丢、outbox 卡在 sending |
+| C1 | 提交时把新消息并进 `needs_attachment` 的条目 | 那条永远发不出去,之后每一次回车都被吞 |
+| C2 | 冲队投递前不标 sending | 分叉命令建会话那几百毫秒里用户回车 → 并进去 → 被旧命令覆盖 → 新的一句消失 |
+| C3 | 回执行成了「最后一条」 | 真正的最后一条回复/报错失去「重发上一条」控制 |
+| C4 | 「回到底部」的强制跟底被 `userMoved` 立刻改回假 | 锚点是旧的时第一次点仍不滚,而按钮已经隐藏、第二次点的机会也没了 |
+
+顺带把 #25 做完整:gh 只脱敏了 `chat_subscribed` 那一条,`chat_queued` 广播与
+`chat_queue_cancelled` 退回的正文仍然发给所有查看者 —— 现在三条路都按查看者分别造帧,
+带 `redacted` 标记;自己排的图片消息不再被显示成"别人的"。另补一条:runtime 被换掉后
+读循环残余的帧不再灌进新回合(`if (runtime.disposed) break`)。
+
+**gi(md5 `5d05aed5…`)作废,请用 gj。** 全量 1923 通过;8 处都做了反向验证(改回去立刻红)。
+
+### 这一轮该记住的
+
+第一次自查(gh→gi)靠我自己重读 diff,抓到 3 处;第二次(gi→gj)换成**只找回归的对抗式复审**,
+又抓到 8 处 —— 其中 S1 是把 gd 修好的东西重新弄坏,C1 是把一个"偶尔丢一条"改成了"每一条都吞"。
+两次都在同一个包上。**"我自己再看一遍"不够;要有一个目标只有"找茬"的第二双眼睛,
+而且要拿完整 diff 而不是拿改动说明去看。**
+
+---
+
+## 2026-09-14 · gi — gh 自查:三处新引入的问题当场修掉,gh 作废
+
+gh 打完包之后按"这一包有没有引入新问题"再过一遍 diff,抓到三处,**都是 gh 自己引进来的**:
+
+1. **#6 的顺序错了**:重排队路径先广播 `chat_queued` 再调 `onAccepted`,而 `onAccepted`
+   会广播 `chat_queue_flushed` —— 客户端最后收到的是"队列空了",队列里明明还有这一条。
+   改成先 `onAccepted` 再 `chat_queued`,并钉住顺序。
+2. **#11 的位会卡住**:回合内处理的顶层 result 没把 `runtime.orphanTurnOpen` 清掉,
+   下一次用户回合会误把自己的 result 当外来的 —— 回合挂到看门狗。补上。
+3. **#15 计数口径错了**:按会话计数会把"一个后台会话连着几个短回合各排一条"的第 4 条
+   当死循环清掉。改成按 **同一条消息**(clientMessageId)计数,换了消息从头数。
+
+顺带:#25 之后共同查看者看到的排队卡没有正文,给一句占位「(另一位成员排队的消息)」。
+
+**gh 那个包(md5 `e359757d…`)作废,请用 gi。** 全量 1911 通过。
+
+---
+
+## 2026-09-14 · gh — gg 后审计的 27 条,一次改完(含 ge 引入的一条回归)
+
+审计报告见 `审计报告_对话模式_gg后_20260914.md`。27 条全部修复;每条有测试,
+13 条关键修复做了反向验证(改回原样立刻红)。**新增 42 条测试,全量 1910 通过。**
+
+### P0 · 越权
+
+- **#1 合流不再借别人的运行时**:`mergeUserMessage` 收到发送者身份(`actorUsername` /
+  `ownerUserId`)与这次的运行时选项;`mergeRefusalReason` 要求"同一个人、同一档位",
+  不一致回 `actor-mismatch` / `policy-mismatch`,退回排队(drain 之后走正常发送,按发送者
+  自己的策略起新一轮)。A 记住的放行条目因此也不会再对 B 生效。
+
+### P1 · 后台子代理整条链
+
+- **#2 用户一发消息不再把后台子代理杀掉**:`collectToolUseDelta` 跳过带
+  `parent_tool_use_id` 的帧;子代理的在途另记 `runtime.subagentToolUses`(只给看门狗用)。
+- **#3 「停止」能停掉 CLI 自己发起的那一轮,且不再丢帧**:`abortClaudeSDKRun` 在
+  `activeChatRuns` 找不到时按 app 会话 id 找 runtime 直接 `interrupt`;
+  `observeOrphanFrames` 在回合被换掉时不再 `return false` —— 用户真回合在跑就交给它的
+  writer,否则重新接住;只剩空 result 才清账。
+- **#4 无回合不合流**:`mergeRefusalReason` 加 `no-turn`。回合起点/末尾那两段窗口里的
+  消息退回排队,不会再把回复丢进开不了的观测回合。
+- **#12 看门狗只续不杀**:`tool_progress` / `task_progress` 作为心跳送到钩子;每批带
+  `toolsInFlight`,静默到点时工具还在跑就续期,硬顶最多续 8 次。
+- **#11 CLI 自己那一轮的 result 不结束用户回合**:`runtime.orphanTurnOpen` 记住"CLI 的
+  一轮开着";turn 建立时带 `expectForeignResult`;本回合还没收到任何帧就到的 result
+  被忽略(`shouldIgnoreForeignResult`)。⚠️ 这一条的时序要实机看。
+
+### P1 · 数据破坏 / 丢消息
+
+- **#5 同一用户的第二个终端也拿不到令牌**(`claimForShell`)—— 有持有者就不发第二张。
+- **#6 drain 重排队也调 `onAccepted`**,`.finally` 不再把它当 undeliverable 丢掉。
+- **#7 排队中的「编辑重跑」不再钉回原会话**:`fromStoredCommand` 有 forkFrom 就
+  `sessionId: null`;后台续发遇到 forkFrom 交回 composer;服务端在
+  `provider_session_id && forkFrom` 时回 `FORK_TARGET_HAS_HISTORY`,不再无声丢弃。
+
+### P2 · 定时任务会话 / 任务建立
+
+- **#8(ge 回归)定时任务回执回来了**:只有带 `toolId` 的 `task_notification` 归卡片;
+  没有的(「⏰ 开始执行」「✅ 执行完成」「⚠️ 执行失败:<原因>」)照旧渲染成回执行。
+  #20 的 tool-less `task_started` 行同一刀。
+- **#9 一次性路径接任务生命周期通道**:定时任务 / 外部 API 那条路也调 `taskLifecycleMessage`。
+  ⚠️ 一次性进程退出会不会带走后台任务,待实机验证。
+- **#10 合流带上 hiddenContext**(与 spawn 那条路同一套截断规则)—— 「让 Claude 建定时任务」
+  的票据不再被合流丢掉。
+
+### P2 · 前端展示
+
+- **#13 阅读位置对活动组/子代理组也能找回**:DOM 的 `data-row-key` 改用尾成员的内在 key
+  (React key 仍是 `_key`)。曾试过在 `resolveReadingSpot` 里退回倒数下标,
+  scrollOwnership 那四条立刻红 —— 分批落地时会按错误下标提前落位。**没上。**
+- **#14 「回到底部」第一次点就有效**:砍窗口前先 `followBottomRef = true`。
+- **#15 后台续发有上限**:同一会话 60 秒内最多 3 次,超限清记录(`autoSendAttemptAllowed`)。
+- **#16 / #17 子代理"还在跑"与"步数"只有一处定义**(`subagentStatus.ts`):展开区不再把转后台的
+  步骤标成「已中断」;「N 步」只数工具。
+- **#18 转后台的行耗时以后台状态为准**:running 留空(显示「运行中」),完成用 `durationMs`。
+- **#21 收到 0 行那一下要记住**(`closedToZeroRef`),不随第 4 步弹开。
+- **#22 "正文出现了"坐实 250ms 才折**(`useSettledTrue`),过渡正文被吸收前不再抖。
+- **#19 子代理帧不刷主上下文环**(两条路都过滤 `parent_tool_use_id`)。
+
+### P3
+
+- **#23** outbox 合并保留 `needs_attachment`;已有一条在等时新消息并入由冲队发。
+- **#24** 恢复 effect 不用盘上空记录抹掉属于这条会话的 `sending` 条目。
+- **#25** 排队预览只给排它的人。**#26** `isSameProjectPath(null, null) === false`。
+- **#27** 附件台账绝对路径回退分支也校验 `userId`。
+
+### 改动清单
+
+- `server/claude-sdk.js`:#1 #2 #3 #4 #9 #11 #12 #19(新增导出 `collectSubagentToolUseDelta` / `shouldIgnoreForeignResult`)
+- `server/modules/websocket/services/observed-run.service.ts`:#3 #12
+- `server/modules/websocket/services/chat-websocket.service.ts`:#1 #6 #7 #10 #25 #27
+- `server/modules/websocket/services/conversation-ownership.service.ts`:#5
+- `server/modules/database/repositories/sessions.db.ts`:#26
+- `src/components/chat/hooks/useChatMessages.ts`:#8 #20
+- `src/components/chat/utils/subagentStatus.ts`(新):#16 #17
+- `src/components/chat/view/subcomponents/SubagentGroupCard.tsx`:#16 #17
+- `src/components/chat/utils/toolRowSummary.ts` + `ActivityTimeline.tsx`:#18 #21 #22
+- `src/components/chat/view/subcomponents/ChatMessagesPane.tsx`:#13
+- `src/components/chat/hooks/useChatSessionState.ts`:#14
+- `src/components/chat/hooks/useChatComposerState.ts`:#23 #24
+- `src/components/chat/utils/sendCommand.ts` + `src/hooks/useQueuedMessageAutoSend.ts`:#7 #15
+- 新增测试:`server/tests/gh-sdk-fixes.test.js`、`server/modules/websocket/tests/gh-send-path-fixes.test.ts`、
+  `src/components/chat/utils/ghClientFixes.test.ts`;更新 9 份既有测试改钉新行为
+
+---
+
 ## 2026-09-10 · gg — 子代理的思考默认折起来
 
 用户原话:

@@ -301,7 +301,7 @@ export function summarizeToolRow(message: ChatMessage, sessionIsProcessing = tru
    * 这也是为什么"后台任务完成"不再需要在主对话流里单独占一行:那件事**这一行
    * 自己就说得清**,而且说得更准。
    */
-  const background = (message as { background?: { status?: string } }).background;
+  const background = (message as { background?: { status?: string; durationMs?: number } }).background;
   const backgroundStatus = background?.status === 'completed'
     ? 'done'
     : background?.status === 'failed'
@@ -309,6 +309,20 @@ export function summarizeToolRow(message: ChatMessage, sessionIsProcessing = tru
       : background?.status === 'running'
         ? 'running'
         : null;
+  /**
+   * gh:**转后台的行,耗时也以后台状态为准。**
+   *
+   * 那个立刻到达的"running in the background" tool_result 带着 timestamp,按它算出来
+   * 的是"转后台之前跑了多久"(0.2s)—— 状态是 running 却显示 0.2s,跑完了也还是 0.2s。
+   * 跑着时留空(界面显示「运行中」),完成/失败用 task_notification 带回的 duration_ms。
+   */
+  const duration = background
+    ? (background.status === 'running'
+      ? ''
+      : (Number.isFinite(background.durationMs) && (background.durationMs as number) > 0
+        ? formatDurationMs(background.durationMs as number)
+        : ''))
+    : toolDuration(message.timestamp, message.toolResult);
 
   return {
     status: backgroundStatus ?? (hasResult
@@ -320,7 +334,7 @@ export function summarizeToolRow(message: ChatMessage, sessionIsProcessing = tru
     target: toolTarget(toolName, message.toolInput),
     metric: metric.text,
     metricIsWrite: metric.isWrite,
-    duration: toolDuration(message.timestamp, message.toolResult),
+    duration,
   };
 }
 

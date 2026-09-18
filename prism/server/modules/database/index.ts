@@ -1,6 +1,6 @@
 export { initializeDatabase, startDatabaseBackups, stopDatabaseBackups } from '@/modules/database/init-db.js';
 export { backupDatabase, closeConnection, getConnection, getDatabasePath } from '@/modules/database/connection.js';
-export { canViewerSeeSession } from '@/modules/database/session-visibility.js';
+export { canViewerSeeSession, canViewerManageSession } from '@/modules/database/session-visibility.js';
 export { canViewerSeeProjectPath, projectVisibilityInput, resolveVisibleProjectRoot } from '@/modules/database/project-access.js';
 export { NO_SUCH_USER_ID, type VisibilityScope } from '@/modules/database/visibility-sql.js';
 export { apiKeysDb } from '@/modules/database/repositories/api-keys.js';
@@ -17,6 +17,8 @@ export { scheduledTasksDb } from '@/modules/database/repositories/scheduled-task
 export { taskRunHistoryLimit } from '@/modules/database/repositories/scheduled-tasks.db.js';
 export type { ScheduledTaskRow, ScheduledTaskInsert, ScheduledTaskRunRow, TaskFrequency, TaskSessionMode } from '@/modules/database/repositories/scheduled-tasks.db.js';
 export { sessionsDb } from '@/modules/database/repositories/sessions.db.js';
+export { sessionTrashDb } from '@/modules/database/repositories/session-trash.db.js';
+export type { SessionTrashRow, TrashDeletedVia } from '@/modules/database/repositories/session-trash.db.js';
 export { uiSettingsDb, type UiSettingsRecord } from '@/modules/database/repositories/ui-settings.db.js';
 export { userDb } from '@/modules/database/repositories/users.js';
 export type { ApprovalStatus, UserAdminRow } from '@/modules/database/repositories/users.js';

@@ -96,10 +96,24 @@ describe('对话所有权(chat / 终端互斥)', () => {
     assert.equal(currentHolder('s1'), null);
   });
 
-  test('fl:同一个人重连沿用同一张令牌 —— 否则旧连接的退出会把新的释放掉', () => {
+  /**
+   * gh:**同一个人的第二个终端也拿不到令牌。**
+   *
+   * fl 对"同一个人"直接把现有令牌原样返回,注释说是重连续期。可真正的重连
+   * 走不到这里(shell 那边按 terminalId 复用 PTY,提前返回);能走到这里的只有
+   * 同一用户的**另一个** PTY。于是第二个终端拿着同一张令牌又起一个 `claude --resume`;
+   * 第一个关闭时令牌匹配 → 锁释放、显示日志被删,而第二个 PTY 还活着,chat 也放行。
+   */
+  test('gh:同一个人再来一个终端也拿不到令牌 —— 有持有者就不发第二张', () => {
     const first = claimForShell('s2', { userId: 7, username: 'bob' });
+    assert.ok(first.token);
     const again = claimForShell('s2', { userId: 7, username: 'bob' });
-    assert.equal(again.token, first.token);
+    assert.equal(again.token, undefined);
+    // 现有持有者原样报回去(调用方据此打印"已被另一个终端接管")
+    assert.equal(again.username, 'bob');
+    // 第一把令牌仍然有效:它释放时才真的释放
+    releaseShellClaim('s2', first.token);
+    assert.equal(currentHolder('s2'), null);
   });
 
   test('没有用户信息时也能登记 —— 平台模式下拿不到用户名,不能因此拒绝接管', () => {

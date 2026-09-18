@@ -3,7 +3,8 @@ import { Check, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Download
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../../lib/utils';
-import { api, authenticatedFetch } from '../../../../utils/api';
+import { api } from '../../../../utils/api';
+import { startBrowserDownload } from '../../../../utils/browserDownload';
 import { safeLocalStorage } from '../../utils/chatStorage';
 import { isInsideProject } from '../../utils/outputPaths';
 import { todoProgress, type TodoItem } from '../../utils/taskChecklist';
@@ -118,6 +119,16 @@ function ChatWorkPanel({
     });
   };
 
+  /**
+   * 下载:**签一张票,然后让浏览器自己去下。**
+   *
+   * 以前是 fetch → blob → `a[download]`:整份文件先落进标签页内存,拼完才弹保存框 ——
+   * 没有进度条、切页就断、几 GB 的产出直接把标签页撑崩。现在换成签票 + 导航,
+   * 下载栏立刻出现,进度是浏览器画的。
+   *
+   * 失败全部挡在签票那一步(权限、路径、文件不存在),那一步还在 fetch 语境里,
+   * setNotice 照常弹得出来 —— 后面那步是浏览器导航,失败只会在下载栏里留一行。
+   */
   const handleDownload = async (file: SessionOutputFile) => {
     const viaSession = !isInsideProject(file.path, projectPath) && Boolean(sessionId);
     if (!viaSession && !projectId) return;
@@ -125,21 +136,11 @@ function ChatWorkPanel({
     setNotice(null);
     try {
       const response = viaSession || !projectId
-        ? await api.sessionOutputBlob(String(sessionId), file.path)
-        : await authenticatedFetch(
-          `/api/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(file.path)}`,
-        );
+        ? await api.issueSessionOutputDownloadTicket(String(sessionId), file.path)
+        : await api.issueDownloadTicket(projectId, [file.path]);
       if (!response.ok) throw new Error(`下载失败(HTTP ${response.status})`);
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = file.name;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      // 释放放到下一拍 —— 有些浏览器在 click 返回时还没开始读这个 URL。
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      const { url } = await response.json() as { url: string };
+      startBrowserDownload(url);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {

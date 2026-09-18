@@ -58,6 +58,45 @@ export function canManageProject(projectId: string, actor: PermissionsActor | un
 }
 
 /**
+ * gk:谁能**永久删除**一个项目。
+ *
+ * 与 `canManageProject`(改权限 / 改所有者)只差一处:**无主项目**。
+ * `owner_user_id IS NULL` 在这个库里的语义是"公共项目",它没有"负责人"这一档
+ * 可以收紧到 —— 而无主项目是常态(监视器在磁盘上扫到新路径时就是不带 owner 地
+ * 建行)。把无主也判成"只有 root 能永久删",等于把普通用户删自己在终端里开出来的
+ * 项目这件事也堵掉了,那是 gj 能做的事。改权限没有这个顾虑:公共项目的权限本来
+ * 就只该 root 动。
+ *
+ * 项目不存在时返回 false(调用方先过可见性,那条路会回 404)。
+ */
+export function canDeleteProject(projectId: string, actor: PermissionsActor | undefined): boolean {
+  if (actor?.isRoot === true) return true;
+  const owner = projectsDb.getProjectOwner(projectId);
+  if (owner === undefined) return false;
+  if (owner === null) return true;
+  return typeof actor?.id === 'number' && owner === actor.id;
+}
+
+/**
+ * gn:谁能**归档**一个项目 —— 与永久删除同一条规则。
+ *
+ * 归档以前是"看得见就能做",与会话归档同口径。但项目归档和会话归档不是一回事:
+ * 归档一个项目,它会从**所有人**的活跃侧栏里消失,而按钮上没有任何"这不是你的
+ * 项目"的提示。2026-09-15 实测,非 root 的 `test` 就这么把 root 的 `lqm` 整个
+ * 归档掉了(可一键还原、没丢数据,但所有人当场都看不见它了)。
+ *
+ * 所以收紧到与 `canDeleteProject` 同一条:root / owner 放行,**无主项目**没有
+ * "负责人"这一档所以回落到可见性。会话级的归档不受影响 —— 共享项目里的协作者
+ * 照样能归档自己看得见的会话,那只影响他自己的列表。
+ *
+ * 故意委托给 `canDeleteProject` 而不是复制一份判据:两者必须永远一致,
+ * 复制出来的第二份迟早会漂。
+ */
+export function canArchiveProject(projectId: string, actor: PermissionsActor | undefined): boolean {
+  return canDeleteProject(projectId, actor);
+}
+
+/**
  * 校验一次权限设置的入参。**不写库** —— 批量场景要在动第一个项目之前就
  * 把"用户 id 不存在""选了指定用户却没选人"这类错一次性问清楚,
  * 而不是改了三个项目之后在第四个上抛出来。

@@ -26,7 +26,8 @@ describe('子代理卡的后台状态', () => {
     // ge 纠错:gd 写的是 `background?.toolUses ?? childTools.length`,前提是
     // "转后台之后子步骤不再走实时流" —— SDK 文档说默认就转发 tool_use/tool_result,
     // 那个前提是错的。
-    expect(source).toMatch(/const stepCount = Math\.max\(background\?\.toolUses \?\? 0, childTools\.length\);/);
+    // gh:判据收进 subagentToolStepCount(只数工具步、取两个来源的最大值)
+    expect(source).toMatch(/const stepCount = subagentToolStepCount\(message\);/);
     expect(source).toMatch(/t\('subagent\.steps', \{ count: stepCount/);
     expect(source).not.toMatch(/t\('subagent\.steps', \{ count: childTools\.length/);
   });
@@ -41,8 +42,8 @@ describe('子代理卡的后台状态', () => {
   });
 
   it('抬头的总步数同样取最大值,「N 个进行中」跟着后台状态走', () => {
-    expect(source).toMatch(/const stepCountOf = \(message: ChatMessage\) => Math\.max\(/);
-    expect(source).toMatch(/if \(background\) return background\.status === 'running';/);
+    expect(source).toMatch(/const stepCountOf = \(message: ChatMessage\) => subagentToolStepCount\(message\);/);
+    expect(source).toMatch(/const runningCount = group\.messages\.filter\(\(message\) => subagentStillRunning\(message, isCurrentTurn\)\)\.length;/);
   });
 
   it('展开区不再是一个独立的白盒子 —— 接在轴上', () => {

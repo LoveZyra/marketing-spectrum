@@ -50,7 +50,38 @@ export type AuditEvent =
    * 至少让它可追溯。
    */
   | 'skill_installed'
-  | 'skill_removed';
+  | 'skill_removed'
+  /*
+   * gk:会话与项目的删除 / 归档 / 恢复。
+   *
+   * 2026-09-14 生产上一条跑了一天的会话被人永久删除,事后**查不出是谁、从哪个入口**:
+   * 25 个审计事件里没有一个是会话级的,单个删项目也没记。这里把"东西没了"这一类
+   * 全部补齐,detail 是一段 JSON(见 sessions.service 的 auditDetail),前端渲染成人话。
+   */
+  | 'session_deleted'
+  | 'session_archived'
+  | 'sessions_bulk_deleted'
+  | 'sessions_bulk_archived'
+  | 'archived_sessions_emptied'
+  | 'project_deleted'
+  | 'project_archived'
+  | 'session_trash_restored'
+  | 'session_trash_purged';
+
+/**
+ * gk:这几类事件不参与"只留最新 5000 行"的常规裁剪 —— `ws_ticket_issued` 每次
+ * 连 WebSocket 都记一条,几天就能把 5000 行冲满,而"上个月谁删了我的会话"正是
+ * 审计日志最该答得上的问题。它们另有一个宽得多的上限(见 trim)。
+ */
+export const DURABLE_AUDIT_EVENTS: readonly AuditEvent[] = [
+  'session_deleted',
+  'sessions_bulk_deleted',
+  'archived_sessions_emptied',
+  'project_deleted',
+  'projects_bulk_deleted',
+  'session_trash_restored',
+  'session_trash_purged',
+];
 
 export type AuditOutcome = 'success' | 'failure';
 
@@ -62,6 +93,8 @@ export type AuditEntry = {
   ip?: string | null;
   userAgent?: string | null;
   detail?: string | null;
+  /** gk:这条记录**对谁做的**(被删会话所属项目的 owner)。见 buildAuditWhere。 */
+  targetUserId?: number | null;
 };
 
 export type AuditRow = {
@@ -73,11 +106,20 @@ export type AuditRow = {
   ip: string | null;
   user_agent: string | null;
   detail: string | null;
+  target_user_id: number | null;
   created_at: string;
 };
 
-// Keep the table from growing without bound on a long-lived install.
-const MAX_ROWS = Number.parseInt(process.env.PRISM_AUDIT_LOG_MAX_ROWS ?? '', 10) || 5000;
+/**
+ * Keep the table from growing without bound on a long-lived install.
+ *
+ * 两个上限都在 `trim()` 里**每次读** —— 不是模块加载时读一次。裁剪每 100 次写
+ * 才跑一次,读两个环境变量的代价可以忽略;而写死在模块顶层的值没法在测试里换,
+ * 于是"第二档到底裁不裁"这件事就只能不测(审计里正是这么漏掉的)。
+ */
+const maxRows = (): number => Number.parseInt(process.env.PRISM_AUDIT_LOG_MAX_ROWS ?? '', 10) || 5000;
+// gk:删除类事件的独立上限 —— 一条删除记录只有几百字节,两万条也不到 10 MB。
+const maxDurableRows = (): number => Number.parseInt(process.env.PRISM_AUDIT_LOG_MAX_DURABLE_ROWS ?? '', 10) || 20000;
 
 let writesSinceTrim = 0;
 const TRIM_EVERY = 100;
@@ -119,9 +161,13 @@ const buildAuditWhere = (
   const params: unknown[] = [];
 
   // 闸门先拼。位置在前不影响 SQL 语义,但读代码的人一眼能看出它不受下面影响。
+  //
+  // gk:范围从"我做的"扩成"我做的 OR **对我做的**"(target_user_id = 我)。
+  // 被删会话所属项目的 owner 要能看到"谁删了我的会话" —— 否则删除记了也等于白记:
+  // 只有删的人自己看得到。对我做的那些行,ip / user_agent 在 list 里脱敏(那是别人的)。
   if (userId !== null) {
-    clauses.push('user_id = ?');
-    params.push(userId);
+    clauses.push('(user_id = ? OR target_user_id = ?)');
+    params.push(userId, userId);
   }
 
   const events = (filters.events ?? []).filter((event) => typeof event === 'string' && event.length > 0);
@@ -154,8 +200,8 @@ export const auditLogDb = {
     try {
       const db = getConnection();
       db.prepare(
-        `INSERT INTO audit_log (user_id, username, event, outcome, ip, user_agent, detail)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO audit_log (user_id, username, event, outcome, ip, user_agent, detail, target_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         entry.userId ?? null,
         entry.username ?? null,
@@ -164,7 +210,8 @@ export const auditLogDb = {
         entry.ip ?? null,
         // User agents are attacker-controlled and unbounded; cap them.
         entry.userAgent ? entry.userAgent.slice(0, 300) : null,
-        entry.detail ? entry.detail.slice(0, 1000) : null
+        entry.detail ? entry.detail.slice(0, 1000) : null,
+        typeof entry.targetUserId === 'number' && Number.isFinite(entry.targetUserId) ? entry.targetUserId : null,
       );
 
       if (++writesSinceTrim >= TRIM_EVERY) {
@@ -195,12 +242,21 @@ export const auditLogDb = {
     const db = getConnection();
     const safeLimit = Math.min(Math.max(1, limit), 500);
     const safeOffset = Math.max(0, offset);
-    const columns = 'id, user_id, username, event, outcome, ip, user_agent, detail, created_at';
+    const columns = 'id, user_id, username, event, outcome, ip, user_agent, detail, target_user_id, created_at';
     const { sql: whereSql, params } = buildAuditWhere(userId, filters);
 
-    return db
+    const rows = db
       .prepare(`SELECT ${columns} FROM audit_log${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`)
       .all(...params, safeLimit, safeOffset) as AuditRow[];
+
+    // gk:非 root 拿到的"对我做的"行,ip / user_agent 是**别人的**,抹掉。
+    // 操作者用户名保留 —— "谁删的"正是这条记录存在的意义。
+    if (userId === null) return rows;
+    return rows.map((row) => (
+      row.user_id !== null && String(row.user_id) === String(userId)
+        ? row
+        : { ...row, ip: null, user_agent: null }
+    ));
   },
 
   /** Total row count, for pagination. Same scoping contract as `list`. */
@@ -213,15 +269,27 @@ export const auditLogDb = {
     return row.count;
   },
 
-  /** Drops the oldest rows beyond MAX_ROWS. */
+  /**
+   * Drops the oldest rows beyond MAX_ROWS.
+   *
+   * gk:分两档。常规事件仍是"只留最新 MAX_ROWS 行";删除类事件(DURABLE_AUDIT_EVENTS)
+   * 不进这一刀,另按 MAX_DURABLE_ROWS 裁 —— 否则一周的 ws_ticket_issued 就能把
+   * 上个月那条删除记录挤出去。
+   */
   trim(): void {
     try {
       const db = getConnection();
+      const durablePlaceholders = DURABLE_AUDIT_EVENTS.map(() => '?').join(',');
       db.prepare(
-        `DELETE FROM audit_log WHERE id NOT IN (
-           SELECT id FROM audit_log ORDER BY id DESC LIMIT ?
+        `DELETE FROM audit_log WHERE event NOT IN (${durablePlaceholders}) AND id NOT IN (
+           SELECT id FROM audit_log WHERE event NOT IN (${durablePlaceholders}) ORDER BY id DESC LIMIT ?
          )`
-      ).run(MAX_ROWS);
+      ).run(...DURABLE_AUDIT_EVENTS, ...DURABLE_AUDIT_EVENTS, maxRows());
+      db.prepare(
+        `DELETE FROM audit_log WHERE event IN (${durablePlaceholders}) AND id NOT IN (
+           SELECT id FROM audit_log WHERE event IN (${durablePlaceholders}) ORDER BY id DESC LIMIT ?
+         )`
+      ).run(...DURABLE_AUDIT_EVENTS, ...DURABLE_AUDIT_EVENTS, maxDurableRows());
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error('Failed to trim audit log', { error: message });

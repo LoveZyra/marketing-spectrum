@@ -78,6 +78,10 @@ type ObservedEntry = {
   appSessionId: string;
   idleTimer: ReturnType<typeof setTimeout> | null;
   absoluteTimer: ReturnType<typeof setTimeout> | null;
+  /** gh:最近一批帧到达时,CLI 那边还有没有工具在跑(含子代理的)。到点时只续不杀。 */
+  toolsInFlight: boolean;
+  /** gh:因"工具在途"续过几次硬顶 —— 有上限,免得真僵死的回合永远收不掉。 */
+  maxExtensions: number;
 };
 
 const entries = new Map<string, ObservedEntry>();
@@ -129,9 +133,31 @@ function clearTimers(entry: ObservedEntry): void {
  * `reason` 只进日志 —— 三种收尾方式(result / 静默超时 / 硬顶)在生产上要分得清:
  * 后两种反复出现就说明 CLI 那侧的回合边界与我们的判据对不上。
  */
+/** gh:硬顶最多因"工具在途"续这么多次(15 分钟 × 8 = 2 小时,与定时任务的单次上限同量级)。 */
+const OBSERVED_MAX_EXTENSIONS = 8;
+
 function finish(appSessionId: string, reason: 'result' | 'idle' | 'max'): void {
   const entry = entries.get(appSessionId);
   if (!entry) return;
+  /**
+   * gh:**工具还在跑就不收。**
+   *
+   * 静默看门狗的 60 秒是按"模型在想"设计的;一条跑 90 秒的后台命令没有任何帧,
+   * 到点就被判成失败(complete exitCode:1,转圈消失),下一帧又开一个新回合 ——
+   * 界面一闪一闪。上游每一批帧都带着"CLI 还有没有工具在途",到点只续不杀。
+   */
+  if (reason !== 'result' && entry.toolsInFlight) {
+    if (reason === 'idle') {
+      armTimers(entry);
+      return;
+    }
+    if (entry.maxExtensions < OBSERVED_MAX_EXTENSIONS) {
+      entry.maxExtensions += 1;
+      entry.absoluteTimer = setTimeout(() => finish(entry.appSessionId, 'max'), OBSERVED_MAX_MS);
+      entry.absoluteTimer.unref?.();
+      return;
+    }
+  }
   entries.delete(appSessionId);
   clearTimers(entry);
   const run = chatRunRegistry.getRun(appSessionId);
@@ -172,12 +198,38 @@ export function observeOrphanFrames(input: {
   trigger: ObservedTrigger;
   /** 这一批里有 `result` —— 这一轮到此为止。 */
   turnEnded: boolean;
+  /** gh:CLI 那边此刻还有没有工具在跑(含子代理)。看门狗到点时只续不杀。 */
+  toolsInFlight?: boolean;
 }): boolean {
   const { appSessionId } = input;
   if (!appSessionId) return false;
 
   const forwardable = input.messages.filter((message) => OBSERVABLE_KINDS.has(String(message.kind)));
   let entry = entries.get(appSessionId);
+
+  /**
+   * gh:**回合被换掉了,这一批不能扔。**
+   *
+   * gb 在这里 `return false`:观测回合被用户的真回合抢占、或被「停止」标成完成之后,
+   * 紧接着到达的那一批帧既不广播也不落库 —— 而显示日志一旦有行就是权威来源,
+   * 这一批从此不会再出现在界面上。现在分三种情况:
+   *   - 用户的真回合正在跑(抢占窗口):交给**它的** writer,界面与日志都是同一条会话;
+   *   - 只是一个空 result(比如刚被中止):什么都不用显示,清账即可;
+   *   - 其余:当作新的一轮重新接住(走下面 `!entry` 那条路)。
+   */
+  if (entry) {
+    const current = chatRunRegistry.getRun(appSessionId);
+    if (!current || !current.observed || current.status !== 'running') {
+      entries.delete(appSessionId);
+      clearTimers(entry);
+      entry = undefined;
+      if (current && !current.observed && current.status === 'running') {
+        for (const message of forwardable) current.writer.send(message);
+        return forwardable.length > 0;
+      }
+      if (forwardable.length === 0) return false;
+    }
+  }
 
   if (!entry) {
     // 没有内容就不开回合 —— 只有 result 到达(空转)时不该凭空冒出一段。
@@ -195,9 +247,16 @@ export function observeOrphanFrames(input: {
       userId: input.userId,
       observed: true,
     });
-    // 被别的回合占着(用户的真回合正在跑)—— 那一轮自己会显示,不用我们插手。
-    if (!run) return false;
-    entry = { appSessionId, idleTimer: null, absoluteTimer: null };
+    // 被别的回合占着(用户的真回合正在跑)—— 交给它的 writer,不能丢(见上)。
+    if (!run) {
+      const busy = chatRunRegistry.getRun(appSessionId);
+      if (busy && !busy.observed && busy.status === 'running') {
+        for (const message of forwardable) busy.writer.send(message);
+        return true;
+      }
+      return false;
+    }
+    entry = { appSessionId, idleTimer: null, absoluteTimer: null, toolsInFlight: false, maxExtensions: 0 };
     entries.set(appSessionId, entry);
     observedTurnsOpened += 1;
     log.info(`[observed] 接住 ${appSessionId} 的一轮无主回合(trigger=${input.trigger})`);
@@ -218,13 +277,14 @@ export function observeOrphanFrames(input: {
 
   const run = chatRunRegistry.getRun(appSessionId);
   if (!run || !run.observed || run.status !== 'running') {
-    // 期间被抢占换掉了 —— 这一批不再属于我们,收摊。
+    // 刚开的回合当场就没了(极端竞态)—— 收摊,下一批再来。
     entries.delete(appSessionId);
     clearTimers(entry);
     return false;
   }
 
   for (const message of forwardable) run.writer.send(message);
+  entry.toolsInFlight = Boolean(input.toolsInFlight);
   armTimers(entry);
 
   if (input.turnEnded) finish(appSessionId, 'result');

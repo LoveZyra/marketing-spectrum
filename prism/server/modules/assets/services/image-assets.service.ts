@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import { getGlobalImageAssetsDir, toPosixPath } from '@/shared/image-attachments.js';
+import { recoverUploadFilename } from '@/shared/upload-filename.js';
 
 /**
  * 聊天图片附件接受的 mime。
@@ -97,7 +98,9 @@ export function inlineContentTypeForFile(fileName: string): string | null {
  *   3. **必带随机后缀**,否则同名文件会互相覆盖(两个人各传一张 `截图.png`)。
  */
 export function buildAttachmentFilename(originalName: string, mimeType: string): string {
-  const raw = typeof originalName === 'string' ? originalName : '';
+  // 先恢复编码,再洗:multer 把 multipart 的 filename 按 latin1 读,`附件.png`
+  // 到这里是 `é™„ä»¶.png`,直接洗就是**以乱码落盘** —— 而附件目录明放在项目文件树里。
+  const raw = recoverUploadFilename(typeof originalName === 'string' ? originalName : '');
   // 先取 basename 去掉目录部分,再把控制字符、分隔符、以及各系统的保留字符洗掉。
   const base = path.basename(raw.replace(/\\/g, '/'))
     .replace(/[\u0000-\u001f\u007f/\\:*?"<>|]/g, '_')
@@ -115,7 +118,9 @@ export function buildAttachmentFilename(originalName: string, mimeType: string):
  */
 export function buildStoredImageRecords(files: UploadedImageFile[]): StoredImageAsset[] {
   return files.map((file) => ({
-    name: file.originalname,
+    // 与落盘名走同一道恢复(buildAttachmentFilename 里那一道),否则文件树里是
+    // 中文、附件卡片上是乱码 —— 两个名字漂开比两个都乱码更难查。
+    name: recoverUploadFilename(file.originalname),
     // 目录由 multer 的 destination 决定(项目 attachments/ 或全局回落),
     // 不能再假定就是全局目录 —— 假定错了,历史里存的路径会指向不存在的文件。
     path: toPosixPath(path.join(file.destination || getGlobalImageAssetsDir(), file.filename)),

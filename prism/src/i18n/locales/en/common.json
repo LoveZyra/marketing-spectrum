@@ -8,7 +8,8 @@
     "shell": "Shell",
     "files": "Files",
     "notebook": "Notebook",
-    "tasks": "Tasks"
+    "tasks": "Tasks",
+    "projects": "Projects"
   },
   "status": {
     "completed": "Completed"
@@ -88,17 +89,22 @@
     "toast": {
       "pathCopied": "Path copied to clipboard",
       "copyFailed": "Failed to copy path",
-      "folderDownloadedPartial": "Downloaded, but {{skipped}} subfolder(s) were left out (too deep to have loaded): {{preview}}. Open the subfolder and download it separately for the full contents."
+      "fileCreated": "File created successfully",
+      "fileDeleted": "File deleted",
+      "folderCreated": "Folder created successfully",
+      "folderDeleted": "Folder deleted",
+      "renamed": "Renamed successfully",
+      "downloadPreparing": "Preparing \"{{name}}\" — your browser will show the save dialog when it is ready…"
     },
     "truncatedNotice": "This directory has too many entries; only part of it is shown. Open a subfolder to see more.",
     "selectionMode": "Select multiple",
     "selectedCount": "{{count}} selected",
     "batchDownload": "Download selected",
+    "batchDownloadLabel": "{{selected}} selected",
     "batchDelete": "Delete selected",
     "exitSelection": "Exit selection",
     "batchDeleteConfirm": "Delete the {{count}} selected items? This cannot be undone.",
     "batchDeletePartial": "{{failed}} items failed to delete",
-    "batchDownloadPartial": "{{failed}} items failed to download",
     "search": {
       "toggle": "Search in project (Ctrl+Shift+F)",
       "placeholder": "Search file contents…",
@@ -112,6 +118,29 @@
       "tooShort": "Enter at least 2 characters",
       "summary": "{{matches}} matches in {{files}} files",
       "truncated": "limit reached, results truncated"
+    },
+    "delete": {
+      "confirm": "Delete",
+      "fileWarning": "This file will be permanently deleted.",
+      "folderWarning": "This folder and all its contents will be permanently deleted.",
+      "title": "Delete {{type}}"
+    },
+    "download": {
+      "unauthorized": "Your session expired — sign in again before downloading \"{{name}}\"",
+      "forbidden": "You do not have permission to download \"{{name}}\", or it no longer exists",
+      "failed": "Failed to download \"{{name}}\" (HTTP {{status}})"
+    },
+    "dropToUpload": "Drop files to upload",
+    "uploadComplete": "Upload complete",
+    "uploadFailed": "Upload failed",
+    "uploadFiles": "Upload files (max {{size}} each)",
+    "uploadedCount": "Uploaded {{uploaded}} of {{total}} {{label}}",
+    "uploadingFiles": "Uploading files",
+    "validation": {
+      "dotsOnly": "Filename cannot be only dots",
+      "emptyName": "Filename cannot be empty",
+      "invalidChars": "Filename contains invalid characters",
+      "reserved": "Filename is a reserved name"
     }
   },
   "projectWizard": {
@@ -238,7 +267,8 @@
     "thoughtSeconds": "Thought for {{duration}} seconds"
   },
   "tooltips": {
-    "exportSessionFailed": "Failed to export session. Please retry."
+    "exportSessionFailed": "Failed to export session. Please retry.",
+    "deleteSessionOptions": "Archive or permanently delete this session"
   },
   "folderBrowser": {
     "title": "Select Folder",
@@ -362,5 +392,29 @@
     "add": "New terminal",
     "close": "Close {{name}}",
     "label": "Terminal {{index}}"
+  },
+  "deleteConfirmation": {
+    "cannotDeletePermanently": "You are not this project's owner, so you can only archive it — archiving hides it from the active list and keeps every message.",
+    "archivedAndCannotDelete": "This session is already archived. Only the project owner or an administrator can delete it permanently, so there is nothing to do here.",
+    "cannotRemoveProject": "You are not this project's owner — archiving or deleting a whole project is limited to its owner and administrators. You can still archive your own sessions.",
+    "archiveSession": "Archive session",
+    "archiveSessionNotice": "Archive keeps the session out of the active list while preserving its history.",
+    "archivedSessionNotice": "This session is already archived. You can keep it hidden or delete it permanently.",
+    "deleteSessionPermanently": "Delete permanently",
+    "archiveProject": "Archive project",
+    "sessionCount": "This project has {{count}} sessions."
+  },
+  "actions": {
+    "close": "Close"
+  },
+  "common": {
+    "cancel": "Cancel",
+    "done": "Done",
+    "failed": "Failed"
+  },
+  "versionUpdate": {
+    "ariaLabels": {
+      "closeSidebar": "Close sidebar"
+    }
   }
 }

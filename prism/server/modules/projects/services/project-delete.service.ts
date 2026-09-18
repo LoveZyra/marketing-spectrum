@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { attachmentsDb, projectsDb, sessionsDb, getConnection } from '@/modules/database/index.js';
+import { attachmentsDb, auditLogDb, projectsDb, sessionsDb, getConnection } from '@/modules/database/index.js';
+import { sessionsService, type SessionActor } from '@/modules/providers/index.js';
 import { ATTACHMENT_DIR_NAME } from '@/shared/attachment-storage.js';
 import { AppError } from '@/shared/utils.js';
 import { createLogger } from '@/shared/logger.js';
@@ -55,10 +56,19 @@ export async function deleteSessionJsonlFilesForProjectPath(projectPath: string)
 
 /**
  * - **Soft delete** (`force` false): set `isArchived` on the `projects` row (hide from the active list; DB only).
- * - **Force** (`force` true): for each session row for that `project_path`, delete the file at `jsonl_path`
- *   (when set), then remove session rows and the `projects` row.
+ * - **Force** (`force` true): every session under that `project_path` goes to the trash (row + display
+ *   log + transcript, see sessions.service), attachments are purged, then the `projects` row is removed.
+ *
+ * gk:此前 force 删项目是**直接 unlink 全部 transcript + DELETE 全部会话行**,而且
+ * 完全不看这些会话有没有在跑。现在逐条走与单条永久删除同一条路(进最近删除、
+ * 收 runtime、审计、推 `session_removed`),并且**先整体预检**:任何一条在跑 / 被终端
+ * 接管 / 有排队消息,整个删除拒绝,一条都不动 —— 删一半再抛,比不删更难解释。
  */
-export async function deleteOrArchiveProject(projectId: string, force: boolean): Promise<void> {
+export async function deleteOrArchiveProject(
+  projectId: string,
+  force: boolean,
+  actor: SessionActor | null = null,
+): Promise<void> {
   const row = projectsDb.getProjectById(projectId);
   if (!row) {
     throw new AppError(`Unknown projectId: ${projectId}`, {
@@ -67,28 +77,79 @@ export async function deleteOrArchiveProject(projectId: string, force: boolean):
     });
   }
 
+  const auditBase = {
+    userId: actor && actor.userId !== null && Number.isFinite(Number(actor.userId)) ? Number(actor.userId) : null,
+    username: actor?.username ?? null,
+    ip: actor?.ip ?? null,
+    userAgent: actor?.userAgent ?? null,
+    targetUserId: row.owner_user_id ?? null,
+  };
+
   if (!force) {
     projectsDb.updateProjectIsArchivedById(projectId, true);
+    auditLogDb.record({
+      ...auditBase,
+      event: 'project_archived',
+      detail: JSON.stringify({ entry: 'project', projectPath: row.project_path, projectName: row.custom_project_name ?? null }),
+    });
     return;
   }
 
+  const sessions = sessionsDb.getSessionsByProjectPathIncludingArchived(row.project_path);
+
+  // 预检:一条都不动之前先问清楚"有没有正在用的"。
+  const busy = sessions.filter((session) => sessionsService.isSessionInUse(session.session_id));
+  if (busy.length > 0) {
+    const names = busy.slice(0, 5).map((session) => session.custom_name?.trim() || session.session_id);
+    throw new AppError(
+      `项目下还有 ${busy.length} 条会话正在使用(在跑 / 终端接管 / 有排队消息):${names.join('、')} —— 先停掉它们再删除项目。`,
+      { code: 'PROJECT_HAS_ACTIVE_SESSIONS', statusCode: 409 },
+    );
+  }
+
+  const trashed: string[] = [];
+  const failed: string[] = [];
+  for (const session of sessions) {
+    try {
+      await sessionsService.deleteOrArchiveSessionById(session.session_id, {
+        force: true,
+        deletedFromDisk: true,
+        actor,
+        via: 'project',
+      });
+      trashed.push(session.custom_name?.trim() || session.session_id);
+    } catch (error) {
+      failed.push(session.session_id);
+      log.warn('[project-delete] 会话进最近删除失败(继续其余):', { sessionId: session.session_id, error: (error as Error)?.message });
+    }
+  }
+
   /**
-   * 顺序与原子性。
+   * **一条都不许"直接删"。**
    *
-   * 磁盘那两步(删 transcript、删附件目录)**没法**放进事务里 —— 文件系统不回滚。
-   * 所以只把两次库写包起来:它们要么一起生效,要么一起不生效。
+   * 上一版在这里继续往下走,靠后面的 `deleteSessionsByProjectPath` 兜住失败的那几条 ——
+   * 那等于把它们连显示日志一起硬删:回收站里没有副本、没有 `session_deleted` 审计、
+   * runtime 也没收,而这正是整个 gk 要消灭的那种"东西凭空没了"。
    *
-   * ## 为什么这一层包起来就够
-   *
-   * 之前四步全裸奔,中途崩会留下"会话行删了、项目行还在"这种谁也没描述过的中间态:
-   * 项目仍列在侧栏,点进去空空如也,而且**再删一次也删不掉那些已经没了的会话**。
-   * 现在最坏的情况是"文件删了、库还在" —— 那是**可自愈**的:重新点一次删除,
-   * 磁盘那两步是幂等的(`fs.rm` 带 force、`forgetUnder` 按前缀),库那步照常跑完。
-   *
-   * 反过来包(先删库再删盘)不行:库删了就再也找不到 project_path,磁盘上的
-   * transcript 和附件成为永久孤儿。所以磁盘在前、库在后,是有意的。
+   * 预检(上面的 `busy`)挡的是"删之前就在用";但循环里每条都 `await`,第五条删到
+   * 一半时第三条完全可能刚被起一个新回合 → 409 → 落到这里。这时正确的收场是
+   * **停下来**:已经进回收站的那些都可恢复(项目行还在,恢复能直接挂回去),
+   * 用户重试一次即可。删一半再硬删剩下的,才是不可解释的那种状态。
    */
-  await deleteSessionJsonlFilesForProjectPath(row.project_path);
+  if (failed.length > 0) {
+    const names = failed.slice(0, 5);
+    throw new AppError(
+      `项目下有 ${failed.length} 条会话没能进入最近删除(多半是刚好开始了新回合):${names.join('、')}`
+      + ` —— 项目没有删除;已经进「最近删除」的 ${trashed.length} 条可以恢复,处理完这几条再重试。`,
+      { code: 'PROJECT_HAS_ACTIVE_SESSIONS', statusCode: 409 },
+    );
+  }
+
+  /**
+   * 顺序与原子性(原文保留):磁盘那步(删附件目录)没法进事务;库写包起来。
+   * 会话行这时已经全部进了回收站,`deleteSessionsByProjectPath` 只是兜底
+   * (例如路径挂着一条列表没返回的行),正常情况下删 0 行。
+   */
   await purgeProjectAttachments(row.project_path);
 
   const commitRemoval = getConnection().transaction(() => {
@@ -96,6 +157,19 @@ export async function deleteOrArchiveProject(projectId: string, force: boolean):
     projectsDb.deleteProjectById(projectId);
   });
   commitRemoval();
+
+  auditLogDb.record({
+    ...auditBase,
+    event: 'project_deleted',
+    detail: JSON.stringify({
+      entry: 'project',
+      projectPath: row.project_path,
+      projectName: row.custom_project_name ?? null,
+      count: trashed.length,
+      names: trashed.slice(0, 10),
+    }),
+  });
+  log.info(`[projects] 永久删除项目:${row.project_path} 会话 ${trashed.length} 条进最近删除 操作者=${actor?.username ?? actor?.userId ?? '-'}`);
 }
 
 /**

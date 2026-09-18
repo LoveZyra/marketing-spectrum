@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import type { ChatMessage, SubagentChildTool } from '../../types/types';
 import type { SubagentGroupItem } from '../../utils/toolGrouping';
 import { shortToolName, shouldFoldNarration } from '../../utils/toolRowSummary';
+import { subagentStillRunning, subagentToolStepCount } from '../../utils/subagentStatus';
 import { cn } from '../../../../lib/utils';
 
 /**
@@ -243,7 +244,7 @@ function SubagentCard({
    * 两个数来源不同、各有可能更全(后台计数含 CLI 侧统计,childTools 含实际到达
    * 的帧),取大的那个。
    */
-  const stepCount = Math.max(background?.toolUses ?? 0, childTools.length);
+  const stepCount = subagentToolStepCount(message);
   /**
    * fz:**没有结果 + 这一轮已经不在跑了 = 已中断,不是"还在跑"。**
    *
@@ -339,10 +340,7 @@ function SubagentGroupCard({ group, getMessageKey, isCurrentTurn = false, rowKey
   const [openKey, setOpenKey] = useState<string | null>(null);
 
   /** ge:两个来源取大的那个(理由见 SubagentCard 里 stepCount 的说明)。 */
-  const stepCountOf = (message: ChatMessage) => Math.max(
-    message.subagentState?.background?.toolUses ?? 0,
-    message.subagentState?.childTools.length ?? 0,
-  );
+  const stepCountOf = (message: ChatMessage) => subagentToolStepCount(message);
   const totalSteps = useMemo(
     () => group.messages.reduce((sum, message) => sum + stepCountOf(message), 0),
     [group.messages],
@@ -354,12 +352,7 @@ function SubagentGroupCard({ group, getMessageKey, isCurrentTurn = false, rowKey
    * gd:**后台任务是那条规则的例外** —— 主回合结束之后它还在自己跑,
    * `task_notification` settle 时才到。所以后台状态说了算,不看 `isCurrentTurn`。
    */
-  const runningCount = group.messages.filter((message) => {
-    const background = message.subagentState?.background;
-    if (background) return background.status === 'running';
-    if (!isCurrentTurn) return false;
-    return !(message.subagentState?.isComplete || message.toolResult);
-  }).length;
+  const runningCount = group.messages.filter((message) => subagentStillRunning(message, isCurrentTurn)).length;
 
   const openMessage = openKey
     ? group.messages.find((message) => getMessageKey(message) === openKey) ?? null
@@ -369,8 +362,8 @@ function SubagentGroupCard({ group, getMessageKey, isCurrentTurn = false, rowKey
    * ga:展开区里的步骤行也要知道"还会不会有结果送来"(见 ChildStepRow)。
    * 两个条件:这一轮还在跑,**并且**这个子代理自己还没交最终结果。
    */
-  const openStillRunning = isCurrentTurn
-    && !(openMessage?.subagentState?.isComplete || openMessage?.toolResult);
+  // gh:与卡片、抬头同一条判据(见 subagentStillRunning)—— 转后台的不再被标成「已中断」。
+  const openStillRunning = openMessage ? subagentStillRunning(openMessage, isCurrentTurn) : false;
   const openInput = openMessage ? parseInput(openMessage.toolInput) : {};
 
   return (

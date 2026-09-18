@@ -35,9 +35,17 @@ export type SessionDeleteConfirmation = {
   sessionTitle: string;
   provider: LLMProvider;
   isArchived: boolean;
+  /** 当前用户能不能永久删除这条(判据见 utils/sessionDeletePermission);false = 不画那枚红按钮。 */
+  canDeletePermanently: boolean;
 };
 
 export type SidebarProps = {
+  /**
+   * gn:**别人**删了 / 恢复了一条会话时的重拉信号(来自 useProjectsState 的
+   * websocket 帧)。侧栏自己的 `trashReloadToken` 只管"我自己刚做的操作",
+   * 这一条管"别人做的"—— 不收它,那一段会一直显示旧数据直到切走再切回来。
+   */
+  externalTrashSignal?: number;
   projects: Project[];
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;

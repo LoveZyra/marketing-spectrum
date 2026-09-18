@@ -340,6 +340,8 @@ export function useChatSessionState({
   const holdAnchorRef = useRef(false);
   /** 是否处于跟底模式。直接由滚动事件写,不经过 state —— state 落后一次 commit。 */
   const followBottomRef = useRef(true);
+  /** gi:「回到底部」点下去那一次 commit 的强制跟底(见控制器里的说明)。 */
+  const forceFollowBottomOnceRef = useRef(false);
   const loadAllFinishedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadAllOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /**
@@ -721,6 +723,14 @@ export function useChatSessionState({
     // scrollHeight 缩水,浏览器再钳一次 scrollTop —— 白滚一次还多跳一下。
     // 砍完窗口这次 commit 会走控制器的跟底分支,不需要在这里手动滚。
     if (allMessagesLoaded) {
+      /**
+       * gh:**跟底分支要先打开。** 这个按钮只在用户滚上去时出现,而那一刻
+       * `handleScroll` 已把 followBottomRef 置假;砍完窗口那次 commit 走的是守位分支
+       * (把锚点校回原处)—— 第一次点什么都不动,第二次才有效。
+       */
+      followBottomRef.current = true;
+      forceFollowBottomOnceRef.current = true;
+      setIsUserScrolledUp(false);
       setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
       setAllMessagesLoaded(false);
       allMessagesLoadedRef.current = false;
@@ -1793,7 +1803,17 @@ export function useChatSessionState({
      * 前插内容(翻页 / 看更早)会先置 `holdAnchorRef`,那种位移不算用户动的。
      */
     const userMoved = !hold && anchor !== null && Math.abs(container.scrollTop - anchor.scrollTop) > 1;
-    if (userMoved) {
+    /**
+     * gi 自查:「回到底部」按钮点下去那一次 commit 要**无条件跟底**。
+     *
+     * 锚点只在 commit 时刷新,用户连续上滚之后它是旧的 → 这一次 `userMoved` 必然为真 →
+     * 上面刚置的 followBottomRef 被这里按"离底部远"重新算成假 → 不滚。而按钮已经隐藏
+     * (isUserScrolledUp 置假),第二次点的机会也没了。一次性的强制标记优先于 userMoved。
+     */
+    if (forceFollowBottomOnceRef.current) {
+      forceFollowBottomOnceRef.current = false;
+      followBottomRef.current = true;
+    } else if (userMoved) {
       followBottomRef.current =
         container.scrollHeight - container.scrollTop - container.clientHeight < FOLLOW_BOTTOM_SLACK_PX;
     }

@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   Bot,
@@ -149,6 +149,23 @@ function ActivityTimeline({
    * 点它必须是**收起**,布尔那套只能在"展开全部 / 回到自动"之间来回。
    */
   const [manualFold, setManualFold] = useState<'open' | 'closed' | null>(null);
+  /**
+   * gh:用户点「收起」时如果收到的是 0 行(段内 ≤3 行、或回合已结束),就记住"收到 0"。
+   * 否则回合还在跑、第 4 步一到,`collapsedVisibleCount` 从 0 变 3,三行在用户
+   * 明确收起的抬头下面自己弹出来,而 manualFold 仍是 closed、再点一次反而全开。
+   * 用户反向点开时清掉。
+   */
+  const closedToZeroRef = useRef(false);
+  /**
+   * gh:**"正文出现了"要坐实 250ms 才算数。**
+   *
+   * 每条助手 text 都是 'reply',于是 `[组][text]` 一到,keepTailOpen 翻假、整段折起;
+   * 下一帧 tool_use 到达,text 被吸进组里,keepTailOpen 又翻真、整段展开 ——
+   * 一段跑 30 步的回合里每句「Now let me check X」都让时间轴缩一下再长回来。
+   * 这里只把 true→false 这一个方向延后 250ms:真正的正文(后面不再有工具)照旧折,
+   * 只是晚一眨眼;要被吸收的过渡正文在这 250ms 里就被吸收了,不再抖。
+   */
+  const settledKeepTail = useSettledTrue(keepTailOpen, 250);
 
   const rows = useMemo(
     () => group.messages.map((message, index) => {
@@ -182,7 +199,7 @@ function ActivityTimeline({
   // 抬头右端的整段耗时:把各行耗时加起来(没有一行报出耗时就不显示)。
   const runDuration = useMemo(() => formatRunDuration(group.messages), [group.messages]);
   // 自动规则(见 planActivityFold):正文没出现前留尾部三行,出现后整段收起。
-  const auto = planActivityFold(rows.length, keepTailOpen);
+  const auto = planActivityFold(rows.length, settledKeepTail);
   /**
    * 手动定过就以手动为准 —— 用户明确点过的状态不该被下一次自动重算冲掉。
    *
@@ -191,11 +208,11 @@ function ActivityTimeline({
    * 写死 0 时,一轮跑到几十步点一下收起,正在跑的那几步也一起没了,
    * 而且这一轮剩下的全程都不再露出来(manualFold 压过自动规则)。
    */
-  const collapsedCount = collapsedVisibleCount(rows.length, keepTailOpen);
+  const collapsedCount = collapsedVisibleCount(rows.length, settledKeepTail);
   const visibleCount = manualFold === 'open'
     ? rows.length
     : manualFold === 'closed'
-      ? collapsedCount
+      ? (closedToZeroRef.current ? 0 : collapsedCount)
       : auto.visibleCount;
   const foldedCount = rows.length - visibleCount;
   const { canFold, showSummary } = auto;
@@ -243,7 +260,16 @@ function ActivityTimeline({
         <button
           type="button"
           data-activity-summary
-          onClick={() => setManualFold(isFullyOpen ? 'closed' : 'open')}
+          onClick={() => {
+            if (isFullyOpen) {
+              // 收到 0 行的那一下要记住(见 closedToZeroRef)。
+              closedToZeroRef.current = collapsedCount === 0;
+              setManualFold('closed');
+            } else {
+              closedToZeroRef.current = false;
+              setManualFold('open');
+            }
+          }}
           aria-expanded={isFullyOpen}
           className="group flex w-full items-center gap-2 py-1.5 text-left text-[13px] leading-5 text-muted-foreground transition-colors hover:text-foreground"
         >
@@ -406,7 +432,7 @@ function ActivityTimeline({
                 )}
 
                 <span className="flex-none font-mono text-[11px] text-muted-foreground">
-                  {summary?.status === 'running' && !summary.duration
+                  {summary?.status === 'running'
                     ? t('activity.running', { defaultValue: '运行中' })
                     : summary?.status === 'interrupted'
                       ? t('activity.interrupted', { defaultValue: '已中断' })
@@ -463,4 +489,21 @@ function ActivityTimeline({
  * 正在跑的那一段重渲,已完成的时间轴整段跳过(每段都要重算 rows/摘要,
  * 长对话里这占了 tick 开销的大头)。
  */
+/**
+ * gh:布尔值的"true→false 延后 N 毫秒"版本(false→true 立刻)。
+ * 用于把"正文出现了 → 折叠"这一下延后一眨眼,让会被吸收的过渡正文来得及被吸收。
+ */
+function useSettledTrue(value: boolean, delayMs: number): boolean {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    if (value) {
+      setSettled(true);
+      return undefined;
+    }
+    const timer = setTimeout(() => setSettled(false), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return value ? true : settled;
+}
+
 export default memo(ActivityTimeline);

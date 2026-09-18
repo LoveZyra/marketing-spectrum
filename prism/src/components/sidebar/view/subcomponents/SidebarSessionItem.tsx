@@ -208,158 +208,163 @@ function SidebarSessionItem({
       </div>
 
       <div className="hidden md:block">
-        <a
-          href={`/session/${session.id}`}
-          className={cn(
-            buttonVariants({ variant: 'ghost' }),
-            'relative h-auto w-full justify-start rounded-md px-2.5 py-[7px] text-left font-normal',
-            isSelected ? 'prism-panel bg-card dark:bg-muted' : 'hover:bg-muted',
-          )}
-          // Left-click keeps in-app navigation; Ctrl/Cmd/middle-click and the
-          // native right-click menu use the href to open a new tab/window.
-          onClick={(event) => {
-            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-            event.preventDefault();
-            onSessionSelect(session, project.projectId);
-          }}
-        >
-          {/* ef:会话行收成**一行** —— 状态点 + 标题 + 右侧相对时间。原来第二行的
-              「N 条」计数很少有人看,却让每行高 34 → 46;运行中改成标题前的实心点
-              (纸构主题下是方形制图标记)+ 时间用强调色,不再另占一行文字。 */}
-          <div className="flex w-full min-w-0 items-center gap-1.5">
-            {/* 状态点全库只此一处:空心圈=等授权,实心点=运行中/有动静。
-                以前行外还挂了一个绝对定位的同义点,于是一行冒出两颗绿点。 */}
-            {(showApprovalIndicator || isProcessing || showRecentIndicator || showAttentionIndicator) && (
-              <span
-                role="status"
-                aria-label={statusIndicatorLabel}
-                title={statusIndicatorLabel}
-                className={cn(
-                  'h-1.5 w-1.5 flex-none rounded-full',
-                  showApprovalIndicator ? 'border-[1.5px] border-primary' : 'bg-primary prism-dot',
-                )}
-              />
-            )}
-            <span
-              className={cn(
-                'min-w-0 flex-1 truncate text-[12.5px] leading-[17px]',
-                isSelected ? 'text-card-foreground' : 'text-body',
-              )}
-              title={sessionView.sessionName}
+        {isEditing ? (
+          /* gq:改名时输入框**顶替整行**。原来它绝对定位浮在右侧,底下那条标题行
+             还画着旧名字,于是输入框左边露出半截原名。现在编辑态整行换掉,行高钉成
+             31px —— 与未编辑时 `py-[7px]` + `leading-[17px]` 算出来的一模一样,
+             列表不会跳一下。 */
+          <div
+            ref={editingContainerRef}
+            className="flex h-[31px] w-full min-w-0 items-center gap-1 rounded-md px-2.5"
+          >
+            <input
+              type="text"
+              value={editingSessionName}
+              onChange={(event) => onEditingSessionNameChange(event.target.value)}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === 'Enter') {
+                  saveEditedSession();
+                } else if (event.key === 'Escape') {
+                  onCancelEditingSession();
+                }
+              }}
+              onClick={(event) => event.stopPropagation()}
+              className="h-6 min-w-0 flex-1 rounded border border-border bg-background px-2 text-xs leading-none focus:outline-none focus:ring-1 focus:ring-primary"
+              aria-label={t('tooltips.editSessionName')}
+              // 行内改名的统一标记:Esc 在这里是"取消改名",不能顺带把正在跑的
+              // 那一轮也中止掉(见 ChatInterface 的全局 Esc)。
+              data-inline-rename="true"
+              autoFocus
+            />
+            <button
+              className="flex h-6 w-6 flex-none items-center justify-center rounded-sm bg-muted hover:bg-accent"
+              onClick={(event) => {
+                event.stopPropagation();
+                saveEditedSession();
+              }}
+              title={t('tooltips.save')}
             >
-              {sessionView.sessionName}
-            </span>
-            {compactSessionAge && (
-              <span
-                className={cn(
-                  'flex-none font-mono text-[10.5px] tabular-nums group-hover:invisible',
-                  isProcessing ? 'text-card-foreground dark:text-primary' : 'text-muted-foreground',
-                )}
-                title={isProcessing
-                  ? t('sessions.runningMeta', { defaultValue: '运行中 · {{age}}', age: compactSessionAge })
-                  : sessionView.messageCount > 0
-                    ? t('sessions.messageCount', { defaultValue: '{{count}} 条', count: sessionView.messageCount })
-                    : undefined}
-              >
-                {compactSessionAge}
-              </span>
-            )}
+              <Check className="h-3 w-3 text-primary" />
+            </button>
+            <button
+              className="flex h-6 w-6 flex-none items-center justify-center rounded-sm bg-muted hover:bg-accent"
+              onClick={(event) => {
+                event.stopPropagation();
+                onCancelEditingSession();
+              }}
+              title={t('tooltips.cancel')}
+            >
+              <X className="h-3 w-3 text-muted-foreground" />
+            </button>
           </div>
-        </a>
-
-        <div
-          ref={editingContainerRef}
-          className={cn(
-            'absolute right-2 top-1/2 flex -translate-y-1/2 transform items-center gap-1 transition-colors duration-200',
-            isEditing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
-          )}
-        >
-            {isEditing ? (
-              <>
-                <input
-                  type="text"
-                  value={editingSessionName}
-                  onChange={(event) => onEditingSessionNameChange(event.target.value)}
-                  onKeyDown={(event) => {
-                    event.stopPropagation();
-                    if (event.key === 'Enter') {
-                      saveEditedSession();
-                    } else if (event.key === 'Escape') {
-                      onCancelEditingSession();
-                    }
-                  }}
-                  onClick={(event) => event.stopPropagation()}
-                  className="w-32 rounded border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-                  autoFocus
-                />
-                <button
-                  className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    saveEditedSession();
-                  }}
-                  title={t('tooltips.save')}
-                >
-                  <Check className="h-3 w-3 text-primary" />
-                </button>
-                <button
-                  className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onCancelEditingSession();
-                  }}
-                  title={t('tooltips.cancel')}
-                >
-                  <X className="h-3 w-3 text-muted-foreground" />
-                </button>
-              </>
-            ) : (
-              <>
-                {/* F12:点开选格式(md / html / json)+「含工具过程」开关。 */}
-                <SessionExportMenu
-                  onExport={(options) => {
-                    void downloadSessionExport(session.id, sessionView.sessionName, options).catch(() => {
-                      // 失败不再静默:点了没反应最让人困惑。给一条提示,侧栏其余不受影响。
-                      toast({ message: t('tooltips.exportSessionFailed', { defaultValue: '导出会话失败,请重试。' }), variant: 'error' });
-                    });
-                  }}
-                >
-                  {({ onClick, ref }) => (
-                    <button
-                      ref={ref}
-                      className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
-                      onClick={onClick}
-                      title={t('tooltips.exportSession', { defaultValue: '导出会话' })}
-                    >
-                      <FileDown className="h-3 w-3 text-muted-foreground" />
-                    </button>
+        ) : (
+          <>
+            <a
+              href={`/session/${session.id}`}
+              className={cn(
+                buttonVariants({ variant: 'ghost' }),
+                'relative h-auto w-full justify-start rounded-md px-2.5 py-[7px] text-left font-normal',
+                isSelected ? 'prism-panel bg-card dark:bg-muted' : 'hover:bg-muted',
+              )}
+              // Left-click keeps in-app navigation; Ctrl/Cmd/middle-click and the
+              // native right-click menu use the href to open a new tab/window.
+              onClick={(event) => {
+                if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                event.preventDefault();
+                onSessionSelect(session, project.projectId);
+              }}
+            >
+              {/* ef:会话行收成**一行** —— 状态点 + 标题 + 右侧相对时间。原来第二行的
+                  「N 条」计数很少有人看,却让每行高 34 → 46;运行中改成标题前的实心点
+                  (纸构主题下是方形制图标记)+ 时间用强调色,不再另占一行文字。 */}
+              <div className="flex w-full min-w-0 items-center gap-1.5">
+                {/* 状态点全库只此一处:空心圈=等授权,实心点=运行中/有动静。
+                    以前行外还挂了一个绝对定位的同义点,于是一行冒出两颗绿点。 */}
+                {(showApprovalIndicator || isProcessing || showRecentIndicator || showAttentionIndicator) && (
+                  <span
+                    role="status"
+                    aria-label={statusIndicatorLabel}
+                    title={statusIndicatorLabel}
+                    className={cn(
+                      'h-1.5 w-1.5 flex-none rounded-full',
+                      showApprovalIndicator ? 'border-[1.5px] border-primary' : 'bg-primary prism-dot',
+                    )}
+                  />
+                )}
+                <span
+                  className={cn(
+                    'min-w-0 flex-1 truncate text-[12.5px] leading-[17px]',
+                    isSelected ? 'text-card-foreground' : 'text-body',
                   )}
-                </SessionExportMenu>
-                <button
-                  className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onStartEditingSession(session.id, sessionView.sessionName);
-                  }}
-                  title={t('tooltips.editSessionName')}
+                  title={sessionView.sessionName}
                 >
-                  <Edit2 className="h-3 w-3 text-muted-foreground" />
-                </button>
-                {!isProcessing && (
-                  <button
-                    className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      requestDeleteSession();
-                    }}
-                    title={t('tooltips.deleteSessionOptions', 'Archive or permanently delete this session')}
+                  {sessionView.sessionName}
+                </span>
+                {compactSessionAge && (
+                  <span
+                    className={cn(
+                      'flex-none font-mono text-[10.5px] tabular-nums group-hover:invisible',
+                      isProcessing ? 'text-card-foreground dark:text-primary' : 'text-muted-foreground',
+                    )}
+                    title={isProcessing
+                      ? t('sessions.runningMeta', { defaultValue: '运行中 · {{age}}', age: compactSessionAge })
+                      : sessionView.messageCount > 0
+                        ? t('sessions.messageCount', { defaultValue: '{{count}} 条', count: sessionView.messageCount })
+                        : undefined}
                   >
-                    <Trash2 className="h-3 w-3 text-muted-foreground hover:text-foreground" />
+                    {compactSessionAge}
+                  </span>
+                )}
+              </div>
+            </a>
+
+            <div className="absolute right-2 top-1/2 flex -translate-y-1/2 transform items-center gap-1 opacity-0 transition-colors duration-200 group-hover:opacity-100">
+              {/* F12:点开选格式(md / html / json)+「含工具过程」开关。 */}
+              <SessionExportMenu
+                onExport={(options) => {
+                  void downloadSessionExport(session.id, sessionView.sessionName, options).catch(() => {
+                    // 失败不再静默:点了没反应最让人困惑。给一条提示,侧栏其余不受影响。
+                    toast({ message: t('tooltips.exportSessionFailed', { defaultValue: '导出会话失败,请重试。' }), variant: 'error' });
+                  });
+                }}
+              >
+                {({ onClick, ref }) => (
+                  <button
+                    ref={ref}
+                    className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
+                    onClick={onClick}
+                    title={t('tooltips.exportSession', { defaultValue: '导出会话' })}
+                  >
+                    <FileDown className="h-3 w-3 text-muted-foreground" />
                   </button>
                 )}
-              </>
-            )}
-          </div>
+              </SessionExportMenu>
+              <button
+                className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onStartEditingSession(session.id, sessionView.sessionName);
+                }}
+                title={t('tooltips.editSessionName')}
+              >
+                <Edit2 className="h-3 w-3 text-muted-foreground" />
+              </button>
+              {!isProcessing && (
+                <button
+                  className="flex h-6 w-6 items-center justify-center rounded-sm bg-muted hover:bg-accent"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    requestDeleteSession();
+                  }}
+                  title={t('tooltips.deleteSessionOptions', 'Archive or permanently delete this session')}
+                >
+                  <Trash2 className="h-3 w-3 text-muted-foreground hover:text-foreground" />
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

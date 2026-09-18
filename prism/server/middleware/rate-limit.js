@@ -21,6 +21,8 @@
  *   PRISM_TRUST_PROXY          `1` honors X-Forwarded-For (set behind nginx)
  */
 
+import { clientIp } from '@/shared/client-ip.js';
+
 const envFlag = (name, fallback) => {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -51,17 +53,11 @@ const LOGIN_LOCKOUT_MAX_MS = 24 * 60 * 60_000;
  * X-Forwarded-For is honored only when PRISM_TRUST_PROXY is set, because an
  * attacker who can reach the socket directly can otherwise forge a fresh IP
  * per request and bypass every limiter in this file.
+ *
+ * gk:实现搬到了 `shared/client-ip.js`(modules 层的删除路由也要给审计记 ip,
+ * 而边界规则不许它们 import middleware)。这里只是转出去,调用方一个不改。
  */
-export function clientIp(req) {
-  if (TRUST_PROXY) {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string' && forwarded.length > 0) {
-      const first = forwarded.split(',')[0].trim();
-      if (first) return first;
-    }
-  }
-  return req.ip || req.socket?.remoteAddress || 'unknown';
-}
+export { clientIp };
 
 // ---------------------------------------------------------------------------
 // Sliding-window limiter

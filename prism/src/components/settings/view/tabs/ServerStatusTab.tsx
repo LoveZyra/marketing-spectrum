@@ -101,8 +101,13 @@ export default function ServerStatusTab() {
     : 0;
   const loadPerCore = status ? status.load1 / Math.max(1, status.cpuCount) : 0;
 
+  /*
+    gn:与其余设置页同口径 —— 页面这一层不设宽度上限,由弹窗的宽度决定。
+    三个页签原来各设各的(xl / 2xl / 3xl),而别的页签一个都没有,弹窗放宽之后
+    就是三种不同的右边留白(2026-09-15 用户逐个截图报过来)。
+  */
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="flex items-center gap-2 text-base font-semibold">

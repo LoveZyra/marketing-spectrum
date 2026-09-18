@@ -1,7 +1,8 @@
 import { auditLogDb, projectsDb, resolveVisibleProjectRoot, userDb } from '@/modules/database/index.js';
 import { deleteOrArchiveProject } from '@/modules/projects/services/project-delete.service.js';
 import {
-  applyProjectPermissions, canManageProject, type PermissionsActor, type ProjectVisibilityChoice,
+  applyProjectPermissions, canArchiveProject, canDeleteProject, canManageProject,
+  type PermissionsActor, type ProjectVisibilityChoice,
 } from '@/modules/projects/services/project-permissions.service.js';
 import { setProjectStarForActor } from '@/modules/projects/services/project-star.service.js';
 import { AppError } from '@/shared/utils.js';
@@ -89,15 +90,29 @@ export async function bulkProjectAction(
   }
 
   const actingUserId = typeof actor.id === 'number' ? actor.id : null;
+  // gk:逐条删除 / 归档的审计与回收站里的"谁删的"用它;ip / ua 这里拿不到(批量入口不带),留空。
+  const bulkActor = { userId: actingUserId, username: actor.username ?? null };
 
   for (const projectId of ids) {
     if (!resolveVisibleProjectRoot(viewer, projectId)) {
       skipped.push({ projectId, reason: 'not-visible' });
       continue;
     }
-    // 改权限 / 改所有者要额外的管理权;删除与收藏沿用单个操作的口径(可见即可)。
-    if ((input.action === 'permissions' || input.action === 'owner')
-      && !canManageProject(projectId, actor)) {
+    /*
+      改权限 / 改所有者要额外的管理权;收藏沿用单个操作的口径(可见即可)。
+      gk:**永久删除**要管理权(owner / root)—— 共享项目里的协作者只能归档。
+      gn:**归档也要**。归档一个项目会让它从所有人的活跃侧栏消失,与单条那条路
+      (projects.routes 的 DELETE)必须同口径,否则批量入口就是同一件事的后门。
+      删除与归档都走 canDeleteProject / canArchiveProject:无主(公共)项目没有
+      "负责人"这一档,与单条同口径。
+    */
+    const manageable = input.action === 'delete'
+      ? canDeleteProject(projectId, actor)
+      : input.action === 'archive'
+        ? canArchiveProject(projectId, actor)
+        : canManageProject(projectId, actor);
+    if ((input.action === 'permissions' || input.action === 'owner' || input.action === 'delete' || input.action === 'archive')
+      && !manageable) {
       skipped.push({ projectId, reason: 'not-manageable' });
       continue;
     }
@@ -105,10 +120,10 @@ export async function bulkProjectAction(
     try {
       switch (input.action) {
         case 'archive':
-          await deleteOrArchiveProject(projectId, false);
+          await deleteOrArchiveProject(projectId, false, bulkActor);
           break;
         case 'delete':
-          await deleteOrArchiveProject(projectId, true);
+          await deleteOrArchiveProject(projectId, true, bulkActor);
           break;
         case 'star':
           setProjectStarForActor(projectId, actingUserId, true);

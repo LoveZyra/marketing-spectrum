@@ -164,6 +164,8 @@ function FileTreeNode({
           ref={renameInputRef}
           type="text"
           value={renameValue || ''}
+          // 行内改名的统一标记,含义同侧栏那几个。
+          data-inline-rename="true"
           onChange={(e) => setRenameValue(e.target.value)}
           onKeyDown={(e) => {
             e.stopPropagation();

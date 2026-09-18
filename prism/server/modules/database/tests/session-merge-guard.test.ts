@@ -92,6 +92,25 @@ describe('assignProviderSessionId 的合并守卫', () => {
   });
 
   /**
+   * gh:**两边都没有项目 → 也不合并。**
+   *
+   * `isSameProjectPath` 原来第一句是 `if (a === b) return true`,于是 null 与 null
+   * 相等 —— 两个还没归属的行会因为"都是空"被并成一行、其中一行被 DELETE。
+   * 客户端已不能指定 newSessionId(fz 白名单),要触发得靠原生 id 的自然碰撞,
+   * 但守卫自己的判据不该有这个洞。
+   */
+  it('gh:两边都没有项目 → 不合并、不删行', () => {
+    insertSession('null-a', null, 'shared-uuid', '第一条');
+    insertSession('null-b', null, null, null);
+
+    expect(db.sessionsDb.assignProviderSessionId('null-b', 'shared-uuid')).toBe(false);
+
+    const after = rows();
+    expect(after.find((r) => r.session_id === 'null-a')).toBeDefined();
+    expect(after.find((r) => r.session_id === 'null-b')?.provider_session_id).toBeNull();
+  });
+
+  /**
    * ga:**软链会让"同一个项目"写成两个不一样的字符串。**
    *
    * app 那一行存的是调用方给的路径,监视器那一行取的是 CLI 子进程的
@@ -139,5 +158,38 @@ describe('assignProviderSessionId 的合并守卫', () => {
   it('写映射成功时返回 true —— 调用方靠这个返回值决定要不要改内存', () => {
     insertSession('reports-true', '/projects/reports', null, null);
     expect(db.sessionsDb.assignProviderSessionId('reports-true', 'reports-true-uuid')).toBe(true);
+  });
+
+  /**
+   * gk:**只吞"监视器裸行"。**
+   *
+   * 2026-09-14 生产排查时把这条 DELETE 列成了"理论上能吞掉真会话"的路:同项目里
+   * 任何一条会话,只要它的 id 被这次映射认领,就会被连行删掉,显示日志留成孤儿。
+   * 监视器抢先建的那一行长相固定 —— `session_id = provider_session_id`、没有显示日志;
+   * 不长这样的一律不删不并不认领。改回"是另一行就删",下面两条立刻红。
+   */
+  it('gk:同项目、但那一行已经有人聊过(有显示日志)→ 不合并、不删行', () => {
+    insertSession('lived-uuid', '/projects/same', 'lived-uuid', '有人聊过的');
+    db.getConnection()
+      .prepare("INSERT INTO session_display_messages (session_id, message_id, kind, timestamp, payload) VALUES (?, ?, ?, ?, ?)")
+      .run('lived-uuid', 'm1', 'text', '2026-09-14T10:00:00Z', '{}');
+    insertSession('claimer', '/projects/same', null, null);
+
+    expect(db.sessionsDb.assignProviderSessionId('claimer', 'lived-uuid')).toBe(false);
+
+    const after = rows();
+    expect(after.find((r) => r.session_id === 'lived-uuid')?.custom_name).toBe('有人聊过的');
+    expect(after.find((r) => r.session_id === 'claimer')?.provider_session_id).toBeNull();
+  });
+
+  it('gk:同项目、但那一行是 app 行(session_id ≠ provider_session_id)→ 不合并、不删行', () => {
+    insertSession('app-victim', '/projects/same', 'victim-provider', '另一段对话');
+    insertSession('claimer-2', '/projects/same', null, null);
+
+    expect(db.sessionsDb.assignProviderSessionId('claimer-2', 'victim-provider')).toBe(false);
+
+    const after = rows();
+    expect(after.find((r) => r.session_id === 'app-victim')?.provider_session_id).toBe('victim-provider');
+    expect(after.find((r) => r.session_id === 'claimer-2')?.provider_session_id).toBeNull();
   });
 });

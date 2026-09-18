@@ -135,6 +135,23 @@ describe('chat.send 的归属校验', () => {
       assert.equal(errors.length, 1);
       // 对外与"这个 id 不存在"同形 —— 不能变成一个"会话是否存在"的探针。
       assert.equal(errors[0].code, 'SESSION_NOT_FOUND');
+      // gk:带上"这是在回 chat.send" —— 客户端只对这一种切「会话已被删除」态。
+      assert.equal(errors[0].request, 'chat.send');
+    });
+  });
+
+  test('gk:会话行已经没了 → SESSION_NOT_FOUND 同样标着 request=chat.send', async () => {
+    await withIsolatedDatabase(async () => {
+      const alice = { id: Number(userDb.createUser('alice', 'hash').id), username: 'alice' };
+      const { ws, spawned } = connect(alice);
+      await send(ws, { type: 'chat.send', sessionId: 'deleted-session', content: 'hi' });
+
+      assert.deepEqual(spawned, []);
+      const errors = protocolErrors(ws);
+      assert.equal(errors.length, 1);
+      assert.equal(errors[0].code, 'SESSION_NOT_FOUND');
+      assert.equal(errors[0].request, 'chat.send');
+      assert.equal(errors[0].sessionId, 'deleted-session');
     });
   });
 

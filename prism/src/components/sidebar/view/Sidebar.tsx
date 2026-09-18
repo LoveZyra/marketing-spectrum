@@ -34,6 +34,9 @@ function Sidebar({
   onRefresh,
   onShowSettings,
   isMobile,
+  // gn:别人删了 / 恢复了一条时的重拉信号;与侧栏自己的 trashReloadToken 相加,
+  // 两边任意一个动了,「最近删除」那一段就重拉一次。
+  externalTrashSignal,
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
@@ -76,6 +79,7 @@ function Sidebar({
     archivedSessionsCount,
     archivedSessionsTotal,
     archivedSessionsHasMore,
+    trashReloadToken,
     isLoadingMoreArchivedSessions,
     loadMoreArchivedSessions,
     selectedArchivedIds,
@@ -244,6 +248,8 @@ function Sidebar({
             onBulkArchivedAction={bulkArchivedAction}
             onEmptyArchive={emptyArchive}
             isBulkArchiving={isBulkArchiving}
+            trashReloadToken={trashReloadToken + (externalTrashSignal ?? 0)}
+            onTrashRestored={() => { void refreshProjects(); }}
             isArchivedSessionsLoading={isArchivedSessionsLoading}
             searchFilter={searchFilter}
             onSearchFilterChange={setSearchFilter}

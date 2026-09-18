@@ -267,12 +267,18 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       continue;
     }
     /**
-     * ge:任务生命周期的两种行**都不出顶层**。
+     * ge:任务生命周期的行**有主的不出顶层**。
      *
-     * 进展每几秒一条,本来就只归行;完成/失败也归到它自己那一行(见上面
-     * `toolRowIds`)。要的是"一根轴串下来",不是每隔几行插一句旁白。
+     * 进展每几秒一条,本来就只归行;带 `toolId` 的完成/失败也归到它自己那一行
+     * (见上面 `toolRowIds`)。要的是"一根轴串下来",不是每隔几行插一句旁白。
+     *
+     * gh:**没有 `toolId` 的照旧渲染成回执行。** ge 把所有 task_notification 一刀切掉,
+     * 连定时任务的三条回执(「⏰ 开始执行」「✅ 执行完成」「⚠️ 执行失败:<原因>」)也一起
+     * 没了 —— 它们从来没有 tool_use_id,不是旁白,是那条会话唯一的成败说明。
+     * 删一类东西之前要先列全它的来源;这里就是没列全的代价。
      */
-    if (msg.kind === 'task_progress' || msg.kind === 'task_notification') continue;
+    if (msg.kind === 'task_progress') continue;
+    if (msg.kind === 'task_notification' && msg.toolId) continue;
 
     const toolResult = resolveToolResult(msg, toolResultMap);
     const realtimeChildren = msg.kind === 'tool_use' && msg.toolId

@@ -156,7 +156,8 @@ describe('handleChatSend 的六条早退都退还了幂等键', () => {
       .map((line, index) => ({ line: line.trim(), index }))
       .filter(({ line }) => line === 'return;');
     // 终端接管 / provider 不支持 / 准备期被停止 / 抄历史后的两道复检
-    expect(returns.length).toBe(5);
+    // gh:+1 —— 分叉点撞上已有历史的会话(FORK_TARGET_HAS_HISTORY)
+    expect(returns.length).toBe(6);
     for (const { index } of returns) {
       expect(lines[index - 1].trim()).toBe('releaseSendKey();');
     }

@@ -58,7 +58,67 @@ CREATE TABLE IF NOT EXISTS audit_log (
     ip TEXT,
     user_agent TEXT,
     detail TEXT,
+    -- gk:这条记录**对谁做的**(被删会话所属项目的 owner)。非 root 的可见范围从
+    -- "我做的"扩成"我做的 OR 对我做的" —— 被删的人也要能在审计页里看到是谁删的。
+    -- 老库靠迁移补列(可空、加列即可)。
+    target_user_id INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`;
+
+/**
+ * gk:**最近删除**(会话回收站)。
+ *
+ * 永久删除不再 DELETE:`sessions` 行、显示日志、`session_display_log_state`
+ * 整体搬进这两张表,transcript 与它的 `<id>/` 目录搬到 `<数据目录>/trash/` 下;
+ * 保留期(`PRISM_TRASH_RETENTION_DAYS`,默认 30 天)内可以原样恢复,超期由清扫器真删。
+ *
+ * 为什么是**另两张表**而不是在 `sessions` 上加一列 `deleted_at`:
+ * 活表上每一条查询(侧栏、搜索、可见性、监视器合并……)都得学会过滤这一列,
+ * 漏一处就是一条"已删除的会话又出现了";搬进别的表,活表的行为与原来**逐字相同**。
+ *
+ * `session_trash_messages.id` 保留原 `session_display_messages.id`(AUTOINCREMENT
+ * 的 id 不会被重用),恢复时按原 id 写回,顺序、分叉锚点全部与删除前一致。
+ *
+ * 起因是 2026-09-14 生产上的一次误删:一条跑了一天的会话被人永久删除,行、显示日志、
+ * transcript 三样一起没了,而删除路径既不留审计也没有任何可恢复的副本。
+ */
+export const SESSION_TRASH_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS session_trash (
+    session_id TEXT PRIMARY KEY NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'claude',
+    provider_session_id TEXT,
+    custom_name TEXT,
+    project_path TEXT,
+    -- 项目行在删项目时会一起没了;恢复要能把它按原样建回来。
+    project_id TEXT,
+    project_display_name TEXT,
+    project_owner_user_id INTEGER,
+    project_visibility TEXT,
+    jsonl_path TEXT,
+    trash_jsonl_path TEXT,
+    trash_dir_path TEXT,
+    isArchived INTEGER NOT NULL DEFAULT 0,
+    display_log_trimmed INTEGER NOT NULL DEFAULT 0,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME,
+    updated_at DATETIME,
+    deleted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_by_user_id INTEGER,
+    deleted_by_username TEXT,
+    -- session | bulk | empty_archived | project | retention | api
+    deleted_via TEXT NOT NULL DEFAULT 'session'
+);
+
+CREATE TABLE IF NOT EXISTS session_trash_messages (
+    id INTEGER PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    provider_assistant_uuid TEXT,
+    UNIQUE (session_id, message_id)
 );
 `;
 
@@ -407,6 +467,8 @@ ${SESSIONS_TABLE_SCHEMA_SQL}
 
 ${SESSION_DISPLAY_MESSAGES_TABLE_SCHEMA_SQL}
 
+${SESSION_TRASH_TABLE_SCHEMA_SQL}
+
 ${ATTACHMENTS_TABLE_SCHEMA_SQL}
 
 ${LAST_SCANNED_AT_SQL}
@@ -452,6 +514,13 @@ CREATE INDEX IF NOT EXISTS idx_sessions_archived_recent
 
 -- 按会话 + 追加顺序取页,回放的唯一查询路径
 CREATE INDEX IF NOT EXISTS idx_display_messages_session_id ON session_display_messages(session_id, id);
+
+-- gk:最近删除 —— 列表与清扫都按删除时间扫,监视器按 provider id 查"是不是在回收站里"。
+CREATE INDEX IF NOT EXISTS idx_session_trash_deleted_at ON session_trash(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_session_trash_provider_session_id ON session_trash(provider_session_id);
+CREATE INDEX IF NOT EXISTS idx_session_trash_messages_session ON session_trash_messages(session_id, id);
+-- gk:审计"对我做的"那一支
+CREATE INDEX IF NOT EXISTS idx_audit_log_target_user_id ON audit_log(target_user_id);
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_owner ON scheduled_tasks(owner_user_id);

@@ -8,6 +8,8 @@ import mime from 'mime-types';
 import { canViewerSeeSession, sessionMessagesDb } from '@/modules/database/index.js';
 import { isInlineSafeContentType } from '@/modules/files/index.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
+import { setDownloadHeaders } from '@/shared/download-headers.js';
+import { issueSessionOutputTicket, readDownloadTicket } from '@/shared/download-tickets.js';
 import { createLogger } from '@/shared/logger.js';
 const log = createLogger('providers');
 
@@ -107,6 +109,48 @@ export function collectSessionWritePaths(messages: readonly unknown[]): Set<stri
   return allowed;
 }
 
+/**
+ * 会话产出的三道闸:会话可见 → 路径在这段会话的写入集合里 → 是个真文件。
+ *
+ * 抽出来是因为**签票和直传要各跑一遍同一套判定**。两边各抄一份的结果必然是漂移,
+ * 而漂移的那一半正好是不带登录态的那条路由 —— 这个仓已经这么破过一次
+ * (`usage.routes.ts` 迁出来时漏挂 `canViewerSeeSession`,邻居都有就它没有)。
+ */
+async function checkSessionOutputAccess(
+  sessionId: string,
+  viewer: ReturnType<typeof readRequestViewer>,
+  requestedPath: string,
+): Promise<{ resolved: string; size: number } | { status: number; error: string }> {
+  if (!canViewerSeeSession(sessionId, viewer)) {
+    return { status: 404, error: 'Session not found' };
+  }
+
+  let allowed: Set<string>;
+  try {
+    allowed = collectSessionWritePaths(sessionMessagesDb.listForSession(sessionId));
+  } catch (error) {
+    log.warn('[SessionOutput] failed to read display log:', (error as Error)?.message || error);
+    return { status: 500, error: 'Failed to resolve session outputs' };
+  }
+
+  const resolved = path.resolve(requestedPath);
+  if (!allowed.has(resolved)) {
+    // 不区分"没写过"和"写过但已删" —— 对调用方都是一句"这不是本会话的产出"。
+    return { status: 403, error: 'Not an output of this session' };
+  }
+
+  try {
+    const stat = await fsPromises.stat(resolved);
+    if (!stat.isFile()) return { status: 404, error: 'File not found' };
+    return { resolved, size: stat.size };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { status: 404, error: 'File not found' };
+    if (code === 'EACCES') return { status: 403, error: 'Permission denied' };
+    return { status: 500, error: (error as Error).message };
+  }
+}
+
 type Deps = { authenticateToken: RequestHandler };
 
 export function createSessionOutputsRouter({ authenticateToken }: Deps): Router {
@@ -186,6 +230,85 @@ export function createSessionOutputsRouter({ authenticateToken }: Deps): Router 
       if (code === 'EACCES') return res.status(403).json({ error: 'Permission denied' });
       return res.status(500).json({ error: (error as Error).message });
     }
+  });
+
+  /**
+   * ## 交给浏览器自己下:签票 + 直传
+   *
+   * 上面那条 `output` 是页面自己 fetch 用的:整份字节先进内存拼成 blob,没有进度条、
+   * 切页就断。想让浏览器自己下就得让它**导航**过去,而一次普通导航设不了
+   * `Authorization` 头 —— 于是走短命票据。与项目文件那对完全同形,理由见
+   * `server/shared/download-tickets.js`。
+   *
+   * 关键一条:**票不是授权,只是身份**。直传口拿票里的 viewer 把上面那三道闸
+   * (可见性 → 写入集合 → 文件存在)**原样重跑一遍**。会话可能在这 5 分钟里被删,
+   * 产出文件可能被 agent 重写掉。
+   */
+
+  /** POST /api/providers/sessions/:sessionId/output-download-ticket  body: { path } */
+  router.post('/sessions/:sessionId/output-download-ticket', authenticateToken, async (req, res) => {
+    const sessionId = String(req.params.sessionId || '');
+    const requested = typeof (req.body as { path?: unknown })?.path === 'string'
+      ? String((req.body as { path: string }).path)
+      : '';
+    if (!sessionId || !requested) {
+      return res.status(400).json({ error: 'Invalid request' });
+    }
+
+    const viewer = readRequestViewer(req);
+    const gate = await checkSessionOutputAccess(sessionId, viewer, requested);
+    if ('status' in gate) {
+      return res.status(gate.status).json({ error: gate.error });
+    }
+
+    const ticket = issueSessionOutputTicket({ viewer, sessionId, filePath: gate.resolved });
+    return res.json({
+      kind: 'file',
+      name: path.basename(gate.resolved),
+      size: gate.size,
+      url: `/api/downloads/session-output?ticket=${ticket}`,
+    });
+  });
+
+  return router;
+}
+
+/**
+ * 会话产出的**直传**路由:`/api/downloads/session-output`。
+ *
+ * 与项目文件那对同形,单独成一个**不接受 `authenticateToken`** 的工厂 ——
+ * 不带登录态的接口面全部收在 `/api/downloads` 这一个前缀下,审计时一眼能数清。
+ */
+export function createSessionOutputDownloadRouter(): Router {
+  const router = express.Router();
+
+  /** GET /api/downloads/session-output?ticket=… */
+  router.get('/session-output', async (req, res) => {
+    const payload = readDownloadTicket(req.query.ticket as string, 'session-output');
+    if (!payload) {
+      return res.status(401).json({ error: '下载链接已过期,请重新点一次下载。' });
+    }
+
+    const gate = await checkSessionOutputAccess(payload.sessionId, payload.viewer, payload.filePath);
+    if ('status' in gate) {
+      return res.status(gate.status).json({ error: gate.error });
+    }
+
+    // 这条口**永远是附件** —— 上面那条口要服务媒体预览所以有 inline 白名单,
+    // 这条口的存在理由就是"存到硬盘"。
+    setDownloadHeaders(res, {
+      fileName: path.basename(gate.resolved),
+      size: gate.size,
+      mimeType: mime.lookup(gate.resolved) || 'application/octet-stream',
+    });
+
+    const fileStream = fs.createReadStream(gate.resolved);
+    fileStream.on('error', (error) => {
+      log.error('[SessionOutput] 直传失败:', error);
+      if (!res.headersSent) res.status(500).end();
+      else res.destroy();
+    });
+    return fileStream.pipe(res);
   });
 
   return router;

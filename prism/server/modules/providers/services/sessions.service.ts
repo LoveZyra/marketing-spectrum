@@ -2,10 +2,38 @@ import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { NO_SUCH_USER_ID, canViewerSeeSession, projectsDb, sessionMessagesDb, sessionsDb, type VisibilityScope } from '@/modules/database/index.js';
+import {
+  NO_SUCH_USER_ID,
+  auditLogDb,
+  canViewerManageSession,
+  canViewerSeeSession,
+  projectsDb,
+  sessionMessagesDb,
+  sessionTrashDb,
+  sessionsDb,
+  type AuditEvent,
+  type SessionTrashRow,
+  type TrashDeletedVia,
+  type VisibilityScope,
+} from '@/modules/database/index.js';
 import { isRootUser } from '@/shared/root-users.js';
-import { chatRunRegistry, currentConversationHolder, hasPendingSendForSession } from '@/modules/websocket/index.js';
+import { createLogger } from '@/shared/logger.js';
+import {
+  chatRunRegistry,
+  currentConversationHolder,
+  hasPendingSendForSession,
+  prepareSessionRemovedBroadcast,
+  broadcastSessionRestored,
+} from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
+import {
+  cancelStrayCheck,
+  moveTranscriptToTrash,
+  purgeTrashFiles,
+  restoreTranscriptFromTrash,
+  scheduleStrayCheck,
+  getTrashRetentionDays,
+} from '@/modules/providers/services/session-trash.service.js';
 import type {
   FetchHistoryOptions,
   FetchHistoryResult,
@@ -14,6 +42,74 @@ import type {
   Viewer,
 } from '@/shared/types.js';
 import { AppError, sliceTailPage } from '@/shared/utils.js';
+
+const log = createLogger('providers');
+
+/**
+ * gk:删除路径上"谁在做"。`Viewer` 之外多带 ip / user-agent,只为审计。
+ * 清扫器这类没有人的调用传 null。
+ */
+export type SessionActor = {
+  userId: number | string | null;
+  username: string | null;
+  ip?: string | null;
+  userAgent?: string | null;
+};
+
+/**
+ * gk:删之前先收掉这条会话的常驻 runtime —— 由组合根注入(claude-sdk 不归这个模块管)。
+ *
+ * 返回 `released: false` 时删除**拒绝**:正跑着的进程留着,行和文件就不能动。
+ * 没接线时视为"没有 runtime 要收"(单测、以及不带 SDK 的部署)。
+ */
+type RuntimeReleaser = (providerSessionId: string) => Promise<{ released: boolean; reason?: string }>;
+let runtimeReleaser: RuntimeReleaser | null = null;
+export function setSessionRuntimeReleaser(releaser: RuntimeReleaser | null): void {
+  runtimeReleaser = releaser;
+}
+
+/** 审计 detail 的 JSON 形状 —— 前端 `AuditLogList` 按它渲染成人话。 */
+export type SessionAuditDetail = {
+  entry: TrashDeletedVia | 'restore' | 'purge';
+  sessionId?: string;
+  sessionName?: string | null;
+  projectPath?: string | null;
+  projectName?: string | null;
+  lastActivity?: string | null;
+  transcriptMoved?: boolean;
+  transcriptRestored?: boolean;
+  count?: number;
+  names?: string[];
+  reason?: string;
+};
+
+function actorFields(actor: SessionActor | null | undefined) {
+  const userId = actor && actor.userId !== null && actor.userId !== undefined && Number.isFinite(Number(actor.userId))
+    ? Number(actor.userId)
+    : null;
+  return {
+    userId,
+    username: actor?.username ?? null,
+    ip: actor?.ip ?? null,
+    userAgent: actor?.userAgent ?? null,
+  };
+}
+
+function recordSessionAudit(
+  event: AuditEvent,
+  actor: SessionActor | null | undefined,
+  detail: SessionAuditDetail,
+  targetUserId: number | null,
+  outcome: 'success' | 'failure' = 'success',
+): void {
+  auditLogDb.record({
+    ...actorFields(actor),
+    event,
+    outcome,
+    detail: JSON.stringify(detail),
+    targetUserId,
+  });
+}
 
 /**
  * dq:右侧工作面板的数据帧(任务清单 + 产出文件的原料)。
@@ -348,6 +444,60 @@ function resolveProjectDisplayName(
   }
 
   return path.basename(projectPath) || projectPath;
+}
+
+/** gk:最近删除列表里的一条(给前端)。 */
+export type TrashedSessionListItem = {
+  sessionId: string;
+  provider: LLMProvider;
+  sessionTitle: string;
+  projectPath: string | null;
+  projectDisplayName: string;
+  projectExists: boolean;
+  lastActivity: string | null;
+  messageCount: number;
+  deletedAt: string;
+  deletedBy: string | null;
+  deletedVia: string;
+  transcriptKept: boolean;
+  /** 保留期到点会被清扫的时刻(retentionDays = 0 时为 null:永不自动清)。 */
+  purgeAt: string | null;
+  canRestore: boolean;
+};
+
+/** root / 项目 owner / 删除者本人 可以恢复。 */
+function canRestoreTrashed(row: SessionTrashRow, viewer: Viewer): boolean {
+  if (isRootUser(viewer.username ?? undefined)) return true;
+  if (viewer.userId === null || viewer.userId === undefined) return false;
+  const viewerId = String(viewer.userId);
+  if (row.deleted_by_user_id !== null && String(row.deleted_by_user_id) === viewerId) return true;
+  const liveProject = row.project_path ? projectsDb.getProjectPath(row.project_path) : null;
+  const owner = liveProject ? liveProject.owner_user_id : row.project_owner_user_id;
+  return owner !== null && owner !== undefined && String(owner) === viewerId;
+}
+
+function toTrashedListItem(row: SessionTrashRow, viewer: Viewer, retentionDays: number): TrashedSessionListItem {
+  const liveProject = row.project_path ? projectsDb.getProjectPath(row.project_path) : null;
+  const deletedAtMs = Date.parse(row.deleted_at);
+  const purgeAt = retentionDays > 0 && Number.isFinite(deletedAtMs)
+    ? new Date(deletedAtMs + retentionDays * 24 * 60 * 60 * 1000).toISOString()
+    : null;
+  return {
+    sessionId: row.session_id,
+    provider: row.provider as LLMProvider,
+    sessionTitle: row.custom_name?.trim() || row.session_id,
+    projectPath: row.project_path,
+    projectDisplayName: resolveProjectDisplayName(row.project_path, liveProject?.custom_project_name ?? row.project_display_name),
+    projectExists: liveProject !== null,
+    lastActivity: row.updated_at ?? row.created_at ?? null,
+    messageCount: row.message_count,
+    deletedAt: row.deleted_at,
+    deletedBy: row.deleted_by_username,
+    deletedVia: row.deleted_via,
+    transcriptKept: row.trash_jsonl_path !== null,
+    purgeAt,
+    canRestore: canRestoreTrashed(row, viewer),
+  };
 }
 
 /**
@@ -782,14 +932,21 @@ export const sessionsService = {
    * Archives or permanently deletes one persisted session row by id.
    *
    * Soft-delete mirrors the project behavior by toggling `isArchived` so the
-   * row disappears from active lists but remains restorable. Force-delete
-   * optionally removes the transcript file before deleting the database row.
+   * row disappears from active lists but remains restorable.
+   *
+   * gk:**永久删除 = 进最近删除**。行、显示日志、transcript 都搬进回收站
+   * (`PRISM_TRASH_RETENTION_DAYS`,默认 30 天后清扫),不再 DELETE / unlink;
+   * 删之前先收掉常驻 runtime;删完写审计、给所有还看得见它的 socket 推 `session_removed`。
+   * `deletedFromDisk` 仍然接受(`false` = transcript 留在原地不搬),默认搬。
    */
   async deleteOrArchiveSessionById(
     sessionId: string,
     options: {
       force?: boolean;
       deletedFromDisk?: boolean;
+      /** gk:谁在删、从哪个入口 —— 只为审计与回收站里的"谁删的"。 */
+      actor?: SessionActor | null;
+      via?: TrashDeletedVia;
     } = {},
   ): Promise<{ sessionId: string; action: 'archived' | 'deleted'; deletedFromDisk: boolean }> {
     const session = sessionsDb.getSessionById(sessionId);
@@ -800,8 +957,18 @@ export const sessionsService = {
       });
     }
 
+    const projectPath = session.project_path?.trim() ? session.project_path : null;
+    const project = projectPath ? projectsDb.getProjectPath(projectPath) : null;
+    const projectName = resolveProjectDisplayName(projectPath, project?.custom_project_name);
+    const sessionName = session.custom_name?.trim() || null;
+    const targetUserId = project?.owner_user_id ?? null;
+    const via: TrashDeletedVia = options.via ?? 'session';
+
     if (!options.force) {
       sessionsDb.updateSessionIsArchived(sessionId, true);
+      recordSessionAudit('session_archived', options.actor, {
+        entry: via, sessionId, sessionName, projectPath, projectName, lastActivity: session.updated_at ?? null,
+      }, targetUserId);
       return {
         sessionId,
         action: 'archived',
@@ -852,24 +1019,282 @@ export const sessionsService = {
       );
     }
 
-    let removedFromDisk = false;
-    if (options.deletedFromDisk && session.jsonl_path) {
-      removedFromDisk = await removeFileIfExists(session.jsonl_path);
+    /**
+     * gk:**先收 runtime,再动行和文件。**
+     *
+     * 2026-09-14 的事故里,行和 transcript 删掉之后,这条会话空闲着的常驻 CLI 又活了
+     * 半小时;被回收时它按老路径写了两行收尾记录,同名文件"复活"成一个空壳。
+     * fj 那道门只挡"正在跑回合",挡不住"空闲但常驻"。收不掉(回合在飞)就拒绝。
+     */
+    if (runtimeReleaser && session.provider_session_id) {
+      const release = await runtimeReleaser(session.provider_session_id);
+      if (!release.released && release.reason === 'turn_in_flight') {
+        throw new AppError(
+          `会话 "${sessionId}" 的常驻进程正在跑一个回合 —— 先停止它再删除。`,
+          { code: 'SESSION_RUN_IN_PROGRESS', statusCode: 409 },
+        );
+      }
+      if (!release.released) {
+        /**
+         * **收不掉 ≠ 在跑。** `releaseClaudeSession` 在 dispose 本身抛错时
+         * (传输已经关了之类)也返回 `released: false`,reason 是 `error`。
+         * 上一版把这一类也当成"回合在飞"回 409,于是一个 dispose 坏掉的 runtime
+         * 能让这条会话**永远删不掉**,而用户看到的是"它明明没在跑"。
+         * 那个 runtime 已经坏了,拦着删除保护不了任何东西 —— 记一行往下走。
+         */
+        log.warn(
+          `[sessions] 删除前收常驻进程没成功(reason=${release.reason ?? 'unknown'}),继续删除:${sessionId}`,
+        );
+      }
     }
 
-    const deleted = sessionsDb.deleteSessionById(sessionId);
-    if (!deleted) {
+    // 名单要在行删掉之前定(可见性判定靠 sessions 行);帧在删完之后发。
+    const fireRemoved = prepareSessionRemovedBroadcast(sessionId);
+    const actor = actorFields(options.actor);
+
+    const moved = sessionTrashDb.moveToTrash({
+      sessionId,
+      deletedByUserId: actor.userId,
+      deletedByUsername: actor.username,
+      deletedVia: via,
+      project: {
+        projectId: project?.project_id ?? null,
+        displayName: projectName,
+        ownerUserId: project?.owner_user_id ?? null,
+        visibility: project?.visibility ?? null,
+      },
+    });
+    if (!moved.moved || !moved.row) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
         statusCode: 404,
       });
     }
+    sessionMessagesDb.invalidateCache(sessionId);
+
+    let transcriptMoved = false;
+    if (options.deletedFromDisk !== false && moved.row.jsonl_path) {
+      const files = await moveTranscriptToTrash(moved.row);
+      sessionTrashDb.recordFilePaths(sessionId, files);
+      transcriptMoved = files.trashJsonlPath !== null;
+      scheduleStrayCheck(moved.row, files);
+    }
+
+    recordSessionAudit('session_deleted', options.actor, {
+      entry: via, sessionId, sessionName, projectPath, projectName,
+      lastActivity: session.updated_at ?? null, transcriptMoved,
+    }, targetUserId);
+    log.info(
+      `[sessions] 永久删除(进最近删除):${sessionId}「${sessionName ?? '未命名'}」`
+      + ` 项目=${projectPath ?? '-'} 操作者=${actor.username ?? actor.userId ?? '系统'} 入口=${via}`
+      + ` transcript=${transcriptMoved ? '已搬入回收站' : '未搬'}`,
+    );
+    fireRemoved({
+      reason: via === 'project' ? 'project_deleted' : 'deleted',
+      deletedBy: actor.username,
+      sessionName,
+      restorable: true,
+    });
 
     return {
       sessionId,
       action: 'deleted',
-      deletedFromDisk: removedFromDisk,
+      deletedFromDisk: transcriptMoved,
     };
+  },
+
+  /**
+   * gk:这条会话是不是"正在用"(在跑回合 / 被终端接管 / 有排队消息)——
+   * 与永久删除路径上那三道门同一口径;删项目前的整体预检用它。
+   */
+  isSessionInUse(sessionId: string): boolean {
+    return chatRunRegistry.isProcessing(sessionId)
+      || Boolean(currentConversationHolder(sessionId))
+      || hasPendingSendForSession(sessionId);
+  },
+
+  /** gk:谁能永久删这条会话(root / 项目 owner)。判定在 database 模块,这里只是转出去。 */
+  canViewerManageSession(sessionId: string, viewer: Viewer): boolean {
+    return canViewerManageSession(sessionId, viewer);
+  },
+
+  /**
+   * gk:永久删除的权限门。看得见但不能永久删 → 403 并说清楚该怎么办(归档);
+   * 看不见 → 与 assertViewerCanSeeSession 同形的 404(不当存在性预言机)。
+   */
+  assertViewerMayPermanentlyDelete(sessionId: string, viewer: Viewer): void {
+    this.assertViewerCanSeeSession(sessionId, viewer);
+    if (!this.canViewerManageSession(sessionId, viewer)) {
+      throw new AppError('只有项目负责人或管理员可以永久删除这条会话;你可以把它归档。', {
+        code: 'SESSION_DELETE_FORBIDDEN',
+        statusCode: 403,
+      });
+    }
+  },
+
+  /**
+   * gk:最近删除的列表(分页,最近删的在前)。可见范围与活表同一条规则,
+   * 项目行已经没了的按删除那一刻的快照判;删的人自己也看得到自己删的。
+   * `canRestore` 按 root / 项目 owner / 删除者 三方给。
+   */
+  listTrashedSessions(
+    viewer: Viewer,
+    options: { limit?: number; offset?: number } = {},
+  ): {
+    sessions: TrashedSessionListItem[];
+    total: number;
+    hasMore: boolean;
+    limit: number;
+    offset: number;
+    retentionDays: number;
+  } {
+    const limit = Math.min(
+      Math.max(1, Number.isFinite(options.limit) ? Math.floor(Number(options.limit)) : DEFAULT_ARCHIVED_PAGE_SIZE),
+      MAX_ARCHIVED_PAGE_SIZE,
+    );
+    const offset = Math.max(0, Number.isFinite(options.offset) ? Math.floor(Number(options.offset)) : 0);
+    const page = sessionTrashDb.listPage(visibilityScopeOf(viewer), limit, offset);
+    const retentionDays = getTrashRetentionDays();
+    const sessions = page.rows.map((row) => toTrashedListItem(row, viewer, retentionDays));
+    return {
+      sessions,
+      total: page.total,
+      hasMore: offset + sessions.length < page.total,
+      limit,
+      offset,
+      retentionDays,
+    };
+  },
+
+  /**
+   * gk:从最近删除里恢复。项目行没了就按快照建回来(owner 照旧);活表里已有同 id /
+   * 同 provider id 的行时拒绝(409)。恢复后给侧栏推一条 `session_upserted`
+   * (由 chatRunRegistry 那条现成的路)。
+   */
+  async restoreTrashedSession(
+    sessionId: string,
+    viewer: Viewer,
+    actor?: SessionActor | null,
+  ): Promise<{ sessionId: string; restored: true; transcriptRestored: boolean }> {
+    const row = sessionTrashDb.get(sessionId);
+    if (!row || !sessionTrashDb.isVisibleTo(sessionId, visibilityScopeOf(viewer))) {
+      throw new AppError(`Session "${sessionId}" is not in the trash.`, {
+        code: 'SESSION_NOT_IN_TRASH',
+        statusCode: 404,
+      });
+    }
+    if (!canRestoreTrashed(row, viewer)) {
+      throw new AppError('只有项目负责人、管理员或删除它的人可以恢复这条会话。', {
+        code: 'SESSION_RESTORE_FORBIDDEN',
+        statusCode: 403,
+      });
+    }
+
+    /**
+     * 冲突先在动文件之前问一次(只读)。库里那一刀最终还是由 `restore()` 的事务
+     * 判定,这里只是避免"文件搬回去了、行却恢复不了"。
+     */
+    if (sessionsDb.getSessionById(sessionId)) {
+      throw new AppError('活跃列表里已经有一条同 id(或同 transcript)的会话,不能恢复到它上面。', {
+        code: 'SESSION_RESTORE_CONFLICT',
+        statusCode: 409,
+      });
+    }
+
+    if (row.project_path) {
+      // 项目行在删项目时一起没了:按删除那一刻的快照建回来,owner **和 visibility** 都不能丢 ——
+      // owner 丢了就成了"无主"(非公共目录仅 root 可见);visibility 丢了则一个
+      // `public` 项目会变回默认语义,原来看得见的人(以及共享对象)当场看不到这条恢复出来的会话。
+      const existing = projectsDb.getProjectPath(row.project_path);
+      if (!existing) {
+        projectsDb.createProjectPath(
+          row.project_path,
+          row.project_display_name,
+          row.project_owner_user_id,
+          row.project_visibility === 'public' ? 'public' : null,
+        );
+      }
+    }
+
+    /**
+     * **文件先搬回来,再动库。**
+     *
+     * 反过来的话(上一版):`restore()` 一提交,回收站行就没了,而 transcript 还在
+     * `<trash>/…` 里 —— 这时若搬运失败(原目录被用户删了、只读盘),那份文件就
+     * **再没有任何记录指向它**,连清扫器都找不到,而恢复出来的会话指着一个不存在的
+     * 路径且接口回的是 `restored: true`。搬不动就当场失败,东西全留在回收站里可重试。
+     */
+    const { transcriptRestored, failed: transcriptFailed } = await restoreTranscriptFromTrash(row);
+    if (transcriptFailed) {
+      throw new AppError(
+        '这条会话的 transcript 没能搬回原位置(目录可能已不存在或不可写)—— 会话仍在「最近删除」里,处理好之后可以再试。',
+        { code: 'SESSION_RESTORE_FILE_FAILED', statusCode: 409 },
+      );
+    }
+
+    const result = sessionTrashDb.restore(sessionId);
+    if (!result.restored) {
+      if (result.reason === 'conflict') {
+        throw new AppError('活跃列表里已经有一条同 id(或同 transcript)的会话,不能恢复到它上面。', {
+          code: 'SESSION_RESTORE_CONFLICT',
+          statusCode: 409,
+        });
+      }
+      throw new AppError(`Session "${sessionId}" is not in the trash.`, {
+        code: 'SESSION_NOT_IN_TRASH',
+        statusCode: 404,
+      });
+    }
+
+    // 库里已经恢复了:那条还没跑的"空壳回查"不能再去动老路径上的文件。
+    cancelStrayCheck(sessionId);
+    sessionMessagesDb.invalidateCache(sessionId);
+
+    recordSessionAudit('session_trash_restored', actor ?? viewer, {
+      entry: 'restore',
+      sessionId,
+      sessionName: row.custom_name,
+      projectPath: row.project_path,
+      projectName: row.project_display_name,
+      transcriptRestored,
+    }, row.project_owner_user_id);
+    log.info(`[sessions] 从最近删除恢复:${sessionId}「${row.custom_name ?? '未命名'}」 操作者=${viewer.username ?? viewer.userId ?? '-'}`);
+    /**
+     * 侧栏那一路(带 isArchived 闸门,归档会话不该弹回活跃列表)。
+     */
+    chatRunRegistry.announceSessionUpsert(sessionId).catch((error) => {
+      log.warn('[sessions] 恢复后的侧栏广播失败:', (error as Error)?.message || error);
+    });
+    /**
+     * gl:**撤掉「已被删除」态要走自己的帧。**
+     *
+     * gk 这里只发了上面那一条,而它对归档会话直接 return —— 于是恢复一条归档态的
+     * 会话时前端一帧都收不到,页面永远停在「这条会话已被删除」,输入框回不来,
+     * 只能刷新(2026-09-15 测试环境实测)。这一帧无条件发给所有看得见它的人。
+     */
+    try {
+      broadcastSessionRestored(sessionId);
+    } catch (error) {
+      log.warn('[sessions] 恢复后的 session_restored 广播失败:', (error as Error)?.message || error);
+    }
+
+    return { sessionId, restored: true, transcriptRestored };
+  },
+
+  /** gk:root 立即清除一条(不等保留期)。 */
+  async purgeTrashedSession(sessionId: string, actor: SessionActor): Promise<{ sessionId: string; purged: boolean }> {
+    const row = sessionTrashDb.purge(sessionId);
+    if (!row) {
+      throw new AppError(`Session "${sessionId}" is not in the trash.`, {
+        code: 'SESSION_NOT_IN_TRASH',
+        statusCode: 404,
+      });
+    }
+    await purgeTrashFiles(row);
+    recordSessionAudit('session_trash_purged', actor, {
+      entry: 'purge', sessionId, sessionName: row.custom_name, projectPath: row.project_path, projectName: row.project_display_name, count: 1,
+    }, row.project_owner_user_id);
+    return { sessionId, purged: true };
   },
 
   /**
@@ -903,14 +1328,20 @@ export const sessionsService = {
     sessionIds: string[],
     action: 'archive' | 'restore' | 'delete',
     viewer: Viewer,
-    options: { deletedFromDisk?: boolean } = {},
+    options: { deletedFromDisk?: boolean; actor?: SessionActor | null } = {},
   ): Promise<{ requested: number; succeeded: string[]; skipped: string[]; failed: string[] }> {
     const succeeded: string[] = [];
     const skipped: string[] = [];
     const failed: string[] = [];
+    const names: string[] = [];
 
     for (const sessionId of [...new Set(sessionIds)]) {
       if (!this.canViewerSeeSession(sessionId, viewer)) {
+        skipped.push(sessionId);
+        continue;
+      }
+      // gk:批量永久删除逐条过 owner / root 门 —— 看得见但不能永久删的静默跳过,计入 skipped。
+      if (action === 'delete' && !this.canViewerManageSession(sessionId, viewer)) {
         skipped.push(sessionId);
         continue;
       }
@@ -918,15 +1349,28 @@ export const sessionsService = {
         if (action === 'restore') {
           this.restoreSessionById(sessionId);
         } else {
+          if (names.length < 10) {
+            const name = sessionsDb.getSessionById(sessionId)?.custom_name?.trim();
+            if (name) names.push(name);
+          }
           await this.deleteOrArchiveSessionById(sessionId, {
             force: action === 'delete',
             deletedFromDisk: action === 'delete' ? options.deletedFromDisk ?? true : false,
+            actor: options.actor ?? viewer,
+            via: 'bulk',
           });
         }
         succeeded.push(sessionId);
       } catch {
         failed.push(sessionId);
       }
+    }
+
+    // gk:批量删除 / 归档另记一条汇总 —— 单条那些各自有记录,这条回答"一次操作动了几条"。
+    if ((action === 'delete' || action === 'archive') && succeeded.length > 0) {
+      recordSessionAudit(action === 'delete' ? 'sessions_bulk_deleted' : 'sessions_bulk_archived', options.actor ?? viewer, {
+        entry: 'bulk', count: succeeded.length, names,
+      }, null);
     }
 
     return { requested: sessionIds.length, succeeded, skipped, failed };
@@ -940,14 +1384,17 @@ export const sessionsService = {
    */
   async emptyArchivedSessions(
     viewer: Viewer,
-    options: { olderThanDays?: number; deletedFromDisk?: boolean } = {},
-  ): Promise<{ deleted: number; failed: number }> {
+    options: { olderThanDays?: number; deletedFromDisk?: boolean; actor?: SessionActor | null } = {},
+  ): Promise<{ deleted: number; failed: number; skipped: number }> {
     const cutoff = typeof options.olderThanDays === 'number' && options.olderThanDays > 0
       ? Date.now() - options.olderThanDays * 24 * 60 * 60 * 1000
       : null;
 
     let deleted = 0;
     let failed = 0;
+    // gk:看得见但不是自己项目的(共享给我的)不能永久删 —— 跳过并计数。
+    let skipped = 0;
+    const names: string[] = [];
     /**
      * dv:游标按"这一页留下了几条"前进,而不是恒取 offset 0 + 空页即收工。
      *
@@ -972,10 +1419,17 @@ export const sessionsService = {
 
       let deletedThisPage = 0;
       for (const row of targets) {
+        if (!this.canViewerManageSession(row.session_id, viewer)) {
+          skipped += 1;
+          continue;
+        }
         try {
+          if (names.length < 10 && row.custom_name?.trim()) names.push(row.custom_name.trim());
           await this.deleteOrArchiveSessionById(row.session_id, {
             force: true,
             deletedFromDisk: options.deletedFromDisk ?? true,
+            actor: options.actor ?? viewer,
+            via: 'empty_archived',
           });
           deleted += 1;
           deletedThisPage += 1;
@@ -990,7 +1444,13 @@ export const sessionsService = {
       if (deletedThisPage === 0 && page.rows.length < MAX_ARCHIVED_PAGE_SIZE) break;
     }
 
-    return { deleted, failed };
+    if (deleted > 0) {
+      recordSessionAudit('archived_sessions_emptied', options.actor ?? viewer, {
+        entry: 'empty_archived', count: deleted, names,
+      }, null);
+    }
+
+    return { deleted, failed, skipped };
   },
 
   /**

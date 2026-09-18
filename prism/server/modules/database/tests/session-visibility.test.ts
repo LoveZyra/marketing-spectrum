@@ -6,6 +6,7 @@ import path from 'node:path';
 import { describe, test } from 'vitest';
 
 import {
+  canViewerManageSession,
   canViewerSeeSession,
   closeConnection,
   initializeDatabase,
@@ -125,6 +126,63 @@ describe('会话可见性', () => {
       sessionsDb.createAppSession('s-alice', 'claude', '/workspace/alice', alice.id);
 
       assert.equal(canViewerSeeSession('s-alice', { userId: null, username: null }), false);
+    });
+  });
+
+  /**
+   * gk:**看得见 ≠ 能永久删。**
+   *
+   * 2026-09-14 的事故:共享项目里任何一位协作者都能把别人跑了一天的对话连 transcript
+   * 一起永久删掉。不可逆的那一档收紧到项目 owner / root;共享给的用户、公共项目的
+   * 访客、无主项目下的非 root 一律不能。改回"可见即可删",下面第二个断言立刻红。
+   */
+  test('gk:永久删除只给项目 owner 与 root(共享用户看得见但删不了)', async () => {
+    await withIsolatedDatabase(() => {
+      const alice = { id: Number(userDb.createUser('alice', 'hash').id) };
+      const bob = { id: Number(userDb.createUser('bob', 'hash').id) };
+      projectsDb.createProjectPath('/workspace/alice', null, alice.id);
+      sessionsDb.createAppSession('s-alice', 'claude', '/workspace/alice', alice.id);
+      const project = projectsDb.getProjectPath('/workspace/alice');
+      projectsDb.setProjectShares(project!.project_id, [bob.id], alice.id);
+      assert.equal(canViewerSeeSession('s-alice', { userId: bob.id, username: 'bob' }), true, '共享用户看得见');
+
+      assert.equal(canViewerManageSession('s-alice', { userId: alice.id, username: 'alice' }), true, 'owner 可以');
+      assert.equal(canViewerManageSession('s-alice', { userId: bob.id, username: 'bob' }), false, '共享用户不可以');
+      assert.equal(canViewerManageSession('s-alice', { userId: 999, username: 'boss' }), true, 'root 可以');
+      assert.equal(canViewerManageSession('missing', { userId: 999, username: 'boss' }), false, '不存在的会话 root 也是 false');
+
+      /**
+       * 无主项目没有"负责人"这一档 → 回落到可见性(看得见就能永久删)。
+       *
+       * 分两种,因为无主的可见性本身是收着的:
+       *   - 不在公共目录:非 root 看不见 → 也管不了(调用方那条路本来就是 404);
+       *   - 在 PRISM_PUBLIC_WORKSPACE 之下:对所有人可见 → 也对所有人可删(gj 口径)。
+       * 收紧成"无主也只有 root 能永久删"会误伤公共目录部署:监视器扫到新路径时
+       * 就是不带 owner 地建项目行(有人在终端里直接跑 `claude`),那些会话普通用户
+       * 会突然删不掉,而「清空归档」逐条跳过、界面上像点了没反应。
+       */
+      projectsDb.createProjectPath('/workspace/orphan');
+      sessionsDb.createAppSession('s-orphan', 'claude', '/workspace/orphan');
+      assert.equal(canViewerSeeSession('s-orphan', { userId: alice.id, username: 'alice' }), false, '无主且不在公共目录:看不见');
+      assert.equal(canViewerManageSession('s-orphan', { userId: alice.id, username: 'alice' }), false, '看不见 → 也管不了');
+      assert.equal(canViewerManageSession('s-orphan', { userId: 999, username: 'boss' }), true);
+
+      const previousPublicWorkspace = process.env.PRISM_PUBLIC_WORKSPACE;
+      process.env.PRISM_PUBLIC_WORKSPACE = '/workspace/shared';
+      try {
+        projectsDb.createProjectPath('/workspace/shared/scan-me');
+        sessionsDb.createAppSession('s-public', 'claude', '/workspace/shared/scan-me');
+        assert.equal(canViewerSeeSession('s-public', { userId: bob.id, username: 'bob' }), true, '公共目录下的无主项目:所有人可见');
+        assert.equal(canViewerManageSession('s-public', { userId: bob.id, username: 'bob' }), true, '可见即可永久删(无主没有负责人这一档)');
+      } finally {
+        if (previousPublicWorkspace === undefined) delete process.env.PRISM_PUBLIC_WORKSPACE;
+        else process.env.PRISM_PUBLIC_WORKSPACE = previousPublicWorkspace;
+      }
+
+      // 没有项目路径的会话仍然只有 root —— 与 canViewerSeeSession 同口径
+      sessionsDb.createAppSession('s-nopath', 'claude', '');
+      assert.equal(canViewerManageSession('s-nopath', { userId: alice.id, username: 'alice' }), false, '无项目路径:非 root 不行');
+      assert.equal(canViewerManageSession('s-nopath', { userId: 999, username: 'boss' }), true);
     });
   });
 });

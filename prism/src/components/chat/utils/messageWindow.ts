@@ -327,6 +327,8 @@ export function resolveReadingSpot(
       if (rowKeyAt(i) === spot.rowKey) return { rowIndex: i, offset: spot.offset };
     }
     // 那一行不在窗口里(被裁掉 / 窗口变小)—— 下标兜底也不会更准,直接放弃。
+    // gh 曾试过在这里退回倒数下标:目标行分几批才落地时,会在第一批就按错误的下标
+    // 落位并把跟底关掉(scrollOwnership 那四条立刻红)。标识找不到就等,等不到再放弃。
     return null;
   }
 

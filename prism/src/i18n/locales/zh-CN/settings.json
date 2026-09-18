@@ -4,7 +4,8 @@
     "account": "账户",
     "permissions": "权限",
     "mcpServers": "MCP 服务器",
-    "skills": "技能"
+    "skills": "技能",
+    "projects": "项目"
   },
   "account": {
     "signedInAs": "当前登录账号",
@@ -32,7 +33,19 @@
     },
     "language": "语言",
     "languageLabel": "语言选择",
-    "languageDescription": "界面显示用哪种语言"
+    "languageDescription": "界面显示用哪种语言",
+    "attachments": {
+      "byProject": "按项目",
+      "count": "共 {{count}} 个附件",
+      "empty": "还没有传过附件。",
+      "expiring": "最先被清理的",
+      "failed": "读不到用量:",
+      "help": "聊天里传的图片和文件存在会话所属项目的 attachments/ 目录下,超过 {{days}} 天会自动清理。你自己往那个目录里放的文件不受影响。",
+      "loading": "正在读取…",
+      "noProject": "(未归属项目)",
+      "refresh": "刷新",
+      "title": "附件空间"
+    }
   },
   "quickSettings": {
     "title": "快速设置",
@@ -365,8 +378,51 @@
         "auth": "登录与账号",
         "projects": "项目变更",
         "skills": "技能装卸",
-        "credentials": "凭据与票据"
+        "credentials": "凭据与票据",
+        "deletions": "会话与项目删除"
       }
+    },
+    "mineTitle": "与我有关的操作记录",
+    "mineHint": "包括你自己的登录、删除等操作,以及别人对你负责的项目里的会话做的删除 / 归档 / 恢复。",
+    "event": {
+      "session_deleted": "永久删除了会话",
+      "session_archived": "归档了会话",
+      "sessions_bulk_deleted": "批量永久删除了",
+      "sessions_bulk_archived": "批量归档了",
+      "archived_sessions_emptied": "清空归档,移入最近删除了",
+      "project_deleted": "永久删除了项目",
+      "project_archived": "归档了项目",
+      "session_trash_restored": "从最近删除恢复了会话",
+      "session_trash_purged": "清除了最近删除里的会话"
+    },
+    "entry": {
+      "session": "从侧栏",
+      "bulk": "批量操作中",
+      "empty_archived": "清空归档时",
+      "project": "删除项目时",
+      "retention": "归档保留期到期时",
+      "api": "外部 API",
+      "restore": "",
+      "purge": ""
+    },
+    "detail": {
+      "quoted": "「{{value}}」",
+      "project": "项目{{name}}",
+      "projectPath": "项目 {{path}}",
+      "lastActivity": "最后活动 {{when}}",
+      "transcriptMoved": "transcript 已移入最近删除",
+      "transcriptKept": "transcript 未搬动",
+      "transcriptRestored": "transcript 已放回",
+      "separator": ",",
+      "withExtras": "{{head}}({{extras}})",
+      "nameList": ":{{names}}",
+      "sessionId": " {{id}}",
+      "sessionHead": "{{entry}}{{verb}}{{target}}",
+      "sessionCount": " {{count}} 条会话",
+      "bulkHead": "{{verb}}{{count}}{{names}}",
+      "movedToTrashCount": ",{{count}} 条会话移入最近删除",
+      "projectHead": "{{verb}}{{name}}{{count}}{{names}}",
+      "truncated": "(详情过长已被截断){{raw}}"
     }
   },
   "models": {
@@ -490,6 +546,8 @@
       "input": "输入",
       "output": "输出",
       "cost": "费用"
-    }
+    },
+    "lastDays": "最近 {{count}} 天",
+    "totalLine": "{{cost}} · {{runs}} 轮"
   }
 }

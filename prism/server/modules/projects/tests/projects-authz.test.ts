@@ -45,6 +45,8 @@ async function withProjectsServer(
     users: Record<string, TestUser>;
     aliceProjectId: string;
     publicProjectId: string;
+    /** 在公共目录下、但**有主**(alice)的项目:所有人都看得见,只有 alice 是负责人。 */
+    ownedPublicProjectId: string;
   }) => Promise<void>,
 ): Promise<void> {
   const prev = {
@@ -73,9 +75,18 @@ async function withProjectsServer(
 
     const alicePath = path.join(dir, 'alice-proj');
     const publicPath = path.join(dir, 'public', 'shared-proj');
-    for (const p of [alicePath, publicPath]) await mkdir(p, { recursive: true });
+    /*
+      gn:要测"看得见但不是负责人"就必须有这么一个 —— **有主 + visibility=public**。
+      只有 alice-proj(bob 看不见)与无主的 shared-proj(没有负责人这一档)的话,
+      "非 owner 归档别人的项目"这个组合根本构造不出来。
+      注意公共目录这件事只对**无主**项目起作用:有主项目要靠 visibility 列才对外可见
+      (实测里那个 lqm 就是 owner=2 且 isPublic=true)。
+    */
+    const ownedPublicPath = path.join(dir, 'alice-public');
+    for (const p of [alicePath, publicPath, ownedPublicPath]) await mkdir(p, { recursive: true });
     const aliceProjectId = projectsDb.createProjectPath(alicePath, null, users.alice.id).project!.project_id;
     const publicProjectId = projectsDb.createProjectPath(publicPath, null, null).project!.project_id;
+    const ownedPublicProjectId = projectsDb.createProjectPath(ownedPublicPath, null, users.alice.id, 'public').project!.project_id;
 
     const fakeAuth: RequestHandler = (req, _res, next) => {
       const name = String(req.headers['x-test-user'] ?? '');
@@ -97,7 +108,7 @@ async function withProjectsServer(
     const address = server.address();
     if (address === null || typeof address !== 'object') throw new Error('no listen address');
 
-    await runTest({ baseUrl: `http://127.0.0.1:${address.port}`, users, aliceProjectId, publicProjectId });
+    await runTest({ baseUrl: `http://127.0.0.1:${address.port}`, users, aliceProjectId, publicProjectId, ownedPublicProjectId });
   } finally {
     if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
     closeConnection();
@@ -164,6 +175,51 @@ describe('项目路由的可见性闸门', () => {
     await withProjectsServer(async ({ baseUrl, publicProjectId }) => {
       const asBob = await call(baseUrl, 'bob', 'POST', `/api/projects/${publicProjectId}/toggle-star`, {});
       assert.equal(asBob.status, 200, `公共项目被误挡:${asBob.text}`);
+    });
+  });
+
+  /**
+   * gn:**归档整个项目也要负责人权限。**
+   *
+   * 2026-09-15 实测:非 root 的 test 账号把 root 名下的 lqm 项目整个归档了 ——
+   * 项目从**所有人**的活跃侧栏消失(可一键还原、没丢数据,但当场谁都看不见它)。
+   * 归档以前是"看得见就能做",与会话归档同口径;而项目归档影响的是所有人,
+   * 不是只影响自己那一份列表。收紧到与永久删除同一条规则。
+   */
+  test('归档整个项目:看得见但不是负责人 → 403', async () => {
+    await withProjectsServer(async ({ baseUrl, ownedPublicProjectId, publicProjectId }) => {
+      // bob 看得见这个项目(它在公共目录下),但负责人是 alice
+      const bobArchive = await call(baseUrl, 'bob', 'DELETE', `/api/projects/${ownedPublicProjectId}`);
+      assert.equal(bobArchive.status, 403, `归档别人的项目应当 403,实际 ${bobArchive.status}`);
+      assert.match(String(bobArchive.body.error ?? ''), /归档/, '403 要说清楚是归档这件事被拦了');
+
+      // 永久删除照旧 403(gk 就有的规则,别被这次改动带坏)
+      const bobDelete = await call(baseUrl, 'bob', 'DELETE', `/api/projects/${ownedPublicProjectId}?force=true`);
+      assert.equal(bobDelete.status, 403);
+
+      // 负责人自己可以归档
+      const aliceArchive = await call(baseUrl, 'alice', 'DELETE', `/api/projects/${ownedPublicProjectId}`);
+      assert.equal(aliceArchive.status, 200, `负责人归档自己的项目应当放行,实际 ${aliceArchive.status}`);
+
+      // **无主**项目没有"负责人"这一档 —— 看得见就能归档,这一条不许被收紧掉,
+      // 否则普通用户连自己在终端里开出来的项目都归档不了(监视器建的行都是无主的)。
+      const bobArchivesUnowned = await call(baseUrl, 'bob', 'DELETE', `/api/projects/${publicProjectId}`);
+      assert.equal(bobArchivesUnowned.status, 200, `无主项目应当仍可归档,实际 ${bobArchivesUnowned.status}`);
+    });
+  });
+
+  test('批量归档走同一条闸门 —— 否则批量入口就是同一件事的后门', async () => {
+    await withProjectsServer(async ({ baseUrl, ownedPublicProjectId }) => {
+      const response = await call(baseUrl, 'bob', 'POST', '/api/projects/bulk', {
+        action: 'archive',
+        projectIds: [ownedPublicProjectId],
+      });
+      assert.equal(response.status, 200, '批量入口逐条鉴权,整体仍是 200');
+      const skipped = (response.body.data as { skipped?: Array<{ projectId: string; reason: string }> } | undefined)?.skipped
+        ?? (response.body as { skipped?: Array<{ projectId: string; reason: string }> }).skipped
+        ?? [];
+      assert.equal(skipped.length, 1, `别人的项目应当被跳过,实际 skipped=${JSON.stringify(skipped)}`);
+      assert.equal(skipped[0].reason, 'not-manageable');
     });
   });
 

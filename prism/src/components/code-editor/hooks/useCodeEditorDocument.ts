@@ -212,9 +212,11 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
 
     document.body.appendChild(anchor);
     anchor.click();
-    document.body.removeChild(anchor);
+    anchor.remove();
 
-    URL.revokeObjectURL(url);
+    // 释放放到下一拍 —— 有些浏览器在 click 返回时还没开始读这个 URL,
+    // 同步撤销会把下载掐死且不抛错(大文件几乎必挂)。与其余下载点一致。
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }, [content, file.name]);
 
   return {

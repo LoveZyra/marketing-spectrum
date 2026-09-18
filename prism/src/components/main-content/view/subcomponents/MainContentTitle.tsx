@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import { Tooltip } from '../../../../shared/view/ui';
 import type { AppTab, Project, ProjectSession } from '../../../../types/app';
 
+import { getTabTitle } from './tabTitle';
+
 type MainContentTitleProps = {
   activeTab: AppTab;
   selectedProject: Project;
@@ -14,18 +16,6 @@ type MainContentTitleProps = {
   /** ef:就地重命名(设计稿标题右侧那支铅笔)。没给就不出现铅笔。 */
   onRenameSession?: (sessionId: string, summary: string) => Promise<boolean> | boolean;
 };
-
-function getTabTitle(activeTab: AppTab, t: (key: string) => string) {
-  if (activeTab === 'files') {
-    return t('mainContent.projectFiles');
-  }
-
-  if (activeTab === 'notebook') {
-    return 'JupyterLab';
-  }
-
-  return 'Project';
-}
 
 // Cursor sessions were titled from `name`; Claude sessions only carry a summary.
 function getSessionTitle(session: ProjectSession): string {

@@ -198,12 +198,16 @@ export default tseslint.config(
             "server/shared/ticket-store.js", // 一次性/可重用票据的通用实现,ws 与预览票据共用
             "server/shared/attachment-storage.ts", // 聊天附件落盘目录、配额与过期清理
             "server/shared/sse-tickets.js", // HTTP SSE 的短命票据(搜索 SSE 用,替代 URL 里的 JWT)
+            "server/shared/download-tickets.js", // 下载直传的短命票据:一次普通导航设不了 Authorization 头,凭据只能进 URL
+            "server/shared/download-headers.js", // 下载响应头:Content-Length(进度条的硬前提)+ RFC 5987 文件名
             "server/shared/ripgrep-path.ts", // 找到真实存在的 rg(自带二进制可能没下载下来)
             "server/shared/prism-internal-transcripts.ts", // Prism 自产 transcript 的忽略判据:watcher 与全量同步共用,放叶子上防循环依赖
             "server/shared/project-display-name.ts", // 项目展示名:项目列表 / watcher / run-registry 三处共用,放叶子上防循环依赖(同 prism-internal-transcripts)
             "server/shared/websocket-state.ts", // 连接注册表与 readyState 常量:低层原语,放叶子上防循环依赖(barrel 强制会把 websocket/providers/projects 连成环)
             "server/shared/logger.ts", // 分级日志:几乎每个模块都要打日志,它自己零依赖,必须待在叶子上
             "server/shared/fork-anchor.ts", // 「编辑重跑」分叉锚点的判据:落库(database)与端点(system)共用,纯函数零依赖,放叶子上
+            "server/shared/client-ip.js", // gk:客户端 IP 判定(X-Forwarded-For 只在 PRISM_TRUST_PROXY 下可信):限流器与删除路由的审计共用,零依赖
+            "server/shared/upload-filename.ts", // multipart 文件名的 latin1→UTF-8 恢复:文档/图片/文件树三条上传路共用,纯函数零依赖
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },

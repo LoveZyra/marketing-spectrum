@@ -121,10 +121,21 @@ describe('顶层行的 data-row-key', () => {
     expect(keys.length).toBe(roots.length);
   });
 
-  it('ChatMessagesPane 给三类行都传了 rowKey,而且与 React key 同源', () => {
+  /**
+   * gh:**组的 rowKey 不许与 React key 同源。**
+   *
+   * React key 是 `_key` = `group_${流水号}`,只在"上一次渲染的登记表里认得出"时沿用,
+   * 登记表不分会话 —— 切走再回来这条会话的每个组都换号,ga 按 rowKey 找回阅读位置
+   * 只要停在一个组上就必然失败。DOM 上的 data-row-key 改用尾成员的内在 key。
+   */
+  it('ChatMessagesPane 给三类行都传了 rowKey;组的 rowKey 取自尾成员的内在 key,不是流水号', () => {
     const pane = read('../view/subcomponents/ChatMessagesPane.tsx');
-    expect(pane).toMatch(/rowKey=\{`subagents-\$\{getGroupKey\(item\)\}`\}/);
-    expect(pane).toMatch(/rowKey=\{`activity-\$\{getGroupKey\(item\)\}`\}/);
+    expect(pane).toMatch(/rowKey=\{`subagents-\$\{getGroupRowKey\(item\)\}`\}/);
+    expect(pane).toMatch(/rowKey=\{`activity-\$\{getGroupRowKey\(item\)\}`\}/);
     expect(pane).toMatch(/rowKey=\{getMessageKey\(item\)\}/);
+    expect(pane).toMatch(/const last = item\.messages\[item\.messages\.length - 1\];/);
+    expect(pane).toMatch(/return \(last && getIntrinsicMessageKey\(last\)\) \|\| getGroupKey\(item\);/);
+    // React key 仍是 _key(组件身份保持靠它)
+    expect(pane).toMatch(/key=\{`activity-\$\{getGroupKey\(item\)\}`\}/);
   });
 });

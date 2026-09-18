@@ -134,9 +134,27 @@ describe('后台子代理:进展与汇报归卡片', () => {
     expect(rows.filter((row) => row.isTaskNotification)).toHaveLength(0);
   });
 
-  it('没有 tool_use_id 的也不单独成行', () => {
-    const rows = normalizedToChatMessages([notification(undefined, 'completed', '✅ 后台任务完成 · 跑 pytest')]);
-    expect(rows.filter((row) => row.isTaskNotification)).toHaveLength(0);
+  /**
+   * gh:**没有 tool_use_id 的照旧渲染成回执行。**
+   *
+   * ge 把所有 task_notification 一刀切掉,连定时任务的三条回执
+   * (「⏰ 开始执行」「✅ 执行完成」「⚠️ 执行失败:<原因>」)也没了 —— 它们从来
+   * 没有 tool_use_id,不是旁白,是那条会话唯一的成败说明。
+   */
+  it('没有 tool_use_id 的(定时任务回执)照旧成行;有 tool_use_id 的归行不出顶层', () => {
+    const receipt = normalizedToChatMessages([
+      notification(undefined, 'failed', '⚠️ 定时任务「回归」执行失败:命令返回 1'),
+    ]);
+    const shown = receipt.filter((row) => row.isTaskNotification);
+    expect(shown).toHaveLength(1);
+    expect(shown[0].content).toContain('执行失败:命令返回 1');
+    expect(shown[0].taskStatus).toBe('failed');
+
+    const owned = normalizedToChatMessages([
+      msg({ kind: 'tool_use', toolName: 'Bash', toolId: 'toolu_X', toolInput: { command: 'pytest' } }),
+      notification('toolu_X', 'completed', '✅ 后台任务完成'),
+    ]);
+    expect(owned.filter((row) => row.isTaskNotification)).toHaveLength(0);
   });
 
   it('**普通工具行(不是子代理)转后台之后,终态归到那一行**', () => {

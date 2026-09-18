@@ -13,11 +13,11 @@ import cors from 'cors';
 
 import { AppError, generateMessageId } from '@/shared/utils.js';
 import { methodOverrideMiddleware } from '@/shared/method-override.js';
-import { closeSessionsWatcher, initializeSessionsWatcher, markInterruptedTurnsOnStartup, sessionsService, startArchiveRetentionSweeper } from '@/modules/providers/index.js';
+import { closeSessionsWatcher, initializeSessionsWatcher, markInterruptedTurnsOnStartup, sessionsService, setSessionRuntimeReleaser, startArchiveRetentionSweeper, startTrashSweeper } from '@/modules/providers/index.js';
 import { broadcastRuntimeEvicted, createWebSocketServer, drainPendingSendForSession, observeOrphanFrames } from '@/modules/websocket/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { createTasksRouter, startTaskScheduler, stopTaskScheduler } from '@/modules/tasks/index.js';
-import { createFilesRouter } from '@/modules/files/index.js';
+import { createFilesRouter, createFileDownloadRouter } from '@/modules/files/index.js';
 import { pruneInternalProjects } from '@/modules/projects/services/project-prune.service.js';
 import {
     createSystemPublicRouter,
@@ -66,7 +66,7 @@ import settingsRoutes from './routes/settings.js';
 import agentRoutes from './routes/agent.js';
 import projectModuleRoutes from './modules/projects/projects.routes.js';
 import providerRoutes from './modules/providers/provider.routes.js';
-import { createSessionOutputsRouter } from './modules/providers/session-outputs.routes.js';
+import { createSessionOutputsRouter, createSessionOutputDownloadRouter } from './modules/providers/session-outputs.routes.js';
 import { assetsRoutes, attachmentUsageRoutes } from './modules/assets/index.js';
 import { startAttachmentSweeper } from './shared/attachment-storage.js';
 import { canViewerSeeSession, closeConnection, initializeDatabase, sessionMessagesDb, sessionsDb, stopDatabaseBackups } from './modules/database/index.js';
@@ -166,6 +166,15 @@ app.locals.wss = wss;
 // F14:常驻进程被名额挤掉时,给还在看那段对话的人推一条状态帧。
 // claude-sdk 不认识 websocket 层,由组合根接线。
 setRuntimeEvictionNotifier(broadcastRuntimeEvicted);
+
+/**
+ * gk:永久删除一条会话之前先收掉它空闲着的常驻 runtime。
+ *
+ * 2026-09-14 的事故:行和 transcript 删掉之后,常驻 CLI 又活了半小时,被回收时按老路径
+ * 写了两行收尾记录,同名文件"复活"成一个空壳。`releaseClaudeSession` 对"回合在飞"
+ * 返回 released:false,删除路径据此拒绝(409)。同样由组合根接线 —— providers 不认识 claude-sdk。
+ */
+setSessionRuntimeReleaser((providerSessionId) => releaseClaudeSession(providerSessionId));
 
 /**
  * gb:CLI 自己发起的那一轮(后台子代理完成通知、会话内定时任务)交给观测回合接住。
@@ -514,9 +523,12 @@ startAttachmentSweeper();
 // F8:归档保留期清扫。**默认关**(PRISM_ARCHIVE_RETENTION_DAYS 未配或为 0)——
 // 永久删除不可逆,不能因为升级了一版就悄悄开始删用户的东西。
 startArchiveRetentionSweeper({
+    // gk:归档保留期到点 = 进最近删除(不再直接真删),再过 PRISM_TRASH_RETENTION_DAYS 才清扫。
     deleteSession: (sessionId) => sessionsService.deleteOrArchiveSessionById(sessionId, {
         force: true,
         deletedFromDisk: true,
+        actor: null,
+        via: 'retention',
     }),
 });
 
@@ -577,12 +589,43 @@ app.use('/api/settings', authenticateToken, settingsRoutes); // includes notific
 // ei:会话产出文件读取。必须排在 providerRoutes **前面** —— 那个路由器里有
 // `/sessions/:sessionId` 一类的通配段,会把 `/sessions/:id/output` 先吃掉。
 app.use('/api/providers', createSessionOutputsRouter({ authenticateToken }));
+
+/*
+ * 「交给浏览器自己下」的直传口。**这三条不带登录态**,认的是一张 5 分钟失效、
+ * 只指向一个目标的下载票 —— 一次普通导航设不了 Authorization 头,凭据只能进 URL
+ * (EventSource 和沙箱预览撞的是同一堵墙,解法也一样)。
+ *
+ * **必须挂在 /api/downloads,不能挂在 /api/projects 下。** 上面那句
+ * `app.use('/api/projects', authenticateToken, projectModuleRoutes)` 是**前缀中间件**,
+ * 排在文件路由前面:任何 /api/projects/... 的请求都要先过它,一条靠票据的链接会被
+ * 直接 401,而且失败形态和"票过期"一模一样,极难排查。换个前缀就与注册顺序彻底无关,
+ * 顺带把"无认证面"收敛成一个可以一眼数清的前缀。
+ */
+app.use('/api/downloads', createFileDownloadRouter());
+app.use('/api/downloads', createSessionOutputDownloadRouter());
 app.use('/api/providers', authenticateToken, providerRoutes);
 app.use('/api/agent', agentRoutes);
 
-// Serve public files (like api-docs.html)
-app.use(express.static(path.join(APP_ROOT, 'public')));
-
+/*
+ * gp:**dist 必须排在 public 前面。**
+ *
+ * 这两行原来是反的,于是 `public/` 里任何一个与构建产物同名的文件都会把真正的
+ * 应用**盖掉**。2026-09-15 在测试环境上就是这么坏的:`public/` 里躺着一份
+ * **2026-09-02 的旧构建**(`index.html` + `assets/`,谁手工拷进去的已不可考),
+ * 而发布包里没有这两个路径,`tar --overwrite` 永远删不掉它 ——
+ *
+ *   - 打开 `http://host:8080/` 或 `/index.html` → public 那层先答 → **两周前的前端**;
+ *   - 打开 `/session/xxx` 这种无扩展名深链 → 走到下面的 `app.get('*')` → dist/index.html
+ *     → **当天的前端**。
+ *
+ * 同一台机器上"有时新版有时老版",就是这么来的:取决于你进的是根地址还是深链。
+ * 而且 public 这层没有 setHeaders,老快照还是 `max-age=0` + 弱 ETag,
+ * 在网络面板里只看得到 200/304,看不出自己吃的是哪一份。
+ *
+ * 调成 dist 优先之后:构建产物(含 vite 从 public/ 复制进去的那份静态资源)先答,
+ * public 只兜底"构建之后才丢进去的文件"。再加 `index: false`,让它连
+ * `/` 的目录索引都不接。
+ */
 // Static files after API routes; HTML uncached, hashed assets cached hard.
 app.use(express.static(path.join(APP_ROOT, 'dist'), {
     setHeaders: (res, filePath) => {
@@ -595,6 +638,9 @@ app.use(express.static(path.join(APP_ROOT, 'dist'), {
         }
     }
 }));
+
+// Serve public files (like api-docs.html) — 只兜底 dist 里没有的那些。
+app.use(express.static(path.join(APP_ROOT, 'public'), { index: false }));
 
 // File CRUD, uploads, browse-filesystem, and file-tree endpoints (protected)
 app.use(createFilesRouter({ authenticateToken }));
@@ -794,6 +840,22 @@ process.on('uncaughtException', fatal('uncaughtException'));
 process.on('unhandledRejection', fatal('unhandledRejection'));
 
 // Initialize database and start server
+/**
+ * `public/` 本该只有图标、品牌图、api-docs 这类随仓库走的静态文件。
+ * 出现 `index.html` 或 `assets/` 就说明有人往里拷过一份构建产物 ——
+ * 发布包里没有这两个路径,`tar --overwrite` 删不掉,它会一直留在那里。
+ */
+function warnAboutStalePublicBuild() {
+    const publicDir = path.join(APP_ROOT, 'public');
+    const strays = ['index.html', 'assets'].filter((name) => fs.existsSync(path.join(publicDir, name)));
+    if (strays.length === 0) return;
+    log.warn(
+        `[static] public/ 里有构建产物残留:${strays.join('、')} —— 它不来自发布包,`
+        + `升级时不会被覆盖或删除。dist/ 已排在它前面,应用不受影响,但建议手工移走:`
+        + `mv ${strays.map((name) => path.join(publicDir, name)).join(' ')} <别处>`,
+    );
+}
+
 async function startServer() {
     try {
         // Data-dir migration safety net: the effective call runs in load-env.js
@@ -808,6 +870,26 @@ async function startServer() {
         // migrations (the columns must exist) and is a no-op once its
         // app_config flag is set, or while no configured root has registered.
         backfillProjectOwners();
+
+        /**
+         * gk:最近删除的清扫。默认 30 天(PRISM_TRASH_RETENTION_DAYS;显式 0 = 永不自动清)。
+         * 启动跑一次(停机期间积压的最多),之后每 6 小时一轮。
+         *
+         * **必须在 initializeDatabase 之后** —— 第一件事就是查 `session_trash`。
+         * 放在模块顶层时,首次升级那一次开机它必定撞 `no such table` 并被吞掉,
+         * 于是"启动跑一次"在最需要它的那一次(升级后第一次开机)从来没跑过。
+         */
+        startTrashSweeper();
+
+        /*
+         * gp:`public/` 里如果躺着一份旧构建,开机时喊一声。
+         *
+         * 挂载顺序已经改成 dist 优先(见上面那段),所以这份残留不再能盖掉应用;
+         * 但它仍然是"部署包永远删不掉、又占着盘"的东西 —— 而且下次谁把顺序改回去,
+         * 症状会一模一样地回来(根地址是两周前的前端,深链是新的)。
+         * 与其让人再查一次,不如开机就把路径念出来。
+         */
+        warnAboutStalePublicBuild();
 
         // F14:给「回合跑到一半被重启打断」的会话补一条「请重发」标记。
         // **必须在这一刻做** —— 判据是"日志最后一条是用户消息",而正在流式输出

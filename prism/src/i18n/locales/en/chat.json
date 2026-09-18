@@ -9,7 +9,9 @@
     "copied": "Message copied",
     "selectFormat": "Select copy format",
     "copyAsMarkdown": "Copy as markdown",
-    "copyAsText": "Copy as text"
+    "copyAsText": "Copy as text",
+    "markdownShort": "MD",
+    "textShort": "TXT"
   },
   "messageTypes": {
     "error": "Error",
@@ -53,6 +55,8 @@
       "edit": "Edit queued message",
       "delete": "Delete queued message",
       "serverLabel": "Queued on server",
+      "othersPreview": "(a message queued by another member)",
+      "imageOnly": "(image only)",
       "serverHint": "Sends when this turn ends · survives closing the tab"
     },
     "attachmentPath": "path",
@@ -187,7 +191,9 @@
       "forceRestore": "Roll back anyway",
       "cancel": "Cancel"
     },
-    "changedFilesTitle": "Changed this turn"
+    "changedFilesTitle": "Changed this turn",
+    "keep": "Keep changes",
+    "keepTitle": "Changes are already written to disk — \"keep\" just collapses this card and changes nothing"
   },
   "attachments": {
     "truncated": "truncated"
@@ -400,5 +406,17 @@
       "label": "Algorithm metrics",
       "description": "Recommendation slot performance and experiment monitoring"
     }
+  },
+  "sessionRemoved": {
+    "notFoundTitle": "This session no longer exists",
+    "projectDeletedTitle": "This session was deleted with its project",
+    "deletedTitle": "This session has been deleted",
+    "notFoundDetail": "It may have been deleted, or you no longer have access. Check Recently Deleted before sending again.",
+    "deletedByDetail": "Deleted by {{who}} at {{when}}.",
+    "deletedDetail": "Deleted at {{when}}.",
+    "restoreHint": "It is in Recently Deleted (sidebar → archive view, bottom). The project owner can restore it during the retention period; this view returns to normal automatically once restored.",
+    "notRestorableHint": "This session cannot be restored.",
+    "draftKept": "What you just typed is kept — a new session will carry it over.",
+    "startNew": "Continue in a new session"
   }
 }

@@ -47,7 +47,7 @@ async function createSymlinkIfSupported(
 
 test('normalizeImageDescriptors accepts objects and bare paths, drops junk', () => {
   const descriptors = normalizeImageDescriptors([
-    { path: '.cloudcli/assets/a.png', name: 'a.png', mimeType: 'image/png' },
+    { path: 'attachments/a.png', name: 'a.png', mimeType: 'image/png' },
     'scripts/pic.jpg',
     { name: 'no-path.png' },
     42,
@@ -56,7 +56,7 @@ test('normalizeImageDescriptors accepts objects and bare paths, drops junk', () 
   ]);
 
   assert.deepEqual(descriptors, [
-    { path: '.cloudcli/assets/a.png', name: 'a.png', mimeType: 'image/png' },
+    { path: 'attachments/a.png', name: 'a.png', mimeType: 'image/png' },
     { path: 'scripts/pic.jpg' },
   ]);
   assert.deepEqual(normalizeImageDescriptors(undefined), []);

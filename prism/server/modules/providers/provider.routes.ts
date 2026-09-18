@@ -21,7 +21,8 @@ import { providerModelsService } from '@/modules/providers/services/provider-mod
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
 import { assertViewerMayCreateSessionAt } from '@/modules/providers/services/session-project-path-guard.service.js';
-import { sessionsService } from '@/modules/providers/services/sessions.service.js';
+import { sessionsService, type SessionActor } from '@/modules/providers/services/sessions.service.js';
+import { clientIp } from '@/shared/client-ip.js';
 import { issueSseTicket } from '@/shared/sse-tickets.js';
 import type {
   LLMProvider,
@@ -618,6 +619,28 @@ const readSkillActor = (req: Request): { id: number | null; username: string | n
   return { id: user?.id ?? null, username: user?.username ?? null };
 };
 
+/** gk:删除类操作的操作者(Viewer + ip + user-agent),只为审计与回收站里的"谁删的"。 */
+const readSessionActor = (req: Request): SessionActor => {
+  const viewer = readRequestViewer(req);
+  return {
+    userId: viewer.userId,
+    username: viewer.username,
+    ip: clientIp(req) ?? null,
+    userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+  };
+};
+
+/** gk:最近删除里的立即清除只给 root。 */
+const assertRootForTrashPurge = (req: Request): void => {
+  const user = (req as Request & { user?: { isRoot?: boolean } }).user;
+  if (user?.isRoot !== true) {
+    throw new AppError('只有 root 可以立即清除最近删除里的会话(其余等保留期自动清扫)', {
+      code: 'TRASH_PURGE_FORBIDDEN',
+      statusCode: 403,
+    });
+  }
+};
+
 router.post(
   '/:provider/skills',
   asyncHandler(async (req: Request, res: Response) => {
@@ -918,7 +941,9 @@ router.post(
       });
     }
 
-    const result = await sessionsService.bulkSessionAction(ids, action, readRequestViewer(req));
+    const result = await sessionsService.bulkSessionAction(ids, action, readRequestViewer(req), {
+      actor: readSessionActor(req),
+    });
     res.json(createApiSuccessResponse(result));
   }),
 );
@@ -931,7 +956,46 @@ router.delete(
   '/sessions/archived',
   asyncHandler(async (req: Request, res: Response) => {
     const olderThanDays = parseOptionalCountQuery(req.query.olderThanDays, 'olderThanDays');
-    const result = await sessionsService.emptyArchivedSessions(readRequestViewer(req), { olderThanDays });
+    const result = await sessionsService.emptyArchivedSessions(readRequestViewer(req), {
+      olderThanDays,
+      actor: readSessionActor(req),
+    });
+    res.json(createApiSuccessResponse(result));
+  }),
+);
+
+/**
+ * gk:最近删除(会话回收站)。放在 `/sessions/:sessionId` 之前,否则 `trash` 会被当成一个 sessionId。
+ *   GET    /sessions/trash                 列表(分页,最近删的在前)
+ *   POST   /sessions/trash/:id/restore     恢复(root / 项目 owner / 删除者)
+ *   DELETE /sessions/trash/:id             立即清除(root)
+ */
+router.get(
+  '/sessions/trash',
+  asyncHandler(async (req: Request, res: Response) => {
+    const page = sessionsService.listTrashedSessions(readRequestViewer(req), {
+      limit: parseOptionalCountQuery(req.query.limit, 'limit'),
+      offset: parseOptionalCountQuery(req.query.offset, 'offset'),
+    });
+    res.json(createApiSuccessResponse(page));
+  }),
+);
+
+router.post(
+  '/sessions/trash/:sessionId/restore',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const result = await sessionsService.restoreTrashedSession(sessionId, readRequestViewer(req), readSessionActor(req));
+    res.json(createApiSuccessResponse(result));
+  }),
+);
+
+router.delete(
+  '/sessions/trash/:sessionId',
+  asyncHandler(async (req: Request, res: Response) => {
+    assertRootForTrashPurge(req);
+    const sessionId = parseSessionId(req.params.sessionId);
+    const result = await sessionsService.purgeTrashedSession(sessionId, readSessionActor(req));
     res.json(createApiSuccessResponse(result));
   }),
 );
@@ -940,12 +1004,17 @@ router.delete(
   '/sessions/:sessionId',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
-    sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
+    const viewer = readRequestViewer(req);
+    sessionsService.assertViewerCanSeeSession(sessionId, viewer);
     const force = parseOptionalBooleanQuery(req.query.force, 'force') ?? false;
+    // gk:永久删除只给 root / 项目 owner;归档仍是看得见就能做。
+    if (force) sessionsService.assertViewerMayPermanentlyDelete(sessionId, viewer);
     const deletedFromDisk = parseOptionalBooleanQuery(req.query.deletedFromDisk, 'deletedFromDisk') ?? force;
     const result = await sessionsService.deleteOrArchiveSessionById(sessionId, {
       force,
       deletedFromDisk,
+      actor: readSessionActor(req),
+      via: 'session',
     });
     res.json(createApiSuccessResponse(result));
   }),

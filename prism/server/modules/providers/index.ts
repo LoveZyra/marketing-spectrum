@@ -2,7 +2,10 @@ export { sessionSynchronizerService } from './services/session-synchronizer.serv
 export { providerSkillsService } from './services/skills.service.js';
 export { providerMcpService } from './services/mcp.service.js';
 export { seedDisplayLogFromTranscript } from './services/display-log-seed.service.js';
-export { sessionsService } from './services/sessions.service.js';
+export { sessionsService, setSessionRuntimeReleaser } from './services/sessions.service.js';
+export type { SessionActor, TrashedSessionListItem } from './services/sessions.service.js';
+// gk:最近删除(会话回收站)的清扫器与保留期
+export { startTrashSweeper, sweepExpiredTrash, getTrashRetentionDays } from './services/session-trash.service.js';
 /**
  * 「这个人能不能拿这个 projectPath 做事」的**唯一实现**。
  *

@@ -45,12 +45,14 @@
     "processingSessionIndicator": "会话运行中",
     "exportSessionFailed": "导出会话失败,请重试。",
     "selectProjects": "多选项目",
-    "exitSelection": "退出多选"
+    "exitSelection": "退出多选",
+    "deleteSessionOptions": "归档或永久删除这条会话"
   },
   "actions": {
     "settings": "设置",
     "cancel": "取消",
-    "save": "保存"
+    "save": "保存",
+    "close": "关闭"
   },
   "status": {
     "active": "活动",
@@ -69,8 +71,8 @@
     "restoreProjectError": "恢复项目时出错，请重试。",
     "restoreSessionFailed": "恢复会话失败，请重试。",
     "restoreSessionError": "恢复会话时出错，请重试。",
-    "bulkDeleteConfirm": "永久删除选中的 {{count}} 条归档会话?此操作不可撤销。",
-    "emptyTrashConfirm": "清空回收站将永久删除 {{count}} 条归档会话,此操作不可撤销。继续?",
+    "bulkDeleteConfirm": "永久删除选中的 {{count}} 条归档会话?它们会先进入「最近删除」,保留期内可恢复。",
+    "emptyTrashConfirm": "清空归档会把 {{count}} 条归档会话移入「最近删除」(只有你负责的项目里的会被处理),保留期内可恢复。继续?",
     "bulkActionFailed": "批量操作失败,请重试。"
   },
   "search": {
@@ -84,13 +86,27 @@
     "modeArchived": "归档",
     "switchMode": "切换搜索范围",
     "runningPlaceholder": "搜索运行中的会话...",
-    "archivedPlaceholder": "搜索归档会话..."
+    "archivedPlaceholder": "搜索归档会话...",
+    "archiveOnlyTooltip": "只看归档",
+    "matches": "{{count}} 处匹配",
+    "projectsScanned": "已扫 {{count}}",
+    "runningTooltip": "正在运行的会话"
   },
   "deleteConfirmation": {
     "deleteProject": "移除项目",
     "deleteSession": "删除会话",
     "confirmDelete": "您想如何处理",
-    "deleteAllData": "永久删除所有数据"
+    "deleteAllData": "永久删除所有数据",
+    "permanentDeleteNotice": "永久删除会把会话(含对话记录)移入「最近删除」,保留期内可由项目负责人恢复;只有项目负责人或管理员可以永久删除。",
+    "archiveProject": "归档项目",
+    "sessionCount": "这个项目下有 {{count}} 条会话。",
+    "archiveSession": "归档会话",
+    "archiveSessionNotice": "归档只是把会话从活跃列表里藏起来,记录一条不动。",
+    "archivedSessionNotice": "这条会话已经在归档里。你可以让它继续藏着,或者永久删除。",
+    "deleteSessionPermanently": "永久删除",
+    "cannotDeletePermanently": "你不是这个项目的负责人,所以只能归档 —— 归档后它从活跃列表里消失,记录都还在。",
+    "archivedAndCannotDelete": "这条会话已经在归档里。永久删除只有项目负责人或管理员能做,所以这里没有可执行的操作。",
+    "cannotRemoveProject": "你不是这个项目的负责人 —— 归档和删除整个项目都只有负责人或管理员能做。你可以归档自己的会话。"
   },
   "project": {
     "permissions": {
@@ -135,10 +151,43 @@
     "loadMore": "加载更多(共 {{total}} 条)",
     "loadingMore": "正在加载…",
     "select": "选中",
-    "emptyTrash": "清空回收站",
+    "emptyTrash": "清空归档",
     "selectedCount": "已选 {{count}} 条",
     "bulkRestore": "批量恢复",
     "bulkDelete": "批量永久删除",
-    "clearSelection": "取消选择"
+    "clearSelection": "取消选择",
+    "deletePermanently": "永久删除",
+    "emptyDescription": "把项目或会话从活跃列表里藏起来之后,它们会出现在这里。",
+    "emptyTitle": "归档里还没有东西",
+    "loadingDescription": "正在取回你藏起来的项目与会话,随时可以恢复。",
+    "loadingTitle": "正在加载归档…",
+    "noMatchingSessions": "归档里没有匹配的条目",
+    "projectArchived": "项目已归档",
+    "restore": "恢复会话",
+    "restoreProject": "恢复项目",
+    "tryDifferentSearch": "换个词再搜搜看。"
+  },
+  "recentlyDeleted": {
+    "title": "最近删除",
+    "retention": "保留 {{days}} 天",
+    "retentionForever": "不自动清除",
+    "loading": "正在加载…",
+    "empty": "没有最近删除的会话。永久删除的会话会先到这里,保留期内可以恢复。",
+    "messageCount": "{{count}} 条",
+    "projectGone": "项目已删除",
+    "deletedBy": "{{who}} 于 {{when}} 删除",
+    "deletedAt": "{{when}} 删除",
+    "purgeIn": "{{days}} 天后清除",
+    "noTranscript": "无 transcript",
+    "restore": "恢复",
+    "cannotRestore": "只有项目负责人、管理员或删除它的人可以恢复",
+    "restoreFailed": "恢复失败,请稍后再试。",
+    "more": "只列出最近 {{shown}} 条(共 {{total}} 条)"
+  },
+  "running": {
+    "emptyDescription": "有模型在跑的时候,正在进行的活儿会出现在这里。",
+    "emptyTitle": "当前没有会话在跑",
+    "noMatchingSessions": "没有匹配这个搜索的运行中会话。",
+    "title": "正在运行"
   }
 }

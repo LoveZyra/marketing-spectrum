@@ -12,7 +12,7 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'bypassPermiss
 export interface ChatImage {
   /** Inline data URL (Claude history stores attachments as base64). */
   data?: string;
-  /** Project-relative path under `.cloudcli/assets` served via the files API. */
+  /** Project-relative path under `attachments/` served via the files API. */
   path?: string;
   name?: string;
   mimeType?: string;
@@ -196,6 +196,8 @@ export interface ChatInterfaceProps {
   sendByCtrlEnter?: boolean;
   externalMessageUpdate?: number;
   newSessionTrigger?: number;
+  /** gk:「这条会话已被删除」卡片上的「新建会话继续」—— 在同一个项目里开新会话。 */
+  onStartNewSession?: (project: Project) => void;
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
 }

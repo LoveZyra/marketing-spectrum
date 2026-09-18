@@ -5,6 +5,7 @@ import { createProject, updateProjectDisplayName } from '@/modules/projects/serv
 import { listProjectTemplates } from '@/modules/projects/services/project-template.service.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
+import { clientIp } from '@/shared/client-ip.js';
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
 import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projects/services/project-delete.service.js';
 import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/projects/services/project-star.service.js';
@@ -12,7 +13,9 @@ import {
   BULK_PROJECT_LIMIT, bulkProjectAction, type BulkProjectAction,
 } from '@/modules/projects/services/project-bulk.service.js';
 import {
-  applyProjectPermissions, canManageProject as canActorManageProject, parsePermissionsInput,
+  applyProjectPermissions,
+  canArchiveProject as canActorArchiveProject,
+  canManageProject as canActorManageProject, parsePermissionsInput,
   readProjectPermissionsView,
 } from '@/modules/projects/services/project-permissions.service.js';
 
@@ -471,7 +474,31 @@ router.delete(
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
     if (!assertVisibleProject(req, res, projectId)) return;
     const force = req.query.force === 'true';
-    await deleteOrArchiveProject(projectId, force);
+    const user = readUser(req);
+    /*
+      gk:永久删除项目只给 owner / root。
+      gn:**归档也一样**。归档一个项目,它会从所有人的活跃侧栏里消失,而按钮上
+      没有任何"这不是你的项目"的提示 —— 2026-09-15 实测,非 root 账号就这么把
+      别人的项目整个归档了(可一键还原,但所有人当场都看不见)。
+      无主(公共)项目没有"负责人"这一档,回到旧口径 —— 见 canDeleteProject。
+    */
+    if (!canActorArchiveProject(projectId, user)) {
+      throw new AppError(
+        force
+          ? '只有项目负责人或管理员可以永久删除这个项目;你可以把它归档。'
+          : '只有项目负责人或管理员可以归档这个项目。',
+        {
+          code: force ? 'PROJECT_DELETE_FORBIDDEN' : 'PROJECT_ARCHIVE_FORBIDDEN',
+          statusCode: 403,
+        },
+      );
+    }
+    await deleteOrArchiveProject(projectId, force, {
+      userId: user?.id ?? null,
+      username: user?.username ?? null,
+      ip: clientIp(req) ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+    });
     res.json({ success: true });
   }),
 );

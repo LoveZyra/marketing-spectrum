@@ -9,7 +9,9 @@
     "copied": "消息已复制",
     "selectFormat": "选择复制格式",
     "copyAsMarkdown": "复制为 Markdown",
-    "copyAsText": "复制为纯文本"
+    "copyAsText": "复制为纯文本",
+    "markdownShort": "MD",
+    "textShort": "TXT"
   },
   "messageTypes": {
     "error": "错误",
@@ -53,6 +55,8 @@
       "edit": "编辑排队消息",
       "delete": "删除排队消息",
       "serverLabel": "服务端已收下",
+      "othersPreview": "(另一位成员排队的消息)",
+      "imageOnly": "(仅图片)",
       "serverHint": "本轮结束后自动发送 · 关掉页面也有效"
     },
     "attachmentPath": "路径",
@@ -187,7 +191,9 @@
       "forceRestore": "仍然回滚",
       "cancel": "取消"
     },
-    "changedFilesTitle": "本轮改动"
+    "changedFilesTitle": "本轮改动",
+    "keep": "保留改动",
+    "keepTitle": "改动已实时写入磁盘;保留 = 收起这张卡,什么都不改"
   },
   "attachments": {
     "truncated": "已截断"
@@ -400,5 +406,17 @@
       "label": "算法效果查询",
       "description": "推荐点位效果与实验监控"
     }
+  },
+  "sessionRemoved": {
+    "notFoundTitle": "这条会话已不存在",
+    "projectDeletedTitle": "这条会话随项目一起被删除了",
+    "deletedTitle": "这条会话已被删除",
+    "notFoundDetail": "它可能已被删除,或者你已无权访问。发送前请先确认它是否在「最近删除」里。",
+    "deletedByDetail": "由 {{who}} 于 {{when}} 删除。",
+    "deletedDetail": "于 {{when}} 被删除。",
+    "restoreHint": "它已进入「最近删除」(侧栏 → 归档视图底部),保留期内可由项目负责人恢复;恢复后这里会自动回到原样。",
+    "notRestorableHint": "这条会话不能恢复。",
+    "draftKept": "你刚才输入的内容还在,新建会话会把它带过去。",
+    "startNew": "新建会话继续"
   }
 }

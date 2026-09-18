@@ -58,13 +58,17 @@ export function claimForShell(
 ): ConversationHolder {
   const existing = holders.get(appSessionId);
   if (existing) {
-    const sameViewer = String(existing.userId ?? '') === String(viewer.userId ?? '');
-    if (!sameViewer) {
-      // 别人持有着 —— 不覆盖,把现有持有者原样报回去(不含 token)。
-      return { ...existing, token: undefined };
-    }
-    // 同一个人重连:沿用同一张令牌,免得旧连接的退出路径把新的这把释放掉。
-    return existing;
+    /**
+     * gh:**有持有者就不再发第二张令牌 —— 同一个人也不例外。**
+     *
+     * 原来对"同一个人"直接把现有令牌原样返回,注释说这是"重连续期"。可真正的
+     * 重连走不到这里(shell 那边按 terminalId 复用 PTY,提前返回);能走到这里的
+     * 只有**同一用户的另一个 PTY**。于是第二个终端拿着同一张令牌又起一个
+     * `claude --resume`;第一个终端关闭时令牌匹配 → 锁释放、显示日志被删,
+     * 而第二个 PTY 还在写 —— 随后 chat 也放行,三方同写一份 transcript。
+     * 不覆盖、不发令牌:终端那边照样打印"已被另一个终端接管"。
+     */
+    return { ...existing, token: undefined };
   }
   const holder: ConversationHolder = {
     panel: 'shell',

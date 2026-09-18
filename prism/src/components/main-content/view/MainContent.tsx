@@ -51,6 +51,7 @@ function MainContent({
   onDeleteSession,
   externalMessageUpdate,
   newSessionTrigger,
+  onStartNewSession,
   jupyterTarget,
 }: MainContentProps) {
   const { t } = useTranslation('common');
@@ -203,6 +204,7 @@ function MainContent({
                 sendByCtrlEnter={sendByCtrlEnter}
                 externalMessageUpdate={externalMessageUpdate}
                 newSessionTrigger={newSessionTrigger}
+                onStartNewSession={onStartNewSession}
               />
             </ErrorBoundary>
           </div>

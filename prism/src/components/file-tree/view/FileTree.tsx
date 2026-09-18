@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import type { DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Check, X, Folder, Upload } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, X, Folder, Upload } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
 import { copyTextToClipboard } from '../../../utils/clipboard';
@@ -70,6 +70,9 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   // Auto-hide toast
   useEffect(() => {
     if (toast) {
+      // info 是"正在做,还没好":它没有自己的时限 —— 该由完成时的成功/失败提示顶掉。
+      // 一条 3 秒就走的"正在准备"对一个 40 秒的下载毫无意义。
+      if (toast.type === 'info') return;
       // warning 里带着目录名,3 秒读不完 —— 给它更长的停留时间。
       const timer = setTimeout(() => setToast(null), toast.type === 'warning' ? 8000 : 3000);
       return () => clearTimeout(timer);
@@ -251,21 +254,31 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     setSelectionMode(false);
   }, []);
 
-  /** 批量下载:逐个走单文件下载(目录走 ZIP),失败逐条提示但不中断其余。 */
+  /**
+   * 批量下载:**一次请求,一个包**。
+   *
+   * 以前是 `for` 循环逐个 `await` 单文件下载,每个都要等整份字节进完内存 ——
+   * 选 20 个就是 20 次串行的完整下载,期间界面只有按钮置灰。
+   *
+   * 另外那版的失败汇总是**死代码**:它靠 `catch { failed += 1 }` 计数,而
+   * `handleDownload` 自己就 try/catch 弹提示、从不往外抛,所以 `failed` 恒为 0,
+   * 「有 N 项下载失败」一次都没显示过。现在整批只有一次请求,要么成要么败,
+   * 也就不再需要这个汇总。
+   */
   const downloadSelected = useCallback(async () => {
     const targets = collectByPaths(filteredFiles, selectedPaths);
-    let failed = 0;
-    for (const item of targets) {
-      try {
-        await operations.handleDownload(item);
-      } catch {
-        failed += 1;
-      }
+    if (targets.length === 0) return;
+    const label = targets.length === 1
+      ? targets[0].name
+      // 用 selected 而不是 count:i18next 见到 count 会去找复数键(_one/_other),
+      // 这条文案不需要复数变体(同 folderDownloadedPartial 那条的 skipped)。
+      : t('fileTree.batchDownloadLabel', { selected: targets.length, defaultValue: `已选 ${targets.length} 项` });
+    try {
+      await operations.downloadPaths(targets.map((item) => item.path), label);
+      clearSelection();
+    } catch (err) {
+      showToast((err as Error).message, 'error');
     }
-    if (failed > 0) {
-      showToast(t('fileTree.batchDownloadPartial', { failed, defaultValue: `有 ${failed} 项下载失败` }), 'warning');
-    }
-    clearSelection();
   }, [filteredFiles, selectedPaths, operations, showToast, t, clearSelection]);
 
   /**
@@ -612,6 +625,9 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           ) : toast.type === 'warning' ? (
             // 「做完了但不完整」—— 与失败区分开,否则用户会以为下载压根没成
             <AlertTriangle className="h-4 w-4 text-amber-500" />
+          ) : toast.type === 'info' ? (
+            // 「还在做」—— 转圈是这条提示的全部意义,静止图标传达不了"正在进行"
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
           ) : (
             <X className="h-4 w-4" />
           )}

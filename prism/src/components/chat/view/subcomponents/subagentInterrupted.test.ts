@@ -42,8 +42,14 @@ describe('ChildStepRow 的"还在跑"判据', () => {
     expect(row).toMatch(/activity\.interrupted/);
   });
 
-  it('信号 = 回合还在跑 **且** 这个子代理自己还没交最终结果', () => {
-    expect(source).toMatch(/const openStillRunning = isCurrentTurn\s*\n\s*&& !\(openMessage\?\.subagentState\?\.isComplete \|\| openMessage\?\.toolResult\);/);
+  /**
+   * gh:展开区与卡片、抬头共用同一条判据(subagentStillRunning):有后台状态以它为准。
+   * 此前展开区只看 isCurrentTurn + toolResult,转后台的 Task 一定有 toolResult,
+   * 于是抬头「1 个进行中」、卡片转圈、点开每一步都是 ✗「已中断」。
+   */
+  it('信号来自 subagentStillRunning —— 与卡片、抬头同一条判据,转后台的不算中断', () => {
+    expect(source).toMatch(/const openStillRunning = openMessage \? subagentStillRunning\(openMessage, isCurrentTurn\) : false;/);
     expect(source).toMatch(/stillRunning=\{openStillRunning\}/);
+    expect(source).not.toMatch(/const openStillRunning = isCurrentTurn/);
   });
 });

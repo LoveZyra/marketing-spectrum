@@ -230,6 +230,18 @@ export type MessageKind =
 export type GatewayEventKind =
   | 'chat_subscribed'
   | 'session_upserted'
+  // gk:会话被永久删除(进了最近删除)—— 发给所有还看得见它的 socket
+  | 'session_removed'
+  /**
+   * gl:会话从最近删除里恢复了 —— 撤掉前端的「已被删除」态。
+   *
+   * **不能用 `session_upserted` 代劳**。那一条是侧栏的"会话出现/更新"事件,
+   * 它带着一道 `if (row.isArchived) return` 的闸门(归档会话不该弹回活跃列表)。
+   * gk 把它借来当"恢复了"的信号,于是恢复一条**归档态**的会话时一帧都不发,
+   * 页面永远停在「这条会话已被删除」,只能刷新。一条广播扛两个语义,
+   * 其中一个的过滤条件就会把另一个需要的场景挡死。
+   */
+  | 'session_restored'
   | 'loading_progress'
   | 'protocol_error';
 

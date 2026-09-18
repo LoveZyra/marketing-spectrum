@@ -152,6 +152,37 @@ export const projectsHaveChanges = (
 };
 
 
+/**
+ * URL 里的会话在 `projects` 里被重新找到时,要不要把它换进 `selectedSession`。
+ *
+ * 顶栏那行标题读的就是 `selectedSession.summary`(见 MainContentTitle),而这个
+ * 对象只在下面那个 effect 里跟着 `projects` 走。原来的判据只有 **id 与 provider**
+ * —— 改名两样都不动,于是顶栏那支铅笔改完名之后:
+ *
+ *   侧栏已经是新名字(它走 handleSidebarRefresh,那条会重新挑一次 selectedSession),
+ *   顶栏还挂着旧标题(没有 summary 的会话就是那句写死的 "New Session"),
+ *   一直到手动点一次刷新才对上。2026-09-15 在测试环境实测。
+ *
+ * 判据放宽到"标题也算",但**不**放宽成整对象比对:messageCount / lastActivity
+ * 每来一条消息就变一次,那样会在流式输出期间把整个聊天子树重渲一遍。
+ *
+ * 空标题不算变化 —— 与 `upsertSessionIntoProject` 同一条规矩:新会话会短暂地
+ * 广播一个空 custom_name,让它覆盖已有标题就是把顶栏闪回 "New Session"。
+ */
+export const selectedSessionNeedsSync = (
+  current: Pick<ProjectSession, 'id' | 'summary' | '__provider'> | null | undefined,
+  incoming: Pick<ProjectSession, 'id' | 'summary' | '__provider'>,
+): boolean => {
+  if (!current) {
+    return true;
+  }
+  if (String(current.id) !== String(incoming.id) || current.__provider !== incoming.__provider) {
+    return true;
+  }
+  const incomingSummary = (incoming.summary ?? '').trim();
+  return Boolean(incomingSummary) && incomingSummary !== (current.summary ?? '').trim();
+};
+
 const getProjectSessions = (project: Project): ProjectSession[] => {
   return project.sessions ?? [];
 };
@@ -387,6 +418,15 @@ export function useProjectsState({
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
+  /**
+   * gn:「最近删除」那一段的**外部**重拉信号。
+   *
+   * gk 已经做了"自己操作后刷新"(侧栏自己的 `trashReloadToken`),缺的是
+   * **别人操作后**也刷新:别人删了 / 恢复了一条,你开着的侧栏一直是旧数据,
+   * 要切走再切回来才更新(2026-09-15 实测)。websocket 那两帧在这一层收,
+   * 计数往下传,和 `externalMessageUpdate` 一个路数。
+   */
+  const [trashSignal, setTrashSignal] = useState(0);
   const [attentionSessionIds, setAttentionSessionIds] = useState<Set<string>>(new Set());
   /**
    * 正在等工具审批的会话。
@@ -695,6 +735,7 @@ export function useProjectsState({
         && event.kind !== 'chat_subscribed'
         && event.kind !== 'loading_progress'
         && event.kind !== 'session_upserted'
+        && event.kind !== 'session_removed'
         && event.kind !== 'status'
         && event.kind !== 'stream_end'
         && event.kind !== 'permission_cancelled'
@@ -717,6 +758,37 @@ export function useProjectsState({
         if (Array.isArray(pending)) {
           setSessionAwaitingApproval(eventSessionId, pending.length > 0);
         }
+      }
+
+      /**
+       * gk:会话被永久删除(进了最近删除)—— 从侧栏拿掉。
+       *
+       * **不**在这里把当前查看的那条置空、也不导航走:对话区自己会切成
+       * 「这条会话已被删除」态(useChatRealtimeHandlers → ChatInterface),把发生了什么、
+       * 没发出去的那段话都留给用户;跳走等于把现场一并抹掉。
+       */
+      if (event.kind === 'session_removed') {
+        if (!eventSessionId) return;
+        clearSessionAttention(eventSessionId);
+        setSessionAwaitingApproval(eventSessionId, false);
+        setProjects((previousProjects) =>
+          previousProjects.map((project) => removeSessionFromProject(project, eventSessionId)),
+        );
+        // gn:「最近删除」那一段也要跟着动 —— 见下面 trashSignal 的注释。
+        setTrashSignal((value) => value + 1);
+        return;
+      }
+
+      /**
+       * gn:别人恢复了一条 —— 「最近删除」里少一条。
+       *
+       * 这一帧本来只给对话区用(撤掉「已被删除」态),但它同时也是"回收站变了"
+       * 的信号。不收它的话,侧栏那一段会一直显示旧数据,要切走再切回来才刷新。
+       * 会话本身怎么回到列表里由下一次 `session_upserted` / 刷新负责,这里只管计数。
+       */
+      if (event.kind === 'session_restored') {
+        setTrashSignal((value) => value + 1);
+        return;
       }
 
       if (event.kind !== 'session_upserted') {
@@ -825,7 +897,7 @@ export function useProjectsState({
     };
 
     return subscribe(handleEvent);
-  }, [markSessionAttention, setSessionAwaitingApproval, navigate, sessionId, subscribe]);
+  }, [clearSessionAttention, markSessionAttention, setSessionAwaitingApproval, navigate, sessionId, subscribe]);
 
   useEffect(() => {
     return () => {
@@ -851,8 +923,18 @@ export function useProjectsState({
       if (match) {
         const normalizedSession = normalizeSessionProvider(match);
         const shouldUpdateProject = selectedProject?.projectId !== project.projectId;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== normalizedSession.__provider;
+        // 只读这三个字段(而不是整个 selectedSession):它们也正是下面依赖数组里
+        // 列的三项 —— 用可选链写,exhaustive-deps 才认得出来,不会要求整对象。
+        const shouldUpdateSession = selectedSessionNeedsSync(
+          selectedSession?.id == null
+            ? null
+            : {
+              id: selectedSession?.id,
+              summary: selectedSession?.summary,
+              __provider: selectedSession?.__provider,
+            },
+          normalizedSession,
+        );
 
         if (shouldUpdateProject) {
           setSelectedProject(project);
@@ -888,7 +970,8 @@ export function useProjectsState({
       __projectId: selectedProject.projectId,
       summary: '',
     });
-  }, [sessionId, projects, selectedProject, selectedSession?.id, selectedSession?.__provider]);
+    // selectedSession?.summary 必须在列:改名只动这一项,漏了它顶栏标题就不跟着走。
+  }, [sessionId, projects, selectedProject, selectedSession?.id, selectedSession?.summary, selectedSession?.__provider]);
 
   const handleProjectSelect = useCallback(
     (project: Project) => {
@@ -1087,6 +1170,8 @@ export function useProjectsState({
       onRefresh: handleSidebarRefresh,
       onShowSettings: () => setShowSettings(true),
       isMobile,
+      // gn:别人删了 / 恢复了一条时,「最近删除」那一段也要跟着重拉。
+      externalTrashSignal: trashSignal,
     }),
     [
       attentionSessionIds,
@@ -1099,6 +1184,7 @@ export function useProjectsState({
       handleSessionSelect,
       handleSidebarRefresh,
       isLoadingProjects,
+      trashSignal,
       isMobile,
       loadingProgress,
       activeSessions,
@@ -1120,6 +1206,7 @@ export function useProjectsState({
     showSettings,
     settingsInitialTab,
     externalMessageUpdate,
+    trashSignal,
     newSessionTrigger,
     setActiveTab,
     setSidebarOpen,

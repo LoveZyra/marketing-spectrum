@@ -36,9 +36,12 @@ describe('无主帧路由的接线', () => {
   it('钩子没接线时行为退回改动前 —— 只计数、不转发(这是总开关)', () => {
     expect(sdk).toMatch(/if \(!orphanTurnHook \|\| !appSessionId\) return;/);
     // 记账要发生在 return 之前,否则"丢了多少"永远是 0
+    // gh:心跳分支(tool_progress)在记账之前就有自己的早退 —— 它不是内容帧,不记账。
+    // 这里看的是**内容帧那条路**:记账那句之后的第一个早退。
     const fn = sdk.slice(sdk.indexOf('function routeOrphanMessage'));
-    expect(fn.indexOf('orphanStats.frames += 1;'))
-      .toBeLessThan(fn.indexOf('if (!orphanTurnHook || !appSessionId) return;'));
+    const accountAt = fn.indexOf('orphanStats.frames += 1;');
+    expect(accountAt).toBeGreaterThan(0);
+    expect(fn.indexOf('if (!orphanTurnHook || !appSessionId) return;', accountAt)).toBeGreaterThan(accountAt);
   });
 
   it('判据是"Prism 有没有为这一轮建 run",**不是帧上的 origin**', () => {

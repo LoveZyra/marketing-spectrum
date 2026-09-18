@@ -14,6 +14,7 @@ import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import ProjectBulkPanel from './ProjectBulkPanel';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
+import RecentlyDeletedSection from './RecentlyDeletedSection';
 
 function HighlightedSnippet({ snippet, highlights }: { snippet: string; highlights: { start: number; end: number }[] }) {
   const parts: ReactNode[] = [];
@@ -133,6 +134,10 @@ type SidebarContentProps = {
   onBulkArchivedAction: (action: 'restore' | 'delete') => void;
   onEmptyArchive: () => void;
   isBulkArchiving: boolean;
+  /** gk:最近删除里恢复了一条 —— 侧栏与归档列表要刷新。 */
+  /** gk:「最近删除」那一段的重拉信号(见 useSidebarController 的 trashReloadToken)。 */
+  trashReloadToken?: number;
+  onTrashRestored?: () => void;
   isArchivedSessionsLoading: boolean;
   searchFilter: string;
   onSearchFilterChange: (value: string) => void;
@@ -179,6 +184,8 @@ export default function SidebarContent({
   onBulkArchivedAction,
   onEmptyArchive,
   isBulkArchiving,
+  trashReloadToken,
+  onTrashRestored,
   isArchivedSessionsLoading,
   searchFilter,
   onSearchFilterChange,
@@ -364,7 +371,8 @@ export default function SidebarContent({
             </div>
           )
         ) : searchMode === 'archived' ? (
-          isArchivedSessionsLoading ? (
+          <>
+          {isArchivedSessionsLoading ? (
             <div className="px-4 py-12 text-center md:py-8">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-muted md:mb-3">
                 <div className="h-6 w-6 flex-none rounded-full border-[1.5px] border-primary" aria-hidden />
@@ -409,7 +417,7 @@ export default function SidebarContent({
                   disabled={isBulkArchiving || archivedSessionsCount === 0}
                   className="rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground disabled:opacity-50"
                 >
-                  {t('archived.emptyTrash', '清空回收站')}
+                  {t('archived.emptyTrash', '清空归档')}
                 </button>
               </div>
 
@@ -632,7 +640,10 @@ export default function SidebarContent({
                 </button>
               )}
             </div>
-          )
+          )}
+          {/* gk:最近删除 —— 永久删除的会话保留期内躺在这里,可恢复。空归档时也显示。 */}
+          <RecentlyDeletedSection active={searchMode === 'archived'} reloadToken={trashReloadToken} onRestored={onTrashRestored} t={t} />
+          </>
         ) : (
           <>
             {projectBulk.selectionMode && (

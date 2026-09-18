@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { closeConnection, initializeDatabase, sessionMessagesDb, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
@@ -10,6 +10,7 @@ import {
   noteMergedSend,
   observeOrphanFrames,
   observedRunStats,
+  OBSERVED_IDLE_MS,
   resetObservedRunsForTest,
 } from '@/modules/websocket/services/observed-run.service.js';
 import { connectedClients } from '@/shared/websocket-state.js';
@@ -122,13 +123,74 @@ describe('观测回合', () => {
     expect(chatRunRegistry.getRun('s-preempt')).toBe(real);
   });
 
-  it('真回合在跑时不插手 —— 那一轮自己会显示', () => {
+  /**
+   * gh:**真回合在跑时,无主帧交给它的 writer,不能扔。**
+   *
+   * gb 在这里直接 `return false`。可"用户的 run 已登记、`runtime.turn` 还没赋值"
+   * 这段窗口(checkpoint / 模型解析 / runtimeForSend 的 await)里,CLI 自己那轮
+   * 的每一帧都会走到这里 —— 扔掉 = 界面与显示日志里永远没有这一段。
+   * 交给用户那个 run 的 writer:同一条会话,照样落库、照样推给正在看的人。
+   */
+  it('真回合在跑时:帧交给它的 writer 落库,不扔;也不另开观测回合', () => {
     sessionsDb.createAppSession('s-busy', 'claude', path.join(tempDirectory, 'proj'), 1);
     chatRunRegistry.startRun({
       appSessionId: 's-busy', provider: 'claude', providerSessionId: null, connection: null, userId: 1,
     });
-    expect(observe('s-busy', [textRow('x')])).toBe(false);
+    expect(observe('s-busy', [textRow('抢占窗口里的一句')])).toBe(true);
     expect(chatRunRegistry.getRun('s-busy')?.observed).toBe(false);
+    const rows = logRows('s-busy');
+    expect(rows.some((row) => String(row.content ?? '').includes('抢占窗口里的一句'))).toBe(true);
+  });
+
+  it('gh:观测回合被「停止」标成完成后,下一批帧不扔 —— 重新接住', () => {
+    sessionsDb.createAppSession('s-stop', 'claude', path.join(tempDirectory, 'proj'), 1);
+    expect(observe('s-stop', [textRow('第一批')])).toBe(true);
+    const first = chatRunRegistry.getRun('s-stop')!;
+    // websocket 层的中止处理:把观测回合标成完成(CLI 其实还在跑)
+    chatRunRegistry.completeRunIfCurrent(first, { exitCode: 1, aborted: true });
+    expect(observe('s-stop', [textRow('第二批')])).toBe(true);
+    const rows = logRows('s-stop');
+    expect(rows.some((row) => String(row.content ?? '').includes('第二批'))).toBe(true);
+    expect(chatRunRegistry.getRun('s-stop')?.observed).toBe(true);
+  });
+
+  /**
+   * gh:**工具还在跑就不按静默收尾。**
+   *
+   * 60 秒静默看门狗是按"模型在想"设计的;一条跑 90 秒的后台命令没有任何帧,
+   * 到点就被判成失败(complete exitCode:1)。上游每一批带着 toolsInFlight,
+   * 到点只续不杀;心跳(空批)也能续期。
+   */
+  it('gh:toolsInFlight 时静默到点只续期,不收尾;工具跑完之后再到点才收', () => {
+    vi.useFakeTimers();
+    try {
+      sessionsDb.createAppSession('s-slow', 'claude', path.join(tempDirectory, 'proj'), 1);
+      expect(observeOrphanFrames({
+        appSessionId: 's-slow', providerSessionId: 'p', userId: 1, provider: 'claude',
+        messages: [textRow('开始跑测试')], trigger: 'unknown', turnEnded: false, toolsInFlight: true,
+      })).toBe(true);
+      vi.advanceTimersByTime(OBSERVED_IDLE_MS + 1);
+      expect(chatRunRegistry.getRun('s-slow')?.status).toBe('running');
+      expect(observedRunStats().open).toBe(1);
+      // 心跳(空批)把"工具跑完了"带过来
+      expect(observeOrphanFrames({
+        appSessionId: 's-slow', providerSessionId: 'p', userId: 1, provider: 'claude',
+        messages: [], trigger: 'unknown', turnEnded: false, toolsInFlight: false,
+      })).toBe(true);
+      vi.advanceTimersByTime(OBSERVED_IDLE_MS + 1);
+      expect(chatRunRegistry.getRun('s-slow')?.status).not.toBe('running');
+      expect(observedRunStats().open).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gh:被换掉之后只剩一个空 result → 清账,不凭空再开一段', () => {
+    sessionsDb.createAppSession('s-stop2', 'claude', path.join(tempDirectory, 'proj'), 1);
+    expect(observe('s-stop2', [textRow('第一批')])).toBe(true);
+    chatRunRegistry.completeRunIfCurrent(chatRunRegistry.getRun('s-stop2')!, { exitCode: 1, aborted: true });
+    expect(observe('s-stop2', [], true)).toBe(false);
+    expect(observedRunStats().open).toBe(0);
   });
 
   it('会话行不存在就不接 —— 落库要以那一行为准', () => {

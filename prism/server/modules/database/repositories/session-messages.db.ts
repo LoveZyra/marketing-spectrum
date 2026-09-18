@@ -572,6 +572,15 @@ export const sessionMessagesDb = {
     }
   },
 
+  /**
+   * gk:让这条会话的解析缓存失效。回收站搬进 / 搬回是**绕过这个仓库**直接动表的
+   * (整体 INSERT … SELECT),缓存不知道;不失效的话,恢复出来的会话可能读到删除前
+   * 那份陈旧的解析结果。
+   */
+  invalidateCache(sessionId: string): void {
+    invalidateParsedList(sessionId);
+  },
+
   deleteForSession(sessionId: string): void {
     try {
       const db = getConnection();

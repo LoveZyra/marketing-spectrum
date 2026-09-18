@@ -280,6 +280,22 @@ export const api = {
     authenticatedFetch(`/api/providers/sessions/${sessionId}/restore`, {
       method: 'POST',
     }),
+  // gk:最近删除(会话回收站)。永久删除的会话在保留期内可从这里恢复。
+  trashedSessions: ({ limit, offset } = {}) => {
+    const params = new URLSearchParams();
+    if (Number.isFinite(limit)) params.set('limit', String(limit));
+    if (Number.isFinite(offset) && offset > 0) params.set('offset', String(offset));
+    const qs = params.toString();
+    return authenticatedFetch(`/api/providers/sessions/trash${qs ? `?${qs}` : ''}`);
+  },
+  restoreTrashedSession: (sessionId) =>
+    authenticatedFetch(`/api/providers/sessions/trash/${encodeURIComponent(sessionId)}/restore`, {
+      method: 'POST',
+    }),
+  purgeTrashedSession: (sessionId) =>
+    authenticatedFetch(`/api/providers/sessions/trash/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    }),
   /**
    * ei:会话产出文件。**产出不一定落在项目目录里**(计划文件在 ~/.claude/plans、
    * 临时脚本在 /tmp),项目文件接口只服务项目根以内,点开就是 403。这条路由按
@@ -370,6 +386,28 @@ export const api = {
     authenticatedFetch(`/api/projects/${projectId}/file?filePath=${encodeURIComponent(filePath)}`),
   readFileBlob: (projectId, filePath) =>
     authenticatedFetch(`/api/projects/${projectId}/files/content?path=${encodeURIComponent(filePath)}`),
+  /**
+   * 换一张下载票,拿回一个**能直接交给浏览器**的 URL。
+   *
+   * 传一个路径且是文件 → `kind:'file'`(有 Content-Length,浏览器画得出百分比);
+   * 传目录或多个路径 → `kind:'zip'`(服务端边压边发,没有百分比,只有已下载多少)。
+   *
+   * 权限、路径越界、文件不存在全在这一步挡掉 —— 必须如此:后面那步是浏览器导航,
+   * 失败了只会在下载栏里留一行"失败",弹不出应用内的提示。
+   */
+  issueDownloadTicket: (projectId, paths) =>
+    authenticatedFetch(`/api/projects/${projectId}/files/download-ticket`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths }),
+    }),
+  /** 会话产出的下载票。同上,失败必须挡在这一步。 */
+  issueSessionOutputDownloadTicket: (sessionId, filePath) =>
+    authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/output-download-ticket`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath }),
+    }),
   // baseMtimeMs:保存冲突检测基线(加载时拿到的 mtime)。传了它,服务端会在磁盘
   // 版本更新过时回 409(FILE_MODIFIED),避免静默覆盖别人的改动。
   saveFile: (projectId, filePath, content, baseMtimeMs) =>

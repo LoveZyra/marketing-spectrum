@@ -8,7 +8,8 @@
     "shell": "终端",
     "files": "文件",
     "notebook": "Notebook",
-    "tasks": "定时任务"
+    "tasks": "定时任务",
+    "projects": "项目"
   },
   "status": {
     "completed": "已完成"
@@ -88,17 +89,22 @@
     "toast": {
       "pathCopied": "路径已复制到剪贴板",
       "copyFailed": "复制失败",
-      "folderDownloadedPartial": "已打包,但 {{skipped}} 个子目录未包含(层级太深没加载):{{preview}}。进入该子目录后再单独下载可拿到完整内容。"
+      "fileCreated": "文件已创建",
+      "fileDeleted": "文件已删除",
+      "folderCreated": "文件夹已创建",
+      "folderDeleted": "文件夹已删除",
+      "renamed": "已重命名",
+      "downloadPreparing": "正在准备「{{name}}」,好了浏览器会弹出保存框…"
     },
     "truncatedNotice": "目录条目过多,仅显示部分内容。可进入子目录查看更多。",
     "selectionMode": "多选",
     "selectedCount": "已选 {{count}} 项",
     "batchDownload": "批量下载",
+    "batchDownloadLabel": "已选 {{selected}} 项",
     "batchDelete": "批量删除",
     "exitSelection": "退出多选",
     "batchDeleteConfirm": "删除选中的 {{count}} 项?此操作不可撤销。",
     "batchDeletePartial": "有 {{failed}} 项删除失败",
-    "batchDownloadPartial": "有 {{failed}} 项下载失败",
     "search": {
       "toggle": "在项目内搜索内容 (Ctrl+Shift+F)",
       "placeholder": "在项目内搜索内容…",
@@ -112,6 +118,29 @@
       "tooShort": "搜索内容至少 2 个字符",
       "summary": "{{matches}} 处命中 · {{files}} 个文件",
       "truncated": "已达上限,结果被截断"
+    },
+    "delete": {
+      "confirm": "删除",
+      "fileWarning": "这个文件将被永久删除。",
+      "folderWarning": "这个文件夹及其全部内容将被永久删除。",
+      "title": "删除{{type}}"
+    },
+    "download": {
+      "unauthorized": "登录已失效,请重新登录后再下载「{{name}}」",
+      "forbidden": "没有权限下载「{{name}}」,或该文件已不存在",
+      "failed": "下载「{{name}}」失败(HTTP {{status}})"
+    },
+    "dropToUpload": "松手即可上传",
+    "uploadComplete": "上传完成",
+    "uploadFailed": "上传失败",
+    "uploadFiles": "上传文件(单个最大 {{size}})",
+    "uploadedCount": "已上传 {{uploaded}} / {{total}} {{label}}",
+    "uploadingFiles": "正在上传…",
+    "validation": {
+      "dotsOnly": "文件名不能只有点",
+      "emptyName": "文件名不能为空",
+      "invalidChars": "文件名里有不允许的字符",
+      "reserved": "这是系统保留的文件名"
     }
   },
   "projectWizard": {
@@ -238,7 +267,8 @@
     "thoughtSeconds": "思考了 {{duration}} 秒"
   },
   "tooltips": {
-    "exportSessionFailed": "导出会话失败,请重试。"
+    "exportSessionFailed": "导出会话失败,请重试。",
+    "deleteSessionOptions": "归档或永久删除这条会话"
   },
   "folderBrowser": {
     "title": "选择文件夹",
@@ -362,5 +392,29 @@
     "add": "新建终端",
     "close": "关闭 {{name}}",
     "label": "终端 {{index}}"
+  },
+  "deleteConfirmation": {
+    "cannotDeletePermanently": "你不是这个项目的负责人,所以只能归档 —— 归档后它从活跃列表里消失,记录都还在。",
+    "archivedAndCannotDelete": "这条会话已经在归档里。永久删除只有项目负责人或管理员能做,所以这里没有可执行的操作。",
+    "cannotRemoveProject": "你不是这个项目的负责人 —— 归档和删除整个项目都只有负责人或管理员能做。你可以归档自己的会话。",
+    "archiveSession": "归档会话",
+    "archiveSessionNotice": "归档只是把会话从活跃列表里藏起来,记录一条不动。",
+    "archivedSessionNotice": "这条会话已经在归档里。你可以让它继续藏着,或者永久删除。",
+    "deleteSessionPermanently": "永久删除",
+    "archiveProject": "归档项目",
+    "sessionCount": "这个项目下有 {{count}} 条会话。"
+  },
+  "actions": {
+    "close": "关闭"
+  },
+  "common": {
+    "cancel": "取消",
+    "done": "完成",
+    "failed": "失败"
+  },
+  "versionUpdate": {
+    "ariaLabels": {
+      "closeSidebar": "关闭侧边栏"
+    }
   }
 }

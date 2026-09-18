@@ -3,6 +3,11 @@ import { ChevronLeft, ChevronRight, Filter, RefreshCw, ScrollText, X } from 'luc
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../../../utils/api';
+import { middleTruncate } from '../../../../../utils/middleTruncate';
+
+import {
+  DELETION_AUDIT_EVENTS, type AuditTranslator, auditEventLabel, describeAuditDetail, isDeletionAuditEvent,
+} from './auditDetail';
 
 type AuditEntry = {
   id: number;
@@ -52,6 +57,12 @@ const EVENT_GROUPS: ReadonlyArray<{ key: string; labelZh: string; events: readon
       'attachment_quota_changed'],
   },
   {
+    // gk:会话与项目的删除 / 归档 / 恢复 —— "我的会话怎么没了、谁删的"从这里查。
+    key: 'deletions',
+    labelZh: '会话与项目删除',
+    events: [...DELETION_AUDIT_EVENTS],
+  },
+  {
     key: 'skills',
     labelZh: '技能装卸',
     events: ['skill_installed', 'skill_removed'],
@@ -73,8 +84,21 @@ const formatTime = (value: string): string => {
  * 审计日志列表(登录/登出/审批/改密/停用等安全事件)。
  * 服务端裁剪可见范围:root 全量,普通用户只有自己的行 —— 组件两处通用。
  */
-export default function AuditLogList() {
+type AuditLogListProps = {
+  /** gk:个人账号页上叫「与我有关的操作记录」—— 非 root 看到的是"我做的 + 对我做的"。 */
+  title?: string;
+};
+
+export default function AuditLogList({ title }: AuditLogListProps = {}) {
   const { t } = useTranslation('settings');
+  /**
+   * gk:审计文案的适配器。auditDetail 是纯函数模块(单测里喂得进假翻译器),
+   * 所以它要的是 `(键, 中文兜底, 插值)` 这个最小形状,这里把 i18next 的 t 折过去。
+   */
+  const translateAudit = useCallback<AuditTranslator>(
+    (key, fallback, vars) => t(key, { defaultValue: fallback, ...(vars ?? {}) }),
+    [t],
+  );
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -132,7 +156,7 @@ export default function AuditLogList() {
       <div className="flex items-center justify-between gap-3">
         <h3 className="flex items-center gap-2 text-sm font-semibold">
           <ScrollText className="h-4 w-4 text-muted-foreground" />
-          {t('audit.title', '安全审计日志')}
+          {title ?? t('audit.title', '安全审计日志')}
           <span className="text-xs font-normal text-muted-foreground">
             {t('audit.total', { count: total, defaultValue: `共 ${total} 条` })}
           </span>
@@ -156,7 +180,7 @@ export default function AuditLogList() {
         <select
           value={groupKey}
           onChange={(event) => setGroupKey(event.target.value)}
-          className="rounded-md border border-border bg-card px-2 py-1.5 text-xs text-body focus:border-border-strong focus:outline-none"
+          className="rounded-md border border-border bg-card py-1.5 pl-2 pr-7 text-xs text-body focus:border-border-strong focus:outline-none"
         >
           <option value="">{t('audit.filter.allEvents', '全部事件')}</option>
           {EVENT_GROUPS.map((group) => (
@@ -169,7 +193,7 @@ export default function AuditLogList() {
         <select
           value={outcome}
           onChange={(event) => setOutcome(event.target.value)}
-          className="rounded-md border border-border bg-card px-2 py-1.5 text-xs text-body focus:border-border-strong focus:outline-none"
+          className="rounded-md border border-border bg-card py-1.5 pl-2 pr-7 text-xs text-body focus:border-border-strong focus:outline-none"
         >
           <option value="">{t('audit.filter.allOutcomes', '全部结果')}</option>
           <option value="success">{t('audit.filter.success', '成功')}</option>
@@ -224,10 +248,11 @@ export default function AuditLogList() {
         <table className="w-full text-sm">
           <thead className="border-b border-border bg-card text-xs text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 text-left font-medium">{t('audit.columns.time', '时间')}</th>
-              <th className="px-3 py-2 text-left font-medium">{t('audit.columns.user', '用户')}</th>
-              <th className="px-3 py-2 text-left font-medium">{t('audit.columns.event', '事件')}</th>
-              <th className="px-3 py-2 text-left font-medium">IP</th>
+              <th className="w-px whitespace-nowrap px-3 py-2 text-left font-medium">{t('audit.columns.time', '时间')}</th>
+              <th className="w-px whitespace-nowrap px-3 py-2 text-left font-medium">{t('audit.columns.user', '用户')}</th>
+              <th className="w-px whitespace-nowrap px-3 py-2 text-left font-medium">{t('audit.columns.event', '事件')}</th>
+              {/* IP 在窄容器里先让位:它远不如「谁、几点、做了什么」重要 */}
+              <th className="hidden w-px whitespace-nowrap px-3 py-2 text-left font-medium lg:table-cell">IP</th>
               <th className="px-3 py-2 text-left font-medium">{t('audit.columns.detail', '详情')}</th>
             </tr>
           </thead>
@@ -245,26 +270,36 @@ export default function AuditLogList() {
             )}
             {entries.map((entry) => (
               <tr key={entry.id} className="border-t border-border">
-                <td className="whitespace-nowrap px-3 py-1.5 text-xs text-muted-foreground">
+                <td className="whitespace-nowrap px-3 py-1.5 text-xs tabular-nums text-muted-foreground">
                   {formatTime(entry.created_at)}
                 </td>
-                <td className="px-3 py-1.5 text-xs font-medium">{entry.username ?? '—'}</td>
-                <td className="px-3 py-1.5">
+                {/* 用户名过长时中间省略 —— 尾部省略会把 zhangsan-2024/2025 截成同一个名字 */}
+                <td className="max-w-32 whitespace-nowrap px-3 py-1.5 text-xs font-medium" title={entry.username ?? ''}>
+                  {entry.username ? middleTruncate(entry.username, 14) : '—'}
+                </td>
+                {/* 事件列锁一行:列一窄,「从最近删除恢复了会话」会被折成一字一行 */}
+                <td className="w-px whitespace-nowrap px-3 py-1.5">
                   <span
-                    className={`rounded px-1.5 py-0.5 font-mono text-[11px] ${
+                    /* -ml-1.5 抵掉徽标自己的 px-1.5,文字左边才与表头「事件」对齐(同账号审批表的状态列) */
+                    className={`-ml-1.5 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] ${isDeletionAuditEvent(entry.event) ? '' : 'font-mono'} ${
                       entry.outcome === 'failure'
                         ? 'bg-muted text-muted-foreground'
                         : 'bg-muted text-body'
                     }`}
+                    title={entry.event}
                   >
-                    {entry.event}
+                    {auditEventLabel(entry.event, translateAudit)}
                   </span>
                 </td>
-                <td className="whitespace-nowrap px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+                <td className="hidden whitespace-nowrap px-3 py-1.5 font-mono text-[11px] text-muted-foreground lg:table-cell">
                   {entry.ip ?? '—'}
                 </td>
-                <td className="max-w-[260px] truncate px-3 py-1.5 text-xs text-muted-foreground" title={entry.detail ?? ''}>
-                  {entry.detail ?? '—'}
+                {/* gk:删除类记录的 detail 是 JSON,翻成人话;其余原样。悬停仍能看到原文。 */}
+                <td
+                  className={`px-3 py-1.5 text-xs text-muted-foreground ${isDeletionAuditEvent(entry.event) ? 'whitespace-normal break-words' : 'max-w-64 truncate'}`}
+                  title={entry.detail ?? ''}
+                >
+                  {describeAuditDetail(entry.event, entry.detail, translateAudit) || '—'}
                 </td>
               </tr>
             ))}

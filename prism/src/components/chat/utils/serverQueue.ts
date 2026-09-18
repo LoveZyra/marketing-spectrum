@@ -19,6 +19,8 @@
 export interface ServerQueuedMessage {
   preview: string;
   enqueuedAt: string;
+  /** gi:不是自己排的 —— 服务端把正文脱敏了,界面显示占位而不是把空串当"没正文"。 */
+  redacted?: boolean;
 }
 
 export type ServerQueueMap = ReadonlyMap<string, ServerQueuedMessage>;
@@ -51,12 +53,13 @@ export function reduceServerQueue(
     existing
     && existing.preview === queued.preview
     && existing.enqueuedAt === queued.enqueuedAt
+    && Boolean(existing.redacted) === Boolean(queued.redacted)
   ) {
     return current;
   }
 
   const next = new Map(current);
-  next.set(sessionId, { preview: queued.preview, enqueuedAt: queued.enqueuedAt });
+  next.set(sessionId, { preview: queued.preview, enqueuedAt: queued.enqueuedAt, redacted: Boolean(queued.redacted) });
   return next;
 }
 
