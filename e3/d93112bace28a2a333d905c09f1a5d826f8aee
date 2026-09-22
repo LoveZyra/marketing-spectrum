@@ -1,0 +1,29 @@
+prism/.env.example
+  s_a24dea6b3caa0d::t_6691c86a651dfe 173-184
+prism/CHANGELOG.md
+  s_a24dea6b3caa0d::t_2fc11a10a5631e 11-65
+prism/eslint.config.js
+  s_a24dea6b3caa0d::t_6ba1296cb04ee0 203
+prism/package-lock.json
+  s_a24dea6b3caa0d::t_242becbe2b69b9 69
+prism/package.json
+  s_a24dea6b3caa0d::t_72e1fcaa6147cf 115
+prism/server/shared/image-attachments.ts
+  s_a24dea6b3caa0d::t_27d45e37a59ab6 6,252-265,270-271
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e3d93112bace28a2a333d905c09f1a5d826f8aee",
+  "prompts": {},
+  "sessions": {
+    "s_a24dea6b3caa0d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7f3ca135-1bbd-4d18-9705-d57a399e00cf",
+        "model": "claude-opus-5"
+      },
+      "human_author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
