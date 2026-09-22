@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { getDataDir } from '../utils/runtime-paths.js';
 
+import { downscaleImageForModel, formatBytes } from './image-downscale.js';
 import { createLogger } from './logger.js';
 const log = createLogger('attachments');
 
@@ -248,12 +249,26 @@ export async function buildClaudeUserContent(
       }
 
       const bytes = await fs.readFile(canonicalPath);
+      /**
+       * 发给模型之前在内存里缩一遍(长边 1568、~1MB),**磁盘原图不动**。
+       * 用户贴什么就传什么的话,一张手机原图就是 3.6MB 的 base64,而且它会跟着
+       * transcript 每一轮重发;把 base64 当文本计数的网关直接给你算出一百万 token。
+       * 详见 image-downscale.ts。
+       */
+      const scaled = await downscaleImageForModel(bytes, mediaType);
+      if (scaled.changed) {
+        log.info(
+          `[Images] 发给模型前缩图 ${path.basename(canonicalPath)}:`
+          + ` ${formatBytes(scaled.original.bytes)} ${scaled.original.width}×${scaled.original.height}`
+          + ` → ${formatBytes(scaled.output.bytes)} ${scaled.output.width}×${scaled.output.height}`,
+        );
+      }
       blocks.push({
         type: 'image',
         source: {
           type: 'base64',
-          media_type: mediaType,
-          data: bytes.toString('base64'),
+          media_type: scaled.mediaType,
+          data: scaled.bytes.toString('base64'),
         },
       });
     } catch (error) {
