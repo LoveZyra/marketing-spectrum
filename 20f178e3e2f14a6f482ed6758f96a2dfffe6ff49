@@ -1,0 +1,230 @@
+prism/.env.example
+  h_4e3a4dcdcf415f 288-298
+prism/CHANGELOG.md
+  h_4e3a4dcdcf415f 11-1384
+prism/eslint.config.js
+  h_4e3a4dcdcf415f 206
+prism/server/claude-sdk.js
+  h_4e3a4dcdcf415f 49,404-416,450-460,462-465,477-478,530-553,641,649-650,703-741,1020,1025-1026,1166,1196,1319-1334,2115-2364,2391-2419,2422-2425,2434-2445,2449-2455,2475,2477-2489,2492-2493,2567-2605,2783-2807,3098-3114,3472,3484-3485,3531-3546,3668,3785-3786,3913-3914,3939-3940,3975,4001-4012,4028-4037,4386-4480,4603-4604,4649
+prism/server/index.js
+  h_4e3a4dcdcf415f 17,38-39,136-138,170-176
+prism/server/modules/assets/assets.routes.ts
+  h_4e3a4dcdcf415f 13-18,43-68,71
+prism/server/modules/database/migrations.ts
+  h_4e3a4dcdcf415f 1032-1049
+prism/server/modules/database/repositories/session-messages.db.ts
+  h_4e3a4dcdcf415f 4,8,67-70,75,109-122,182-190,267-269,310-312,315-323,326,354-356,367-368,387,390-406,550-574
+prism/server/modules/database/repositories/sessions.db.ts
+  h_4e3a4dcdcf415f 1-2,7,10-11,29-62,234-239,241,253-284,295,304,307
+prism/server/modules/database/schema.ts
+  h_4e3a4dcdcf415f 298-302
+prism/server/modules/database/tests/display-log-integrity.test.ts
+  h_4e3a4dcdcf415f 62-69
+prism/server/modules/database/tests/fork-anchor-lookup.test.ts
+  h_4e3a4dcdcf415f 1-98
+prism/server/modules/database/tests/fork-anchor-migration.test.ts
+  h_4e3a4dcdcf415f 1-90
+prism/server/modules/database/tests/session-merge-guard.test.ts
+  h_4e3a4dcdcf415f 1-143
+prism/server/modules/providers/list/claude/claude-sessions.provider.ts
+  h_4e3a4dcdcf415f 175-188,190-207,419-446
+prism/server/modules/providers/list/claude/transcript-provenance.ts
+  h_4e3a4dcdcf415f 59-75,85
+prism/server/modules/providers/provider.routes.ts
+  h_4e3a4dcdcf415f 19,695-718,762-763,767-771,775-783,785-791,1004-1005,1019-1029
+prism/server/modules/providers/services/mcp-redaction.ts
+  h_4e3a4dcdcf415f 1-65
+prism/server/modules/providers/services/session-export.service.ts
+  h_4e3a4dcdcf415f 38-54,65-71,84-95,184-192,208-209,225,232-237,266-272,275,296-297
+prism/server/modules/providers/services/sessions.service.ts
+  h_4e3a4dcdcf415f 7,361,363-398,400-431,437-438,443,446,628-650,663-664,830-854
+prism/server/modules/providers/tests/mcp-redaction.test.ts
+  h_4e3a4dcdcf415f 1-98
+prism/server/modules/providers/tests/session-export.service.test.ts
+  h_4e3a4dcdcf415f 3,176-249
+prism/server/modules/providers/tests/user-turn-provenance.test.ts
+  h_4e3a4dcdcf415f 203-247
+prism/server/modules/system/usage.routes.ts
+  h_4e3a4dcdcf415f 7-8,11,127-147,178-220,247-260
+prism/server/modules/tasks/services/scheduled-tasks.service.ts
+  h_4e3a4dcdcf415f 241-244
+prism/server/modules/websocket/index.ts
+  h_4e3a4dcdcf415f 4,6-8
+prism/server/modules/websocket/services/chat-run-registry.service.ts
+  h_4e3a4dcdcf415f 4,57-75,248-257,268-271,273-277,279-282,285-287,305-306,365-384,412-423,438-439,443-482,498-499,515-528,532-565
+prism/server/modules/websocket/services/chat-send-dedupe.ts
+  h_4e3a4dcdcf415f 1-124
+prism/server/modules/websocket/services/chat-websocket.service.ts
+  h_4e3a4dcdcf415f 5-7,21-22,35-45,60-85,114-115,118-149,151-166,199-212,280-304,348-400,486-492,551,561-564,691-727,739,747,764-784,799,808,825,837,851-852,855-856,868,873-937,947-948,958-965,1007-1016,1047,1071-1084,1140,1144,1167-1187,1658-1671
+prism/server/modules/websocket/services/conversation-ownership.service.ts
+  h_4e3a4dcdcf415f 42-54,59-68
+prism/server/modules/websocket/services/observed-run.service.ts
+  h_4e3a4dcdcf415f 1-253
+prism/server/modules/websocket/services/shell-websocket.service.ts
+  h_4e3a4dcdcf415f 5,9-10,315-329,477-503,520-536,540-552,559-566
+prism/server/modules/websocket/services/websocket-server.service.ts
+  h_4e3a4dcdcf415f 113-131
+prism/server/modules/websocket/tests/chat-image-filter.test.ts
+  h_4e3a4dcdcf415f 76-268
+prism/server/modules/websocket/tests/chat-run-registry.test.ts
+  h_4e3a4dcdcf415f 466-537
+prism/server/modules/websocket/tests/chat-send-dedupe.test.ts
+  h_4e3a4dcdcf415f 1-176
+prism/server/modules/websocket/tests/conversation-ownership.test.ts
+  h_4e3a4dcdcf415f 74-95,99-104
+prism/server/modules/websocket/tests/observed-run.test.ts
+  h_4e3a4dcdcf415f 1-204
+prism/server/modules/websocket/tests/run-refusal-reason.test.ts
+  h_4e3a4dcdcf415f 1-124
+prism/server/routes/agent.js
+  h_4e3a4dcdcf415f 385-416,991-1005,1348-1363,1427-1456,1464-1484,1521-1522,1524-1527,1606-1607,1609-1612
+prism/server/shared/fork-anchor.ts
+  h_4e3a4dcdcf415f 1-67
+prism/server/shared/image-attachments.ts
+  h_4e3a4dcdcf415f 32-38,129-174,178-180,182-187,220-226,238-239,245
+prism/server/shared/types.ts
+  h_4e3a4dcdcf415f 205-213,336-348
+prism/server/tests/agent-resume-project-path.test.js
+  h_4e3a4dcdcf415f 1-55
+prism/server/tests/bash-permission-segments.test.js
+  h_4e3a4dcdcf415f 5,42-60
+prism/server/tests/client-options-allowlist.test.ts
+  h_4e3a4dcdcf415f 1-58
+prism/server/tests/fork-anchor.test.ts
+  h_4e3a4dcdcf415f 1-70
+prism/server/tests/fork-point-uuid.test.ts
+  h_4e3a4dcdcf415f 1-49
+prism/server/tests/image-source-roots.test.ts
+  h_4e3a4dcdcf415f 1-67
+prism/server/tests/merge-user-message.test.js
+  h_4e3a4dcdcf415f 1-130
+prism/server/tests/model-lookup-session-id.test.js
+  h_4e3a4dcdcf415f 1-47
+prism/server/tests/orphan-parent-tool-use-id.test.js
+  h_4e3a4dcdcf415f 1-107
+prism/server/tests/orphan-turn-wiring.test.js
+  h_4e3a4dcdcf415f 1-61
+prism/server/tests/subagent-transcript-paths.test.ts
+  h_4e3a4dcdcf415f 1-60
+prism/server/tests/task-lifecycle-channel.test.js
+  h_4e3a4dcdcf415f 1-169
+prism/server/tests/tool-group-pagination.test.ts
+  h_4e3a4dcdcf415f 1-83
+prism/server/tests/tool-policy-allowed.test.js
+  h_4e3a4dcdcf415f 1-61
+prism/src/components/chat/hooks/armedContext.test.ts
+  h_4e3a4dcdcf415f 1-50
+prism/src/components/chat/hooks/chatViewState.test.ts
+  h_4e3a4dcdcf415f 1-70
+prism/src/components/chat/hooks/composerOwnership.test.ts
+  h_4e3a4dcdcf415f 1-60
+prism/src/components/chat/hooks/frame-dedupe.test.ts
+  h_4e3a4dcdcf415f 1-83
+prism/src/components/chat/hooks/localNoticeRoundtrip.test.ts
+  h_4e3a4dcdcf415f 1-61
+prism/src/components/chat/hooks/olderPage.test.ts
+  h_4e3a4dcdcf415f 1-54
+prism/src/components/chat/hooks/replay-catchup.test.ts
+  h_4e3a4dcdcf415f 1-60
+prism/src/components/chat/hooks/scrollControllerWiring.test.ts
+  h_4e3a4dcdcf415f 1-130
+prism/src/components/chat/hooks/subagentBackground.test.ts
+  h_4e3a4dcdcf415f 1-200
+prism/src/components/chat/hooks/subagentNestedTranscript.test.ts
+  h_4e3a4dcdcf415f 1-128
+prism/src/components/chat/hooks/useChatComposerState.ts
+  h_4e3a4dcdcf415f 1,23,29-44,175-176,330-395,492-505,510,542-576,578-580,582,585-749,1110,1148,1177,1234,1275,1308-1309,1327,1436-1585,1619,1621-1623,1626,1631-1646,1648-1671,1673-1724,1761,1766-1769,1772,1774-1775,1779,1781-1789,1793,1795-1810,1813-1815,1824,1826,1830,1886-1921,1923-1926,1929,1939,1941-1944,1946,1948-1964,1978-1979,1988,1990-1995,1997-1998,2001-2007,2009,2012-2013,2063-2064,2118-2150,2153-2167,2169-2170,2172-2178,2180,2184,2186-2188,2191,2193-2194,2197-2215,2420-2422,2425-2428,2523,2609
+prism/src/components/chat/hooks/useChatMessages.ts
+  h_4e3a4dcdcf415f 167-212,215-241,254,269-275,281-299,309,330-331,461-462,468-474,500-504
+prism/src/components/chat/hooks/useChatRealtimeHandlers.ts
+  h_4e3a4dcdcf415f 4,12,33-89,134-141,177,253-255,268-270,292-294,298-303,368-397,412-433,440-442,698
+prism/src/components/chat/hooks/useChatSessionState.ts
+  h_4e3a4dcdcf415f 7,10-12,14-17,19,21-23,81,118-124,141-210,295-329,345-359,370-393,419-431,448-451,461-462,479-507,520-521,609-624,626,628-629,633,645,695,732-757,765-781,799-808,814-833,840,874-882,885-896,898,1025-1034,1041-1052,1091,1120-1137,1163,1165-1168,1172-1174,1201-1284,1293-1296,1305,1308,1335,1338-1339,1429-1456,1458-1460,1523-1524,1526,1530-1543,1547,1549,1551-1553,1562,1668-1781,1804-1806,1818-1819,1826-1847,1857-1891,1895-1917,2023-2024
+prism/src/components/chat/types/types.ts
+  h_4e3a4dcdcf415f 35-46,71-80,83-97,103-121
+prism/src/components/chat/utils/activityFold.test.ts
+  h_4e3a4dcdcf415f 3,5-24,26-33,36-38,40,43-56,59-60,67-73,75,77-79,82-83,86-257,260-299
+prism/src/components/chat/utils/auditFixes.test.ts
+  h_4e3a4dcdcf415f 1-95
+prism/src/components/chat/utils/chatStorage.ts
+  h_4e3a4dcdcf415f 81-88,92-100,124-149
+prism/src/components/chat/utils/messageWindow.ts
+  h_4e3a4dcdcf415f 119-451
+prism/src/components/chat/utils/outboxLifecycle.test.ts
+  h_4e3a4dcdcf415f 1-129
+prism/src/components/chat/utils/queuedStorageRoundtrip.test.ts
+  h_4e3a4dcdcf415f 1-92
+prism/src/components/chat/utils/scrollOwnership.test.ts
+  h_4e3a4dcdcf415f 1-202
+prism/src/components/chat/utils/sendCommand.test.ts
+  h_4e3a4dcdcf415f 1-298
+prism/src/components/chat/utils/sendCommand.ts
+  h_4e3a4dcdcf415f 1-383
+prism/src/components/chat/utils/serverQueue.test.ts
+  h_4e3a4dcdcf415f 1-155
+prism/src/components/chat/utils/serverQueue.ts
+  h_4e3a4dcdcf415f 1-109
+prism/src/components/chat/utils/sessionScroll.test.ts
+  h_4e3a4dcdcf415f 1-158
+prism/src/components/chat/utils/sessionWindow.test.ts
+  h_4e3a4dcdcf415f 1-180
+prism/src/components/chat/utils/toolGrouping.test.ts
+  h_4e3a4dcdcf415f 313-369
+prism/src/components/chat/utils/toolGrouping.ts
+  h_4e3a4dcdcf415f 3-4,234-252,258,279-283,319-330,333,355-356
+prism/src/components/chat/utils/toolRowSummary.ts
+  h_4e3a4dcdcf415f 293-312,314,316,371,373,378-396,398-403,405,407-412,414-417,424-425,428-551
+prism/src/components/chat/utils/turnBoundary.ts
+  h_4e3a4dcdcf415f 1-80
+prism/src/components/chat/utils/turnOutputBoundary.test.ts
+  h_4e3a4dcdcf415f 1-74
+prism/src/components/chat/utils/turnOutputs.ts
+  h_4e3a4dcdcf415f 145-165
+prism/src/components/chat/view/ChatInterface.tsx
+  h_4e3a4dcdcf415f 19-24,155-156,259,401,405,410-412,414-423,443,616,706-707
+prism/src/components/chat/view/subcomponents/ActivityTimeline.tsx
+  h_4e3a4dcdcf415f 27,51,53-61,139-140,144-151,184-203,213-214,216,228-237,242,246-247,250,254-256,265,267,269-273,275
+prism/src/components/chat/view/subcomponents/ChatComposer.tsx
+  h_4e3a4dcdcf415f 446-453,992-999
+prism/src/components/chat/view/subcomponents/ChatMessagesPane.tsx
+  h_4e3a4dcdcf415f 14-15,18-19,34-37,115-116,280-298,364-386,423-427,433,436,442,445-455,458-461,466,477-480,506-523,537
+prism/src/components/chat/view/subcomponents/MessageComponent.tsx
+  h_4e3a4dcdcf415f 60-65,76,143,181-184
+prism/src/components/chat/view/subcomponents/SubagentGroupCard.tsx
+  h_4e3a4dcdcf415f 2,7,70-99,101-158,168-173,188-192,202,207-208,215-280,298-299,310,312-314,318-322,331-334,337,341-345,347,350-362,368-373,379,412,418-426,428,443-448,453-464
+prism/src/components/chat/view/subcomponents/activityFoldWiring.test.ts
+  h_4e3a4dcdcf415f 1-32
+prism/src/components/chat/view/subcomponents/subagentCardWiring.test.ts
+  h_4e3a4dcdcf415f 1-97
+prism/src/components/chat/view/subcomponents/subagentInterrupted.test.ts
+  h_4e3a4dcdcf415f 1-49
+prism/src/hooks/projectsHaveChanges.test.ts
+  h_4e3a4dcdcf415f 13
+prism/src/hooks/useQueuedMessageAutoSend.ts
+  h_4e3a4dcdcf415f 69-86,90,92-109,117-121
+prism/src/i18n/locales/en/chat.json
+  h_4e3a4dcdcf415f 93-95,362
+prism/src/i18n/locales/zh-CN/chat.json
+  h_4e3a4dcdcf415f 93-95,362
+prism/src/i18n/locales/zh-TW/chat.json
+  h_4e3a4dcdcf415f 112-114
+prism/src/stores/applyServerSnapshot.test.ts
+  h_4e3a4dcdcf415f 1-269
+prism/src/stores/computeMerged.test.ts
+  h_4e3a4dcdcf415f 211-265
+prism/src/stores/upsertRealtime.test.ts
+  h_4e3a4dcdcf415f 1-83
+prism/src/stores/useSessionStore.ts
+  h_4e3a4dcdcf415f 32-33,68-78,95-106,167,194-205,267-274,293,314,316,318-327,329-331,333-335,635-776,871,873-876,878-879,890-901,939-946,966,977,1009-1025,1035,1037-1039,1041
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "20f178e3e2f14a6f482ed6758f96a2dfffe6ff49",
+  "prompts": {},
+  "humans": {
+    "h_4e3a4dcdcf415f": {
+      "author": "ctj <tianji.chang@ly.com>"
+    }
+  }
+}
