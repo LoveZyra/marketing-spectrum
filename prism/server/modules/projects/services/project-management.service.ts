@@ -213,10 +213,28 @@ export async function createProject(
   };
 }
 
+/** hl(动态 P1-5):显示名上限。侧栏一行放不下的名字没有意义,5000 字进库只是给列表页添负担。 */
+export const PROJECT_DISPLAY_NAME_MAX_LENGTH = 120;
+
 /**
  * Sets `projects.custom_project_name` for the given `projectId` (or clears it when empty).
+ *
+ * hl(动态 P1-5):只认字符串(`null` / `undefined` / 空串 = 清掉自定义名,回落到目录名),
+ * 其余类型 400;长度封顶 —— 此前不限长不限型,对象也能塞进去。
  */
 export function updateProjectDisplayName(projectId: string, newDisplayName: unknown): void {
+  if (newDisplayName !== undefined && newDisplayName !== null && typeof newDisplayName !== 'string') {
+    throw new AppError('displayName must be a string', {
+      code: 'INVALID_DISPLAY_NAME',
+      statusCode: 400,
+    });
+  }
   const trimmed = typeof newDisplayName === 'string' ? newDisplayName.trim() : '';
+  if (trimmed.length > PROJECT_DISPLAY_NAME_MAX_LENGTH) {
+    throw new AppError(`displayName must not exceed ${PROJECT_DISPLAY_NAME_MAX_LENGTH} characters`, {
+      code: 'INVALID_DISPLAY_NAME',
+      statusCode: 400,
+    });
+  }
   projectsDb.updateCustomProjectNameById(projectId, trimmed.length > 0 ? trimmed : null);
 }

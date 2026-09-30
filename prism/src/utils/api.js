@@ -231,6 +231,70 @@ export const api = {
     const queryString = params.toString();
     return authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/messages${queryString ? `?${queryString}` : ''}`);
   },
+  // gy:技能优化(SkillWhet)。整层可能没挂载(404),调用方按 useSkillWhetStatus 判断。
+  skillWhet: {
+    status: () => authenticatedFetch('/api/skillwhet/status'),
+    skills: () => authenticatedFetch('/api/skillwhet/skills'),
+    skill: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}`),
+    gate: (name, rerun = false) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/gate`, rerun ? { method: 'POST', body: '{}' } : undefined),
+    facts: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/facts`),
+    contract: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/contract`),
+    wiki: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/wiki`),
+    feedbackStats: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/feedback-stats`),
+    importSkill: (name, replace = false) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/import`, { method: 'POST', body: JSON.stringify({ replace }) }),
+    bootstrap: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/bootstrap`, { method: 'POST', body: '{}' }),
+    removeSkill: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+    uploadSkill: (name, files) => authenticatedFetch('/api/skillwhet/skills/upload', { method: 'POST', body: JSON.stringify({ name, files }) }),
+    tasksValidate: (skill, format, content) => authenticatedFetch('/api/skillwhet/tasks/validate', { method: 'POST', body: JSON.stringify({ skill, format, content }) }),
+    tasksAdd: (skill, format, content, keepPassing = false) => authenticatedFetch('/api/skillwhet/tasks', { method: 'POST', body: JSON.stringify({ skill, format, content, keep_passing: keepPassing }) }),
+    tasks: (skill) => authenticatedFetch(`/api/skillwhet/tasks${skill ? `?skill=${encodeURIComponent(skill)}` : ''}`),
+    // gz:训练作业 / staging / 发布 / 反馈收件箱
+    tasksDerive: (skill, testDir = 'tests/unit') => authenticatedFetch('/api/skillwhet/tasks/derive', { method: 'POST', body: JSON.stringify({ skill, test_dir: testDir }) }),
+    jobs: (skill, limit) => authenticatedFetch(`/api/skillwhet/jobs?${[skill ? `skill=${encodeURIComponent(skill)}` : '', limit ? `limit=${limit}` : ''].filter(Boolean).join('&')}`),
+    job: (id) => authenticatedFetch(`/api/skillwhet/jobs/${encodeURIComponent(id)}`),
+    jobProgress: (id, after = 0) => authenticatedFetch(`/api/skillwhet/jobs/${encodeURIComponent(id)}/progress?after=${after}`),
+    jobLog: (id, tail = 200) => authenticatedFetch(`/api/skillwhet/jobs/${encodeURIComponent(id)}/log?tail=${tail}`),
+    jobCreate: (skill, args) => authenticatedFetch('/api/skillwhet/jobs', { method: 'POST', body: JSON.stringify({ skill, kind: 'train', args }) }),
+    jobCancel: (id) => authenticatedFetch(`/api/skillwhet/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' }),
+    jobBudget: () => authenticatedFetch('/api/skillwhet/jobs/budget'),
+    staging: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/staging`),
+    stagingDetail: (name, sid) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/staging/${encodeURIComponent(sid)}`),
+    // ha:force 与 skip_release 各是各的开关(没被接受 ≠ 没做留出集评估)
+    stagingAdopt: (name, sid, { force = false, skipRelease = false } = {}) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/staging/${encodeURIComponent(sid)}/adopt`, { method: 'POST', body: JSON.stringify({ force, skip_release: skipRelease }) }),
+    stagingExport: (name, sid) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/staging/${encodeURIComponent(sid)}/export`),
+    publish: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/publish`, { method: 'POST', body: '{}' }),
+    publishAsNew: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/publish-as-new`, { method: 'POST', body: '{}' }),
+    rollbacks: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/rollbacks`),
+    publishHistory: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/publishes`),
+    rollback: (name, to) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/rollback`, { method: 'POST', body: JSON.stringify({ to }) }),
+    feedbackInbox: (skill) => authenticatedFetch(`/api/skillwhet/feedback/inbox${skill ? `?skill=${encodeURIComponent(skill)}` : ''}`),
+    feedbackInboxAccept: (ids) => authenticatedFetch('/api/skillwhet/feedback/inbox/accept', { method: 'POST', body: JSON.stringify({ ids }) }),
+    // ha:从会话挖任务 / 留出集评估(release-once)
+    harvestProjects: () => authenticatedFetch('/api/skillwhet/harvest/projects'),
+    harvestStart: (payload) => authenticatedFetch('/api/skillwhet/harvest', { method: 'POST', body: JSON.stringify(payload) }),
+    jobResult: (id) => authenticatedFetch(`/api/skillwhet/jobs/${encodeURIComponent(id)}/result`),
+    jobImport: (id, taskIds) => authenticatedFetch(`/api/skillwhet/jobs/${encodeURIComponent(id)}/import`, { method: 'POST', body: JSON.stringify(taskIds ? { task_ids: taskIds } : {}) }),
+    releaseEval: (name, sid) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/staging/${encodeURIComponent(sid)}/release-eval`, { method: 'POST', body: '{}' }),
+    // he:夜训计划 / 从中断处续跑
+    nightly: () => authenticatedFetch('/api/skillwhet/nightly'),
+    nightlySave: (name, plan) => authenticatedFetch(`/api/skillwhet/nightly/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(plan) }),
+    checkpoint: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/checkpoint`),
+    jobResume: (id) => authenticatedFetch(`/api/skillwhet/jobs/${encodeURIComponent(id)}/resume`, { method: 'POST', body: '{}' }),
+    provenance: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/provenance`),
+    ledger: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/ledger`),
+  },
+  // gy:对话里的反馈(👍/👎 与效果调查卡)。
+  sessionFeedback: {
+    list: (sessionId) => authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/feedback`),
+    set: (sessionId, messageId, payload) => authenticatedFetch(
+      `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/feedback`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+    remove: (sessionId, messageId) => authenticatedFetch(
+      `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/feedback`,
+      { method: 'DELETE' },
+    ),
+  },
   renameProject: (projectId, displayName) =>
     authenticatedFetch(`/api/projects/${projectId}/rename`, {
       method: 'PUT',

@@ -1,10 +1,16 @@
 import { useEffect, useReducer, useRef } from 'react';
 
+import { pushAccountSettings } from '../utils/accountSettings';
+
 type UiPreferences = {
   showRawParameters: boolean;
   showThinking: boolean;
   sendByCtrlEnter: boolean;
   sidebarVisible: boolean;
+  /** gy:调过 skill 的回合结束后要不要问「效果如何」。服务端按这个键决定弹不弹。 */
+  skillSurveyEnabled: boolean;
+  /** hc:技能优化页自己的「SKILL STUDIO」导航开合(左轨那颗开合按钮在技能优化页管的是它,不是项目侧栏)。 */
+  skillNavVisible: boolean;
 };
 
 type UiPreferenceKey = keyof UiPreferences;
@@ -35,9 +41,20 @@ const DEFAULTS: UiPreferences = {
   showThinking: true,
   sendByCtrlEnter: false,
   sidebarVisible: true,
+  skillSurveyEnabled: true,
+  skillNavVisible: true,
 };
 
 const PREFERENCE_KEYS = Object.keys(DEFAULTS) as UiPreferenceKey[];
+/**
+ * hl(动态 P2-8):改了就要推到账号的键。
+ *
+ * 「技能效果询问」开关服务端也读(`user_ui_settings.uiPreferences.skillSurveyEnabled`,
+ * 决定弹不弹调查卡),此前 setPreference 只写 localStorage、不 push,关了照弹。
+ * 侧栏 / 技能导航开合是**本机布局态**,随页签切换频繁写,不值得每次打接口
+ * (动态报告 P3 也点名"侧栏开合偏好随 tab 切换写服务端"会让另一端的侧栏消失)。
+ */
+const ACCOUNT_SYNCED_PREFERENCE_KEYS = new Set<UiPreferenceKey>(['skillSurveyEnabled', 'showRawParameters', 'showThinking', 'sendByCtrlEnter']);
 const VALID_KEYS = new Set<UiPreferenceKey>(PREFERENCE_KEYS); // prevents unknown keys from being written
 const SYNC_EVENT = 'ui-preferences:sync';
 
@@ -151,6 +168,8 @@ export function useUiPreferences(storageKey = 'uiPreferences') {
   );
 
   const hasPersistedRef = useRef(false);
+  /** 本实例上一次 setPreference 改的是不是要同步到账号的键;写完 localStorage 再推。 */
+  const pendingAccountPushRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -177,6 +196,11 @@ export function useUiPreferences(storageKey = 'uiPreferences') {
     }
 
     localStorage.setItem(storageKey, JSON.stringify(state));
+    if (pendingAccountPushRef.current) {
+      pendingAccountPushRef.current = false;
+      // 落盘之后再推:pushAccountSettings 读的是 localStorage 里那份。
+      void pushAccountSettings();
+    }
 
     window.dispatchEvent(
       new CustomEvent<SyncEventDetail>(SYNC_EVENT, {
@@ -234,6 +258,7 @@ export function useUiPreferences(storageKey = 'uiPreferences') {
   }, [storageKey]);
 
   const setPreference = (key: UiPreferenceKey, value: unknown) => {
+    if (ACCOUNT_SYNCED_PREFERENCE_KEYS.has(key)) pendingAccountPushRef.current = true;
     dispatch({ type: 'set', key, value });
   };
 

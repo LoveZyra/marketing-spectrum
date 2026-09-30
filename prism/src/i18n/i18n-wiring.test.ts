@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 import { beforeAll, describe, test } from 'vitest';
 
-import i18n, { initI18n, resolveInitialLanguage, setLanguagePreference } from './config.js';
+import i18n, { initI18n, resolveInitialLanguage, setLanguagePreference, whenFallbackReady } from './config.js';
 import { languagesIn, loadResource, namespacesIn, resourceIndex } from './resource-registry';
 
 const FALLBACK_LANGUAGE = 'en';
@@ -37,6 +37,8 @@ const loadFlat = async (language: string, namespace: string) =>
 describe('i18next serves the translations that exist on disk', () => {
   beforeAll(async () => {
     await initI18n();
+    // hl:en 现在是 init 之后后台补挂的(首屏只装当前语言),这里等它到位再断言回退。
+    await whenFallbackReady();
   });
 
   /**

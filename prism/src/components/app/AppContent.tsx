@@ -88,8 +88,6 @@ function AppContentInner() {
   const { preferences: uiPreferences, setPreference } = useUiPreferences();
   // ee:预览最大化期间,项目侧栏也收起(不写偏好,还原即回到用户自己的开合状态)。
   const [editorMaximized, setEditorMaximized] = useState(false);
-  // 折叠后只留图标轨:侧栏与它的外层边框一起不渲染
-  const isSidebarCollapsed = !isMobile && (!uiPreferences.sidebarVisible || editorMaximized);
 
   const {
     processingSessions,
@@ -194,13 +192,36 @@ function AppContentInner() {
     }
   }, [navigate, refreshProjectsSilently, sessionDeleteTarget, sessionId, tSidebar]);
 
-  const lastAutoCollapseTabRef = useRef(activeTab);
+  // 折叠后只留图标轨:侧栏与它的外层边框一起不渲染。
+  // hc:技能优化是全局页面(不挂在项目下),项目 / 会话侧栏在那里没有用处 —— 一律不渲染;
+  // 左轨的开合按钮在那一页改管技能优化自己的导航(见 AppRail)。
+  // hh:Notebook 同理 —— JupyterLab 的文件树从 home 起,自带文件浏览器,不看当前项目;项目栏在那一页只占地方。
+  //
+  // hl(动态 P3 轮询 / 偏好):原来切标签页就 `setPreference('sidebarVisible', tab === 'chat')` ——
+  // 这个偏好随 uiPreferences 同步到账号,于是**另一台设备**停在文件页,会让本机聊天页刷新后
+  // 侧栏消失。现在:聊天页跟着持久化的偏好(只有用户在聊天页亲手开合才写);其他页默认收起,
+  // 在那一页里开合只改本地状态、不落盘,换页即复位。
+  const [offChatSidebarOpen, setOffChatSidebarOpen] = useState(false);
+  const lastSidebarTabRef = useRef(activeTab);
   useEffect(() => {
-    if (isMobile) return;
-    if (lastAutoCollapseTabRef.current === activeTab) return;
-    lastAutoCollapseTabRef.current = activeTab;
-    setPreference('sidebarVisible', activeTab === 'chat');
-  }, [activeTab, isMobile, setPreference]);
+    if (lastSidebarTabRef.current === activeTab) return;
+    lastSidebarTabRef.current = activeTab;
+    setOffChatSidebarOpen(false);
+  }, [activeTab]);
+  const sidebarOpenHere = activeTab === 'chat' ? uiPreferences.sidebarVisible : offChatSidebarOpen;
+  const toggleSidebarHere = useCallback(() => {
+    if (activeTab === 'chat') {
+      setPreference('sidebarVisible', !uiPreferences.sidebarVisible);
+      return;
+    }
+    // Sidebar 自己也读这个偏好(为假时整棵不画):在别的页亲手「展开」而偏好是收着的,
+    // 这是用户的明确意图,顺带把偏好也打开 —— 只有这一种情况会在非聊天页写偏好。
+    if (!offChatSidebarOpen && !uiPreferences.sidebarVisible) setPreference('sidebarVisible', true);
+    setOffChatSidebarOpen((open) => !open);
+  }, [activeTab, offChatSidebarOpen, setPreference, uiPreferences.sidebarVisible]);
+
+  const isSidebarCollapsed = !isMobile && (!sidebarOpenHere || editorMaximized
+    || activeTab === 'skillwhet' || activeTab === 'notebook');
 
   // Queued messages for sessions that finish while another session (or none)
   // is being viewed are sent from here; the viewed session's composer handles
@@ -247,12 +268,36 @@ function AppContentInner() {
     void refreshRunningSessions();
   }, [refreshRunningSessions]);
 
+  // hl(动态 P3 轮询):5 秒一次的 /sessions/running 原来不看页面可见性 —— 后台标签页整天在打。
+  // 不可见时停;回到前台立刻补一次再恢复周期。
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      void refreshRunningSessions();
-    }, 5000);
+    let interval: number | null = null;
+    const start = () => {
+      if (interval !== null) return;
+      interval = window.setInterval(() => {
+        void refreshRunningSessions();
+      }, 5000);
+    };
+    const stop = () => {
+      if (interval === null) return;
+      window.clearInterval(interval);
+      interval = null;
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        stop();
+      } else {
+        void refreshRunningSessions();
+        start();
+      }
+    };
 
-    return () => window.clearInterval(interval);
+    if (document.visibilityState !== 'hidden') start();
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, [refreshRunningSessions]);
 
   // 「在 JupyterLab 打开」:编辑器里的按钮通过 paletteOps 走到这里 ——
@@ -307,6 +352,8 @@ function AppContentInner() {
           setActiveTab={setActiveTab}
           onShowSettings={openSettings}
           pendingApprovalCount={pendingApprovalCount}
+          sidebarOpen={sidebarOpenHere}
+          onToggleSidebar={toggleSidebarHere}
         />
       )}
       {/*

@@ -1,0 +1,8 @@
+{
+ "runner": "pytest",
+ "defects": [
+  "ValueError on '#' lines (crash, frame in scripts)",
+  "TypeError on None (crash)"
+ ],
+ "notes": "two independent crash defects; both must land in one round"
+}

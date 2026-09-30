@@ -36,7 +36,10 @@
     "clearSearch": "Очистить поиск",
     "openCommandPalette": "Открыть палитру команд",
     "attentionRequiredIndicator": "Сессия требует внимания",
-    "approvalPendingIndicator": "Ожидает вашего разрешения на инструмент"
+    "approvalPendingIndicator": "Ожидает вашего разрешения на инструмент",
+    "hideSkillNav": "Hide skill navigation",
+    "showSkillNav": "Show skill navigation",
+    "noSidebarOnNotebook": "No project sidebar on the Notebook page"
   },
   "actions": {
     "settings": "Настройки",

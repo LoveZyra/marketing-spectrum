@@ -37,6 +37,7 @@ import {
 import { CLAUDE_FALLBACK_MODELS } from './modules/providers/list/claude/claude-models.provider.js';
 import { providerModelsService } from './modules/providers/services/provider-models.service.js';
 import { resolveClaudeCodeExecutablePath } from './shared/claude-cli-path.js';
+import { usernameKey } from './shared/root-users.js';
 import {
   createNotificationEvent,
   notifyRunFailed,
@@ -146,7 +147,8 @@ export function readForcedDenyTools(env = process.env) {
 export function readBypassAllowlist(env = process.env) {
   const raw = env.PRISM_ALLOW_BYPASS_USERS;
   if (typeof raw !== 'string' || !raw.trim()) return null;
-  return new Set(raw.split(',').map((name) => name.trim().toLowerCase()).filter(Boolean));
+  // hj:与 isRootUser 同一个比对键(只折 ASCII,与 COLLATE NOCASE 逐字同口径)。
+  return new Set(raw.split(',').map((name) => usernameKey(name)).filter(Boolean));
 }
 
 export function describeBypassUnderRoot(permissionMode) {
@@ -700,6 +702,8 @@ function mapCliOptionsToSDK(options = {}, stderrTail = null) {
   };
 
   sdkOptions.settingSources = ['project', 'user', 'local'];
+  // hl(09-24 P2-17):一次性路径也吃自动压缩旋钮(与常驻路径同一个函数)。
+  applyCompactSettings(sdkOptions);
   /**
    * ge:**子代理的完整对话要转发过来 —— 卡片里那条嵌套时间轴靠它。**
    *
@@ -877,21 +881,81 @@ function resolveContextWindowTokens(runtime, sdkMessage) {
  * `usage.routes.ts` 里那个 `parseTokenUsageTotals` 名字叫 Totals 其实取的是最后一条,
  * 别照着它写。
  */
-function createUsageAccumulator() {
-  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, model: null };
+export function createUsageAccumulator() {
+  return {
+    inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, model: null,
+    // hj:子代理那部分单独再记一份 —— result 帧的汇总只含主循环,子代理的调用不在里面。
+    subagent: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+  };
 }
 
 /** 把一条 SDK 消息里的 usage 累加进去。不是 assistant 消息就原样返回。 */
-function accumulateUsage(accumulator, sdkMessage) {
+export function accumulateUsage(accumulator, sdkMessage) {
   if (!accumulator || !sdkMessage || typeof sdkMessage !== 'object') return;
   const usage = sdkMessage.message?.usage;
   if (!usage || typeof usage !== 'object') return;
+  // hj:一次 API 调用有几个内容块(文字 + 工具调用),CLI 就吐几条 assistant 消息,带的是
+  // **同一份** usage(同一个 message.id)。按 id 只记第一次,否则一次调用算两三遍。
+  const messageId = sdkMessage.message?.id;
+  if (typeof messageId === 'string' && messageId) {
+    if (!accumulator.seenMessageIds) accumulator.seenMessageIds = new Set();
+    if (accumulator.seenMessageIds.has(messageId)) return;
+    accumulator.seenMessageIds.add(messageId);
+  }
   accumulator.inputTokens += readNumber(usage.input_tokens ?? usage.inputTokens);
   accumulator.outputTokens += readNumber(usage.output_tokens ?? usage.outputTokens);
   accumulator.cacheReadTokens += readNumber(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens);
   accumulator.cacheCreationTokens += readNumber(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens);
+  if (sdkMessage.parent_tool_use_id && accumulator.subagent) {
+    const sub = accumulator.subagent;
+    sub.inputTokens += readNumber(usage.input_tokens ?? usage.inputTokens);
+    sub.outputTokens += readNumber(usage.output_tokens ?? usage.outputTokens);
+    sub.cacheReadTokens += readNumber(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens);
+    sub.cacheCreationTokens += readNumber(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens);
+  }
   const model = sdkMessage.message?.model ?? sdkMessage.model;
   if (typeof model === 'string' && model) accumulator.model = model;
+}
+
+/**
+ * hj:用 result 帧上这一轮的用量汇总覆盖逐条累加的值(result 没带用量时保留累加值)。说明见函数体注释。
+ */
+export function mergeResultUsage(accumulator, resultMessage) {
+  if (!accumulator) return accumulator;
+  // hj:**这一轮的 token 数以 result 帧的汇总为准**;result 帧没带用量时才退回逐条累加的值。
+  //
+  // 逐条累加(`accumulateUsage`)在我们这套网关下两头都错:
+  // - **少记**:`includePartialMessages = false` 时,CLI 在内容块结束时就把 assistant 消息吐出来,
+  //   那时 `message.usage` 还是 message_start 的快照;网关把 output_tokens(以及大多数时候的
+  //   input_tokens)放在 message_delta 里,到的时候那条消息已经发出去了 —— 台账的「输出」从 fg
+  //   起整列是 0,「输入」大半是 0(用户在「用量与费用」里看到的);
+  // - **多记**:一次 API 调用有几个内容块(文字 + 工具调用)就吐几条 assistant 消息,
+  //   它们带的是**同一份** usage,逐条相加会把一次调用算两三遍。
+  // result 帧的 `usage` 是 CLI 在每次 message_stop 时累加出来的这一轮汇总,两个问题都没有。
+  //
+  // **它是这一轮的,不是会话累计**(与 total_cost_usd 不同):对照随包 CLI 核过 —— 每次提问
+  // `new <QueryEngine>({...})`,构造器里 `totalUsage` 归零,submitMessage 里只在 message_stop
+  // 累加。所以直接用,不做差分。
+  const totals = resultMessage?.usage;
+  if (totals && typeof totals === 'object') {
+    const fromResult = {
+      inputTokens: readNumber(totals.input_tokens ?? totals.inputTokens),
+      outputTokens: readNumber(totals.output_tokens ?? totals.outputTokens),
+      cacheReadTokens: readNumber(totals.cache_read_input_tokens ?? totals.cacheReadInputTokens),
+      cacheCreationTokens: readNumber(totals.cache_creation_input_tokens ?? totals.cacheCreationInputTokens),
+    };
+    const sum = fromResult.inputTokens + fromResult.outputTokens + fromResult.cacheReadTokens + fromResult.cacheCreationTokens;
+    if (sum > 0) {
+      // 子代理的调用不进主循环的 totalUsage,把逐条累加的子代理部分补上(它同样可能偏少,
+      // 但总比整段丢掉强;子代理的费用本来就在 total_cost_usd 里,费用列不受影响)。
+      const sub = accumulator.subagent ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+      accumulator.inputTokens = fromResult.inputTokens + sub.inputTokens;
+      accumulator.outputTokens = fromResult.outputTokens + sub.outputTokens;
+      accumulator.cacheReadTokens = fromResult.cacheReadTokens + sub.cacheReadTokens;
+      accumulator.cacheCreationTokens = fromResult.cacheCreationTokens + sub.cacheCreationTokens;
+    }
+  }
+  return accumulator;
 }
 
 /**
@@ -903,6 +967,7 @@ function accumulateUsage(accumulator, sdkMessage) {
 function recordTurnUsage(accumulator, resultMessage, context) {
   try {
     if (!accumulator) return;
+    mergeResultUsage(accumulator, resultMessage);
     const costCumulative = readNumber(resultMessage?.total_cost_usd ?? resultMessage?.totalCostUsd);
     // 一条 token 都没有、也没有费用 —— 空轮(比如立刻被中止),不记。
     const hasTokens = accumulator.inputTokens + accumulator.outputTokens
@@ -1103,6 +1168,40 @@ async function loadMcpConfig(cwd) {
  * @param {Object|null} runEntry - Gateway run registry entry (abort-by-runId)
  * @returns {Promise<void>}
  */
+/**
+ * hl(动态 P1-1):**一次性回合要把成败告诉调用方。**
+ *
+ * 此前 `queryClaudeSDKOnce` 无论如何都正常 resolve(`undefined`):SDK / CLI 抛错被
+ * catch 后只往 writer 发一帧 error;result 帧的 `is_error` 也只影响 complete 帧的
+ * exitCode。而定时任务(`scheduled-tasks.service`)与外部 Agent API 拿的是
+ * **promise**,不是 writer —— 于是模型名不存在、网关 400、超出轮次上限,任务
+ * 一律记 `completed`,5 分钟重试 / 连续 3 次停手 / 失败通知从来没生效过。
+ *
+ * 现在一次性路径返回这个对象;常驻路径不动(它的调用方读 writer)。
+ *
+ * @typedef {{ ok: boolean, exitCode: 0|1, aborted: boolean, error: string|null, sessionId: string|null }} OneShotOutcome
+ */
+function oneShotOutcome({ ok, aborted = false, error = null, sessionId = null }) {
+  return { ok, exitCode: ok ? 0 : 1, aborted, error: ok ? null : (error || (aborted ? '回合被中止' : '回合失败')), sessionId };
+}
+
+/**
+ * result 帧里"业务失败"的原因文案。SDK 的失败 result 有三种形状:`is_error` +
+ * `result` 字符串(API 错误原文)、`subtype: 'error_max_turns'` 之类不带正文、
+ * 以及 `errors: string[]`。都取不到就用 subtype 兜底 —— 运行记录里至少要有一个词。
+ */
+export function describeOneShotResultError(message) {
+  if (!message || typeof message !== 'object') return null;
+  const isError = Boolean(message.is_error)
+    || (typeof message.subtype === 'string' && message.subtype !== 'success');
+  if (!isError) return null;
+  if (typeof message.result === 'string' && message.result.trim()) return message.result.trim();
+  if (Array.isArray(message.errors) && message.errors.length > 0) {
+    return message.errors.map((entry) => String(entry)).join('; ');
+  }
+  return typeof message.subtype === 'string' ? message.subtype : 'result is_error';
+}
+
 async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
   const { sessionId, sessionSummary } = options;
   let capturedSessionId = sessionId;
@@ -1125,7 +1224,7 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
     || Boolean(runEntry?.aborted);
   if (abortedBeforeStart) {
     log.info(`[Claude SDK] 回合在起跑前已被中止,不再启动(session=${sessionId || 'NEW'})`);
-    return;
+    return oneShotOutcome({ ok: false, aborted: true, sessionId: sessionId || null });
   }
 
   /**
@@ -1329,7 +1428,7 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
      */
     if ((sessionId ? abortedSessionIds.delete(sessionId) : false) || runEntry?.aborted) {
       log.info(`[Claude SDK] 回合在准备期间被中止,不再启动 SDK(session=${sessionId || 'NEW'})`);
-      return;
+      return oneShotOutcome({ ok: false, aborted: true, sessionId: sessionId || null });
     }
 
     try {
@@ -1410,6 +1509,8 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
     const oneShotStartedAt = Date.now();
     /** fj:result 帧报告的业务失败(见下面赋值处)。 */
     let oneShotResultIsError = false;
+    /** hl(动态 P1-1):失败原因原文,随 outcome 交给调用方记进运行记录。 */
+    let oneShotResultError = null;
 
     // Process streaming messages
     log.info('Starting async generator loop for session:', capturedSessionId || 'NEW');
@@ -1483,8 +1584,8 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
          * 被 CLI 侧拒绝)。于是"模型没做完"和"模型做完了"对调用方(外部 API 的
          * 同步响应、定时任务的运行记录)长得一模一样,失败被记成成功。
          */
-        oneShotResultIsError = Boolean(message.is_error)
-          || (typeof message.subtype === 'string' && message.subtype !== 'success');
+        oneShotResultError = describeOneShotResultError(message);
+        oneShotResultIsError = oneShotResultError !== null;
         recordTurnUsage(oneShotUsage, message, {
           // fj:同上 —— app 会话 id 优先(`options.runId` 就是它)。
           sessionId: (typeof options.runId === 'string' && options.runId)
@@ -1532,7 +1633,14 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
       sessionName: sessionSummary,
       stopReason: wasAborted ? 'aborted' : (oneShotResultIsError ? 'failed' : 'completed'),
     });
-    // Complete
+    // hl(动态 P1-1):成败随返回值上抛 —— writer 上的帧只有浏览器在看,
+    // 定时任务与外部 API 看的是这个。
+    return oneShotOutcome({
+      ok: !wasAborted && !oneShotResultIsError,
+      aborted: wasAborted,
+      error: oneShotResultError,
+      sessionId: capturedSessionId || sessionId || null,
+    });
 
   } catch (error) {
     // stderr 一起打出来 —— 单独一句 "exited with code 1" 在日志里定位不了任何东西。
@@ -1548,7 +1656,7 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
     if (wasAborted) {
       // The abort already produced the terminal complete; a generator throw
       // caused by interrupt() is expected noise, not a user-facing error.
-      return;
+      return oneShotOutcome({ ok: false, aborted: true, sessionId: capturedSessionId || sessionId || null });
     }
 
     // Check if Claude CLI is installed for a clearer error message
@@ -1566,6 +1674,14 @@ async function queryClaudeSDKOnce(command, options = {}, ws, runEntry = null) {
       sessionId: capturedSessionId || sessionId || null,
       sessionName: sessionSummary,
       error
+    });
+    // hl(动态 P1-1):此前这里正常 resolve —— 调用方把"CLI 起不来 / 模型名不存在"
+    // 全记成了成功。改成带 exitCode 的失败结果(不 reject:一次性路径的调用方
+    // 已经有 `.finally` 收尾,reject 会让 `chat.send` 的网关路径多出一个未处理拒绝)。
+    return oneShotOutcome({
+      ok: false,
+      error: errorContent,
+      sessionId: capturedSessionId || sessionId || null,
     });
   }
 }
@@ -1834,6 +1950,40 @@ const AUTO_COMPACT_WINDOW = (() => {
   const parsed = parseInt(process.env.PRISM_AUTO_COMPACT_WINDOW, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 })();
+
+/**
+ * 把自动压缩的两个旋钮写进 `options.settings`。
+ *
+ * hl(09-24 P2-17):此前这段只写在 `buildPersistentSdkOptions` 里 —— 定时任务、
+ * 外部 Agent API、常驻失败后的一次性回退走的是 `mapCliOptionsToSDK`,那条路上
+ * `PRISM_AUTO_COMPACT` / `PRISM_AUTO_COMPACT_WINDOW` 一个都不生效,CLI 用自己的默认。
+ * 抽成一个函数两路共用,旋钮才是"部署级"的。
+ *
+ * ⚠️ **这两个字段属于 `Settings`,不属于 `Options`** —— 必须走 `options.settings`。
+ * gt 里直接写成 `sdkOptions.autoCompactEnabled`,SDK **静默忽略**,两个旋钮都是死的。
+ *
+ *   sdk.d.ts  autoCompactWindow?: number    → interface Settings
+ *   sdk.d.ts  autoCompactEnabled?: boolean  → interface Settings
+ *   sdk.d.ts  settings?: string | Settings  → type Options   ← 入口在这
+ *
+ * `settings` 是"flag 层",优先级在 user/project/local 之上、managed policy 之下 ——
+ * 正是运维旋钮该在的位置。有 `settings-shape.test.js` 盯着这几条。
+ */
+function applyCompactSettings(sdkOptions) {
+  const compactSettings = {};
+  if (!AUTO_COMPACT_ENABLED) compactSettings.autoCompactEnabled = false;
+  if (AUTO_COMPACT_WINDOW) compactSettings.autoCompactWindow = AUTO_COMPACT_WINDOW;
+  if (Object.keys(compactSettings).length > 0) {
+    // 已经有 settings 就合并;是路径字符串(string | Settings)就不动它,只警告 ——
+    // 悄悄把用户指定的 settings 文件换成对象,比旋钮失效更糟。
+    if (typeof sdkOptions.settings === 'string') {
+      log.warn('[Claude SDK] options.settings 是路径字符串,自动压缩旋钮这次不生效:', sdkOptions.settings);
+    } else {
+      sdkOptions.settings = { ...(sdkOptions.settings || {}), ...compactSettings };
+    }
+  }
+  return sdkOptions;
+}
 /**
  * 常驻运行时上限 —— **整台服务器**的,不是每人的。
  *
@@ -1928,6 +2078,8 @@ function beginCompaction(runtime, turn, { trigger, blocking }) {
     trigger, blocking, startedAtMs: Date.now(), beat: 0, lastBeatAtMs: 0,
     stallAfterMs: stallThresholdFor(turn),
   };
+  // hl(09-24 P2-19):压缩阶段用自己的(更短的)静默上限,现在就切过去。
+  if (runtime?.turn === turn) armIdleWatchdog(runtime, turn);
   turn.ws?.send(createCompactionStatus(runtime.sessionId, {
     phase: 'running',
     trigger,
@@ -1949,8 +2101,13 @@ function beginCompaction(runtime, turn, { trigger, blocking }) {
  */
 function stallThresholdFor(turn) {
   const idleMs = turn?.watchdog?.idleMs;
-  if (!Number.isFinite(idleMs) || idleMs <= 0) return 45_000;
-  return Math.max(15_000, Math.round(idleMs / 2));
+  // hl(09-24 P2-19):压缩阶段有自己的静默上限(默认 3 分钟),提示在它的一半出声;
+  // 此前跟着用户回合的 60 分钟走,"CLI 没有响应"要等 30 分钟才说。
+  const effectiveIdle = Number.isFinite(idleMs) && idleMs > 0
+    ? (COMPACTION_IDLE_TIMEOUT_MS > 0 ? Math.min(idleMs, COMPACTION_IDLE_TIMEOUT_MS) : idleMs)
+    : (COMPACTION_IDLE_TIMEOUT_MS > 0 ? COMPACTION_IDLE_TIMEOUT_MS : 0);
+  if (effectiveIdle <= 0) return 45_000;
+  return Math.max(15_000, Math.round(effectiveIdle / 2));
 }
 
 /**
@@ -1964,6 +2121,12 @@ function endCompaction(runtime, turn, { ok, error }) {
   if (!turn?.compaction) return;
   const state = turn.compaction;
   turn.compaction = null;
+  // hl 复核:status 帧先收尾时,CLI 随后还会吐一帧 compact_boundary —— 记下来,
+  // 让边界帧只补日志、不再把压缩态重新点亮(见读循环)。
+  turn.compactionAwaitingBoundary = true;
+  // hl(09-24 P2-19):压缩结束,静默看门狗恢复用户回合的预算(回合本身已结束时
+  // 调用方紧接着 clearTurnTimers,这里武装的计时器会被一并撤掉)。
+  if (runtime?.turn === turn) armIdleWatchdog(runtime, turn);
   const durationMs = state.durationMs ?? (Date.now() - state.startedAtMs);
   const kind = ok ? 'ok' : classifyCompactError(error);
   // 没真压的那几种不更新"上次用时"—— 拿一次空操作当参照,下次的"比平常久"就废了。
@@ -2041,40 +2204,31 @@ function readTurnWatchdogConfig(env = process.env) {
 const TURN_WATCHDOG = readTurnWatchdogConfig();
 
 /**
- * 维护回合(自动压缩)的预算 —— 和用户回合**分开**。
+ * hl(09-24 P2-19):**压缩阶段的静默上限**,和用户回合的 idle 看门狗**分开**。
  *
- * 用户回合里跑一条一小时的 SQL 是正常的,所以那套是 idle 一小时、绝对上限默认关闭、
- * 工具在途容忍 24 小时。把压缩也套进这套参数,后果就是压缩一旦卡住,一小时内
- * 没有任何东西会来救 —— 线上真出现过界面"正在压缩"转了二十分钟。
+ * gt 把压缩交还给 CLI 之后,它发生在用户回合内部、吃用户回合的预算:idle 60 分钟。
+ * 用户回合里跑一小时的 SQL 是正常的,但压缩是一次总结调用,正常几十秒;卡住之后
+ * 界面"正在压缩"要转 30 分钟才提示、60 分钟才有人来救。
  *
- * idle 指的是**流上多久没动静**(每来一条流消息就重置),不是压缩总耗时:
- *   - idle 90s:压缩是对接近满窗的上下文做一次总结调用,首 token 出来之前流上
- *     是安静的,几十秒的首字延迟可能出现;90s 留足余量。
- *   - 绝对 5min:压缩正常是几十秒的事,跑过 5 分钟基本断定它帮不上忙,不如放弃、
- *     带着未压缩的上下文继续跑用户那一回合(调用处 catch 里就是这个降级语义)。
- * 两个都要:只有 idle 会被"慢吞吞一直吐东西"绕过,只有绝对上限又太粗、
- * 真死了也得等满 5 分钟。
+ * 这里只在 `turn.compaction` 亮着的那段把静默上限收紧(默认 15 分钟,
+ * `PRISM_COMPACT_TIMEOUT_MS` 覆盖,0 关闭);压缩帧一到(成功 / 失败 / 被拦)就恢复
+ * 用户回合的预算。
+ *
+ * ⚠️ 常驻路径 `includePartialMessages = false`,CLI 压缩期间**只在开始和结束各发一帧,
+ * 没有保活帧** —— 所以这个"静默上限"实际就是**压缩总时长上限**。默认不能太小:
+ * 180k 上下文经网关压缩超过 5 分钟是真实会发生的(方案_上下文压缩超时与重入_20260915),
+ * 上限一砍 runtime 就销毁,下一条 resume 又压、又被砍,死循环。15 分钟既远大于
+ * 正常压缩,又比用户回合的 60 分钟早得多地救回一个真卡死的压缩。
+ *
+ * gt 之前那套 `MAINTENANCE_WATCHDOG` / `internal` 维护回合已经删干净(hl 09-24 P3):
+ * 没有任何回合再传 `internal: true`,**别再把压缩塞回独立回合** —— 那正是
+ * 2026-09-15 事故的机理(见 AUTO_COMPACT_ENABLED 的说明)。
  */
-function readMaintenanceWatchdogConfig(env = process.env) {
-  const idleParsed = parseInt(env.PRISM_COMPACT_IDLE_TIMEOUT_MS, 10);
-  const absoluteParsed = parseInt(env.PRISM_COMPACT_TIMEOUT_MS, 10);
-  return {
-    idleMs: Number.isFinite(idleParsed) && idleParsed >= 0 ? idleParsed : 90 * 1000,
-    absoluteMs: Number.isFinite(absoluteParsed) && absoluteParsed >= 0 ? absoluteParsed : 5 * 60 * 1000,
-    // 维护回合不该有工具在途,所以没有"工具静默"这一档。
-    toolSilenceMaxMs: 0,
-  };
+export function readCompactionIdleTimeout(env = process.env) {
+  const parsed = parseInt(env.PRISM_COMPACT_TIMEOUT_MS, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 15 * 60 * 1000;
 }
-/**
- * gt 起**没有任何回合再传 `internal: true`** —— Prism 自己那两处压缩(维护窗口、
- * 发送前兜底)都删了,压缩归 CLI 且发生在用户回合内部,用的是 TURN_WATCHDOG。
- *
- * 这份配置与 `internal` 参数一并保留:`internal` 是"这一轮不属于用户"的通用概念,
- * 将来再有维护类回合仍然要它。**但别再把压缩塞回来** —— 90s 的 idle 在
- * `includePartialMessages = false` 下测不出"活着",只会把慢压缩误杀,
- * 这正是 2026-09-15 那次事故的机理(见 AUTO_COMPACT_ENABLED 的说明)。
- */
-const MAINTENANCE_WATCHDOG = readMaintenanceWatchdogConfig();
+const COMPACTION_IDLE_TIMEOUT_MS = readCompactionIdleTimeout();
 
 /**
  * 这个 runtime 现在能不能接新活。
@@ -2087,7 +2241,17 @@ const MAINTENANCE_WATCHDOG = readMaintenanceWatchdogConfig();
 export function runtimeIsIdle(runtime) {
   if (!runtime || runtime.disposed) return false;
   if (runtime.turn) return false;
-  return runtime.pendingToolUses.size === 0;
+  /**
+   * hl(09-24 P2-18):**CLI 自己发起的那一轮也算忙。**
+   *
+   * `orphanTurnOpen` 是 gb/gh 加的:后台子代理完成通知、会话内定时触发,CLI 会在
+   * 两个用户回合之间自己跑一轮,帧走无主路径(routeOrphanMessage)。那段时间
+   * `turn` 是 null、`pendingToolUses` 可能也是空的(工具在子代理那张表里),
+   * 按旧判据它就是"闲的" —— 名额淘汰 / 空闲回收 / 终端接管释放都会把它杀掉,
+   * 那一轮的输出就此消失。
+   */
+  if (runtime.orphanTurnOpen) return false;
+  return (runtime.pendingToolUses?.size ?? 0) === 0;
 }
 
 /**
@@ -2588,7 +2752,7 @@ export function applyServerToolPolicy(mode, disallowedTools, actorUsername, allo
 
   const bypassAllowlist = readBypassAllowlist();
   const mayBypass = bypassAllowlist === null
-    || bypassAllowlist.has(String(actorUsername ?? '').trim().toLowerCase());
+    || bypassAllowlist.has(usernameKey(actorUsername));
 
   if (effectiveMode === 'bypassPermissions' && !mayBypass) {
     log.warn(
@@ -2748,18 +2912,7 @@ function buildPersistentSdkOptions(options, runtime) {
    * 正是运维旋钮该在的位置:压得过 `~/.claude/settings.json` 里的用户偏好。
    * 有 `settings-shape.test.js` 盯着这三条,SDK 换版把字段挪走就会变红。
    */
-  const compactSettings = {};
-  if (!AUTO_COMPACT_ENABLED) compactSettings.autoCompactEnabled = false;
-  if (AUTO_COMPACT_WINDOW) compactSettings.autoCompactWindow = AUTO_COMPACT_WINDOW;
-  if (Object.keys(compactSettings).length > 0) {
-    // 已经有 settings 就合并;是路径字符串(string | Settings)就不动它,只警告 ——
-    // 悄悄把用户指定的 settings 文件换成对象,比旋钮失效更糟。
-    if (typeof sdkOptions.settings === 'string') {
-      log.warn('[Claude SDK] options.settings 是路径字符串,自动压缩旋钮这次不生效:', sdkOptions.settings);
-    } else {
-      sdkOptions.settings = { ...(sdkOptions.settings || {}), ...compactSettings };
-    }
-  }
+  applyCompactSettings(sdkOptions);
   /**
    * ge:**子代理的完整对话要转发过来 —— 卡片里那条嵌套时间轴靠它。**
    *
@@ -3035,7 +3188,7 @@ async function readPersistentRuntime(runtime) {
       const taskRowInTurn = taskLifecycleMessage(message, runtime.sessionId || null);
       if (taskRowInTurn) {
         touchTurnActivity(runtime, turn);
-        if (!turn.internal) turn.ws.send(taskRowInTurn);
+        turn.ws.send(taskRowInTurn);
         continue;
       }
 
@@ -3063,13 +3216,20 @@ async function readPersistentRuntime(runtime) {
       if (message.type === 'system' && message.subtype === 'status') {
         if (message.status === 'compacting') {
           // 回合中途 CLI 自己压 = 用户正等着它,blocking。
-          beginCompaction(runtime, turn, { trigger: 'auto', blocking: !turn.internal });
+          beginCompaction(runtime, turn, { trigger: 'auto', blocking: true });
         }
         if (message.compact_result) {
           endCompaction(runtime, turn, {
             ok: message.compact_result === 'success',
             error: message.compact_error || null,
           });
+        } else if (message.status === null && turn.compaction) {
+          /**
+           * hl 复核:PreCompact hook 拦下压缩时,CLI 只发 `status: null`、不带
+           * `compact_result`。不收尾的话压缩态一直亮到回合结束,剩余回合都按
+           * 压缩上限走。按"取消"收尾(classifyCompactError → skipped,不报失败)。
+           */
+          endCompaction(runtime, turn, { ok: false, error: 'Compaction canceled' });
         }
       }
 
@@ -3078,12 +3238,24 @@ async function readPersistentRuntime(runtime) {
        * 而 pre/post token 与耗时全在里面,是"压缩到底做成了什么"的唯一硬数据。
        */
       if (message.type === 'system' && message.subtype === 'compact_boundary') {
-        turn.sawCompactBoundary = true;
         const meta = message.compact_metadata || {};
-        beginCompaction(runtime, turn, {
-          trigger: meta.trigger === 'manual' ? 'manual' : 'auto',
-          blocking: !turn.internal,
-        });
+        /**
+         * hl 复核:边界帧 = 压缩**已经完成**。CLI 通常先发 `status{compact_result:'success'}`
+         * 再吐边界帧 —— 那时本回合的压缩已经收尾,原来这里无条件 begin 会把压缩态重新
+         * 点亮、一直亮到回合结束,剩余回合被按压缩上限计时。
+         * 现在:本回合已收过尾就只记日志不再 begin;还亮着(或完全没有 status 帧)就补
+         * 元数据并立即收尾。
+         */
+        // "收过尾、还欠一帧边界"只对**紧挨着的那次**压缩成立;消费掉就清,
+        // 同一回合里后面再有一次只带边界帧的压缩照常 begin → end。
+        const alreadyEnded = !turn.compaction && Boolean(turn.compactionAwaitingBoundary);
+        turn.compactionAwaitingBoundary = false;
+        if (!alreadyEnded) {
+          beginCompaction(runtime, turn, {
+            trigger: meta.trigger === 'manual' ? 'manual' : 'auto',
+            blocking: true,
+          });
+        }
         if (turn.compaction) {
           // status 帧先到时只能标 auto;边界元数据才知道是不是用户手打的。
           if (meta.trigger === 'manual' && turn.compaction.trigger === 'auto') {
@@ -3094,6 +3266,9 @@ async function readPersistentRuntime(runtime) {
           if (post) turn.compaction.postTokens = post;
           const duration = readNumber(meta.duration_ms);
           if (duration) turn.compaction.durationMs = duration;
+          // 边界帧就是完成信号:立即收尾,静默看门狗回到用户回合预算。
+          endCompaction(runtime, turn, { ok: true });
+          turn.compactionAwaitingBoundary = false;
         }
         /*
          * gt:**压缩的硬数据落一行日志。**
@@ -3118,10 +3293,6 @@ async function readPersistentRuntime(runtime) {
       const sid = runtime.sessionId || null;
       const normalized = sessionsService.normalizeMessage('claude', transformedMessage, sid);
       for (const msg of normalized) {
-        // Internal turns (the auto-/compact turn) stay invisible to the UI:
-        // only errors may surface. Session-id capture, context/token
-        // bookkeeping, and result handling still run for these turns.
-        if (turn.internal && msg.kind !== 'error') continue;
         if (transformedMessage.parentToolUseId && !msg.parentToolUseId) {
           msg.parentToolUseId = transformedMessage.parentToolUseId;
         }
@@ -3135,13 +3306,11 @@ async function readPersistentRuntime(runtime) {
        * 整个子代理运行期间一直闪。记账(accumulateUsage)照旧 —— 那是真花的钱。
        */
       const tokenBudgetData = message?.parent_tool_use_id ? null : extractTokenBudget(message, runtime);
-      if (tokenBudgetData && !turn.internal) {
+      if (tokenBudgetData) {
         turn.ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: sid, provider: 'claude' }));
       }
 
-      // fg:累加要**包括 internal 回合**(自动压缩)。压缩是真花钱的,
-      // 界面上不显示不等于账上不该有 —— 恰恰相反,"为什么这个月贵了"
-      // 很可能答案就是压缩跑得多。
+      // fg:逐条累加(含 CLI 在回合内自动压缩那几次调用 —— 压缩是真花钱的)。
       accumulateUsage(turn.usage, message);
 
       if (isTurnResult(message)) {
@@ -3169,9 +3338,9 @@ async function readPersistentRuntime(runtime) {
           userId: runtime.ownerUserId ?? null,
           username: runtime.actorUsername ?? null,
           model: runtime.currentModel ?? null,
-          // 压缩单独一档。它是真花钱的,而且"这个月为什么贵了"的答案
-          // 很可能就是压缩跑得多 —— 混进 chat 里就永远看不出来。
-          source: turn.internal ? 'compact' : 'chat',
+          // hl(09-24 P3):压缩归 CLI、发生在用户回合内部之后,`source:'compact'`
+          // 这一档再也没有产生过 —— 常驻路径的账一律是 chat。
+          source: 'chat',
           durationMs: Date.now() - turn.startedAtMs,
         });
         finishPersistentTurn(runtime, { resultMessage: message });
@@ -3240,8 +3409,15 @@ function touchTurnActivity(runtime, turn) {
  */
 function armIdleWatchdog(runtime, turn) {
   const budget = turn.watchdog || TURN_WATCHDOG;
-  if (budget.idleMs <= 0) return;
+  // hl(09-24 P2-19):压缩进行中用压缩阶段自己的静默上限(取两者较小;用户回合
+  // 的 idle 关着时也照样用压缩上限)。压缩帧一到就会重新武装回用户预算。
+  const compacting = Boolean(turn.compaction) && COMPACTION_IDLE_TIMEOUT_MS > 0;
+  const idleMs = compacting
+    ? (budget.idleMs > 0 ? Math.min(budget.idleMs, COMPACTION_IDLE_TIMEOUT_MS) : COMPACTION_IDLE_TIMEOUT_MS)
+    : budget.idleMs;
   if (turn.idleTimer) clearTimeout(turn.idleTimer);
+  turn.idleTimer = null;
+  if (idleMs <= 0) return;
   turn.idleTimer = setTimeout(() => {
     if (runtime.turn !== turn) return; // result arrived in the meantime
     // 在途工具挂在 runtime 上(见读循环里的说明),这里跟着读那一份。
@@ -3252,13 +3428,13 @@ function armIdleWatchdog(runtime, turn) {
           `Claude turn had a tool call pending with no activity for ${Math.round(silenceMs / 3600000)}h (abandoned approval or lost tool result); the session runtime was restarted`);
         return;
       }
-      // 维护回合的 toolSilenceMaxMs 是 0:它本就不该有工具在途,续期即可。
       armIdleWatchdog(runtime, turn);
       return;
     }
-    fireTurnTimeout(runtime, turn,
-      `Claude ${turn.internal ? 'maintenance' : ''} turn produced no output for ${Math.round(budget.idleMs / 1000)}s; the session runtime was restarted`);
-  }, budget.idleMs);
+    fireTurnTimeout(runtime, turn, compacting
+      ? `Claude context compaction produced no output for ${Math.round(idleMs / 1000)}s; the session runtime was restarted (the next message continues with the uncompacted context)`
+      : `Claude turn produced no output for ${Math.round(idleMs / 1000)}s; the session runtime was restarted`);
+  }, idleMs);
   turn.idleTimer.unref?.();
 }
 
@@ -3469,7 +3645,10 @@ export function orderRuntimesForEviction(runtimes, exceptKey) {
      * 用户的回合因为**别人**的一次发送而降级或失败。
      */
     .filter((runtime) => runtime.key !== exceptKey
-      && !runtime.turn
+      // hl(09-24 P2-18):此前只看 `!runtime.turn` —— 回合刚被中止但 Bash 还在跑、
+      // 或 CLI 正跑自己那一轮(orphanTurnOpen)的 runtime 会被当空闲杀掉。
+      // "闲"的定义全链路只有 runtimeIsIdle 一份。
+      && runtimeIsIdle(runtime)
       // 预占**有时效**:领走后若因异常没能开跑也没能清标记,超过这个窗口就
       // 重新可淘汰,免得一个失败的发送把名额永久钉死。
       && !(runtime.claimedAt && Date.now() - runtime.claimedAt < CLAIM_STALE_MS))
@@ -3766,7 +3945,7 @@ async function runtimeForSend(options) {
 }
 
 /** Runs one turn on a resident runtime and resolves when its result arrives. */
-async function runPersistentTurn(runtime, { command, images, cwd, imageRoots = [], ws, sessionSummary, isNewSession, internal = false, compactionTrigger = null }) {
+async function runPersistentTurn(runtime, { command, images, cwd, imageRoots = [], ws, sessionSummary, isNewSession, compactionTrigger = null }) {
   if (runtime.turn) throw new Error('A turn is already running for this session');
   // 回合结束不等于 CLI 闲下来了:上一回合可能是被中止/超时收掉的,而它起的
   // Bash 还在跑。这时候往 runtime.input 里推东西,消息只会排在那个工具后面 ——
@@ -3788,10 +3967,8 @@ async function runPersistentTurn(runtime, { command, images, cwd, imageRoots = [
     ws,
     sessionSummary,
     isNewSession,
-    internal,
     capturedSessionId: runtime.sessionId || null,
     sessionCreatedSent: false,
-    sawCompactBoundary: false,
     /** 这一回合正在进行的压缩(见 beginCompaction);不在压缩时为 null。 */
     compaction: null,
     // B8:回合起点与"输入已递交给 CLI"标志。回退重放的安全性判断要用 ——
@@ -3808,9 +3985,8 @@ async function runPersistentTurn(runtime, { command, images, cwd, imageRoots = [
     sawFrame: false,
     /** fg:这一回合的 token 累加器。见 createUsageAccumulator。 */
     usage: createUsageAccumulator(),
-    // 这一回合用哪套预算。维护回合(自动压缩)走短预算,和用户回合分开 ——
-    // 用户回合里跑一小时的 SQL 正常,压缩跑一小时是卡死了。
-    watchdog: internal ? MAINTENANCE_WATCHDOG : TURN_WATCHDOG,
+    // 这一回合的预算(压缩阶段另有更短的静默上限,见 armIdleWatchdog)。
+    watchdog: TURN_WATCHDOG,
     lastStreamActivityAt: Date.now(),
     idleTimer: null,
     absoluteTimer: null,
@@ -3865,13 +4041,13 @@ async function runPersistentTurn(runtime, { command, images, cwd, imageRoots = [
   // Prism 自己推的 `/compact`:不等 CLI 的 status 帧,立刻点亮 —— 那一帧要等
   // CLI 真的开始压才来,中间那段空白正是用户以为"点了没反应"的地方。
   if (compactionTrigger) {
-    beginCompaction(runtime, turn, { trigger: compactionTrigger, blocking: !internal });
+    beginCompaction(runtime, turn, { trigger: compactionTrigger, blocking: true });
   }
   if (turn.watchdog.absoluteMs > 0) {
     turn.absoluteTimer = setTimeout(() => {
       if (runtime.turn !== turn) return; // result arrived in the meantime
       fireTurnTimeout(runtime, turn,
-        `Claude ${turn.internal ? 'maintenance ' : ''}turn exceeded the absolute cap of ${Math.round(turn.watchdog.absoluteMs / 1000)}s; the session runtime was restarted`);
+        `Claude turn exceeded the absolute cap of ${Math.round(turn.watchdog.absoluteMs / 1000)}s; the session runtime was restarted`);
     }, turn.watchdog.absoluteMs);
     turn.absoluteTimer.unref?.();
   }
@@ -3944,16 +4120,9 @@ function sendContextUsageEvent(ws, sessionId, usage, runtime = null) {
       outputTokens: 0,
       contextExact: true,
       breakdown: { input: usage.totalTokens, output: 0 },
-      /*
-       * 分母是**自动压缩的触发线**(CLI 的 autoCompactWindow),不是模型窗口 ——
-       * 越过它是正常且预期的状态,所以百分比会出现 ≥100%。
-       *
-       * gt:这里原来送的是 Prism 自己那条 0.8 的线;Prism 不再自己压之后,
-       * 过线的定义就是 CLI 的那条 —— 也就是 `total` 本身,比值 1。
-       * 真模型窗口一并送过去,界面想解释"还有多少余量"时用得上。
-       */
-      autoCompactRatio: 1,
-      rawTotal: usage.rawMaxTokens ?? undefined,
+      // 分母 `total` 是**自动压缩的触发线**(CLI 的 autoCompactWindow),不是模型
+      // 窗口 —— 越过它是正常且预期的状态,所以百分比会出现 ≥100%。
+      // (hl 09-24 P3:原来还带 `autoCompactRatio:1` / `rawTotal`,前端没有消费者,删。)
     },
     sessionId: sessionId || null,
     provider: 'claude',
@@ -3985,8 +4154,8 @@ function scheduleContextUsageBackfill(runtime, ws) {
 }
 
 /**
- * Persistent-mode implementation of one chat turn, including 80% high-water
- * auto-compact. The native session id never changes across compaction.
+ * Persistent-mode implementation of one chat turn. Compaction is owned by the
+ * CLI and happens inside the turn; the native session id never changes across it.
  */
 async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = null) {
   const { sessionId, sessionSummary } = options;
@@ -4041,13 +4210,8 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
     return { sessionId: sid };
   };
 
-  /*
-   * gt:**发送前的自动压缩已经删掉。**
-   *
-   * 它原本是"从上个进程恢复出来、一上来占比就过线"的兜底,推一轮 `internal` 的
-   * `/compact` 挡在用户消息前面。现在压缩归 CLI —— 上下文真过线时它会在这一轮里
-   * 自己压,走用户回合的预算,不会被那个 90s 杀掉,也不占额外的一轮。
-   */
+  // gt:发送前 / 回合后的自动压缩都已删掉 —— 压缩归 CLI,在用户回合内部发生
+  // (压缩阶段的静默上限见 armIdleWatchdog)。
 
   // Abort may also land between chat.send and the first input push (the
   // runId registry makes that window abortable) — bail out before running.
@@ -4077,28 +4241,10 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
   let usage = await readRuntimeContextUsage(runtime);
   sendContextUsageEvent(ws, finalSessionId || sessionId || null, usage, runtime);
 
-  /*
-   * gt:**维护窗口的压缩已经删掉。**
-   *
-   * 它原本是"回合答完、CLI 闲着时顺手压一次",初衷是不占用户等待时间 ——
-   * 但它跑在 `internal` 回合里,而 `includePartialMessages = false` 下压缩
-   * 全程无帧,于是那道 idle 90s 变成了压缩的总预算,必然超时;超时后占比没降,
-   * 下一回合结束又来一次。结果是**每答完一条就白等 90 秒,还压不成**。
-   *
-   * 现在这件事归 CLI:它会在自己该压的时候、在用户回合内部压,
-   * 走用户回合的预算。上面那次 `readRuntimeContextUsage` + `sendContextUsageEvent`
-   * 仍然保留 —— 用量环要的是真值,与谁压无关。
-   */
-
-  // 压缩期间用户可能按了停止 —— 那就按中止收尾,别再发 complete。
-  //
-  // du:`delete` 必须放在 `||` 的**左边**(与上面 wasAborted 同一写法)。
-  // 反过来时,只要 runEntry.aborted 为真就短路,标记永远留在 abortedSessionIds
-  // 里 —— 该会话的**下一条消息**一进来就被 wasRunAborted 命中,直接按中止收尾:
-  // 不推给 CLI、不发 error、不发 complete,用户的气泡发出去石沉大海。
-  const abortedFlagConsumed = finalSessionId ? abortedSessionIds.delete(finalSessionId) : false;
-  const abortedDuringMaintenance = abortedFlagConsumed || Boolean(runEntry?.aborted);
-  if (!wasAborted && !abortedDuringMaintenance) {
+  // hl(09-24 P3):这里原来还有第二次 `abortedSessionIds.delete(finalSessionId)`
+  // (维护窗口压缩期间的中止判定)—— 上面 wasAborted 已经消费过标记,它恒为 false;
+  // 维护窗口本身也已删掉。
+  if (!wasAborted) {
     ws.send(createCompleteMessage({ provider: 'claude', sessionId: finalSessionId || sessionId || null, exitCode: resultMessage?.is_error ? 1 : 0 }));
   }
   notifyRunStopped({
@@ -4106,7 +4252,7 @@ async function queryClaudeSDKPersistent(command, options = {}, ws, runEntry = nu
     provider: 'claude',
     sessionId: finalSessionId || sessionId || null,
     sessionName: sessionSummary,
-    stopReason: (wasAborted || abortedDuringMaintenance) ? 'aborted' : 'completed',
+    stopReason: wasAborted ? 'aborted' : 'completed',
   });
 
   return { sessionId: finalSessionId || sessionId || null };
@@ -4342,14 +4488,16 @@ async function userTurnReachedTranscript(options, sinceMs) {
 async function runOneShotFallback(command, options, ws, runEntry, degradeNotice) {
   const budget = MAX_RUNTIMES + MAX_ONESHOT_OVERFLOW;
   if (claudeRuntimes.size + activeOneShotFallbacks >= budget) {
+    const content = '并发会话已满，请稍候再试';
     ws.send(createNormalizedMessage({
       kind: 'error',
-      content: '并发会话已满，请稍候再试',
+      content,
       sessionId: options.sessionId || null,
       provider: 'claude',
     }));
     ws.send(createCompleteMessage({ provider: 'claude', sessionId: options.sessionId || null, exitCode: 1 }));
-    return;
+    // hl(动态 P1-1):名额满也是失败,定时任务要记 failed 并按重试规则走。
+    return oneShotOutcome({ ok: false, error: content, sessionId: options.sessionId || null });
   }
   if (degradeNotice) {
     // Same channel as the auto-compact notice: a transient one-line status.
@@ -4363,7 +4511,7 @@ async function runOneShotFallback(command, options, ws, runEntry, degradeNotice)
   }
   activeOneShotFallbacks += 1;
   try {
-    await queryClaudeSDKOnce(command, options, ws, runEntry);
+    return await queryClaudeSDKOnce(command, options, ws, runEntry);
   } finally {
     activeOneShotFallbacks -= 1;
   }
@@ -4381,7 +4529,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
   const runEntry = { aborted: false, runtime: null, queryInstance: null };
   if (runId) activeChatRuns.set(runId, runEntry);
   try {
-    await queryClaudeSDKDispatch(command, options, ws, runEntry);
+    // hl(动态 P1-1):一次性路径(`options.oneShot`)返回 OneShotOutcome;
+    // 常驻路径仍返回 undefined —— 它的调用方(网关)只看 writer。
+    return await queryClaudeSDKDispatch(command, options, ws, runEntry);
   } finally {
     // Identity-checked: never delete a newer run's registration.
     if (runId && activeChatRuns.get(runId) === runEntry) activeChatRuns.delete(runId);
@@ -4407,7 +4557,10 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
       provider: 'claude',
     }));
     ws.send(createCompleteMessage({ provider: 'claude', sessionId: options.sessionId || null, exitCode: 1 }));
-    return;
+    // hl(动态 P1-1):一次性调用方要拿到失败;常驻路径的调用方不看返回值,不受影响。
+    return options.oneShot
+      ? oneShotOutcome({ ok: false, error: bypassProblem, sessionId: options.sessionId || null })
+      : undefined;
   }
 
   const usePersistent = PERSISTENT_ENABLED && !options.oneShot;
@@ -4461,6 +4614,8 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
 
   // -------- run the turn --------
   let turnOutcome = null;
+  /** hl(动态 P1-1):一次性路径的成败,最后作为返回值交给调用方。 */
+  let oneShotResult;
   if (loopSpec) {
     try {
       turnOutcome = await runAgentLoop(loopSpec, options, ws, runEntry);
@@ -4516,7 +4671,7 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
         // Resident pool full of busy runtimes: degrade WITHIN the overflow
         // budget (with a visible notice) or fail fast when it is exhausted.
         log.warn('[Claude SDK] Runtime pool full, attempting budgeted one-shot fallback:', message);
-        await runOneShotFallback(command, options, ws, runEntry, true);
+        oneShotResult = await runOneShotFallback(command, options, ws, runEntry, true);
       } else if (
         error?.prismInputDelivered
         // 侦察要的是 provider 原生会话 id。网关传进来的 options 里叫 `sessionId`,
@@ -4535,7 +4690,7 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
         ws.send(createCompleteMessage({ provider: 'claude', sessionId: options.sessionId || null, exitCode: 1 }));
       } else {
         log.warn('[Claude SDK] Persistent turn failed, falling back to one-shot mode:', message);
-        await runOneShotFallback(command, options, ws, runEntry, false);
+        oneShotResult = await runOneShotFallback(command, options, ws, runEntry, false);
       }
     }
   } else {
@@ -4544,7 +4699,7 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
     // queryClaudeSDKOnce 等于绕开 MAX_RUNTIMES+overflow 的全局并发预算 ——
     // API 流量可以无上限打出上百个进程,仅剩 IP 限流兜底。
     // degradeNotice=false:这不是降级,不发"已降级"提示,只做配额与计数。
-    await runOneShotFallback(command, options, ws, runEntry, false);
+    oneShotResult = await runOneShotFallback(command, options, ws, runEntry, false);
   }
 
   // -------- post-turn changed-files summary --------
@@ -4580,6 +4735,9 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
       pruneCheckpoints().catch(() => {});
     }
   }
+
+  // hl(动态 P1-1):只有一次性路径有返回值(见 queryClaudeSDKOnce 上方的说明)。
+  return oneShotResult;
 }
 
 /* ------------------------------------------------------------------ */
@@ -4589,7 +4747,17 @@ async function queryClaudeSDKDispatch(command, options, ws, runEntry) {
 const idleReaper = setInterval(() => {
   const now = Date.now();
   for (const runtime of claudeRuntimes.values()) {
-    if (!runtime.turn && now - runtime.lastUsed > IDLE_RUNTIME_MS) {
+    // hl(09-24 P2-18):按 runtimeIsIdle 判闲(在途工具 / CLI 自发的一轮都算忙);
+    // 回收器另看子代理那张在途表 —— 子代理跑着时 lastUsed 照样在刷,但要防的正是
+    // "主代理一帧没发、全在子代理里干活"这种半小时静默。
+    const subagentBusy = (runtime.subagentToolUses?.size ?? 0) > 0;
+    const idleFor = now - runtime.lastUsed;
+    // 兜底:没有回合、却因为丢失的 tool_result 或没收尾的自发一轮永远"忙"着的
+    // runtime,静默超过工具静默硬顶(默认 24h)也回收 —— 不让名额被僵尸永久钉住。
+    const zombie = !runtime.turn
+      && TURN_WATCHDOG.toolSilenceMaxMs > 0
+      && idleFor > TURN_WATCHDOG.toolSilenceMaxMs;
+    if ((runtimeIsIdle(runtime) && !subagentBusy && idleFor > IDLE_RUNTIME_MS) || zombie) {
       disposePersistentRuntime(runtime).catch(() => {});
     }
   }
@@ -4672,8 +4840,6 @@ export function mergeRefusalReason(runtime, command, options = {}) {
    * **整批既不广播也不落库**。退回排队,drain 会在 complete 之后正常起新一轮。
    */
   if (!runtime.turn) return 'no-turn';
-  // 维护回合(自动压缩)正在重写这段对话的上下文,不是插话的时候。
-  if (runtime.turn.internal) return 'maintenance-turn';
   /**
    * gh:**发送者必须就是这个 runtime 的主人,策略档位也要一致。**
    *
@@ -4824,7 +4990,9 @@ async function releaseClaudeSession(sessionId) {
 
   const runtime = claudeRuntimes.get(sessionId);
   if (!runtime || runtime.disposed) return { released: true, reason: 'not_resident' };
-  if (runtime.turn) return { released: false, reason: 'turn_in_flight' };
+  // hl(09-24 P2-18):在途工具 / CLI 自发的一轮都算"有回合在飞"—— 此前只看
+  // `runtime.turn`,终端接管会在 Bash 还在跑、或后台子代理正回报时把 CLI 杀掉。
+  if (!runtimeIsIdle(runtime)) return { released: false, reason: 'turn_in_flight' };
 
   try {
     await disposePersistentRuntime(runtime);
@@ -4913,7 +5081,6 @@ export {
   // 导出** —— 纯 ESM 直读这份源码会 SyntaxError。tsc 编译时静默去重了,所以
   // 一直没露馅(线上跑的是编译产物)。
   cancelPendingApprovalsForSession,
-  readMaintenanceWatchdogConfig,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
   disposeAllRuntimes,

@@ -97,6 +97,12 @@ export default defineConfig(({ mode }) => {
             const localeMatch = /[\\/]src[\\/]i18n[\\/]locales[\\/]([^\\/]+)[\\/]/.exec(id)
             if (localeMatch) return `locale-${localeMatch[1]}`
 
+            // hl(P3 首屏 / 09-24 审计 P3):rollup 的 CommonJS 互操作助手是个**虚拟模块**
+            // (`\0commonjsHelpers.js`),不在 node_modules 下 —— 下面那条 vendor-helpers 规则
+            // 管不到它,于是它按"谁先够到"被折进了 vendor-markdown,vendor-react 反过来 import
+            // vendor-markdown,登录页就得先下 450KB 的 markdown + KaTeX。放进小小的 helpers 块。
+            if (id.includes('commonjsHelpers')) return 'vendor-helpers'
+
             if (!id.includes('node_modules')) return undefined
             // Must come first. These are one-line interop helpers (`_extends`,
             // `_objectWithoutPropertiesLoose`, tslib's `__awaiter`) that many

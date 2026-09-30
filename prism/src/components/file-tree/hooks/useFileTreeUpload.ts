@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { IS_PLATFORM } from '../../../constants/config';
 import type { Project } from '../../../types/app';
@@ -13,11 +14,17 @@ import {
   MAX_FILE_UPLOAD_TOTAL_LABEL,
 } from '../constants/constants';
 import { formatFileSize } from '../utils/fileTreeUtils';
+import { describeFileServerError } from '../utils/serverErrorText';
 
 type UseFileTreeUploadOptions = {
   selectedProject: Project | null;
   onRefresh: () => void;
-  showToast: (message: string, type: 'success' | 'error') => void;
+  showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
+  /**
+   * hl(动态 P2-12):上传前查一下树里有没有同名 —— 返回会被覆盖的相对路径列表。
+   * 由 FileTree 提供(它手里有整棵树);不传就只在上传后按服务端返回的 `overwritten` 提示。
+   */
+  findExisting?: (relativePaths: string[], targetPath: string) => string[];
 };
 
 export type FileTreeUploadProgressState = {
@@ -36,12 +43,12 @@ type UploadResponse = {
   files?: unknown[];
   uploadedCount?: number;
   requestedFileCount?: number;
+  /** hl(动态 P2-12):服务端落盘前查到的同名文件(相对目标目录)。 */
+  overwritten?: string[];
 };
 
 const COMPLETE_PROGRESS_CLEAR_DELAY_MS = 1400;
 const ERROR_PROGRESS_CLEAR_DELAY_MS = 3200;
-
-const pluralizeFiles = (count: number) => (count === 1 ? 'file' : 'files');
 
 const getRelativePath = (file: File) => {
   const fileWithRelativePath = file as File & { webkitRelativePath?: string };
@@ -53,14 +60,20 @@ const getFileDisplayName = (file: File) => {
   return relativePath.split(/[\\/]/).pop() || file.name;
 };
 
-const validateFilesForUpload = (files: File[]): string | null => {
-  if (files.length > MAX_FILE_UPLOAD_COUNT) {
-    return `You can upload up to ${MAX_FILE_UPLOAD_COUNT} files at once.`;
-  }
+type Translate = (key: string, options: Record<string, unknown> & { defaultValue: string }) => string;
 
+/**
+ * hl(P3 文件组):不再按「一次最多 20 个」整批拒绝 —— 超过的按 20 个一批分批发
+ * (见 uploadFiles)。这里只剩单文件与总量两道闸。
+ */
+const validateFilesForUpload = (files: File[], t: Translate): string | null => {
   const oversizedFile = files.find((file) => file.size > MAX_FILE_UPLOAD_SIZE_BYTES);
   if (oversizedFile) {
-    return `${getFileDisplayName(oversizedFile)} is larger than ${MAX_FILE_UPLOAD_SIZE_LABEL}.`;
+    return t('fileTree.upload.fileTooLarge', {
+      name: getFileDisplayName(oversizedFile),
+      limit: MAX_FILE_UPLOAD_SIZE_LABEL,
+      defaultValue: `「${getFileDisplayName(oversizedFile)}」超过单文件上限 ${MAX_FILE_UPLOAD_SIZE_LABEL}`,
+    });
   }
 
   // Every file can clear the per-file cap and the batch still be enormous, which
@@ -68,10 +81,23 @@ const validateFilesForUpload = (files: File[]): string | null => {
   // the message actionable — the user can see how much to drop.
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
   if (totalBytes > MAX_FILE_UPLOAD_TOTAL_BYTES) {
-    return `That selection is ${formatFileSize(totalBytes)}; uploads are limited to ${MAX_FILE_UPLOAD_TOTAL_LABEL} at a time.`;
+    return t('fileTree.upload.totalTooLarge', {
+      total: formatFileSize(totalBytes),
+      limit: MAX_FILE_UPLOAD_TOTAL_LABEL,
+      defaultValue: `这批文件共 ${formatFileSize(totalBytes)},一次上传最多 ${MAX_FILE_UPLOAD_TOTAL_LABEL}`,
+    });
   }
 
   return null;
+};
+
+/** 按服务端每请求的文件数上限切批。 */
+export const chunkUploadBatches = <T,>(files: T[], size = MAX_FILE_UPLOAD_COUNT): T[][] => {
+  const batches: T[][] = [];
+  for (let index = 0; index < files.length; index += size) {
+    batches.push(files.slice(index, index + size));
+  }
+  return batches;
 };
 
 const parseUploadResponse = (xhr: XMLHttpRequest): UploadResponse => {
@@ -86,12 +112,35 @@ const parseUploadResponse = (xhr: XMLHttpRequest): UploadResponse => {
   }
 };
 
-const formatUploadSuccessMessage = (uploadedCount: number, requestedFileCount: number) => {
+const formatUploadSuccessMessage = (uploadedCount: number, requestedFileCount: number, t: Translate) => {
   if (uploadedCount !== requestedFileCount) {
-    return `Uploaded ${uploadedCount} of ${requestedFileCount} ${pluralizeFiles(requestedFileCount)}`;
+    return t('fileTree.upload.partial', {
+      uploaded: uploadedCount,
+      total: requestedFileCount,
+      defaultValue: `已上传 ${uploadedCount} / ${requestedFileCount} 个文件`,
+    });
   }
 
-  return `Uploaded ${uploadedCount} ${pluralizeFiles(uploadedCount)} successfully`;
+  return t('fileTree.upload.success', {
+    uploaded: uploadedCount,
+    defaultValue: `已上传 ${uploadedCount} 个文件`,
+  });
+};
+
+/** hl(动态 P2-12):被覆盖的文件列表 → 一句提示(最多列 3 个,其余计数)。 */
+export const formatOverwrittenMessage = (overwritten: string[], t: Translate): string => {
+  const shown = overwritten.slice(0, 3).join('、');
+  const rest = overwritten.length - 3;
+  return rest > 0
+    ? t('fileTree.upload.overwrittenMany', {
+        names: shown,
+        rest,
+        defaultValue: `已覆盖同名文件:${shown},另有 ${rest} 个`,
+      })
+    : t('fileTree.upload.overwritten', {
+        names: shown,
+        defaultValue: `已覆盖同名文件:${shown}`,
+      });
 };
 
 const buildUploadFormData = (files: File[], targetPath: string) => {
@@ -262,6 +311,7 @@ const uploadFormDataWithProgress = (
       reject(new Error(payload.error || payload.message || `Upload failed with status ${xhr.status}`));
     };
 
+    // 文案在 uploadFiles 的 catch 里经 describeFileServerError 翻成界面语言。
     xhr.onerror = () => reject(new Error('Upload failed. Check your connection and try again.'));
     xhr.onabort = () => reject(new Error('Upload canceled.'));
 
@@ -363,7 +413,9 @@ export const useFileTreeUpload = ({
   selectedProject,
   onRefresh,
   showToast,
+  findExisting,
 }: UseFileTreeUploadOptions) => {
+  const { t } = useTranslation();
   const [isDragOver, setIsDragOver] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [operationLoading, setOperationLoading] = useState(false);
@@ -416,17 +468,35 @@ export const useFileTreeUpload = ({
       const fileName = files.length === 1 ? getFileDisplayName(files[0]) : undefined;
 
       if (!selectedProject) {
-        const message = 'Select a project before uploading files.';
+        const message = t('fileTree.upload.noProject', { defaultValue: '请先选择一个项目再上传' });
         showToast(message, 'error');
         setUploadError(message, files.length, targetPath, fileName);
         return;
       }
 
-      const validationError = validateFilesForUpload(files);
+      const validationError = validateFilesForUpload(files, t);
       if (validationError) {
         showToast(validationError, 'error');
         setUploadError(validationError, files.length, targetPath, fileName);
         return;
+      }
+
+      // hl(动态 P2-12):树里已经能看到同名的,先问一句再覆盖 —— 覆盖是不可逆的。
+      if (findExisting) {
+        const clashes = findExisting(files.map(getRelativePath), targetPath);
+        if (clashes.length > 0) {
+          const listed = clashes.slice(0, 5).join('\n');
+          const more = clashes.length > 5 ? `\n…` : '';
+          const confirmed = window.confirm(t('fileTree.upload.overwriteConfirm', {
+            count: clashes.length,
+            names: `${listed}${more}`,
+            defaultValue: `目标目录里已有 ${clashes.length} 个同名文件,上传会覆盖它们:\n${listed}${more}\n\n确定覆盖吗?`,
+          }));
+          if (!confirmed) {
+            setDropTarget(null);
+            return;
+          }
+        }
       }
 
       clearProgressTimer();
@@ -462,18 +532,21 @@ export const useFileTreeUpload = ({
 
         let uploadedCount = 0;
         let response: UploadResponse = {};
+        const overwritten: string[] = [];
 
-        if (smallFiles.length > 0) {
-          const smallBytes = smallFiles.reduce((sum, file) => sum + file.size, 0);
+        // hl(P3 文件组):服务端每请求最多 20 个,超过的分批发而不是整批拒。
+        for (const batch of chunkUploadBatches(smallFiles)) {
+          const batchBytes = batch.reduce((sum, file) => sum + file.size, 0);
           response = await uploadFormDataWithProgress(
             selectedProject.projectId,
-            buildUploadFormData(smallFiles, targetPath),
-            (progress) => reportBytes((smallBytes * progress) / 100),
+            buildUploadFormData(batch, targetPath),
+            (progress) => reportBytes((batchBytes * progress) / 100),
           );
           uploadedCount += typeof response.uploadedCount === 'number'
             ? response.uploadedCount
-            : response.files?.length ?? smallFiles.length;
-          completedBytes += smallBytes;
+            : response.files?.length ?? batch.length;
+          if (Array.isArray(response.overwritten)) overwritten.push(...response.overwritten);
+          completedBytes += batchBytes;
         }
 
         for (const file of largeFiles) {
@@ -486,6 +559,7 @@ export const useFileTreeUpload = ({
             (bytesSent) => { completedBytes = startedAt; reportBytes(bytesSent); },
           );
           uploadedCount += typeof one.uploadedCount === 'number' ? one.uploadedCount : 1;
+          if (Array.isArray(one.overwritten)) overwritten.push(...one.overwritten);
           completedBytes = startedAt + file.size;
           response = one;
         }
@@ -501,11 +575,19 @@ export const useFileTreeUpload = ({
           targetPath,
         });
 
-        showToast(formatUploadSuccessMessage(uploadedCount, requestedFileCount), 'success');
+        // hl(动态 P2-12):覆盖了同名文件就用 warning 列出来,而不是一句「上传完成」。
+        if (overwritten.length > 0) {
+          showToast(formatOverwrittenMessage(overwritten, t), 'warning');
+        } else {
+          showToast(formatUploadSuccessMessage(uploadedCount, requestedFileCount, t), 'success');
+        }
         scheduleProgressClear(COMPLETE_PROGRESS_CLEAR_DELAY_MS);
         onRefresh();
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Upload failed';
+        const message = describeFileServerError(
+          err instanceof Error ? err.message : t('fileTree.uploadFailed', { defaultValue: '上传失败' }),
+          t,
+        );
         console.error('Upload error:', err);
         showToast(message, 'error');
         setUploadError(message, files.length, targetPath, fileName, latestProgress);
@@ -516,11 +598,13 @@ export const useFileTreeUpload = ({
     },
     [
       clearProgressTimer,
+      findExisting,
       onRefresh,
       scheduleProgressClear,
       selectedProject,
       setUploadError,
       showToast,
+      t,
     ],
   );
 
@@ -564,14 +648,14 @@ export const useFileTreeUpload = ({
         const files = await collectDroppedFiles(e.dataTransfer);
         await uploadFiles(files, targetPath);
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Could not read dropped files';
+        const message = err instanceof Error ? err.message : t('fileTree.upload.readDropFailed', { defaultValue: '无法读取拖入的文件' });
         console.error('Upload error:', err);
         showToast(message, 'error');
         setUploadError(message, 0, targetPath);
         setDropTarget(null);
       }
     },
-    [dropTarget, setUploadError, showToast, uploadFiles],
+    [dropTarget, setUploadError, showToast, t, uploadFiles],
   );
 
   const handleItemDragOver = useCallback((e: DragEvent, itemPath: string) => {

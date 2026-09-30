@@ -1,0 +1,61 @@
+{
+ "format": "skillwhet.tasks.v1",
+ "tasks": [
+  {
+   "id": "d1",
+   "intent": "Does normalize_cell remove currency symbols such as $ or \u20ac from a cell value? Answer yes or no, then explain in one sentence.",
+   "reference_kind": "rubric",
+   "reference": "Says YES: currency symbols ($, \u20ac, \u00a3, \u00a5) are stripped by normalize_cell, in addition to collapsing whitespace.",
+   "split": "train"
+  },
+  {
+   "id": "d2",
+   "intent": "What does extract_tables return when the document contains no tables at all? Does it raise?",
+   "reference_kind": "rubric",
+   "reference": "Returns an empty list and does not raise on a table-free document.",
+   "split": "train"
+  },
+  {
+   "id": "d3",
+   "intent": "How does normalize_cell treat internal runs of whitespace inside a cell, e.g. 'a    b'?",
+   "reference_kind": "rubric",
+   "reference": "Runs of whitespace are collapsed to a single space and leading/trailing whitespace is stripped (so 'a    b' becomes 'a b').",
+   "split": "train"
+  },
+  {
+   "id": "d5",
+   "intent": "In the sidecar/text format extract_tables reads, what separates one table from the next?",
+   "reference_kind": "rubric",
+   "reference": "A blank line separates tables; consecutive non-blank lines are rows of the same table; cells are split on '|'.",
+   "split": "train"
+  },
+  {
+   "id": "d1v",
+   "intent": "If a cell contains '$ 12.50', what does normalize_cell return?",
+   "reference_kind": "rubric",
+   "reference": "'12.50' \u2014 the currency symbol is stripped and whitespace collapsed/trimmed.",
+   "split": "val"
+  },
+  {
+   "id": "d2v",
+   "intent": "I passed an empty file to extract_tables. What should I expect back?",
+   "reference_kind": "rubric",
+   "reference": "An empty list ([]), no exception.",
+   "split": "val"
+  },
+  {
+   "id": "d4v",
+   "intent": "Is normalize_cell idempotent, i.e. does applying it twice give the same result as once?",
+   "reference_kind": "rubric",
+   "reference": "Yes, idempotent: normalizing an already-normalized cell returns it unchanged.",
+   "split": "val"
+  },
+  {
+   "id": "gen_t",
+   "intent": "A cell reads '\u20ac 7,50' (note the euro sign). What exactly does normalize_cell return for it, and why?",
+   "reference_kind": "rubric",
+   "reference": "'7,50' \u2014 currency symbols (including \u20ac) are stripped and whitespace collapsed/trimmed; the answer should not claim the symbol is kept.",
+   "split": "test"
+  }
+ ]
+}

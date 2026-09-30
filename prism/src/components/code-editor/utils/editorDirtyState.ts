@@ -14,9 +14,28 @@
 
 let editorDirty = false;
 
+/**
+ * hl(P3 文件组):脏态也要**能订阅** —— 标签条(EditorTabs)要在活动标签上画 ●。
+ * 订阅方用 useSyncExternalStore;事件处理器里同步读一次的老用法不受影响。
+ */
+const listeners = new Set<() => void>();
+
 /** CodeEditor 每次脏态变化时同步进来;卸载时置 false。 */
 export function setEditorDirty(value: boolean): void {
+  if (editorDirty === value) return;
   editorDirty = value;
+  for (const listener of listeners) listener();
+}
+
+export function isEditorDirty(): boolean {
+  return editorDirty;
+}
+
+export function subscribeEditorDirty(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 /**
@@ -26,6 +45,6 @@ export function setEditorDirty(value: boolean): void {
 export function confirmDiscardEditorChanges(message: string): boolean {
   if (!editorDirty) return true;
   const discard = window.confirm(message);
-  if (discard) editorDirty = false;
+  if (discard) setEditorDirty(false);
   return discard;
 }

@@ -32,11 +32,11 @@ const __dirname = path.dirname(__filename);
  * to the legacy location inside the server/database/ folder.
  *
  * Priority:
- *   1. DATABASE_PATH environment variable (set by cli.js or load-env-vars.js)
+ *   1. DATABASE_PATH environment variable (set by server/load-env.js: the .env value, or ~/.prism/auth.db)
  *   2. Legacy path: server/database/auth.db
  */
 function resolveDatabasePath(): string {
-    // process.env.DATABASE_PATH is set by load-env-vars.js to either the .env value or a default(~/.prism/auth.db) in the user's home directory. 
+    // load-env.js 总会设 DATABASE_PATH(.env 的值或 ~/.prism/auth.db);走到 legacy 只剩直接 import 本模块的测试。
     return process.env.DATABASE_PATH || resolveLegacyDatabasePath();
 }
 
@@ -159,15 +159,6 @@ function applyPragmas(db: Database.Database): void {
 }
 
 /**
- * Writes a consistent snapshot of the database next to it and prunes old
- * ones. `VACUUM INTO` is used rather than copying the file because it takes
- * a read lock and produces a defragmented, fully-checkpointed copy — a raw
- * copy of a WAL-mode database without its -wal sidecar can be stale.
- *
- * Called on a daily timer from init-db.ts; retention is `keep` most-recent
- * files (default 7).
- */
-/**
  * 增量备份每批拷多少页。
  *
  * 100 页 × 4KB ≈ 400KB —— 单批的耗时远小于一帧预算,而批数够少,不至于让
@@ -175,69 +166,249 @@ function applyPragmas(db: Database.Database): void {
  */
 const BACKUP_PAGES_PER_STEP = 100;
 
-export async function backupDatabase(keep = 7): Promise<string | null> {
+/** 迁移前备份的文件名后缀。带这个后缀的不按日期裁剪,只留最近 PRE_MIGRATION_KEEP 份。 */
+export const PRE_MIGRATION_SUFFIX = '-pre-migration';
+
+/** 例行备份默认保留的天数。 */
+export const DEFAULT_BACKUP_KEEP_DAYS = 14;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export type BackupOptions = {
+  /** 例行备份按日期保留几天(每天只留最新一份)。默认 14;<= 0 表示不裁剪。 */
+  keepDays?: number;
+  /** 'pre-migration':文件名带 `-pre-migration` 后缀,不参与按日期裁剪(只按份数留最近几份)。 */
+  label?: 'pre-migration';
+  /** 注入时钟,给测试用。 */
+  now?: () => Date;
+};
+
+/**
+ * 迁移前备份保留最近几份。
+ *
+ * 它们不参与按日期裁剪(迁移事故可能几周后才被发现),但也不能无限留:指纹对 schema.ts 的
+ * 任何改动都敏感,每次带 schema 改动的发版都会多一份整库副本。5 份覆盖最近五次升级,
+ * 足够回到任何一次迁移之前;写死而不做成配置 —— 要更多的人手工 cp 到别的名字即可(不会被删)。
+ */
+export const PRE_MIGRATION_KEEP = 5;
+
+/**
+ * 从环境变量读例行备份的保留天数。
+ * `PRISM_DB_BACKUP_KEEP_DAYS` 优先;老名字 `PRISM_DB_BACKUP_KEEP`(hl 之前是"份数")
+ * 仍然认,按天数解释 —— 一天一份的情况下两者本来就相等,老 .env 不用改。
+ *
+ * hl 复核:**0、负数、认不出的值都按默认**,与旧实现 `parseInt(…) || 7` 同语义 —— 老配置
+ * `PRISM_DB_BACKUP_KEEP=0` 以前等于"默认份数",不能悄悄变成"永不裁剪"把盘写满。
+ * 想关掉备份用 `PRISM_DB_BACKUP=0`。
+ */
+export function backupKeepDaysFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+  for (const key of ['PRISM_DB_BACKUP_KEEP_DAYS', 'PRISM_DB_BACKUP_KEEP']) {
+    const raw = env[key];
+    if (raw === undefined || raw.trim() === '') continue;
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return DEFAULT_BACKUP_KEEP_DAYS;
+}
+
+/** 备份目录:数据库旁边的 backups/。 */
+export function resolveBackupDir(dbPath: string = resolveDatabasePath()): string {
+  return path.join(path.dirname(dbPath), 'backups');
+}
+
+/**
+ * 把数据库完整拷一份到旁边的 backups/ 目录,然后裁剪旧的。
+ *
+ * 用 `db.backup()` 而不是 `VACUUM INTO`,也不是直接拷文件:
+ *
+ * - 直接 cp 一个 WAL 模式的库,没带上 -wal 那份就是旧的。
+ * - `VACUUM INTO` 是 better-sqlite3 的同步 API,整份库拷完之前**事件循环一步都走不了**。
+ *   108MB 的库实测停 611ms;按现在的增长,1GB 就是每天卡 6 秒 —— 期间所有人的
+ *   WebSocket 帧、所有 HTTP 请求、所有定时任务一起停摆,而这只是一次例行备份。
+ * - `db.backup()` 是**增量**的:每次 `progress` 回调返回下一批要拷的页数,
+ *   两批之间事件循环能喘气。100 页一批,在 4KB 页大小下约 400KB —— 单批远小于
+ *   一帧的预算,拷 1GB 也不会让任何一次请求明显变慢。
+ *
+ * 代价是 `backup()` **不做碎片整理**(VACUUM 会),所以备份文件可能比源库略大。
+ * 对一份备份来说这不重要 —— 它是拿来恢复的,不是拿来省空间的。
+ *
+ * hl(静态 P1-14)加的三条:
+ *   1. **先写 `.tmp` 再 rename**:半截文件不会顶着 `.db` 的名字混进备份里(此前失败的
+ *      半截文件也占裁剪名额,还可能被当成一份好备份拿去恢复);
+ *   2. `label: 'pre-migration'` 的备份带后缀、不按日期裁剪(留最近 5 份)—— 由 init-db 在跑迁移前同步调;
+ *   3. 裁剪按**日期**(见 pruneBackups),不再按份数。
+ *
+ * 调用方:init-db 的两个定时器(例行)与 initializeDatabase(迁移前)。
+ */
+export async function backupDatabase(options: BackupOptions | number = {}): Promise<string | null> {
+  // 兼容旧签名 backupDatabase(keep: number):按天数解释。
+  const opts: BackupOptions = typeof options === 'number' ? { keepDays: options } : options;
+  const keepDays = opts.keepDays ?? DEFAULT_BACKUP_KEEP_DAYS;
+  const now = opts.now ?? (() => new Date());
+
   const dbPath = resolveDatabasePath();
   if (!fs.existsSync(dbPath)) return null;
 
-  const backupDir = path.join(path.dirname(dbPath), 'backups');
+  const backupDir = resolveBackupDir(dbPath);
   if (!fs.existsSync(backupDir)) {
     fs.mkdirSync(backupDir, { recursive: true });
   }
 
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const stamp = now().toISOString().replace(/[:.]/g, '-');
   const baseName = path.basename(dbPath, path.extname(dbPath));
-  const target = path.join(backupDir, `${baseName}-${stamp}.db`);
+  const suffix = opts.label === 'pre-migration' ? PRE_MIGRATION_SUFFIX : '';
+  const target = path.join(backupDir, `${baseName}-${stamp}${suffix}.db`);
+  const tmp = `${target}.tmp`;
 
   try {
     const db = getConnection();
     // 同一秒重试是空操作(目标文件已存在)。
     if (fs.existsSync(target)) return target;
+    if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
 
-    /**
-     * 用 `db.backup()` 而不是 `VACUUM INTO`。
-     *
-     * 两者都能产出一份完整副本,区别在**阻不阻塞**:
-     *
-     * - `VACUUM INTO` 是 better-sqlite3 的同步 API,整份库拷完之前**事件循环一步都走不了**。
-     *   108MB 的库实测停 611ms;按现在的增长,1GB 就是每天卡 6 秒 —— 期间所有人的
-     *   WebSocket 帧、所有 HTTP 请求、所有定时任务一起停摆,而这只是一次例行备份。
-     * - `db.backup()` 是**增量**的:每次 `progress` 回调返回下一批要拷的页数,
-     *   两批之间事件循环能喘气。100 页一批,在 4KB 页大小下约 400KB —— 单批远小于
-     *   一帧的预算,拷 1GB 也不会让任何一次请求明显变慢。
-     *
-     * 代价是 `backup()` **不做碎片整理**(VACUUM 会),所以备份文件可能比源库略大。
-     * 对一份备份来说这不重要 —— 它是拿来恢复的,不是拿来省空间的;而"每天卡几秒"
-     * 是所有人都能感觉到的。
-     *
-     * 返回 Promise 之后调用方(init-db 的两个定时器)也跟着不再阻塞。
-     */
-    await db.backup(target, {
+    await db.backup(tmp, {
       progress: ({ remainingPages }) => (remainingPages > 0 ? BACKUP_PAGES_PER_STEP : 0),
     });
-    pruneBackups(backupDir, baseName, keep);
+    fs.renameSync(tmp, target);
+    if (opts.label === 'pre-migration') prunePreMigrationBackups(backupDir, baseName);
+    else pruneBackups(backupDir, baseName, keepDays, now());
     return target;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log.error('Database backup failed', { error: message });
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* 半截文件删不掉也不影响主流程 */ }
     return null;
   }
 }
 
-/** Deletes all but the `keep` newest backups for the given database name. */
-function pruneBackups(backupDir: string, baseName: string, keep: number): void {
-  const entries = fs
-    .readdirSync(backupDir)
-    .filter((name) => name.startsWith(`${baseName}-`) && name.endsWith('.db'))
-    .sort()
-    .reverse();
+/**
+ * **同步**备份(hl,静态 P1-14 —— 只给"迁移前"那一份用)。
+ *
+ * 为什么不复用上面的增量 `db.backup()`:它是异步的,而 `initializeDatabase` 从头到迁移跑完
+ * 一直是同步的 —— 十几处测试与启动路径依赖"调用返回时表已经是新形状"。在迁移前插一个 await,
+ * 这些调用方就会在迁移跑完之前读表(fork-anchor-migration 测试就是这么红的)。
+ *
+ * 用 `VACUUM INTO`:同步、自带一致性(读事务里拷),产出的是整理过的完整副本。它会阻塞
+ * 事件循环 —— 但此刻服务还没开始监听,没有任何请求在等,阻塞正是我们想要的:迁移必须等它写完。
+ * 同样先写 `.tmp` 再 rename。
+ */
+export function backupDatabaseSync(options: Pick<BackupOptions, 'label' | 'now'> = {}): string | null {
+  const now = options.now ?? (() => new Date());
+  const dbPath = resolveDatabasePath();
+  if (!fs.existsSync(dbPath)) return null;
 
-  for (const stale of entries.slice(keep)) {
+  const backupDir = resolveBackupDir(dbPath);
+  const stamp = now().toISOString().replace(/[:.]/g, '-');
+  const baseName = path.basename(dbPath, path.extname(dbPath));
+  const suffix = options.label === 'pre-migration' ? PRE_MIGRATION_SUFFIX : '';
+  const target = path.join(backupDir, `${baseName}-${stamp}${suffix}.db`);
+  const tmp = `${target}.tmp`;
+
+  try {
+    fs.mkdirSync(backupDir, { recursive: true });
+    if (fs.existsSync(target)) return target;
+    if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+    getConnection().prepare('VACUUM INTO ?').run(tmp);
+    fs.renameSync(tmp, target);
+    prunePreMigrationBackups(backupDir, baseName);
+    return target;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error('Database backup failed', { error: message });
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* 半截文件删不掉也不影响主流程 */ }
+    return null;
+  }
+}
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** 备份文件名 → 它的日期(YYYY-MM-DD,取自文件名里的 ISO 时间戳);认不出返回 null。 */
+export function backupDateOf(fileName: string, baseName: string): string | null {
+  const match = new RegExp(`^${escapeRegExp(baseName)}-(\\d{4}-\\d{2}-\\d{2})T`).exec(fileName);
+  return match ? match[1] : null;
+}
+
+/** 迁移前备份只留最近 `keep` 份(见 PRE_MIGRATION_KEEP)。 */
+export function prunePreMigrationBackups(backupDir: string, baseName: string, keep = PRE_MIGRATION_KEEP): string[] {
+  const removed: string[] = [];
+  let names: string[];
+  try {
+    names = fs.readdirSync(backupDir);
+  } catch {
+    return removed;
+  }
+  const stale = names
+    .filter((name) => name.startsWith(`${baseName}-`) && name.endsWith(`${PRE_MIGRATION_SUFFIX}.db`))
+    .filter((name) => backupDateOf(name, baseName) !== null)
+    .sort()
+    .reverse()
+    .slice(Math.max(keep, 1));
+  for (const name of stale) {
     try {
-      fs.unlinkSync(path.join(backupDir, stale));
+      fs.unlinkSync(path.join(backupDir, name));
+      removed.push(name);
+    } catch { /* 删不掉不影响主流程 */ }
+  }
+  return removed;
+}
+
+/**
+ * 裁剪例行备份 —— **按日期**,不按份数(hl,静态 P1-14)。
+ *
+ * 此前是"只留最新 7 份":每次重启都备份,今天一天部署 8 次,前几天的快照全被挤掉,
+ * 而迁移事故恰恰要的是"迁移前那份"。现在:
+ *   · 带 `-pre-migration` 后缀的不按日期删,另由 prunePreMigrationBackups 只留最近 PRE_MIGRATION_KEEP 份;
+ *   · 其余按文件名里的日期分组,每天只留最新一份;
+ *   · 日期早于 `keepDays` 天前的整天删掉。`keepDays <= 0` 表示不裁剪。
+ *   · 顺带清掉超过 1 小时的 `.tmp` 半截文件(上一个进程写到一半被杀)。
+ *
+ * 只认自己的命名(`<base>-<ISO 时间戳>[-pre-migration].db`),别的文件一概不碰 ——
+ * 运维手工 cp 到这个目录里的备份不该被程序删掉。
+ */
+export function pruneBackups(backupDir: string, baseName: string, keepDays: number, now: Date = new Date()): string[] {
+  const removed: string[] = [];
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(backupDir);
+  } catch {
+    return removed;
+  }
+
+  const unlink = (name: string) => {
+    try {
+      fs.unlinkSync(path.join(backupDir, name));
+      removed.push(name);
     } catch {
       // A backup we cannot remove is not worth failing the run over.
     }
+  };
+
+  // 半截文件:超过 1 小时的 .tmp 一定不是正在写的那份。
+  for (const name of entries) {
+    if (!name.startsWith(`${baseName}-`) || !name.endsWith('.db.tmp')) continue;
+    try {
+      const ageMs = now.getTime() - fs.statSync(path.join(backupDir, name)).mtimeMs;
+      if (ageMs > 60 * 60 * 1000) unlink(name);
+    } catch { /* 已经没了 */ }
   }
+
+  if (!(keepDays > 0)) return removed;
+
+  const routine = entries
+    .filter((name) => name.startsWith(`${baseName}-`) && name.endsWith('.db') && !name.endsWith(`${PRE_MIGRATION_SUFFIX}.db`))
+    .filter((name) => backupDateOf(name, baseName) !== null)
+    .sort()
+    .reverse(); // 时间戳可排序:新的在前
+
+  const cutoff = new Date(now.getTime() - keepDays * DAY_MS).toISOString().slice(0, 10);
+  const seenDays = new Set<string>();
+  for (const name of routine) {
+    const day = backupDateOf(name, baseName)!;
+    if (day < cutoff) { unlink(name); continue; }
+    if (seenDays.has(day)) { unlink(name); continue; }
+    seenDays.add(day);
+  }
+  return removed;
 }
 
 /**

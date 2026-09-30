@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import express, { type RequestHandler, type Router } from 'express';
 
-import { projectsDb, resolveVisibleProjectRoot } from '@/modules/database/index.js';
+import { resolveVisibleProjectRoot, userDb } from '@/modules/database/index.js';
 import { validatePathInProject } from '@/modules/files/index.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
 import {
@@ -72,7 +72,8 @@ export function createPreviewRouter(dependencies: PreviewRouterDependencies): Ro
 
     const relDir = relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/')) : '';
     const fileName = relPath.slice(relDir ? relDir.length + 1 : 0);
-    const ticket = issuePreviewTicket({ projectId, relDir });
+    const tokenVersion = (req as { user?: { token_version?: number | null } }).user?.token_version ?? 0;
+    const ticket = issuePreviewTicket({ projectId, relDir, viewer: { ...readRequestViewer(req), tokenVersion } });
 
     res.json({
       success: true,
@@ -112,7 +113,14 @@ export function createPreviewPublicRouter(dependencies: PreviewPublicRouterDepen
       return res.status(410).type('text/plain').send('Preview expired. Reopen the preview.');
     }
 
-    const projectRoot = projectsDb.getProjectPathById(scope.projectId);
+    // hj(审计 P1-2):票只证明「签票时是谁」。公开口按票里的人重跑两道:账号现在还能不能用
+    // (停用 / 驳回 / 退出所有设备)、现在还能不能看这个项目(取消共享)。没带 viewer 的票
+    // 只可能是升级前签的 —— 票在内存里,重启就没了,所以这里直接当过期。
+    const holder = scope.viewer;
+    if (!holder || !userDb.getUsableUser(holder.userId, holder.tokenVersion ?? null)) {
+      return res.status(410).type('text/plain').send('Preview expired. Reopen the preview.');
+    }
+    const projectRoot = resolveVisibleProjectRoot(holder, scope.projectId);
     if (!projectRoot) {
       return res.status(404).type('text/plain').send('Not found');
     }

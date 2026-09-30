@@ -1,9 +1,10 @@
 import express from 'express';
 
-import { auditLogDb, projectsDb, resolveVisibleProjectRoot, userDb } from '@/modules/database/index.js';
+import { projectsDb, resolveVisibleProjectRoot, userDb } from '@/modules/database/index.js';
 import { createProject, updateProjectDisplayName } from '@/modules/projects/services/project-management.service.js';
+import { broadcastProjectChange, prepareProjectChangeBroadcast } from '@/modules/websocket/index.js';
 import { listProjectTemplates } from '@/modules/projects/services/project-template.service.js';
-import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
+import { AppError, asyncHandler, createApiSuccessResponse, validateWorkspacePath } from '@/shared/utils.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
 import { clientIp } from '@/shared/client-ip.js';
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
@@ -16,7 +17,8 @@ import {
   applyProjectPermissions,
   canArchiveProject as canActorArchiveProject,
   canManageProject as canActorManageProject, parsePermissionsInput,
-  readProjectPermissionsView,
+  canRestoreProject as canActorRestoreProject,
+  readProjectPermissionsView, transferProjectOwner,
 } from '@/modules/projects/services/project-permissions.service.js';
 
 const router = express.Router();
@@ -204,7 +206,10 @@ router.put(
     }
 
     const input = parsePermissionsInput((req.body ?? {}) as Record<string, unknown>);
+    // hl(动态 P2-4):改权限前先收"现在谁看得见"的名单 —— 改完之后被收回可见性的人要收 removed。
+    const announce = prepareProjectChangeBroadcast(projectId);
     const view = applyProjectPermissions(projectId, input, readUser(req)?.id ?? null);
+    announce('permissions');
     res.json(createApiSuccessResponse(view));
   }),
 );
@@ -294,9 +299,25 @@ router.post(
     // 反归档越权:传别人的已归档路径,createProject 会把它 isArchived=0 复活并
     // 回传对方的真实 projectId —— 既改了别人的状态,又是文件 IDOR 的"拿 id"桥。
     // 已存在的行若对当前用户不可见,直接拒。不存在的路径正常走新建。
-    const existing = projectsDb.getProjectPath(projectPath);
+    //
+    // hl(09-24 P2-14):**先 realpath 再查行。** 此前用原始路径查、createProject 却按
+    // realpath 落库 —— 在工作区里放一个指向别人已归档项目的软链,原始路径查不到行、
+    // 可见性判定被跳过,realpath 一落就把别人的项目复活了。两个路径形态都查一遍。
+    const pathValidation = await validateWorkspacePath(projectPath);
+    const candidatePaths = [...new Set([projectPath, pathValidation.resolvedPath].filter(
+      (value): value is string => typeof value === 'string' && value.length > 0,
+    ))];
+    const existing = candidatePaths.map((candidate) => projectsDb.getProjectPath(candidate)).find(Boolean) ?? null;
     if (existing && !resolveVisibleProjectRoot(readRequestViewer(req), existing.project_id)) {
       throw new AppError('Project not found', { code: 'PROJECT_NOT_FOUND', statusCode: 404 });
+    }
+    // 命中的是一个**已归档**项目:这一步实质是"还原",按还原的门走(owner / root),
+    // 看得见但不是负责人的协作者不能借"新建"把别人归档的项目拉回来(09-24 P2-15 同门)。
+    if (existing && Boolean(existing.isArchived) && !canActorRestoreProject(existing.project_id, readUser(req))) {
+      throw new AppError('这个路径对应一个已归档的项目,只有它的负责人或管理员可以还原。', {
+        code: 'PROJECT_RESTORE_FORBIDDEN',
+        statusCode: 403,
+      });
     }
 
     // 权限三选:personal(默认,仅自己)/ public(所有登录用户)/ shared(指定用户)。
@@ -350,14 +371,40 @@ router.post(
       templateId,
     });
 
+    const revived = projectCreationResult.outcome === 'reactivated_archived';
+    /*
+     * hl 复核:**只有请求体显式带了 visibility 才改复活项目的权限。** 缺省时的 `personal`
+     * 是"新建项目"的默认值,拿它去覆盖一个归档前是「指定用户」的项目,等于静默收回所有人的
+     * 访问。向导只在用户动过权限选择器时才发这个字段(见 ProjectCreationWizard 的
+     * permissionTouched);不能改成"等于默认值就不应用" —— 那样用户**有意**改回「个人」
+     * 就永远生效不了。
+     */
+    const explicitVisibility = typeof requestBody.visibility === 'string';
+    if (revived && explicitVisibility) {
+      /*
+       * hl(09-24 P2-14):复活归档路径时,用户在向导里选的可见性 / 共享此前被**静默丢掉**
+       * (createProjectPath 的 ON CONFLICT 分支按设计不改归属与权限,复活后仍是归档前的
+       * 那套)。用户明明选了「指定用户」,建完却是「个人」,而界面说"创建成功"。
+       * 现在把他选的那套按「项目权限」同一份实现应用上(无主项目会被认领给操作者,
+       * 有主项目不夺归属)。上面那道门保证走到这里的人本来就能管这个项目。
+       */
+      applyProjectPermissions(
+        projectCreationResult.project.projectId,
+        { visibility: rawVisibility as 'personal' | 'public' | 'shared', sharedUserIds },
+        callerId,
+      );
+    }
+    // hl(动态 P2-4):新建 / 复活都推给能看见的人。
+    broadcastProjectChange(projectCreationResult.project.projectId, revived ? 'revived' : 'created');
+
     res.json({
       success: true,
       project: projectCreationResult.project,
+      revived,
       ...(projectCreationResult.template ? { template: projectCreationResult.template } : {}),
-      message:
-        projectCreationResult.outcome === 'reactivated_archived'
-          ? 'Archived project path reused successfully'
-          : 'Project created successfully',
+      message: revived
+        ? 'Archived project path reused successfully'
+        : 'Project created successfully',
     });
   }),
 );
@@ -414,35 +461,51 @@ router.patch(
       });
     }
 
-    if (!projectsDb.setProjectOwner(projectId, ownerUserId)) {
+    // hl(动态 P2-4 / P2-5 / P2-9):名单先收、原 owner 自动授权、审计带 targetUserId —— 见 transferProjectOwner。
+    const announce = prepareProjectChangeBroadcast(projectId);
+    const transfer = transferProjectOwner(projectId, ownerUserId, {
+      id: actor.id ?? null,
+      username: actor.username ?? null,
+      isRoot: true,
+      ip: clientIp(req) ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+    });
+    if (!transfer) {
       throw new AppError(`Project "${projectId}" was not found.`, {
         code: 'PROJECT_NOT_FOUND',
         statusCode: 404,
       });
     }
+    announce('owner');
 
-    auditLogDb.record({
-      userId: actor.id ?? null,
-      username: actor.username ?? null,
-      event: 'project_owner_changed',
-      detail: `${projectId} -> ${ownerUserId === null ? 'public' : `user ${ownerUserId}`}`,
-    });
-
-    res.json({ success: true, projectId, ownerUserId });
+    res.json({ success: true, projectId, ownerUserId, previousOwnerGranted: transfer.grantedPreviousOwner });
   }),
 );
 
-router.put('/:projectId/rename', (req, res) => {
-  try {
+/**
+ * hl(动态 P1-5):改显示名与改权限 / 归档同门 —— 只有 owner / root。
+ *
+ * `custom_project_name` 是**全局**的一列:ben 把 ann 的项目改个名,所有人的侧栏一起变。
+ * 此前只过 `assertVisibleProject`,共享接收方和公共项目的路人都能改。
+ * 改成 asyncHandler:入参不合法(类型 / 超长)由 AppError 回 400,而不是一律 500。
+ */
+router.put(
+  '/:projectId/rename',
+  asyncHandler(async (req, res) => {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
     if (!assertVisibleProject(req, res, projectId)) return;
+    if (!canManageProject(req, projectId)) {
+      throw new AppError('只有项目负责人或管理员可以修改项目名称', {
+        code: 'PROJECT_RENAME_FORBIDDEN',
+        statusCode: 403,
+      });
+    }
     const { displayName } = req.body as { displayName?: unknown };
     updateProjectDisplayName(projectId, displayName);
+    broadcastProjectChange(projectId, 'renamed');
     res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to rename project' });
-  }
-});
+  }),
+);
 
 router.post(
   '/:projectId/toggle-star',
@@ -459,7 +522,15 @@ router.post(
   asyncHandler(async (req, res) => {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
     if (!assertVisibleProject(req, res, projectId)) return;
+    // hl(09-24 P2-15):还原与归档对称 —— 只有 owner / root。
+    if (!canActorRestoreProject(projectId, readUser(req))) {
+      throw new AppError('只有项目负责人或管理员可以还原这个项目。', {
+        code: 'PROJECT_RESTORE_FORBIDDEN',
+        statusCode: 403,
+      });
+    }
     restoreArchivedProject(projectId);
+    broadcastProjectChange(projectId, 'restored');
     res.json(createApiSuccessResponse({ projectId, isArchived: false }));
   }),
 );
@@ -480,7 +551,7 @@ router.delete(
       gn:**归档也一样**。归档一个项目,它会从所有人的活跃侧栏里消失,而按钮上
       没有任何"这不是你的项目"的提示 —— 2026-09-15 实测,非 root 账号就这么把
       别人的项目整个归档了(可一键还原,但所有人当场都看不见)。
-      无主(公共)项目没有"负责人"这一档,回到旧口径 —— 见 canDeleteProject。
+      hl(动态 P2-7):无主(公共目录)项目也只给 root —— 见 canDeleteProject。
     */
     if (!canActorArchiveProject(projectId, user)) {
       throw new AppError(
@@ -493,12 +564,15 @@ router.delete(
         },
       );
     }
+    // hl(动态 P2-4):名单要在行动之前收(删掉之后判不出谁看得见)。
+    const announce = prepareProjectChangeBroadcast(projectId);
     await deleteOrArchiveProject(projectId, force, {
       userId: user?.id ?? null,
       username: user?.username ?? null,
       ip: clientIp(req) ?? null,
       userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
     });
+    announce(force ? 'deleted' : 'archived');
     res.json({ success: true });
   }),
 );

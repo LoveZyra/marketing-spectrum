@@ -14,10 +14,14 @@ import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
 import type { TurnOutputFile } from '../../utils/turnOutputs';
+import type { FeedbackPayload, MessageFeedbackRow } from '../../hooks/useMessageFeedback';
+import { uiLocale } from '../../../../utils/uiLocale';
 
 import ChatMessageImages from './ChatMessageImages';
 import { Markdown, StreamingMarkdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
+import MessageFeedbackControl from './MessageFeedbackControl';
+import SkillSurveyCard from './SkillSurveyCard';
 import TurnOutputsCard from './TurnOutputsCard';
 import UserMessageBody from './UserMessageBody';
 
@@ -63,6 +67,16 @@ type MessageComponentProps = {
    * 此前会让"倒数第几行"整体错位)。
    */
   rowKey?: string;
+  /**
+   * gy:反馈。`feedback` 是我对这条回答已有的意见(点亮 👍/👎);`feedbackSkillHint`
+   * 是本轮调用的 skill(👎 表单预填);`skillSurvey` 非空 = 服务端抽中了这一轮,
+   * 在产出卡下面画「效果如何」卡。三个回调都没传时(时间轴展开区、首页)一律不画。
+   */
+  feedback?: MessageFeedbackRow | null;
+  feedbackSkillHint?: string | null;
+  skillSurvey?: { skill: string } | null;
+  onFeedbackSubmit?: (messageId: string, payload: FeedbackPayload) => Promise<unknown>;
+  onFeedbackRemove?: (messageId: string) => Promise<void>;
 };
 
 type InteractiveOption = {
@@ -73,7 +87,7 @@ type InteractiveOption = {
 
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, onEditRerun, showRetry = false, onRetry, canRerun = false, turnOutputs, onFileOpenPath, outputsSessionId, bare = false, rowKey }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, onEditRerun, showRetry = false, onRetry, canRerun = false, turnOutputs, onFileOpenPath, outputsSessionId, bare = false, rowKey, feedback = null, feedbackSkillHint = null, skillSurvey = null, onFeedbackSubmit, onFeedbackRemove }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = bare || (prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -114,7 +128,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
   const formattedTime = useMemo(() => {
     const raw = message.timestamp;
     if (raw === 0 || raw === '0') return '';
-    return new Date(raw).toLocaleTimeString();
+    return new Date(raw).toLocaleTimeString(uiLocale());
   }, [message.timestamp]);
   const shouldHideThinkingMessage = Boolean(message.isThinking && !showThinking);
   const [isCompactSummaryOpen, setIsCompactSummaryOpen] = useState(false);
@@ -523,6 +537,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                     <TurnOutputsCard files={turnOutputs} onFileOpen={onFileOpenPath} sessionId={outputsSessionId} />
                   </div>
                 )}
+
+                {/* gy:调过 skill 的回合结束后的「效果如何」卡 —— 服务端抽中才有,产出卡同一位置。 */}
+                {!bare && skillSurvey && onFeedbackSubmit && typeof message.id === 'string' && (
+                  <div className="mt-3">
+                    <SkillSurveyCard messageId={String(message.id).split('#')[0]} skill={skillSurvey.skill} onSubmit={onFeedbackSubmit} />
+                  </div>
+                )}
               </div>
             )}
 
@@ -530,6 +551,16 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               <div className="mt-2 flex w-full items-center gap-2 font-mono text-[10.5px] text-muted-foreground transition-opacity sm:opacity-0 sm:focus-within:opacity-100 sm:group-hover/msg:opacity-100">
                 {shouldShowAssistantCopyControl && (
                   <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
+                )}
+                {/* gy:👍/👎 —— 与复制同一行;只在真正的回答(能复制的那条)上画。 */}
+                {shouldShowAssistantCopyControl && onFeedbackSubmit && onFeedbackRemove && typeof message.id === 'string' && (
+                  <MessageFeedbackControl
+                    messageId={String(message.id).split('#')[0]}
+                    feedback={feedback}
+                    skillHint={feedbackSkillHint}
+                    onSubmit={onFeedbackSubmit}
+                    onRemove={onFeedbackRemove}
+                  />
                 )}
                 {/* ef:设计稿的回答下方是「复制 + 重跑」两枚图标。重跑只挂在
                     收尾那条上(由 ChatMessagesPane 判定),它重发的是上一条用户

@@ -1,0 +1,8 @@
+{
+ "runner": "agent",
+ "defects": [
+  "references say currency symbols are kept (they are stripped)",
+  "the 'empty list on no tables' guarantee was deleted"
+ ],
+ "notes": "prose loop only; rubric tasks; target=haiku judge=opus"
+}

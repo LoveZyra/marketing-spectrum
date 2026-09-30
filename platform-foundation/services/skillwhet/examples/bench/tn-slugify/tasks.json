@@ -1,0 +1,47 @@
+{
+ "format": "skillwhet.tasks.v1",
+ "tasks": [
+  {
+   "id": "tests/unit/test_norm.py::test_slugify_basic",
+   "intent": "basic",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_slugify_folds_accents",
+   "intent": "accents",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_slugify_truncates_without_trailing_dash",
+   "intent": "truncate",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_dedupe_keeps_first_and_order",
+   "intent": "dedupe",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_slugify_folds_accents",
+   "intent": "accents",
+   "reference_kind": "rule",
+   "split": "val"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_slugify_truncates_without_trailing_dash",
+   "intent": "truncate",
+   "reference_kind": "rule",
+   "split": "val"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_slugify_folds_umlaut",
+   "intent": "umlaut (never trained on)",
+   "reference_kind": "rule",
+   "split": "test"
+  }
+ ]
+}

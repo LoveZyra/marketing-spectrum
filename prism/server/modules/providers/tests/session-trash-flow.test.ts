@@ -295,7 +295,7 @@ describe('永久删除 → 最近删除', () => {
     expect(db.getConnection().prepare("SELECT COUNT(*) AS n FROM session_trash_messages WHERE session_id = 's1'").get()).toEqual({ n: 2 });
   });
 
-  it('权限:共享用户看得见但不能永久删(403);批量删除时被跳过;归档照常', async () => {
+  it('权限:共享用户看得见但不能永久删(403);批量删除时被跳过;归档同门(hl 动态 P2-6)', async () => {
     expect(db.canViewerSeeSession('s1', viewerOf(sharedUser))).toBe(true);
     expect(() => providers.sessionsService.assertViewerMayPermanentlyDelete('s1', viewerOf(sharedUser)))
       .toThrow(expect.objectContaining({ code: 'SESSION_DELETE_FORBIDDEN' }));
@@ -306,8 +306,13 @@ describe('永久删除 → 最近删除', () => {
     expect(bulk.skipped).toEqual(['s1']);
     expect(db.sessionsDb.getSessionById('s1')).not.toBeNull();
 
+    // hl(动态 P2-6):归档是全局的一列,共享用户不能归档别人发起的会话 —— 单条 403、批量跳过
+    expect(() => providers.sessionsService.assertViewerMayArchiveOrRestore('s1', viewerOf(sharedUser), 'archive'))
+      .toThrow(expect.objectContaining({ code: 'SESSION_ARCHIVE_FORBIDDEN' }));
     const archived = await providers.sessionsService.bulkSessionAction(['s1'], 'archive', viewerOf(sharedUser));
-    expect(archived.succeeded).toEqual(['s1']);
+    expect(archived.skipped).toEqual(['s1']);
+    const byOwner = await providers.sessionsService.bulkSessionAction(['s1'], 'archive', viewerOf(owner));
+    expect(byOwner.succeeded).toEqual(['s1']);
   });
 
   it('最近删除列表:owner 与共享用户都看得见,canRestore 只给 owner / root / 删除者', async () => {

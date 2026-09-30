@@ -12,14 +12,14 @@ describe('sse-tickets', () => {
     const t = issueSseTicket(42);
     expect(typeof t).toBe('string');
     expect(t.length).toBe(64);
-    expect(consumeSseTicket(t)).toEqual({ userId: 42 });
+    expect(consumeSseTicket(t)).toEqual({ userId: 42, tokenVersion: null });
   });
 
   it('有效期内可重复消费 —— EventSource 断线重连要靠这个', () => {
     const t = issueSseTicket(7);
-    expect(consumeSseTicket(t)).toEqual({ userId: 7 });
+    expect(consumeSseTicket(t)).toEqual({ userId: 7, tokenVersion: null });
     // 一次性票会让第二次(重连)拿到 null;这里必须仍然有效
-    expect(consumeSseTicket(t)).toEqual({ userId: 7 });
+    expect(consumeSseTicket(t)).toEqual({ userId: 7, tokenVersion: null });
   });
 
   it('未知 / 空 / 非字符串一律 null', () => {
@@ -39,7 +39,7 @@ describe('sse-tickets', () => {
     const a = issueSseTicket(1);
     const b = issueSseTicket(2);
     expect(a).not.toBe(b);
-    expect(consumeSseTicket(a)).toEqual({ userId: 1 });
-    expect(consumeSseTicket(b)).toEqual({ userId: 2 });
+    expect(consumeSseTicket(a)).toEqual({ userId: 1, tokenVersion: null });
+    expect(consumeSseTicket(b)).toEqual({ userId: 2, tokenVersion: null });
   });
 });

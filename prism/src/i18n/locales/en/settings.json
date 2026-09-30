@@ -10,7 +10,7 @@
   "account": {
     "signedInAs": "Signed in as",
     "logoutTitle": "Log out / switch account",
-    "logoutHelp": "You'll return to the sign-in page; signing in with another account completes the switch. Local sessions and drafts stay in this browser.",
+    "logoutHelp": "You'll return to the sign-in page; signing in with another account completes the switch. This browser's UI preferences and unsent drafts are cleared (preferences are synced to your account and restored on next sign-in).",
     "logoutButton": "Log out",
     "revokeAllTitle": "Log out everywhere",
     "revokeAllHelp": "Revokes this account's tokens on every browser/device (use if a token may have leaked). This device returns to the sign-in page too.",
@@ -45,6 +45,10 @@
       "noProject": "(no project)",
       "refresh": "Refresh",
       "title": "Attachment storage"
+    },
+    "skillSurvey": {
+      "title": "Skill effectiveness survey",
+      "help": "After a turn that used a skill, a sampled “How did it go?” card appears under the answer. Your answers, pooled with everyone else’s, are used only to optimize that skill."
     }
   },
   "quickSettings": {
@@ -212,7 +216,8 @@
     "confirmDelete": "Are you sure you want to delete this API key?",
     "status": {
       "active": "In use",
-      "inactive": "Disabled"
+      "inactive": "Disabled",
+      "revoked": "Revoked (sign-out everywhere / password change; enable to re-issue)"
     },
     "github": {
       "title": "GitHub Tokens",
@@ -315,7 +320,9 @@
       "badge": "Managed",
       "hint": "Managed by Prism."
     },
-    "addServer": "Add {{provider}} MCP Server"
+    "addServer": "Add {{provider}} MCP Server",
+    "refreshingScopes": "Refreshing project scopes…",
+    "loading": "Loading MCP servers…"
   },
   "accounts": {
     "title": "Account approval",
@@ -524,7 +531,8 @@
     "removeConfirm": "Uninstall",
     "removing": "Uninstalling…",
     "removeDone": "Uninstalled \"{{name}}\"",
-    "removeFailed": "Uninstall failed, please try again."
+    "removeFailed": "Uninstall failed, please try again.",
+    "description": "Manage {{provider}} skills from local files, complete folders, and project-aware locations."
   },
   "usage": {
     "title": "Usage & cost",
@@ -532,7 +540,7 @@
     "loading": "Loading…",
     "empty": "No usage recorded in this period. It appears after your first turn.",
     "scopedHint": "Showing your own usage only",
-    "footnote": "Cost comes from the model's own billing value, recorded per turn. This is not the number in the chat /cost popup — that one is current context usage, this is cumulative spend.",
+    "footnote": "Cost is the billed value returned with each turn. It is not the /cost number on the chat page — that one is current context size; this is cumulative spend. \"Input\" excludes cache; cached tokens are under \"Cache read\" (billed at about a tenth). Token counts recorded before the hj release are incomplete — the gateway reports usage at the end of the stream, which older versions missed; costs are unaffected.",
     "by": {
       "day": "By day",
       "username": "By user",
@@ -545,9 +553,12 @@
       "runs": "Turns",
       "input": "Input",
       "output": "Output",
-      "cost": "Cost"
+      "cost": "Cost",
+      "cacheRead": "Cache read",
+      "cacheWrite": "Cache write"
     },
     "lastDays": "Last {{count}} days",
     "totalLine": "{{cost}} · {{runs}} runs"
-  }
+  },
+  "close": "Close settings"
 }

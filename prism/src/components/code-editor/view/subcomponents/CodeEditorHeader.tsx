@@ -14,8 +14,12 @@ type CodeEditorHeaderProps = {
   notebookRaw?: boolean;
   saving: boolean;
   saveSuccess: boolean;
+  /** hl(P3 文件组):有未保存改动 —— 标题前画 ●。 */
+  dirty?: boolean;
   /** diff 视图缓冲区是片段,写回会截断真文件 —— false 时整个保存按钮不渲染。 */
   canSave?: boolean;
+  /** hl(动态 P2-11):读失败时没有可下的内容,下载按钮不渲染。 */
+  canDownload?: boolean;
   onToggleMarkdownPreview: () => void;
   onToggleHtmlPreview: () => void;
   onToggleNotebookRaw?: () => void;
@@ -47,6 +51,7 @@ type CodeEditorHeaderProps = {
     save: string;
     saving: string;
     saved: string;
+    unsaved?: string;
     fullscreen: string;
     exitFullscreen: string;
     maximize?: string;
@@ -67,7 +72,9 @@ export default function CodeEditorHeader({
   notebookRaw = false,
   saving,
   saveSuccess,
+  dirty = false,
   canSave = true,
+  canDownload = true,
   onToggleMarkdownPreview,
   onToggleHtmlPreview,
   onToggleNotebookRaw,
@@ -90,6 +97,16 @@ export default function CodeEditorHeader({
       <div className="flex min-w-0 flex-1 shrink items-center gap-2">
         <div className="min-w-0 shrink">
           <div className="flex min-w-0 items-center gap-2">
+            {dirty && (
+              <span
+                className="shrink-0 text-primary"
+                title={labels.unsaved ?? '未保存'}
+                aria-label={labels.unsaved ?? '未保存'}
+                data-testid="editor-dirty-marker"
+              >
+                ●
+              </span>
+            )}
             <h3 className="truncate text-sm font-medium text-foreground">{file.name}</h3>
             {file.diffInfo && (
               <span className="shrink-0 whitespace-nowrap rounded bg-primary/[0.08] px-1.5 py-0.5 text-[10px] text-card-foreground dark:text-primary">
@@ -167,14 +184,17 @@ export default function CodeEditorHeader({
           <SettingsIcon className="h-4 w-4" />
         </button>
 
-        <button
-          type="button"
-          onClick={onDownload}
-          className="flex items-center justify-center rounded-md p-1.5 text-body hover:bg-muted hover:text-foreground"
-          title={labels.download}
-        >
-          <Download className="h-4 w-4" />
-        </button>
+        {canDownload && (
+          <button
+            type="button"
+            onClick={onDownload}
+            className="flex items-center justify-center rounded-md p-1.5 text-body hover:bg-muted hover:text-foreground"
+            title={labels.download}
+            aria-label={labels.download}
+          >
+            <Download className="h-4 w-4" />
+          </button>
+        )}
 
         {canSave && (
           <button

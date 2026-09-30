@@ -35,7 +35,10 @@
     "cancel": "キャンセル",
     "openCommandPalette": "コマンドパレットを開く",
     "attentionRequiredIndicator": "セッションが対応を必要としています",
-    "approvalPendingIndicator": "ツールの許可を待っています"
+    "approvalPendingIndicator": "ツールの許可を待っています",
+    "hideSkillNav": "Hide skill navigation",
+    "showSkillNav": "Show skill navigation",
+    "noSidebarOnNotebook": "No project sidebar on the Notebook page"
   },
   "actions": {
     "settings": "設定",

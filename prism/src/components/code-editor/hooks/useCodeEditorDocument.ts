@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { api } from '../../../utils/api';
+import { startBrowserDownload } from '../../../utils/browserDownload';
 import { useToast } from '../../../shared/view/ui';
+import { emitFileSaved } from '../../file-tree/utils/fileTreeEvents';
 import type { CodeEditorFile } from '../types/types';
 import { isBinaryFile } from '../utils/binaryFile';
+import { chooseEditorDownload } from '../utils/editorDownload';
 import { getPreviewKind } from '../utils/previewableFile';
 
 type UseCodeEditorDocumentParams = {
@@ -38,6 +41,9 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
   // 覆盖到真文件上(hasUnsavedChanges 此时为真,因为 persistedContent 还是空)。
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isBinary, setIsBinary] = useState(false);
+  // hk(审计 P1-6):服务端判出来的「只能看不能存」—— 非 UTF-8 文本(多半是 GBK)按 GBK 显示但禁止保存,
+  // 二进制按二进制占位显示。原来只按扩展名判,.pkl / GBK 的 csv 会被当 UTF-8 读进来,一保存就写坏。
+  const [readOnlyReason, setReadOnlyReason] = useState<string | null>(null);
   // Some binaries (images, PDFs, audio, video) can be rendered natively, so the
   // editor shows an inline preview instead of the generic binary placeholder.
   const previewKind = getPreviewKind(file.name);
@@ -61,6 +67,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
       try {
         setLoading(true);
         setIsBinary(false);
+        setReadOnlyReason(null);
 
         // Natively previewable media (image/pdf/audio/video) is rendered by
         // CodeEditorMediaPreview, so there is nothing to read as text here.
@@ -98,10 +105,30 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
           ? await api.sessionOutputText(outputSessionId, filePath)
           : await api.readFile(fileProjectId, filePath);
         if (!response.ok) {
-          throw new Error(`Failed to load file: ${response.status} ${response.statusText}`);
+          // hk:服务端给了可读的原因(比如文件太大)就用它,别只报一个状态码。
+          const body = await response.json().catch(() => null) as { error?: string } | null;
+          throw new Error(body?.error || `Failed to load file: ${response.status} ${response.statusText}`);
         }
 
         const data = await response.json();
+        if (data.binary === true) {
+          setContent('');
+          setPersistedContent('');
+          setIsBinary(true);
+          setLoadError(null);
+          return;
+        }
+        if (data.readOnly === true) {
+          const encodingNote: Record<string, string> = {
+            gbk: '这个文件不是 UTF-8 编码(按 GBK 显示),为免保存时把中文写坏,已设为只读。需要编辑请先在本地转成 UTF-8。',
+            'utf-16le': '这个文件是 UTF-16 编码,为免保存时写坏,已设为只读。需要编辑请先在本地转成 UTF-8。',
+            'utf-16be': '这个文件是 UTF-16 编码,为免保存时写坏,已设为只读。需要编辑请先在本地转成 UTF-8。',
+            'utf-8-damaged': '这个文件里有几处不完整的 UTF-8 字节(常见于截断的样本、正在写入的日志),已设为只读,以免保存时把那几处写成乱码。',
+          };
+          setReadOnlyReason(data.readOnlyReason === 'encoding'
+            ? (encodingNote[String(data.encoding)] ?? '这个文件不是 UTF-8 编码,为免保存时写坏,已设为只读。需要编辑请先在本地转成 UTF-8。')
+            : '这个文件不能按文本编辑,已设为只读。');
+        }
         setContent(data.content);
         setPersistedContent(data.content);
         // 记录加载时的 mtime 作保存冲突基线(D1)。
@@ -142,10 +169,18 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
       return;
     }
 
+    // hk:服务端判为只读(非 UTF-8 / 二进制)的文件不存 —— 那正是会被写坏的那一类。
+    // hl(P3 文件组):只读原因已经有一条横幅在显示,Ctrl+S 不再把同一句话再挂成第二条;
+    // 只弹一次短 toast 提醒"这是只读的"。
+    if (readOnlyReason) {
+      toast({ message: '这个文件是只读的,未保存', variant: 'error' });
+      return;
+    }
+
     // 读失败时缓冲区里是错误注释,不是文件内容。绝不能保存 —— 那会用注释覆盖
-    // 真文件。让用户重新打开成功后再编辑。
+    // 真文件。让用户重新打开成功后再编辑。(保存按钮在 loadError 时已不渲染,这里挡 Ctrl+S。)
     if (loadError) {
-      setSaveError('文件未能正确加载,已禁止保存以免覆盖原文件。请重新打开该文件。');
+      toast({ message: '文件未能正确加载,已禁止保存以免覆盖原文件', variant: 'error' });
       return;
     }
 
@@ -167,7 +202,19 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
       // 409:磁盘版本在编辑期间变过。不覆盖,给用户"重载 / 仍覆盖"两条路 ——
       // 重载 = 关掉重新打开;仍覆盖 = 再点一次保存(下一次带 force)。
       if (response.status === 409) {
+        const conflict = await response.json().catch(() => null) as { code?: string; error?: string } | null;
+        // hk:二进制 / 非 UTF-8 的文件,服务端不许按文本覆盖 —— 这不是「再点一次就覆盖」的冲突。
+        if (conflict?.code === 'FILE_NOT_TEXT') {
+          setSaveError(conflict.error || '这个文件不能按文本保存。');
+          return;
+        }
         forceNextSaveRef.current = true;
+        // hk(审计 P2-6):文件在打开之后被删了或改名了。再点保存 = 在原路径重新建出来(用户明确选择)。
+        if (conflict?.code === 'FILE_DELETED') {
+          setSaveError('这个文件在你打开之后被删除或改名了,未保存。再次点击保存会在原路径重新建出它;若它已改名,请关闭后打开新名字的文件。');
+          toast({ message: '文件已被删除或改名,未保存', description: '再次保存=在原路径重建', variant: 'error' });
+          return;
+        }
         const conflictMsg = '文件在你编辑期间被改动过。再次点击保存将覆盖磁盘版本;或关闭后重新打开以加载最新内容。';
         setSaveError(conflictMsg);
         toast({ message: '文件已被改动,未覆盖', description: '再次保存=覆盖;重新打开=加载最新', variant: 'error' });
@@ -193,6 +240,8 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
       setPersistedContent(content);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
+      // hl(P3 文件组):让文件树把这一行的大小 / 修改时间刷新。
+      emitFileSaved(filePath);
     } catch (error) {
       const message = getErrorMessage(error);
       console.error('Error saving file:', error);
@@ -200,24 +249,63 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
     } finally {
       setSaving(false);
     }
-  }, [content, filePath, fileProjectId, outputSessionId, previewKind, fileName, isDiffView, loadError, toast]);
+  }, [content, filePath, fileProjectId, outputSessionId, previewKind, fileName, isDiffView, loadError, readOnlyReason, toast]);
 
-  const handleDownload = useCallback(() => {
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
+  /**
+   * 下载。
+   *
+   * hl(动态 P2-11):原来是把**缓冲区**装进 Blob 交给 `a[download]` —— 读失败(413 太大、404)的
+   * 标签页照样能"下载"出一份内容是错误注释的假文件;而且只读的 GBK 文件下下来是转码后的
+   * UTF-8,不是原件。现在与文件树同一条路:签一张下载票,让浏览器直接下**磁盘上的原文件**
+   * (有百分比,大文件不经标签页内存)。读失败时下载按钮已不渲染,这里再挡一次。
+   * 会话产出通道(项目目录之外)走它自己的票;diff 视图没有对应的磁盘文件,退回缓冲区。
+   */
+  const handleDownload = useCallback(async () => {
+    if (loadError) {
+      toast({ message: '文件未能正确加载,没有可下载的内容', variant: 'error' });
+      return;
+    }
 
-    anchor.href = url;
-    anchor.download = file.name;
+    const fallbackToBuffer = () => {
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = file.name;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      // 释放放到下一拍 —— 有些浏览器在 click 返回时还没开始读这个 URL,
+      // 同步撤销会把下载掐死且不抛错(大文件几乎必挂)。与其余下载点一致。
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    };
 
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
+    // hl 复核 P3-10:有未保存改动时下缓冲区(用户要的是他眼前这份),否则签票下磁盘原件。
+    const source = chooseEditorDownload({
+      loadError: Boolean(loadError),
+      isDiffView,
+      hasUnsavedChanges: content !== persistedContent,
+      canIssueTicket: Boolean(outputSessionId || fileProjectId),
+    });
+    if (source === 'buffer') {
+      fallbackToBuffer();
+      return;
+    }
 
-    // 释放放到下一拍 —— 有些浏览器在 click 返回时还没开始读这个 URL,
-    // 同步撤销会把下载掐死且不抛错(大文件几乎必挂)。与其余下载点一致。
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  }, [content, file.name]);
+    try {
+      const response = outputSessionId
+        ? await api.issueSessionOutputDownloadTicket(outputSessionId, filePath)
+        : await api.issueDownloadTicket(fileProjectId, [filePath]);
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(body?.error || `HTTP ${response.status}`);
+      }
+      const { url } = await response.json() as { url: string };
+      startBrowserDownload(url);
+    } catch (error) {
+      toast({ message: '下载失败', description: getErrorMessage(error), variant: 'error' });
+    }
+  }, [content, file.name, filePath, fileProjectId, isDiffView, loadError, outputSessionId, persistedContent, toast]);
 
   return {
     content,
@@ -228,6 +316,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
     saveSuccess,
     saveError,
     loadError,
+    readOnlyReason,
     isBinary,
     isDiffView,
     previewKind,

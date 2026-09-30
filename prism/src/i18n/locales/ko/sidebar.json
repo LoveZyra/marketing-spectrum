@@ -35,7 +35,10 @@
     "cancel": "취소",
     "openCommandPalette": "명령 팔레트 열기",
     "attentionRequiredIndicator": "세션에 주의가 필요합니다",
-    "approvalPendingIndicator": "도구 권한 승인을 기다리는 중"
+    "approvalPendingIndicator": "도구 권한 승인을 기다리는 중",
+    "hideSkillNav": "Hide skill navigation",
+    "showSkillNav": "Show skill navigation",
+    "noSidebarOnNotebook": "No project sidebar on the Notebook page"
   },
   "actions": {
     "settings": "설정",

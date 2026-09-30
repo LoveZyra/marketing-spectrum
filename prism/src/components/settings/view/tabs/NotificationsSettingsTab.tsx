@@ -55,6 +55,8 @@ export default function NotificationsSettingsTab({
                     },
                   })
                 }
+                // hl(P3 可访问性):可见文字只有「已启用」,读屏器单念它不知道启用的是什么。
+                aria-label={t('notifications.sound.title', { defaultValue: 'Completion sound' })}
                 className="h-4 w-4 accent-primary"
               />
               {t('notifications.sound.enabled', { defaultValue: 'Enabled' })}

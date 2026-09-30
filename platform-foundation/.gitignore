@@ -20,3 +20,8 @@ skills/schedule-task/_shared/runtime_env.sh
 skills/schedule-task/_shared/bigdata_env.sh
 skills/schedule-task/_shared/claude_bin.env
 skills/schedule-task/_shared/crontab.txt
+
+# ── skillwhet 训练产物：工作副本与基准 scratch，跑一次生成一堆 ──
+.evo/
+.bench-work/
+*.egg-info/

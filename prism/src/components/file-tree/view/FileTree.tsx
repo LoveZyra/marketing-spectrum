@@ -14,8 +14,11 @@ import { useFileTreeViewMode } from '../hooks/useFileTreeViewMode';
 import { useFileTreeUpload } from '../hooks/useFileTreeUpload';
 import type { FileTreeImageSelection, FileTreeNode } from '../types/types';
 import { formatFileSize, formatRelativeTime, isImageFile } from '../utils/fileTreeUtils';
+import { subscribeFileSaved } from '../utils/fileTreeEvents';
+import { findExistingUploadTargets } from '../utils/uploadTargets';
 import { Project } from '../../../types/app';
 import { ScrollArea, Input } from '../../../shared/view/ui';
+import { useModalKeyboard } from '../../../shared/view/hooks/useModalKeyboard';
 
 import FileTreeBody from './FileTreeBody';
 import FileTreeDetailedColumns from './FileTreeDetailedColumns';
@@ -70,14 +73,21 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   // Auto-hide toast
   useEffect(() => {
     if (toast) {
-      // info 是"正在做,还没好":它没有自己的时限 —— 该由完成时的成功/失败提示顶掉。
-      // 一条 3 秒就走的"正在准备"对一个 40 秒的下载毫无意义。
-      if (toast.type === 'info') return;
-      // warning 里带着目录名,3 秒读不完 —— 给它更长的停留时间。
-      const timer = setTimeout(() => setToast(null), toast.type === 'warning' ? 8000 : 3000);
+      // hl(P3 文件组):info(「已开始打包…」)原来永不消失 —— 浏览器导航式下载拿不到完成事件,
+      // 没有谁会来顶掉它。给 8 秒上限;warning 里带着目录名,3 秒读不完,同样 8 秒。
+      const timer = setTimeout(
+        () => setToast(null),
+        toast.type === 'warning' || toast.type === 'info' ? 8000 : 3000,
+      );
       return () => clearTimeout(timer);
     }
   }, [toast]);
+
+  const { viewMode, changeViewMode } = useFileTreeViewMode();
+  const { expandedDirs, toggleDirectory, collapseAll } = useExpandedDirectories();
+  // hl 复核 P2-1:刷新后只重拉**展开着**的懒加载目录 —— 用 ref 把最新的展开集合交给数据 hook。
+  const expandedDirsRef = useRef(expandedDirs);
+  expandedDirsRef.current = expandedDirs;
 
   const {
     files,
@@ -88,10 +98,14 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     isInProject,
     navigateUp,
     resetToProject,
-  } = useFileTreeData(selectedProject);
+    loadSubtree,
+    loadingSubtrees,
+  } = useFileTreeData(selectedProject, (path) => expandedDirsRef.current.has(path));
 
-  const { viewMode, changeViewMode } = useFileTreeViewMode();
-  const { expandedDirs, toggleDirectory, collapseAll } = useExpandedDirectories();
+  // hl(P3 文件组):编辑器保存成功 → 刷新树,让那一行的大小 / 修改时间跟上。
+  useEffect(() => subscribeFileSaved(() => refreshFiles()), [refreshFiles]);
+
+
   const { searchQuery, setSearchQuery, filteredFiles, searchExpandedPaths } = useFileTreeSearch({
     files,
   });
@@ -112,13 +126,49 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     showToast,
   });
 
+  // hl(动态 P2-12):上传前按树里已加载的节点查同名。
+  const findExisting = useCallback(
+    (relativePaths: string[], targetPath: string) =>
+      findExistingUploadTargets(files, location.projectRoot, relativePaths, targetPath),
+    [files, location.projectRoot],
+  );
+
   // File upload (drag and drop)
   const upload = useFileTreeUpload({
     selectedProject,
     onRefresh: refreshFiles,
     showToast,
+    findExisting,
   });
   const operationLoading = operations.operationLoading || upload.operationLoading;
+
+  // hl(动态 P2-10):「…还有更多」→ 单独列这个目录,原地接进树。
+  const handleLoadMore = useCallback(
+    (item: FileTreeNode) => {
+      void loadSubtree(item.path).catch((err: unknown) => {
+        showToast((err as Error).message || t('fileTree.loadMoreFailed', '加载失败'), 'error');
+      });
+    },
+    [loadSubtree, showToast, t],
+  );
+
+  const nodeLabels = useMemo(
+    () => ({
+      loadMore: t('fileTree.loadMore', '…还有更多,点击加载'),
+      loading: t('fileTree.loadingMore', '正在加载…'),
+      symlink: t('fileTree.symlink', '符号链接'),
+    }),
+    [t],
+  );
+
+  // hl(P2-22):删除确认框接上共用的模态键盘行为(Esc 关、焦点圈、初始焦点落在「取消」)。
+  const deleteDialogRef = useRef<HTMLDivElement>(null);
+  const deleteCancelRef = useRef<HTMLButtonElement>(null);
+  const deleteDialogOpen = operations.deleteConfirmation.isOpen && Boolean(operations.deleteConfirmation.item);
+  useModalKeyboard(deleteDialogRef, { open: deleteDialogOpen, onClose: operations.handleCancelDelete, lockScroll: false });
+  useEffect(() => {
+    if (deleteDialogOpen) deleteCancelRef.current?.focus();
+  }, [deleteDialogOpen]);
 
   // Focus input when creating new item
   useEffect(() => {
@@ -135,6 +185,14 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
       renameInputRef.current.select();
     }
   }, [operations.renamingItem]);
+
+  // hl(P3 文件组):改名失败后仍在改名态 —— 请求结束时把焦点放回输入框,别让它"卡死"。
+  useEffect(() => {
+    if (!operations.operationLoading && operations.renamingItem && renameInputRef.current
+      && document.activeElement !== renameInputRef.current) {
+      renameInputRef.current.focus();
+    }
+  }, [operations.operationLoading, operations.renamingItem]);
 
   /**
    * 图标沿用 `getFileIconData` 的映射,颜色改走**七个语义族**。
@@ -518,7 +576,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           // 大目录静默少显示 —— 用户以为看到的就是全部。
           <div className="flex items-center gap-2 border-b border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            <span>{t('fileTree.truncatedNotice', '目录条目过多,仅显示部分内容。可进入子目录查看更多。')}</span>
+            <span>{t('fileTree.truncatedNotice', '目录条目过多,只显示了一部分。没列全的文件夹展开后有「…还有更多」,点击即可加载。')}</span>
           </div>
         )}
 
@@ -555,6 +613,9 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           selectedPaths={selectedPaths}
           onToggleSelect={toggleSelect}
           selectionMode={selectionMode}
+          onLoadMore={handleLoadMore}
+          loadingSubtrees={loadingSubtrees}
+          nodeLabels={nodeLabels}
         />
       </ScrollArea>
 
@@ -567,16 +628,28 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
 
       {/* Delete Confirmation Dialog */}
       {operations.deleteConfirmation.isOpen && operations.deleteConfirmation.item && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[rgba(16,16,16,0.72)]">
-          <div className="prism-modal-shadow mx-4 max-w-sm rounded-lg border border-border bg-background p-4">
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-[rgba(16,16,16,0.72)]"
+          onClick={operations.handleCancelDelete}
+        >
+          <div
+            ref={deleteDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="file-tree-delete-title"
+            onClick={(event) => event.stopPropagation()}
+            className="prism-modal-shadow mx-4 max-w-sm rounded-lg border border-border bg-background p-4"
+          >
             <div className="mb-4 flex items-center gap-3">
               <div className="rounded-full bg-destructive/10 p-2">
                 <AlertTriangle className="h-5 w-5 text-destructive" />
               </div>
               <div>
-                <h3 className="font-medium text-foreground">
+                <h3 id="file-tree-delete-title" className="font-medium text-foreground">
                   {t('fileTree.delete.title', 'Delete {{type}}', {
-                    type: operations.deleteConfirmation.item.type === 'directory' ? 'Folder' : 'File'
+                    type: operations.deleteConfirmation.item.type === 'directory'
+                      ? t('fileTree.delete.typeFolder', '文件夹')
+                      : t('fileTree.delete.typeFile', '文件'),
                   })}
                 </h3>
                 <p className="text-sm text-muted-foreground">
@@ -591,6 +664,8 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
             </p>
             <div className="flex justify-end gap-2">
               <button
+                ref={deleteCancelRef}
+                type="button"
                 onClick={operations.handleCancelDelete}
                 disabled={operationLoading}
                 className="rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-accent"
@@ -598,6 +673,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
                 {t('common.cancel', 'Cancel')}
               </button>
               <button
+                type="button"
                 onClick={operations.handleConfirmDelete}
                 disabled={operationLoading}
                 className="flex items-center gap-2 rounded-md bg-destructive px-3 py-1.5 text-sm text-destructive-foreground transition-colors hover:bg-destructive disabled:opacity-50"

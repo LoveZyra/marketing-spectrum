@@ -13,6 +13,7 @@ import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
 import type { ChatViewState } from '../../hooks/useChatSessionState';
 import { extractTurnOutputsCached, mergeTurnOutputs, type TurnOutputFile } from '../../utils/turnOutputs';
+import type { FeedbackPayload, MessageFeedbackRow } from '../../hooks/useMessageFeedback';
 import { cn } from '../../../../lib/utils';
 import { createGroupIdentityState, groupConsecutiveTools, isSubagentGroupItem, isToolGroupItem, stabilizeGroupIdentity } from '../../utils/toolGrouping';
 import { focusActivityGroup, lastTurnBoundaryIndex, shouldKeepActivityTailOpen } from '../../utils/toolRowSummary';
@@ -88,6 +89,12 @@ interface ChatMessagesPaneProps {
    * 有它就以它为准,没有(还没拉到 / 刚跑完的这一轮)才退回窗口内现推。
    */
   serverTurnOutputs?: ReadonlyMap<string, TurnOutputFile[]>;
+  /** gy:服务端抽中的「效果如何」卡(助手回答 id → skill)。 */
+  skillSurveys?: ReadonlyMap<string, string>;
+  /** gy:我对各条回答的反馈(message id → 行),与两个回调。 */
+  feedbackByMessageId?: ReadonlyMap<string, MessageFeedbackRow>;
+  onFeedbackSubmit?: (messageId: string, payload: FeedbackPayload) => Promise<unknown>;
+  onFeedbackRemove?: (messageId: string) => Promise<void>;
 }
 
 /**
@@ -147,6 +154,10 @@ function ChatMessagesPane({
   onRetryLastTurn,
   isHome = false,
   serverTurnOutputs,
+  skillSurveys,
+  feedbackByMessageId,
+  onFeedbackSubmit,
+  onFeedbackRemove,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
   // 上一轮的组身份登记表(每条消息都指回它所属的组)—— 见 stabilizeGroupIdentity。
@@ -192,6 +203,54 @@ function ChatMessagesPane({
     }
     return byIndex;
   }, [groupedVisibleMessages, serverTurnOutputs]);
+
+  /**
+   * gy:「效果如何」卡落到**这一遍渲染的下标**上 —— 与 serverOutputsByIndex 同一道理:
+   * 一条显示日志消息可能被拆成多条,卡只挂最后一条。
+   */
+  const surveyByIndex = useMemo(() => {
+    if (!skillSurveys || skillSurveys.size === 0) return null;
+    const lastIndexById = new Map<string, number>();
+    groupedVisibleMessages.forEach((item, index) => {
+      if (isToolGroupItem(item) || isSubagentGroupItem(item)) return;
+      if (item.type !== 'assistant' || item.isStreaming) return;
+      const rawId = typeof item.id === 'string' ? item.id : '';
+      if (!rawId) return;
+      const baseId = rawId.split('#')[0];
+      if (skillSurveys.has(baseId)) lastIndexById.set(baseId, index);
+    });
+    if (lastIndexById.size === 0) return null;
+    const byIndex = new Map<number, string>();
+    for (const [baseId, index] of lastIndexById) byIndex.set(index, skillSurveys.get(baseId) as string);
+    return byIndex;
+  }, [groupedVisibleMessages, skillSurveys]);
+
+  /**
+   * gy:每条助手回答所属回合调用的 skill(👎 表单预填用)。从**扁平的可见消息**扫:
+   * 用户消息开新一轮,`Skill` 工具帧记 skill,助手正文都记为这一轮的回答。
+   */
+  const skillByAnswerId = useMemo(() => {
+    const map = new Map<string, string>();
+    let currentSkill = '';
+    for (const item of visibleMessages) {
+      if (item.type === 'user') { currentSkill = ''; continue; }
+      if (item.isToolUse && item.toolName === 'Skill') {
+        // 工具行的 toolInput 在 useChatMessages 里被 JSON.stringify 成了字符串(实时流里则可能还是对象),两种都认。
+        let input: { skill?: unknown } | null = null;
+        if (typeof item.toolInput === 'string') {
+          try { input = JSON.parse(item.toolInput) as { skill?: unknown }; } catch { input = null; }
+        } else if (item.toolInput && typeof item.toolInput === 'object') {
+          input = item.toolInput as { skill?: unknown };
+        }
+        if (typeof input?.skill === 'string' && input.skill.trim() && !currentSkill) currentSkill = input.skill.trim();
+        continue;
+      }
+      if (item.type === 'assistant' && currentSkill && typeof item.id === 'string') {
+        map.set(item.id.split('#')[0], currentSkill);
+      }
+    }
+    return map;
+  }, [visibleMessages]);
 
   /**
    * 流式气泡的消息对象。只随正文变化重建,其余一切保持不变;key 写死成
@@ -575,6 +634,11 @@ function ChatMessagesPane({
                   turnOutputs={turnOutputs}
                   onFileOpenPath={onFileOpen}
                   outputsSessionId={selectedSession?.id || currentSessionId || null}
+                  feedback={feedbackByMessageId?.get(String(item.id ?? '').split('#')[0]) ?? null}
+                  feedbackSkillHint={skillByAnswerId.get(String(item.id ?? '').split('#')[0]) ?? null}
+                  skillSurvey={canCarryOutputs && surveyByIndex?.has(renderedIndex) ? { skill: surveyByIndex.get(renderedIndex) as string } : null}
+                  onFeedbackSubmit={onFeedbackSubmit}
+                  onFeedbackRemove={onFeedbackRemove}
                 />
               );
             });

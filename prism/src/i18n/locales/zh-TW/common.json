@@ -7,7 +7,8 @@
     "chat": "聊天",
     "shell": "終端機",
     "files": "檔案",
-    "notebook": "Notebook"
+    "notebook": "Notebook",
+    "skillwhet": "技能最佳化"
   },
   "status": {
     "completed": "已完成"
@@ -90,6 +91,8 @@
     }
   },
   "projectWizard": {
+    "revivedTitle": "已還原一個封存的專案",
+    "revivedHint": "這個路徑之前已有專案並被封存；現在按你選擇的可見性還原了它，舊會話一併回來。",
     "title": "建立新專案",
     "steps": {
       "configure": "設定",

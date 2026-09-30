@@ -1,0 +1,8 @@
+{
+ "runner": "pytest",
+ "defects": [
+  "dedupe_lines ignores ignore_case and trailing whitespace",
+  "word_count counts bare punctuation"
+ ],
+ "notes": "two functions defective at once; probe = a different punctuation token"
+}

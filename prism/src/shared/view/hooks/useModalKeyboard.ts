@@ -1,4 +1,6 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
+
+import { isLocalEscapeTarget, isTopModal, pushModal, removeModal } from './modalStack';
 
 /**
  * 自建弹层的键盘行为:**Esc 关闭 + Tab 焦点陷阱 + 打开时锁 body 滚动**。
@@ -30,15 +32,23 @@ export function useModalKeyboard(
   options: { open?: boolean; onClose: () => void; lockScroll?: boolean },
 ): void {
   const { open = true, onClose, lockScroll = true } = options;
+  // onClose 走 ref:调用方常传内联函数,放进依赖会让 effect 每次渲染都重跑 ——
+  // 而重跑 = 出栈再入栈,父弹层一重渲染就会跑到已打开的子弹层**上面**去。
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return undefined;
+    // hl 复核 P2-2:入栈;只有栈顶这一层处理键盘(见 modalStack.ts)。
+    const modalId = pushModal();
 
     const handleKeyDown = (event: KeyboardEvent): void => {
+      if (!isTopModal(modalId)) return;
       if (event.key === 'Escape') {
-        // stopPropagation:嵌套弹层时只关最上面那一个,别一路关到底
+        // 行内输入框(改名 / 重置密码 / 额度编辑)自己的 Esc 优先:取消输入,不关弹窗。
+        if (isLocalEscapeTarget(event.target)) return;
         event.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
 
@@ -77,8 +87,9 @@ export function useModalKeyboard(
     if (lockScroll) document.body.style.overflow = 'hidden';
 
     return () => {
+      removeModal(modalId);
       document.removeEventListener('keydown', handleKeyDown, true);
       if (lockScroll && previousOverflow !== null) document.body.style.overflow = previousOverflow;
     };
-  }, [open, onClose, containerRef, lockScroll]);
+  }, [open, containerRef, lockScroll]);
 }

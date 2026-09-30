@@ -1,4 +1,5 @@
 import { authenticatedFetch } from './api';
+import { decodeJwtPayload } from './tokenRefresh';
 
 /**
  * 账号级界面偏好同步(F11)。
@@ -14,6 +15,21 @@ import { authenticatedFetch } from './api';
  * 冲突用时间戳解决:两边都带 `updatedAt`,新的赢。没有它的话,"在 A 电脑上改完
  * 打开 B 电脑"和"在 B 电脑上改完打开 A 电脑"会得到相反的结果,而用户完全无从
  * 预测哪一次生效。
+ *
+ * ## hl(动态 P1-7 / 09-24 P1-5):本机那份**记着主人是谁**
+ *
+ * 同一浏览器换账号登录,此前 ann 的 `claude-settings`(含 skipPermissions / allowedTools)、
+ * 字号、以及**未发送的草稿全文**被当作"本机更新"推成了 ben 的账号设置(浏览器实测,
+ * 草稿里的「内部密码」进了对方的服务端记录)。根因两处:登出只清令牌,本机时间戳
+ * 仍是 ann 的、通常比服务端新;草稿键也参与同步。
+ *
+ * 现在:
+ *   - 本机记一个 `accountSettingsOwner`(userId)。拉取时主人 ≠ 当前用户 → 本机那份
+ *     一律**不推**,先清掉再以服务端为准;
+ *   - 登出时清草稿 + 时间戳(`clearLocalAccountStateOnLogout`);同步键留着,换人由主人标记兜底
+ *     (hl 复核 P3-7:原来登出连同步键一起清,同一个人再登录必整页重载一次);
+ *   - 草稿(`draft_input_*`)**不再同步** —— 草稿是正文,不是偏好;服务端老记录里残留的
+ *     草稿键在下一次推送时被整体覆盖掉。
  */
 
 /** 参与同步的 localStorage 键。不在这张表里的一律只留在本机(比如 auth-token)。 */
@@ -29,89 +45,101 @@ const SYNCED_KEYS = [
 ] as const;
 
 /**
- * dl:按前缀同步的动态键 —— 输入框草稿(`draft_input_*`)。
- *
- * 草稿此前只活在本机:换台电脑、清一次缓存,打了一半的话就没了。排队消息
- * (`queued_message_*`)刻意**不**同步:它和标签页互斥认领绑定,跨设备复制
- * 等于两台机器抢着替用户发同一条。
- *
- * 上限挡的是键数膨胀(每条会话一个键,聊过的会话只多不少):只带最新改动
- * 无从知晓,就按键名排序取前 N —— 排序只为两台设备取到**同一批**,
- * 保证收敛,不保证"最新的 N 条"。
+ * 登出 / 换账号时要清掉的**本机私有**前缀键:输入框草稿。
+ * dl 曾把它们纳入账号同步;hl 起只在本机,换人时清掉(它们是上一个人的正文)。
  */
-const SYNCED_KEY_PREFIXES = ['draft_input_'] as const;
-const MAX_SYNCED_PREFIX_KEYS = 50;
+const LOCAL_PRIVATE_KEY_PREFIXES = ['draft_input_'] as const;
 
 const UPDATED_AT_KEY = 'accountSettingsUpdatedAt';
+const OWNER_KEY = 'accountSettingsOwner';
+const AUTH_TOKEN_KEY = 'auth-token';
 
 type Payload = { values: Record<string, string>; updatedAt: string };
 
-const matchesSyncedPrefix = (key: string): boolean =>
-  SYNCED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
+const safeGet = (key: string): string | null => {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
 
-/** 本机所有命中前缀、值非空的键(排序取前 N,两台设备取同一批)。 */
-const listLocalPrefixKeys = (): string[] => {
+const safeSet = (key: string, value: string): void => {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // 隐私模式下 localStorage 可能整个抛 —— 同步是增值功能,不该让它拖垮页面。
+  }
+};
+
+const safeRemove = (key: string): void => {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // 同上
+  }
+};
+
+const listLocalPrivateKeys = (): string[] => {
   try {
     const keys: string[] = [];
     for (let index = 0; index < window.localStorage.length; index++) {
       const key = window.localStorage.key(index);
-      if (key && matchesSyncedPrefix(key)) keys.push(key);
+      if (key && LOCAL_PRIVATE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) keys.push(key);
     }
-    return keys.sort().slice(0, MAX_SYNCED_PREFIX_KEYS);
+    return keys;
   } catch {
     return [];
   }
 };
 
+/** 当前登录的 userId(从本机令牌解),拿不到返回 null。 */
+export const readCurrentAccountId = (): string | null => {
+  const payload = decodeJwtPayload(safeGet(AUTH_TOKEN_KEY));
+  const raw = payload?.userId;
+  return raw === null || raw === undefined ? null : String(raw);
+};
+
 const readLocal = (): Payload => {
   const values: Record<string, string> = {};
-  for (const key of [...SYNCED_KEYS, ...listLocalPrefixKeys()]) {
-    try {
-      const value = window.localStorage.getItem(key);
-      if (value !== null && value !== '') values[key] = value;
-    } catch {
-      // 隐私模式下 localStorage 可能整个抛 —— 同步是增值功能,不该让它拖垮页面。
-    }
+  for (const key of SYNCED_KEYS) {
+    const value = safeGet(key);
+    if (value !== null && value !== '') values[key] = value;
   }
-  let updatedAt = '';
-  try {
-    updatedAt = window.localStorage.getItem(UPDATED_AT_KEY) ?? '';
-  } catch {
-    updatedAt = '';
-  }
-  return { values, updatedAt };
+  return { values, updatedAt: safeGet(UPDATED_AT_KEY) ?? '' };
 };
 
 const writeLocal = (values: Record<string, unknown>, updatedAt: string): void => {
   for (const key of SYNCED_KEYS) {
     const value = values[key];
-    try {
-      if (typeof value === 'string') window.localStorage.setItem(key, value);
-    } catch {
-      // 同上
-    }
+    if (typeof value === 'string') safeSet(key, value);
   }
-  // 前缀键:远端那份是权威(能走到这里 = 远端更新)。写入远端有的;
-  // 删掉本机有、远端没有的 —— 否则"发出去后已清掉的草稿"会在旧设备上复活。
-  try {
-    const remotePrefixKeys = new Set(
-      Object.keys(values).filter((key) => matchesSyncedPrefix(key) && typeof values[key] === 'string'),
-    );
-    for (const key of remotePrefixKeys) {
-      window.localStorage.setItem(key, values[key] as string);
-    }
-    for (const localKey of listLocalPrefixKeys()) {
-      if (!remotePrefixKeys.has(localKey)) window.localStorage.removeItem(localKey);
-    }
-  } catch {
-    // 同上
-  }
-  try {
-    window.localStorage.setItem(UPDATED_AT_KEY, updatedAt);
-  } catch {
-    // 同上
-  }
+  safeSet(UPDATED_AT_KEY, updatedAt);
 };
+
+/**
+ * 清掉本机与账号相关的一切:同步键、草稿、时间戳、主人标记。
+ * 登出时调;换账号登录(主人 ≠ 当前用户)时也在拉取前先调。
+ * **不**动 `auth-token`(登出流程自己管)与主题、语言这类与账号无关的键。
+ */
+export function clearLocalAccountState(): void {
+  for (const key of SYNCED_KEYS) safeRemove(key);
+  for (const key of listLocalPrivateKeys()) safeRemove(key);
+  safeRemove(UPDATED_AT_KEY);
+  safeRemove(OWNER_KEY);
+}
+
+/**
+ * hl 复核 P3-7:**登出**只清本机私有的东西(草稿、时间戳),同步键与主人标记留着。
+ *
+ * 原来登出调 `clearLocalAccountState` 连同步键一起清 —— 同一个人再登录时本机是空的、
+ * 服务端那份必然"不一样",于是每次登录都整页重载一次。换人的情况不靠登出清理:
+ * 拉取时主人标记 ≠ 当前用户,`pullAccountSettings` 会先整体清掉、且绝不推上去。
+ */
+export function clearLocalAccountStateOnLogout(): void {
+  for (const key of listLocalPrivateKeys()) safeRemove(key);
+  safeRemove(UPDATED_AT_KEY);
+}
 
 const isNewer = (left: string, right: string): boolean => {
   const a = Date.parse(left);
@@ -121,14 +149,26 @@ const isNewer = (left: string, right: string): boolean => {
   return a > b;
 };
 
+const hasLegacyDraftKeys = (values: Record<string, unknown>): boolean =>
+  Object.keys(values).some((key) => LOCAL_PRIVATE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix)));
+
 /**
  * 登录后拉一次。
  *
  * 服务端那份更新就落到本机并返回 true(调用方据此让界面重读)——
  * 本机更新则反向推上去,不覆盖用户刚在本机做的改动。
+ *
+ * 主人 ≠ 当前用户时本机那份**绝不推**:先清掉,再把服务端的落下来(服务端没有就从
+ * 默认值开始,同样不推)。
  */
 export async function pullAccountSettings(): Promise<boolean> {
   try {
+    const accountId = readCurrentAccountId();
+    const owner = safeGet(OWNER_KEY);
+    const switchedAccount = accountId !== null && owner !== null && owner !== accountId;
+    if (switchedAccount) clearLocalAccountState();
+    if (accountId !== null) safeSet(OWNER_KEY, accountId);
+
     const response = await authenticatedFetch('/api/settings/ui');
     if (!response.ok) return false;
     const payload = (await response.json()) as {
@@ -137,14 +177,15 @@ export async function pullAccountSettings(): Promise<boolean> {
     };
     const remote = payload.settings;
     if (!remote || typeof remote !== 'object' || !remote.values) {
-      // 服务端还没有这个账号的偏好:把本机这份作为初始值推上去。
-      await pushAccountSettings();
+      // 服务端还没有这个账号的偏好:把本机这份作为初始值推上去 —— 但只在本机这份确实是
+      // 他自己的(不是刚清掉的上一个人的)时。
+      if (!switchedAccount) await pushAccountSettings();
       return false;
     }
 
     const local = readLocal();
     const remoteUpdatedAt = payload.clientUpdatedAt || remote.updatedAt || '';
-    if (isNewer(local.updatedAt, remoteUpdatedAt)) {
+    if (!switchedAccount && isNewer(local.updatedAt, remoteUpdatedAt)) {
       await pushAccountSettings();
       return false;
     }
@@ -161,6 +202,8 @@ export async function pullAccountSettings(): Promise<boolean> {
     });
 
     writeLocal(remote.values, remoteUpdatedAt || new Date().toISOString());
+    // 老记录里还躺着草稿正文:推一次把它整体覆盖掉(值只含 SYNCED_KEYS)。
+    if (hasLegacyDraftKeys(remote.values)) void pushAccountSettings();
     return changed;
   } catch {
     // 拉失败就用本机那份,什么都不做 —— 这条路径上没有任何值得打断用户的东西。
@@ -168,15 +211,16 @@ export async function pullAccountSettings(): Promise<boolean> {
   }
 }
 
-/** 改动后推一次。调用点自己决定时机(保存按钮、切换开关)。 */
+/** 改动后推一次。调用点自己决定时机(保存按钮、切换开关)。主人不是当前用户时不推。 */
 export async function pushAccountSettings(): Promise<void> {
+  const accountId = readCurrentAccountId();
+  const owner = safeGet(OWNER_KEY);
+  if (accountId !== null && owner !== null && owner !== accountId) return;
+  if (accountId !== null && owner === null) safeSet(OWNER_KEY, accountId);
+
   const updatedAt = new Date().toISOString();
   const { values } = readLocal();
-  try {
-    window.localStorage.setItem(UPDATED_AT_KEY, updatedAt);
-  } catch {
-    // 同上
-  }
+  safeSet(UPDATED_AT_KEY, updatedAt);
 
   try {
     await authenticatedFetch('/api/settings/ui', {
@@ -192,16 +236,17 @@ export async function pushAccountSettings(): Promise<void> {
 export const ACCOUNT_SYNCED_KEYS: readonly string[] = SYNCED_KEYS;
 
 /**
- * dl:草稿这类高频改动的**拖尾节流推送**。
+ * 高频改动的**拖尾节流推送**(停笔 8 秒推一次;页面隐藏时立刻推)。
  *
- * 设置页的开关本来就在保存动作里直接 push;草稿是每个键入都落一次 localStorage
- * 的东西,不能每敲一个字打一次接口 —— 停笔 8 秒后推一次。页面隐藏时立刻推:
- * "打了一半合上电脑,另一台接着打"正是这个功能存在的理由。
+ * dl 时给草稿用;hl 起草稿不再同步,输入框那边的调用保留为空转 —— 推的只会是
+ * SYNCED_KEYS,没有必要为每次停笔打一次接口。留着这个导出是为了不动输入框的代码;
+ * 真正要同步的偏好改动都在保存动作里直接 `pushAccountSettings()`。
  */
 const PUSH_DEBOUNCE_MS = 8_000;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function schedulePushAccountSettings(delayMs: number = PUSH_DEBOUNCE_MS): void {
+export function schedulePushAccountSettings(delayMs: number = PUSH_DEBOUNCE_MS, options: { force?: boolean } = {}): void {
+  if (!options.force) return;
   if (pushTimer) clearTimeout(pushTimer);
   pushTimer = setTimeout(() => {
     pushTimer = null;

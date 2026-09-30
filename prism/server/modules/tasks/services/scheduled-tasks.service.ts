@@ -2,12 +2,15 @@ import crypto from 'node:crypto';
 
 import {
   userDb as usersDb,
+  canViewerSeeProjectPath,
+  projectsDb,
   scheduledTasksDb,
   sessionsDb,
   sessionMessagesDb,
   type ScheduledTaskRow,
   type TaskFrequency,
 } from '@/modules/database/index.js';
+import { assertViewerMayCreateSessionAt, seedDisplayLogFromTranscript } from '@/modules/providers/index.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import { generateMessageId } from '@/shared/utils.js';
 import { createLogger } from '@/shared/logger.js';
@@ -84,7 +87,31 @@ export function computeRetryAt(recentStatuses: string[], now: Date, regularNext:
   return retryAt;
 }
 
-type QueryClaudeSDK = (message: string, options: Record<string, unknown>, writer: unknown) => Promise<unknown>;
+/**
+ * hl(动态 P1-1):一次性回合的返回值(见 claude-sdk `oneShotOutcome`)。
+ * 老的 `undefined` 也接受 —— 单测里注入的假 SDK、以及万一某条路径没返回,
+ * 都按"没报失败"处理,但真正的失败一定带 `ok:false`。
+ */
+export type OneShotOutcome = {
+  ok: boolean;
+  exitCode: 0 | 1;
+  aborted: boolean;
+  error: string | null;
+  sessionId: string | null;
+};
+type QueryClaudeSDK = (message: string, options: Record<string, unknown>, writer: unknown) => Promise<OneShotOutcome | undefined | unknown>;
+
+/** 把 queryClaudeSDK 的返回值读成明确的三态:成功 / 失败(原因)/ 被中止。 */
+export function readOneShotOutcome(value: unknown): { ok: true } | { ok: false; aborted: boolean; error: string } {
+  if (!value || typeof value !== 'object') return { ok: true };
+  const outcome = value as Partial<OneShotOutcome>;
+  if (outcome.ok === true || (outcome.ok === undefined && outcome.exitCode !== 1)) return { ok: true };
+  return {
+    ok: false,
+    aborted: Boolean(outcome.aborted),
+    error: outcome.error || (outcome.aborted ? '回合被中止' : '回合失败'),
+  };
+}
 /**
  * 中止一条回合。与 `queryClaudeSDK` 一样由 composition root 注入 ——
  * 这个模块不能直接 import claude-sdk(eslint 的模块边界不让,而且会形成环)。
@@ -131,21 +158,35 @@ export function computeNextRunAt(task: FrequencyFields, from: Date): Date | null
     d.setHours(hour, minute, 0, 0);
     return d;
   };
+  /**
+   * hl(09-24 P2-4):"明天同一时刻"用日历日推,不用 `+24h`。
+   *
+   * 夏令时切换那天一天不是 24 小时:回拨日(America/New_York 11 月)`+24h` 落在
+   * 同一日历日的 23:xx,`setHours` 再把它拉回**今天**的时刻 → 结果 ≤ from,
+   * 每天任务在那天要么多跑一次、要么跳过一天。`setDate(getDate()+1)` 让 JS
+   * 按本地日历进位,时刻由 `setHours` 钉住。生产是 Asia/Shanghai 不受影响,
+   * 但这是正确性,不是时区偏好。
+   */
+  const nextCalendarDay = (base: Date) => {
+    const d = new Date(base);
+    d.setDate(d.getDate() + 1);
+    return atTime(d);
+  };
 
   if (frequency === 'daily') {
     let next = atTime(from);
-    if (next <= from) { next = atTime(new Date(from.getTime() + 24 * 3600_000)); }
+    if (next <= from) next = nextCalendarDay(from);
     return next;
   }
 
   if (frequency === 'weekdays') {
     let next = atTime(from);
     // 已过今天时刻则从明天起找;周六(6)/周日(0)跳过
-    if (next <= from) next = atTime(new Date(from.getTime() + 24 * 3600_000));
+    if (next <= from) next = nextCalendarDay(from);
     for (let i = 0; i < 7; i += 1) {
       const day = next.getDay();
       if (day !== 0 && day !== 6) return next;
-      next = atTime(new Date(next.getTime() + 24 * 3600_000));
+      next = nextCalendarDay(next);
     }
     return next;
   }
@@ -155,7 +196,7 @@ export function computeNextRunAt(task: FrequencyFields, from: Date): Date | null
     let next = atTime(from);
     for (let i = 0; i < 8; i += 1) {
       if (next.getDay() === targetWeekday && next > from) return next;
-      next = atTime(new Date(next.getTime() + 24 * 3600_000));
+      next = nextCalendarDay(next);
     }
     return next;
   }
@@ -174,6 +215,25 @@ export function toDbUtc(date: Date): string {
 
 function nowDbUtc(): string {
   return toDbUtc(new Date());
+}
+
+/**
+ * hl(09-24 P2-12):服务器时区的自述,随任务列表 / 任务响应下发。
+ *
+ * `computeNextRunAt` 按**服务器本地时区**算,而表单和「下一次」原来按浏览器时区
+ * 显示、给 Claude 的隐藏上下文还写着"服务器与用户同一时区" —— Docker 默认 UTC 时
+ * 差 8 小时,用户填 10:00 看到"下一次 18:00"。前端拿这份去格式化和标注。
+ * 与 skillwhet 夜训的 `serverTime` 同形,多一个 `now`(ISO)供前端算相对时间。
+ */
+export function serverTimeInfo(now: Date = new Date()): { tz: string; offsetMin: number; local: string; now: string } {
+  let tz = 'UTC';
+  try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { /* 极少数运行时没有 ICU */ }
+  return {
+    tz,
+    offsetMin: -now.getTimezoneOffset(),
+    local: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+    now: now.toISOString(),
+  };
 }
 
 /* ── 回执行 ────────────────────────────────────────────────────────── */
@@ -215,7 +275,50 @@ function resolveTargetSessionId(task: ScheduledTaskRow): string {
   return sessionId;
 }
 
-async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual'): Promise<void> {
+/**
+ * hl(09-24 P1-9 / 动态已知):跑之前先确认**项目还在、没归档、主人还看得见**。
+ *
+ * 此前任务找不到会话就 `createAppSession` → `createProjectPath`,把已删项目以新
+ * project_id 重建出来(属主是任务主人,原共享 / 公开设置全丢);已归档的项目照跑。
+ * 这里一律不建项目:返回原因,调用方记一次 failed(不重试 —— 项目回来之前重试
+ * 只会刷出三条一模一样的失败)。导出供单测。
+ */
+export async function explainProjectUnavailable(task: Pick<ScheduledTaskRow, 'project_path' | 'owner_user_id'>): Promise<string | null> {
+  const owner = task.owner_user_id != null ? usersDb.getUserById(task.owner_user_id) : null;
+  if (!owner) return '任务主人账号不存在,任务跳过';
+  const viewer = { userId: owner.id, username: owner.username };
+  const project = projectsDb.getProjectPath(task.project_path);
+  if (!project) {
+    /**
+     * 没有项目行:要么项目被删了(hl 起删项目会连带删任务,所以正常不会走到这),
+     * 要么任务建在一条"还没被扫描进 projects 表"的路径上(建任务时允许:公共目录 /
+     * root)。用与建任务**同一道门**判:目录还在且主人现在仍可在那里开会话就放行
+     * (跑起来会照旧登记项目,属主是任务主人);过不了门就是删了 / 越界了,跳过。
+     */
+    try {
+      await assertViewerMayCreateSessionAt(viewer, task.project_path);
+      return null;
+    } catch {
+      return `项目 ${task.project_path} 已删除或不可访问,任务跳过`;
+    }
+  }
+  if (project.isArchived) return `项目 ${task.project_path} 已归档,任务跳过`;
+  if (!canViewerSeeProjectPath(viewer, task.project_path)) {
+    return `任务主人(${owner.username})已无权访问项目 ${task.project_path},任务跳过`;
+  }
+  return null;
+}
+
+/** 失败但**不该**触发 5 分钟重试的那一类(项目不在了、用户按了停止)。 */
+class TaskSkippedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TaskSkippedError';
+  }
+}
+
+/** 导出供单测(hl-tasks.test):调度 / 手动两种触发都从这里进。 */
+export async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual'): Promise<void> {
   if (!queryClaudeSDKRef) return;
   if (!scheduledTasksDb.claimRun(task.id)) return; // 已在跑
 
@@ -224,11 +327,30 @@ async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual
   let status: 'completed' | 'failed' = 'completed';
   let detail: string | null = null;
   let sessionId: string | null = null;
+  /** 跳过类失败(项目不在 / 被中止)不进入重试;真失败才重试。 */
+  let retryable = true;
 
   try {
+    const unavailable = await explainProjectUnavailable(task);
+    if (unavailable) throw new TaskSkippedError(unavailable);
+
     sessionId = resolveTargetSessionId(task);
     const session = sessionsDb.getSessionById(sessionId);
     const providerSessionId = session?.provider_session_id ?? null;
+
+    /**
+     * hl(动态 P2-1):**回执之前先把显示日志抄齐。**
+     *
+     * 终端接管释放会 `deleteForSession` 清掉这条会话的显示日志;之后任务写的
+     * 用户指令行与 ⏰ / ✅ 回执全被 `session-messages.db` 的守门拒掉("日志空着
+     * 而 transcript 存在"),会话页什么都看不到,直到有人手动发一条触发重抄。
+     * 这里走与 `chat.send` **同一条** seed 路径(并发去重、失败可区分),不另写一套。
+     * 抄失败就当没抄:这一轮的落库会被守门拒绝,下一轮再抄 —— 和 chat 的语义一致。
+     */
+    const seed = await seedDisplayLogFromTranscript(sessionId);
+    if (seed.status === 'failed') {
+      log.warn(`[Tasks] 「${task.name}」会话 ${sessionId} 的显示日志重抄失败,本轮回执可能不落库`);
+    }
 
     const run = chatRunRegistry.startRun({
       appSessionId: sessionId,
@@ -253,6 +375,12 @@ async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual
       kind: 'text',
       role: 'user',
       content: task.instructions,
+      // hl 复核(动态 P2-6 同源):记下发起人 = 任务主人。会话的归档 / 删除按"第一条
+      // 用户消息的 senderUserId"认发起人,缺了它,协作者自己的任务建出的会话他本人
+      // 动不了。只影响会话归属判定,不改 canTouch / 以谁的身份跑。
+      senderUserId: task.owner_user_id ?? undefined,
+      // gy:定时任务的回合没有人在屏幕前 —— 效果调查卡按 origin 跳过它。
+      origin: 'scheduled',
     } as Parameters<typeof sessionMessagesDb.append>[1]);
     appendReceipt(sessionId, 'started', task);
 
@@ -278,8 +406,19 @@ async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual
       // 后者只能靠改用法。混在一起就两个都看不出来。
       usageSource: 'task',
       oneShot: true,
-    }, run.writer).finally(() => {
-      chatRunRegistry.completeRunIfCurrent(run, { exitCode: 0 });
+    }, run.writer);
+    const settledRun = runPromise.then(
+      (value) => {
+        // hl(动态 P1-1):兜底的终止帧按真实成败给 exitCode(正常情况下 SDK 自己
+        // 已经发过 complete,registry 只收一个)。
+        chatRunRegistry.completeRunIfCurrent(run, { exitCode: readOneShotOutcome(value).ok ? 0 : 1 });
+        return value;
+      },
+      (error) => {
+        chatRunRegistry.completeRunIfCurrent(run, { exitCode: 1 });
+        throw error;
+      },
+    ).finally(() => {
       // 回合结束要把这条会话上排队的网页消息放出去 —— 用户在任务跑着的时候发的那条
       // 会进 pendingSends,没人来接就得躺满 30 分钟 TTL。外部 API 那条路(routes/agent.js)
       // 在 dv 轮补过同样的一句,定时任务这条同类路径漏了。
@@ -287,7 +426,19 @@ async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual
     });
 
     try {
-      await promiseWithTimeout(runPromise, TASK_RUN_TIMEOUT_MS);
+      const outcome = readOneShotOutcome(await promiseWithTimeout(settledRun, TASK_RUN_TIMEOUT_MS));
+      /**
+       * hl(动态 P1-1):**SDK 说失败就是失败。**
+       *
+       * 此前 promise 一 resolve 就记 completed —— 模型名不存在、网关 400、超出轮次
+       * 上限,运行记录里全是「成功」,会话里 error 帧后面紧跟「✅ 执行完成」;
+       * 5 分钟重试、连续 3 次停手、失败通知从没生效过。
+       * 被用户按停止中止的那次也记 failed,但不重试(人正看着,重跑由他决定)。
+       */
+      if (!outcome.ok) {
+        if (outcome.aborted) throw new TaskSkippedError(outcome.error);
+        throw new Error(outcome.error);
+      }
     } catch (error) {
       if (error instanceof TaskRunTimeoutError) {
         /**
@@ -321,6 +472,7 @@ async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual
   } catch (error) {
     status = 'failed';
     detail = error instanceof Error ? error.message : String(error);
+    if (error instanceof TaskSkippedError) retryable = false;
     log.error(`[Tasks] 「${task.name}」(${trigger}) 执行失败:`, detail);
     /**
      * 失败要有人知道。
@@ -349,13 +501,28 @@ async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 'manual
     appendReceipt(sessionId, status, task, status === 'completed' ? `耗时 ${seconds}s` : detail ?? undefined);
   }
 
+  /**
+   * hl(09-24 P2-10):**收尾按库里最新的任务算,不用起跑时那份快照。**
+   *
+   * 运行期间用户可能改了频率 / 时刻 / 启停(PATCH 会重推 next_run_at),原来这里
+   * 拿闭包里的旧 `task` 重算并写回 —— 改成 manual 的任务会被写回一个 next_run_at,
+   * 下一拍就自动跑一次;改了时刻的任务下一次仍按旧时刻。任务在这段时间被删了
+   * (删项目连带删任务)就什么都不写。
+   */
+  const latest = scheduledTasksDb.getById(task.id);
+  if (!latest) {
+    log.info(`[Tasks] 「${task.name}」运行期间已被删除,不再写运行记录`);
+    return;
+  }
+
   // 下一次时刻从"这次结束"起算 —— 手动触发也顺带校准
-  const next = computeNextRunAt(task, new Date());
-  let nextRunAt = task.enabled && next ? toDbUtc(next) : task.enabled ? null : task.next_run_at;
+  const next = computeNextRunAt(latest, new Date());
+  let nextRunAt = latest.enabled && next ? toDbUtc(next) : latest.enabled ? null : latest.next_run_at;
 
   // dm:调度触发的失败,5 分钟后自动重试一次;连续失败 3 次就停手等正常周期。
   // 手动触发不重试 —— 人正看着,重跑该由他自己决定。
-  if (status === 'failed' && trigger === 'schedule' && task.enabled && next) {
+  // hl:跳过类失败(项目不在 / 被中止)也不重试(见 TaskSkippedError)。
+  if (status === 'failed' && retryable && trigger === 'schedule' && latest.enabled && next) {
     const previousStatuses = scheduledTasksDb
       .listRuns(task.id, TASK_RETRY_MAX_CONSECUTIVE_FAILURES)
       .rows.map((row) => row.status);

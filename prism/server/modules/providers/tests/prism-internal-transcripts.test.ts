@@ -25,7 +25,7 @@ const encoded = (cwd: string) =>
 
 describe('Prism 自产 transcript 的忽略判据', () => {
   it('登记在案的入口', () => {
-    expect([...PRISM_INTERNAL_CWD_MARKERS]).toEqual(['prism-model-probe']);
+    expect([...PRISM_INTERNAL_CWD_MARKERS]).toEqual(['prism-model-probe', 'prism-skillwhet']);
   });
 
   it('模型探测被认出来', () => {
@@ -57,6 +57,21 @@ describe('Prism 自产 transcript 的忽略判据', () => {
   it('watcher 与全量同步同源 —— 不是各写一份', () => {
     const filePath = encoded('/tmp/prism-model-probe-x');
     expect(shouldIgnoreWatchPath(filePath)).toBe(isPrismInternalTranscript(filePath));
+  });
+
+  /**
+   * gy:技能优化(SkillWhet)。`whet serve` 每次调 `claude -p` 都 mkdtemp 一个 cwd,
+   * 默认落在 `~/.prism/skillwhet/tmp/prism-skillwhet/whet-claude-xxxx` —— 与 9-03 那次
+   * `skillopt_claude_*` 长出幽灵项目是同一个病根。标记 `prism-skillwhet` 要能挡住它,
+   * 而普通项目里恰好叫 `skillwhet` 的目录不能被误杀。
+   */
+  it('技能优化的临时 cwd 被忽略;真项目里叫 skillwhet 的目录不受影响', () => {
+    const tmpCwd = '/home/jovyan/.prism/skillwhet/tmp/prism-skillwhet/whet-claude-ab12';
+    expect(isPrismInternalTranscript(encoded(tmpCwd))).toBe(true);
+    expect(shouldIgnoreWatchPath(encoded(tmpCwd))).toBe(true);
+    expect(isPrismInternalProjectPath(tmpCwd)).toBe(true);
+    expect(isPrismInternalProjectPath('/home/jovyan/work/skillwhet')).toBe(false);
+    expect(isPrismInternalTranscript(encoded('/home/jovyan/work/skillwhet'))).toBe(false);
   });
 
   it('子代理 transcript 仍然照旧忽略(别把老规矩改坏)', () => {

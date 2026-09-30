@@ -12,6 +12,11 @@ import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/pris
 
 import { useTheme } from '../../contexts/ThemeContext';
 
+import { withAccessibleContrast } from './accessibleCodeTheme';
+
+// hl(P3 可访问性):oneLight 的注释 / 字符串色在浅底上只有 3.0–3.8:1,压到 ≥4.5:1(见 accessibleCodeTheme)。
+const accessibleOneLight = withAccessibleContrast(oneLight as Record<string, Record<string, unknown>>);
+
 /**
  * The real highlighter, kept in its own module so it lands in its own chunk.
  *
@@ -42,7 +47,7 @@ export default function SyntaxHighlighterImpl({
   return (
     <SyntaxHighlighter
       language={language}
-      style={isDarkMode ? oneDark : oneLight}
+      style={isDarkMode ? oneDark : accessibleOneLight}
       customStyle={customStyle}
       codeTagProps={codeTagProps}
     >

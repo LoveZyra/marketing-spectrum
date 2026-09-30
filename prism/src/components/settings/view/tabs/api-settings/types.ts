@@ -10,6 +10,8 @@ export type ApiKeyItem = {
   created_at: string;
   last_used?: string | null;
   is_active: boolean;
+  /** hl:因退出所有设备 / 改密 / 重置密码而作废(服务端按 token_version 判);「启用」可重新签发。 */
+  revoked?: number | boolean;
 };
 
 export type CreatedApiKey = {

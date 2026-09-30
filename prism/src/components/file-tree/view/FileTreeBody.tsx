@@ -39,6 +39,10 @@ type FileTreeBodyProps = {
   selectedPaths?: ReadonlySet<string>;
   onToggleSelect?: (item: FileTreeNode, event: React.MouseEvent) => void;
   selectionMode?: boolean;
+  /** hl(动态 P2-10):截断目录的懒加载,见 FileTreeNode。 */
+  onLoadMore?: (item: FileTreeNode) => void;
+  loadingSubtrees?: ReadonlySet<string>;
+  nodeLabels?: { loadMore: string; loading: string; symlink: string };
 };
 
 export default function FileTreeBody({
@@ -71,6 +75,9 @@ export default function FileTreeBody({
   selectedPaths,
   onToggleSelect,
   selectionMode,
+  onLoadMore,
+  loadingSubtrees,
+  nodeLabels,
 }: FileTreeBodyProps) {
   const { t } = useTranslation();
 
@@ -117,6 +124,9 @@ export default function FileTreeBody({
           selectedPaths={selectedPaths}
           onToggleSelect={onToggleSelect}
           selectionMode={selectionMode}
+          onLoadMore={onLoadMore}
+          loadingSubtrees={loadingSubtrees}
+          nodeLabels={nodeLabels}
         />
       )}
     </>

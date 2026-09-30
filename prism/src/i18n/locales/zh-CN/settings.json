@@ -10,7 +10,7 @@
   "account": {
     "signedInAs": "当前登录账号",
     "logoutTitle": "退出登录 / 切换账号",
-    "logoutHelp": "退出后回到登录页；用另一个账号登录即完成切换。本地会话与草稿保存在此浏览器中，不会丢失。",
+    "logoutHelp": "退出后回到登录页；用另一个账号登录即完成切换。本机的界面偏好与未发送的草稿会一并清除（偏好已同步到账号，再次登录自动恢复）。",
     "logoutButton": "退出登录",
     "revokeAllTitle": "退出所有设备",
     "revokeAllHelp": "吊销此账号在所有浏览器/设备上已签发的登录令牌（怀疑令牌泄露时使用），随后本机也会回到登录页。",
@@ -45,6 +45,10 @@
       "noProject": "(未归属项目)",
       "refresh": "刷新",
       "title": "附件空间"
+    },
+    "skillSurvey": {
+      "title": "技能效果询问",
+      "help": "调过技能的回合结束后,按抽样在回答下方问一句「这次处理得怎么样」。你的答复与所有人的一起,只用于优化这个技能本身。"
     }
   },
   "quickSettings": {
@@ -212,7 +216,8 @@
     "confirmDelete": "确定要删除此 API 密钥吗？",
     "status": {
       "active": "使用中",
-      "inactive": "已停用"
+      "inactive": "已停用",
+      "revoked": "已作废（退出所有设备 / 改密后失效，可重新启用）"
     },
     "github": {
       "title": "GitHub 令牌",
@@ -315,7 +320,9 @@
       "badge": "托管",
       "hint": "由棱镜托管。"
     },
-    "addServer": "添加 {{provider}} MCP 服务器"
+    "addServer": "添加 {{provider}} MCP 服务器",
+    "refreshingScopes": "正在刷新项目作用域…",
+    "loading": "正在加载 MCP 服务…"
   },
   "accounts": {
     "title": "账号审批",
@@ -524,7 +531,8 @@
     "removeConfirm": "卸载",
     "removing": "卸载中…",
     "removeDone": "已卸载「{{name}}」",
-    "removeFailed": "卸载失败,请重试。"
+    "removeFailed": "卸载失败,请重试。",
+    "description": "管理 {{provider}} 的技能:可从本地文件、整个文件夹或项目目录添加。"
   },
   "usage": {
     "title": "用量与费用",
@@ -532,7 +540,7 @@
     "loading": "加载中…",
     "empty": "这段时间还没有用量记录。跑一轮对话之后就会出现。",
     "scopedHint": "只统计你自己的用量",
-    "footnote": "费用取自模型返回的计费值,按轮记账。与对话页 /cost 里的数字不是一回事 —— 那个是当前上下文占用,这里是累计花销。",
+    "footnote": "费用取自模型返回的计费值,按轮记账。与对话页 /cost 里的数字不是一回事 —— 那个是当前上下文占用,这里是累计花销。「输入」不含缓存,命中缓存的部分记在「缓存读」里(按约一折计费)。升级到 hj 版本之前的 token 数记录不全 —— 网关把用量放在流的末尾,旧版本没读到;费用不受影响。",
     "by": {
       "day": "按日期",
       "username": "按用户",
@@ -545,9 +553,12 @@
       "runs": "轮次",
       "input": "输入",
       "output": "输出",
-      "cost": "费用"
+      "cost": "费用",
+      "cacheRead": "缓存读",
+      "cacheWrite": "缓存写"
     },
     "lastDays": "最近 {{count}} 天",
     "totalLine": "{{cost}} · {{runs}} 轮"
-  }
+  },
+  "close": "关闭设置"
 }

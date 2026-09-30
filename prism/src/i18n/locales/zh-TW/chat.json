@@ -37,10 +37,10 @@
     "send": "傳送",
     "stop": "停止",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enter 傳送 • Shift+Enter 換行 • Tab 切換模式 • / 斜線指令",
-      "enter": "Enter 傳送 • Shift+Enter 換行 • Tab 切換模式 • / 斜線指令"
+      "ctrlEnter": "Ctrl+Enter 傳送 • Shift+Enter 換行 • Shift+Tab 切換模式 • / 斜線指令",
+      "enter": "Enter 傳送 • Shift+Enter 換行 • Shift+Tab 切換模式 • / 斜線指令"
     },
-    "clickToChangeMode": "點擊變更權限模式（或在輸入框中按 Tab）",
+    "clickToChangeMode": "點擊變更權限模式（或在輸入框中按 Shift+Tab）",
     "showAllCommands": "顯示所有指令",
     "scrollToBottom": "捲動到底部",
     "attachmentPath": "路徑",
@@ -271,5 +271,44 @@
   },
   "home": {
     "starters": "試試這些開始"
+  },
+  "feedback": {
+    "failed": "反饋沒有儲存成功",
+    "up": "有幫助",
+    "down": "有問題",
+    "markedDown": "已標記有問題 · 點選可改",
+    "category": "問題類別",
+    "note": "說明",
+    "notePlaceholder": "哪裡不對?一句話就行",
+    "expected": "期望結果",
+    "expectedPlaceholder": "可不填。填了就是訓練時的判據 —— 越具體越好",
+    "skill": "這次的技能",
+    "skillPlaceholder": "沒調技能可留空",
+    "skillAuto": "自動識別,可改",
+    "retract": "撤回",
+    "cancel": "取消",
+    "submit": "提交",
+    "categories": {
+      "wrong_result": "結果不對",
+      "not_as_asked": "沒按要求做",
+      "wrong_tool": "用錯了技能/工具",
+      "too_slow": "太慢",
+      "other": "其他"
+    }
+  },
+  "survey": {
+    "thanks": "謝謝,已記下 —— 這會成為這個技能下次最佳化的依據。",
+    "skipped": "好的,這次不問了。",
+    "question": "這次「{{skill}}」處理得怎麼樣?",
+    "skip": "跳過",
+    "good": "好",
+    "neutral": "一般",
+    "bad": "差",
+    "hintPick": "選一檔即記錄;想多說兩句再填下面",
+    "hintRecorded": "已記錄。可以補一句待最佳化點,或直接關掉",
+    "notePlaceholder": "待最佳化點(可不填)。例:漏了渠道口徑 / 表格少一列 / 該先問我時間窗",
+    "footnote": "調過技能的回合按抽樣詢問;同一技能一小時內不再問;可在「我的賬號」關閉",
+    "close": "就這樣",
+    "submit": "提交"
   }
 }

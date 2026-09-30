@@ -57,6 +57,8 @@ export type CreateProjectResponse = {
   error?: string | CreateProjectApiError;
   details?: string;
   message?: string;
+  /** hl:路径命中已归档项目 → 服务端还原了它(而不是新建)。 */
+  revived?: boolean;
 };
 
 export type WizardFormState = {

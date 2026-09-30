@@ -102,6 +102,34 @@ export const scheduledTasksDb = {
     })();
   },
 
+  /**
+   * hl(09-24 P1-9):项目**永久删除**时把它的定时任务连运行记录一起删掉。
+   *
+   * 此前删项目不碰 `scheduled_tasks`:任务到点照跑,找不到固定会话就
+   * `createAppSession` → `createProjectPath` 把项目以**新 project_id** 重建出来,
+   * 属主是任务主人、原共享 / 公开设置全丢。调用方把它放进删项目的同一个事务里。
+   */
+  deleteByProjectPath(projectPath: string): number {
+    const db = getConnection();
+    db.prepare(`
+      DELETE FROM scheduled_task_runs
+      WHERE task_id IN (SELECT id FROM scheduled_tasks WHERE project_path = ?)
+    `).run(projectPath);
+    return db.prepare('DELETE FROM scheduled_tasks WHERE project_path = ?').run(projectPath).changes;
+  },
+
+  /**
+   * hl(09-24 P1-9):项目**归档**时停用它的定时任务(不删:还原项目后由人决定要不要
+   * 重新启用 —— 归档期间可能已经错过很多次,自动恢复等于一还原就立刻跑)。
+   */
+  disableByProjectPath(projectPath: string): number {
+    return getConnection().prepare(`
+      UPDATE scheduled_tasks
+      SET enabled = 0, next_run_at = NULL
+      WHERE project_path = ? AND enabled = 1
+    `).run(projectPath).changes;
+  },
+
   getById(id: string): ScheduledTaskRow | undefined {
     return getConnection().prepare(`SELECT ${COLUMNS} FROM scheduled_tasks WHERE id = ?`).get(id) as ScheduledTaskRow | undefined;
   },

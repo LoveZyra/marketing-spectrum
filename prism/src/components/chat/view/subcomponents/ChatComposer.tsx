@@ -17,6 +17,7 @@ import type { AttachedDoc, DocUploadProgress, QueuedDraft } from '../../hooks/us
 import { useComposerDensity } from '../../hooks/useComposerDensity';
 import type { PendingPermissionRequest, PermissionMode } from '../../types/types';
 import { executionModeMeta, orderedExecutionModes } from '../../utils/executionModes';
+import { clampMenuLeft } from '../../utils/menuPlacement';
 import type { ProviderModelOption } from '../../../../types/app';
 import {
   PromptInput,
@@ -245,7 +246,7 @@ function ChatComposer({
     const textareaRect = textareaRef.current?.getBoundingClientRect();
     return {
       top: textareaRect ? Math.max(16, textareaRect.top - 316) : 0,
-      left: textareaRect ? textareaRect.left : 16,
+      left: textareaRect ? Math.max(8, textareaRect.left) : 16,
       bottom: textareaRect ? window.innerHeight - textareaRect.top + 8 : 90,
     };
   }, [isCommandMenuOpen, textareaRef]);
@@ -270,8 +271,10 @@ function ChatComposer({
     const rect = modeDropdownButtonRef.current?.getBoundingClientRect();
     if (!rect) return;
 
+    // hl(动态 P2-21):手机上菜单右半截被裁 —— 夹进视口(w-72 = 288px,渲染后按实测宽)。
+    const menuWidth = modeDropdownMenuRef.current?.offsetWidth || 288;
     setModeDropdownPosition({
-      left: rect.left,
+      left: clampMenuLeft(rect.left, menuWidth, window.innerWidth),
       top: rect.top - 8,
       maxHeight: Math.max(96, rect.top - 16),
     });
@@ -332,8 +335,9 @@ function ChatComposer({
       return;
     }
 
+    const menuWidth = effortDropdownMenuRef.current?.offsetWidth || 160;
     setEffortDropdownPosition({
-      left: rect.left,
+      left: clampMenuLeft(rect.left, menuWidth, window.innerWidth),
       top: rect.top - 8,
       maxHeight: Math.max(96, rect.top - 16),
     });

@@ -36,7 +36,10 @@
     "clearSearch": "Effacer la recherche",
     "openCommandPalette": "Ouvrir la palette de commandes",
     "attentionRequiredIndicator": "La session nécessite votre attention",
-    "approvalPendingIndicator": "En attente de votre autorisation d'outil"
+    "approvalPendingIndicator": "En attente de votre autorisation d'outil",
+    "hideSkillNav": "Hide skill navigation",
+    "showSkillNav": "Show skill navigation",
+    "noSidebarOnNotebook": "No project sidebar on the Notebook page"
   },
   "actions": {
     "settings": "Paramètres",

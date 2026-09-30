@@ -35,7 +35,10 @@ export function attachmentDisposition(fileName) {
   const base = safe || 'download';
 
   // 去掉非 ASCII 之后再 trim:"季度报告 2026.xlsx" 的回落版否则会以空格开头。
-  const ascii = base.replace(/[^\x20-\x7e]/g, '').replace(/["\\]/g, '').trim() || 'download';
+  let ascii = base.replace(/[^\x20-\x7e]/g, '').replace(/["\\]/g, '').trim() || 'download';
+  // hl(P3 文件组):「报告.txt」去掉中文只剩 `.txt` —— 老浏览器存下来是个隐藏文件。
+  // 主名被削空时保住扩展名:`download.txt`。
+  if (ascii.startsWith('.')) ascii = `download${ascii}`;
   const encoded = encodeURIComponent(base);
 
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;

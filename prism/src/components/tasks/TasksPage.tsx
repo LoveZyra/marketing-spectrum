@@ -6,7 +6,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { authenticatedFetch } from '../../utils/api';
-import { useToast } from '../../shared/view/ui';
+import { NumberInput, useToast } from '../../shared/view/ui';
 // 项目/会话/模型三个下拉抽成了共享实现:别处要用同一套交互时直接引它,
 // 而不是照着抄一遍 —— 抄出来的第二份迟早会漂。
 import { BrowseFolderFooter, FancySelect, type FancyOption } from '../../shared/view/ui/FancySelect';
@@ -17,6 +17,7 @@ import {
 import FolderBrowserModal from '../project-creation-wizard/components/FolderBrowserModal';
 import type { AppTab, Project } from '../../types/app';
 import { useModalKeyboard } from '../../shared/view/hooks/useModalKeyboard';
+import { uiLocale } from '../../utils/uiLocale';
 
 /**
  * 定时任务页(cj 轮起,版式对照用户给的 Scheduled tasks 参考图)。
@@ -97,11 +98,40 @@ interface WireRun {
 /** 详情页一屏铺几条,「看更多」每次再加这么多。 */
 const RUNS_PAGE = 8;
 
-function formatWhen(value: string | null): string {
+/**
+ * hl(09-24 P2-12):服务器时区的自述,随 GET /api/tasks 下发(与 skillwhet 夜训同形)。
+ * 任务的时刻按**服务器本地时区**调度;表单、「下一次」、给 Claude 的隐藏上下文
+ * 全部按它显示 / 描述,并标注时区名 —— 此前按浏览器时区,Docker 默认 UTC 时差 8 小时,
+ * 用户填 10:00 看到「下一次 18:00」。
+ */
+export type ServerTime = { tz: string; offsetMin: number; local: string; now: string };
+
+function offsetLabel(offsetMin: number): string {
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  const hours = Math.floor(abs / 60);
+  const minutes = abs % 60;
+  return `UTC${sign}${hours}${minutes ? `:${String(minutes).padStart(2, '0')}` : ''}`;
+}
+
+/** 时区标签:`Asia/Shanghai (UTC+8)`;拿不到服务器时区就按浏览器的(不标注)。 */
+function tzLabel(serverTime: ServerTime | null): string {
+  if (!serverTime) return '';
+  return `${serverTime.tz} (${offsetLabel(serverTime.offsetMin)})`;
+}
+
+function formatWhen(value: string | null, serverTime: ServerTime | null = null): string {
   if (!value) return '—';
   const date = new Date(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  if (serverTime?.tz) {
+    try {
+      return date.toLocaleString(uiLocale(), { timeZone: serverTime.tz });
+    } catch {
+      /* 浏览器不认这个时区名就退回本地时区 */
+    }
+  }
+  return date.toLocaleString(uiLocale());
 }
 
 /* ── 手动创建 / 编辑弹窗 ─────────────────────────────────────────── */
@@ -120,7 +150,7 @@ type FormState = {
 };
 
 function TaskFormModal({
-  initial, editingId, projects, models, defaultModelReal, onClose, onSaved,
+  initial, editingId, projects, models, defaultModelReal, serverTime, onClose, onSaved,
 }: {
   initial: FormState;
   editingId: string | null;
@@ -128,6 +158,8 @@ function TaskFormModal({
   models: FancyOption[];
   /** 「默认模型」实际指向谁(能查到就写在主行,别名退到副行)。 */
   defaultModelReal: string | null;
+  /** hl:服务器时区(表单里的时刻按它理解)。 */
+  serverTime: ServerTime | null;
   onClose: () => void;
   onSaved: (task: WireTask) => void;
 }) {
@@ -139,12 +171,8 @@ function TaskFormModal({
   const [browsingFolder, setBrowsingFolder] = useState(false);
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((f) => ({ ...f, [key]: value }));
   /** 数字时刻框:允许清空(空串),其余取整并夹进 [min,max]。 */
-  const setClamped = (key: 'runAtHour' | 'runAtMinute' | 'runAtDay', raw: string, min: number, max: number) => {
-    if (raw === '') { set(key, ''); return; }
-    const value = Number(raw);
-    if (Number.isNaN(value)) return;
-    set(key, Math.max(min, Math.min(max, Math.trunc(value))));
-  };
+  // hh:时 / 分 / 日三个数字框改用 NumberInput —— 打字时不夹取(原来 9 后面敲 1 → "91" → 被夹成 23),
+  // 离开输入框时才夹到范围里;空着提交用 placeholder 的默认值(见 submit)。
 
   // 三个下拉的选项全部走共享 hook,不许各写一份。
   const projectOptions = useProjectOptions(projects, form.projectPath);
@@ -238,7 +266,9 @@ function TaskFormModal({
                   variant="chip"
                   className="max-w-[55%] flex-1"
                   value={form.projectPath}
-                  onChange={(next) => set('projectPath', next)}
+                  // hl(09-24 P2-13):换项目就清掉已选的固定会话 —— 会话挂在项目上,
+                  // 带着别的项目的会话提交会被服务端 400。
+                  onChange={(next) => setForm((f) => (f.projectPath === next ? f : { ...f, projectPath: next, fixedSessionId: '' }))}
                   placeholder={t('tasksPage.form.pickProject', { defaultValue: '选择项目…' })}
                   searchable
                   searchPlaceholder={t('tasksPage.select.searchProjects', { defaultValue: '搜索项目…' })}
@@ -290,24 +320,32 @@ function TaskFormModal({
                   />
                 )}
                 {form.frequency === 'monthly' && (
-                  <input type="number" min={1} max={28} placeholder="1" className={`${field} w-20`} value={form.runAtDay}
-                    onChange={(e) => setClamped('runAtDay', e.target.value, 1, 28)} />
+                  <NumberInput integer allowEmpty min={1} max={28} placeholder="1" className={`${field} w-20`} value={form.runAtDay === '' ? null : form.runAtDay}
+                    onChange={(v) => set('runAtDay', v ?? '')} aria-label="day" />
                 )}
                 {form.frequency !== 'hourly' && form.frequency !== 'manual' && (
-                  <input type="number" min={0} max={23} placeholder="9" className={`${field} w-20`} value={form.runAtHour}
-                    onChange={(e) => setClamped('runAtHour', e.target.value, 0, 23)} />
+                  <NumberInput integer allowEmpty min={0} max={23} placeholder="9" className={`${field} w-20`} value={form.runAtHour === '' ? null : form.runAtHour}
+                    onChange={(v) => set('runAtHour', v ?? '')} aria-label="hour" />
                 )}
                 {form.frequency !== 'manual' && (
                   <>
                     <span className="text-muted-foreground">:</span>
-                    <input type="number" min={0} max={59} placeholder="0" className={`${field} w-20`} value={form.runAtMinute}
-                      onChange={(e) => setClamped('runAtMinute', e.target.value, 0, 59)} />
+                    <NumberInput integer allowEmpty min={0} max={59} placeholder="0" className={`${field} w-20`} value={form.runAtMinute === '' ? null : form.runAtMinute}
+                      onChange={(v) => set('runAtMinute', v ?? '')} aria-label="minute" />
                   </>
                 )}
                 {form.frequency === 'manual' && (
                   <span className="text-[12.5px] text-muted-foreground">{t('tasksPage.form.manualHint', { defaultValue: '只在点「立即运行」时执行' })}</span>
                 )}
               </div>
+              {form.frequency !== 'manual' && serverTime && (
+                <p className="mt-1 text-[11.5px] leading-4 text-muted-foreground">
+                  {t('tasksPage.form.serverTzHint', {
+                    tz: tzLabel(serverTime), local: serverTime.local,
+                    defaultValue: '按服务器时区 {{tz}} 理解,服务器现在 {{local}}',
+                  })}
+                </p>
+              )}
             </div>
             <div>
               <label className={label}>{t('tasksPage.form.sessionMode', { defaultValue: '会话' })}</label>
@@ -371,7 +409,7 @@ function TaskFormModal({
         onClose={() => setBrowsingFolder(false)}
         onFolderSelected={(folderPath) => {
           setBrowsingFolder(false);
-          if (folderPath) set('projectPath', folderPath);
+          if (folderPath) setForm((f) => (f.projectPath === folderPath ? f : { ...f, projectPath: folderPath, fixedSessionId: '' }));
         }}
       />
     </div>
@@ -384,10 +422,34 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
   const { t, i18n } = useTranslation('common');
   const { toast } = useToast();
   const [tasks, setTasks] = useState<WireTask[]>([]);
+  const [serverTime, setServerTime] = useState<ServerTime | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [detailId, setDetailId] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  // hl(动态 P2-22):「新建任务」菜单 —— Esc 关、点菜单外任意处关且**不吞这次点击**
+  // (原来是一层透明遮罩接走第一次点击,点任务卡片要点两下)。
+  const newMenuRef = useRef<HTMLDivElement | null>(null);
+  const newMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!newMenuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setMenuOpen(false);
+      newMenuButtonRef.current?.focus();
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [menuOpen]);
   const [modal, setModal] = useState<{ editingId: string | null; initial: FormState } | null>(null);
   // 项目目录与模型目录都走共享 hook。
   const projects = useProjectRows();
@@ -397,7 +459,10 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
     try {
       const response = await authenticatedFetch('/api/tasks');
       const payload = await response.json();
-      if (response.ok) setTasks((payload.tasks ?? []) as WireTask[]);
+      if (response.ok) {
+        setTasks((payload.tasks ?? []) as WireTask[]);
+        if (payload.serverTime && typeof payload.serverTime.tz === 'string') setServerTime(payload.serverTime as ServerTime);
+      }
     } catch { /* 列表读不到就保持现状 */ } finally {
       setLoading(false);
     }
@@ -595,7 +660,10 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
       const text = '我想设置一个定时任务。先简单说明 Prism 的定时任务是怎么工作的,然后问我几个问题,弄清楚要让 Claude 定期做什么、什么时候运行、结果写到哪个会话;我确认后你就直接创建,并把任务名、频率和下一次运行时间告诉我。';
       const hiddenContext = [
         '[系统随消息附带的技术说明,用户在页面上看不到这段;不要复述它,更不要把 ticket 展示出来]',
-        `现在是 ${now.toLocaleString()}(服务器与用户同一时区,偏移 UTC${-now.getTimezoneOffset() / 60 >= 0 ? '+' : ''}${-now.getTimezoneOffset() / 60});任务的时刻按这个时区理解。`,
+        // hl(09-24 P2-12):写服务端真实时区与偏移,不再假设"与用户同一时区"。
+        serverTime
+          ? `现在服务器时间是 ${formatWhen(serverTime.now, serverTime)}(服务器时区 ${tzLabel(serverTime)};用户浏览器时区偏移 ${offsetLabel(-now.getTimezoneOffset())});任务的 runAtHour / runAtMinute **按服务器时区**理解,用户说的时间若是他本地时区,要按两者的偏移差换算后再填。`
+          : `现在是 ${now.toLocaleString()}(浏览器时区,偏移 ${offsetLabel(-now.getTimezoneOffset())};服务器时区未知,任务的时刻按服务器本地时区理解)。`,
         '需求里缺哪一项就问哪一项(任务名、要做什么、多久跑一次、几点跑、写进哪个会话),能从用户话里推断出来的不要多问;一次问全,别挤牙膏。',
         ...sessionLines,
         '',
@@ -678,7 +746,7 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
                     {runs.map((run) => (
                       <li key={run.id} className="border-b border-border py-2 last:border-b-0">
                         <div className="flex items-center justify-between gap-2 text-sm">
-                          <span className="text-foreground">{formatWhen(run.finishedAt)}</span>
+                          <span className="text-foreground">{formatWhen(run.finishedAt, serverTime)}</span>
                           <span className={`shrink-0 rounded px-1.5 py-px text-[11.5px] font-medium ${run.status === 'completed' ? 'bg-primary/10 text-foreground' : 'bg-destructive/10 text-destructive'}`}>
                             {run.status === 'completed'
                               ? t('tasksPage.statusOk', { defaultValue: '成功' })
@@ -721,7 +789,7 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
               ) : detail.lastRunAt ? (
                 // 存量任务:cz 之前跑的那些没有明细行,只剩摘要,照旧显示一条。
                 <div className="flex items-center justify-between gap-2 border-b border-border pb-2 text-sm">
-                  <span className="text-foreground">{formatWhen(detail.lastRunAt)}</span>
+                  <span className="text-foreground">{formatWhen(detail.lastRunAt, serverTime)}</span>
                   <span className={`rounded px-1.5 py-px text-[11.5px] font-medium ${detail.lastRunStatus === 'completed' ? 'bg-primary/10 text-foreground' : 'bg-muted text-muted-foreground'}`}>
                     {detail.lastRunStatus === 'completed'
                       ? t('tasksPage.statusOk', { defaultValue: '成功' })
@@ -790,7 +858,10 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
                 <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">{t('tasksPage.repeats', { defaultValue: '重复' })}</h3>
                 <p className="text-sm text-foreground">{frequencyLabel(detail, t, i18n.language)}
                   {detail.nextRunAt && detail.enabled && (
-                    <span className="ml-2 text-muted-foreground">{t('tasksPage.nextRun', { when: formatWhen(detail.nextRunAt), defaultValue: '下一次:{{when}}' })}</span>
+                    <span className="ml-2 text-muted-foreground">
+                      {t('tasksPage.nextRun', { when: formatWhen(detail.nextRunAt, serverTime), defaultValue: '下一次:{{when}}' })}
+                      {serverTime && <span className="ml-1">({tzLabel(serverTime)})</span>}
+                    </span>
                   )}
                 </p>
               </div>
@@ -822,6 +893,7 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
             projects={projects}
             models={models}
             defaultModelReal={defaultModelReal}
+            serverTime={serverTime}
             onClose={() => setModal(null)}
             onSaved={(task) => { setTasks((current) => current.map((item) => (item.id === task.id ? task : item))); }}
           />
@@ -856,8 +928,9 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
             {/* 一个按钮,点开永远是同一份选项(用户点名):按钮本体和小箭头都
                 只负责"展开怎么建",不直接触发任何一种 —— 直接跳走会让人措手不及。
                 菜单里「让 Claude 创建」排第一,是推荐路径。 */}
-            <div className="relative flex-none">
+            <div ref={newMenuRef} className="relative flex-none">
               <button
+                ref={newMenuButtonRef}
                 type="button"
                 onClick={() => setMenuOpen((open) => !open)}
                 aria-expanded={menuOpen}
@@ -870,7 +943,6 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
               </button>
               {menuOpen && (
                 <>
-                  <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} aria-hidden />
                   <div role="menu" className="prism-modal-shadow absolute right-0 top-full z-20 mt-1 w-64 overflow-hidden rounded-lg border border-border bg-popover py-1">
                     <button type="button" role="menuitem" onClick={() => void createWithClaude()}
                       className="flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-muted">
@@ -936,7 +1008,8 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
                   </span>
                   {task.enabled && task.nextRunAt && (
                     <span className="text-[11.5px] text-muted-foreground">
-                      {t('tasksPage.nextRun', { when: formatWhen(task.nextRunAt), defaultValue: '下一次:{{when}}' })}
+                      {t('tasksPage.nextRun', { when: formatWhen(task.nextRunAt, serverTime), defaultValue: '下一次:{{when}}' })}
+                      {serverTime && <span className="ml-1">({serverTime.tz})</span>}
                     </span>
                   )}
                 </div>
@@ -953,6 +1026,7 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
           projects={projects}
           models={models}
           defaultModelReal={defaultModelReal}
+          serverTime={serverTime}
           onClose={() => setModal(null)}
           onSaved={(task) => {
             setTasks((current) => {

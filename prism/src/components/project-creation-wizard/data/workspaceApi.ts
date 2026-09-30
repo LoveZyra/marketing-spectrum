@@ -86,15 +86,29 @@ export const fetchShareableUsers = async (): Promise<ShareableUser[]> => {
   return data.data?.users ?? [];
 };
 
+/**
+ * hl(09-24 P2-14):**别把 `revived` / `message` 丢掉。** 路径命中一个已归档的项目时,
+ * 服务端是把它还原(并应用向导里选的可见性),不是新建;此前这里只回 `project`,
+ * 界面一律说"创建成功",用户不知道自己刚把一个旧项目连同旧会话一起拉了回来。
+ */
 export const createProjectRequest = async (payload: CreateProjectPayload) => {
   const response = await api.createProject(payload);
   const data = await parseJson<CreateProjectResponse>(response);
 
   if (!response.ok) {
-    throw new Error(resolveCreateProjectErrorMessage(data) || 'Failed to create project');
+    // hl(P3 中英混排):把服务端的错误码带出去,向导按码翻成界面语言(原文英文直出)。
+    const error = new Error(resolveCreateProjectErrorMessage(data) || 'Failed to create project') as Error & { code?: string };
+    const rawError = (data as { error?: unknown }).error;
+    const code = rawError && typeof rawError === 'object' ? (rawError as { code?: unknown }).code : (data as { code?: unknown }).code;
+    if (typeof code === 'string') error.code = code;
+    throw error;
   }
 
-  return data.project;
+  return {
+    project: data.project,
+    revived: data.revived === true,
+    message: typeof data.message === 'string' ? data.message : null,
+  };
 };
 
 /**

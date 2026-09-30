@@ -9,6 +9,7 @@
 
 import { getConnection } from '@/modules/database/connection.js';
 import { createLogger } from '@/shared/logger.js';
+import { isAccountUsable } from '@/shared/account-usable.js';
 const log = createLogger('db');
 
 type UserRow = {
@@ -105,6 +106,19 @@ export const userDb = {
       .get(username) as UserRow | undefined;
   },
 
+  /**
+   * hl(动态 P3):**含已停用账号**的用户名查找 —— 只给登录失败的审计分类用。
+   * `getUserByUsername` 带 is_active=1,停用账号登录时查不到,审计就记成了
+   * `unknown user`(误导:管理员翻记录会以为有人在猜用户名)。只回 id / username / is_active,
+   * 鉴权路径仍走上面那条,停用账号照样登不进去。
+   */
+  findUserByUsernameIncludingInactive(username: string): Pick<UserRow, 'id' | 'username' | 'is_active'> | undefined {
+    const db = getConnection();
+    return db
+      .prepare('SELECT id, username, is_active FROM users WHERE username = ?')
+      .get(username) as Pick<UserRow, 'id' | 'username' | 'is_active'> | undefined;
+  },
+
   /** Updates the last_login timestamp. Non-fatal — logs but does not throw. */
   updateLastLogin(userId: number): void {
     try {
@@ -126,6 +140,18 @@ export const userDb = {
         'SELECT id, username, created_at, last_login, token_version, approval_status FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
+  },
+
+  /**
+   * hj(审计 P1-2):凭据(票据、cookie、API key)背后的那个人**现在**还能不能用。
+   * 在 `getUserById`(只返回 is_active=1)之上再过 `isAccountUsable`:审批状态 + 可选的 token_version。
+   * 下载票 / 预览票 / 任务票 / Jupyter 会话都走这一个判定。
+   */
+  getUsableUser(userId: number | string | null | undefined, tokenVersion: number | null = null): UserPublicRow | undefined {
+    const id = Number(userId);
+    if (!Number.isInteger(id) || id <= 0) return undefined;
+    const user = this.getUserById(id);
+    return isAccountUsable(user, { tokenVersion }) ? user : undefined;
   },
 
   /**

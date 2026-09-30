@@ -1,0 +1,32 @@
+version: 1
+allowed_imports:
+- __future__
+- re
+entrypoints:
+- id: extract_tables
+  module: scripts/extract.py
+  signature: 'extract_tables(path: str, pages: str | None = None) -> list[list[list[str]]]'
+  doc_anchor: references/extraction.md#extract_tables
+  preconditions: []
+  postconditions:
+  - returns a possibly-empty list; never raises on a table-free document
+  side_effects:
+  - none
+  stability: stable
+  cost_class: cpu_bound
+- id: normalize_cell
+  module: scripts/extract.py
+  signature: 'normalize_cell(raw: str) -> str'
+  doc_anchor: references/extraction.md#normalize_cell
+  preconditions: []
+  postconditions:
+  - strips any currency symbol, not only the dollar sign
+  checks:
+  - example:
+      args:
+      - '  £ 40 '
+      returns: '40'
+  side_effects:
+  - none
+  stability: stable
+  cost_class: cpu_bound

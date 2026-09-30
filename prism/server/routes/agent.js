@@ -18,6 +18,7 @@ import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
 import { IS_PLATFORM } from '../constants/config.js';
 import { readRequestViewer } from '../shared/project-visibility.js';
 import { normalizeProjectPath, WORKSPACES_ROOT, generateMessageId } from '../shared/utils.js';
+import { isAccountUsable } from '../shared/account-usable.js';
 
 const log = createLogger('agent');
 
@@ -111,7 +112,9 @@ const validateExternalApiKey = (req, res, next) => {
 
   const user = apiKeysDb.validateApiKey(apiKey);
 
-  if (!user) {
+  // hj(审计 P1-2):key 有效还不够,账号本身得「现在能用」—— 驳回一个已批准的人之后,
+  // 他的 key 原来照样能跑 Claude(这里只查了 is_active,没查审批状态)。
+  if (!user || !isAccountUsable(user)) {
     return res.status(401).json({ error: 'Invalid or inactive API key' });
   }
 
@@ -855,16 +858,26 @@ router.post('/sessions', validateExternalApiKey, async (req, res) => {
     const finalProjectPath = normalizeProjectPath(path.resolve(String(projectPath)));
     await assertInsideWorkspaceRoot(finalProjectPath);
 
+    /*
+     * hl(动态 P1-6):**项目可见性也要过**,而且要在 fs.access 之前。
+     *
+     * 此前只有工作区包含判定 + 存在性检查:bob 的 key 往 alice 的私有项目路径 POST 一下,
+     * alice 的侧栏立刻多一条无名会话;不存在的路径 400「does not exist」、存在的 201 ——
+     * 顺手成了一个"工作区下任意目录存不存在"的探针。跑回合那支(下面 POST /)早就有
+     * `assertViewerMayCreateSessionAt`,领号这支漏了。看不见 / 不存在一律 404 同形。
+     */
+    await assertViewerMayCreateSessionAt(readRequestViewer(req), finalProjectPath);
+
     try {
       await fs.access(finalProjectPath);
     } catch {
-      return res.status(400).json({ error: `Project path does not exist: ${finalProjectPath}` });
+      return res.status(404).json({ error: '项目不存在或你没有权限' });
     }
 
-    const sessionId = crypto.randomUUID();
+    // 与网页端同一条路(sessionsService.createAppSession):落行 + 推 session_upserted。
     // owner 必须传:不传 = 项目无主(非公共目录仅 root 可见 / 公共目录下全员可见),
     // 调用者自己反而丢掉归属。
-    sessionsDb.createAppSession(sessionId, provider, finalProjectPath, req.user.id);
+    const { sessionId } = sessionsService.createAppSession(provider, finalProjectPath, req.user.id);
 
     return res.status(201).json({
       success: true,
@@ -875,7 +888,8 @@ router.post('/sessions', validateExternalApiKey, async (req, res) => {
     });
   } catch (error) {
     log.error('[Agent API] 领会话号失败:', error);
-    return res.status(400).json({ error: error.message });
+    // AppError(404 同形)按它自己的状态码回;其余入参类错误维持 400。
+    return res.status(Number.isInteger(error?.statusCode) ? error.statusCode : 400).json({ error: error.message });
   }
 });
 
@@ -1539,6 +1553,9 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         kind: 'text',
         role: 'user',
         content: message.trim(),
+        // hl(动态 P2-6):记下发起人 —— 会话的归档 / 还原 / 永久删要认"这是不是我开的"。
+        senderUserId: req.user.id,
+        origin: 'api',
       });
 
       res.status(202).json({
@@ -1568,7 +1585,13 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         actorUsername: req.user?.username ?? null,
         usageSource: 'api',   // fg:外部接口跑的账单独一档
         oneShot: true,
-      }, run.writer).catch((error) => {
+      }, run.writer).then((outcome) => {
+        // hl(动态 P1-1):一次性路径现在返回成败;异步模式没有响应可改,
+        // 但失败要进日志(此前 CLI 起不来 / 模型名不存在这里一个字都没有)。
+        if (outcome && outcome.ok === false) {
+          log.warn('[Agent API] 异步回合失败', { sessionId: appSessionId, error: outcome.error, aborted: outcome.aborted });
+        }
+      }).catch((error) => {
         log.error('[Agent API] 异步回合失败', {
           sessionId: appSessionId,
           error: error instanceof Error ? error.message : String(error),
@@ -1643,6 +1666,8 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         kind: 'text',
         role: 'user',
         content: message.trim(),
+        senderUserId: req.user.id,
+        origin: 'api',
       });
     }
 
@@ -1674,12 +1699,15 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       });
     }
 
+    // hl(动态 P1-1):同步路径把一次性回合的成败带进响应。
+    let turnOutcome = null;
+
     // Start the session (Claude is the only provider)
     if (provider === 'claude') {
       log.info('🤖 Starting Claude SDK session');
 
       try {
-        await queryClaudeSDK(message.trim(), {
+        turnOutcome = await queryClaudeSDK(message.trim(), {
           projectPath: finalProjectPath,
           cwd: finalProjectPath,
           sessionId: resumeProviderSessionId,
@@ -1698,7 +1726,8 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       } finally {
         // 释放运行位:回合结束(成功/失败)都要放,否则这个会话会被永久标成
         // "有回合在跑",后续请求全被 409 挡下。
-        if (syncRun) chatRunRegistry.completeRunIfCurrent(syncRun, { exitCode: 0 });
+        // hl(动态 P1-1):兜底帧的 exitCode 按真实成败(正常时 SDK 已发过 complete,只收一个)。
+        if (syncRun) chatRunRegistry.completeRunIfCurrent(syncRun, { exitCode: turnOutcome && turnOutcome.ok === false ? 1 : 0 });
         // dv:同步路径同理 —— 跑完把排队那条接上去。
         if (syncRun) drainPendingSendForSession(syncRun.appSessionId);
       }
@@ -1727,7 +1756,13 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     let branchInfo = null;
     let prInfo = null;
 
-    if (createBranch || createPR) {
+    // hl(动态 P1-1):回合失败就不建分支 / PR —— 那是"成功之后"的事。
+    const turnFailed = Boolean(turnOutcome && turnOutcome.ok === false);
+    if (turnFailed) {
+      log.warn('[Agent API] 同步回合失败', { sessionId: writer.getSessionId(), error: turnOutcome.error, aborted: turnOutcome.aborted });
+    }
+
+    if ((createBranch || createPR) && !turnFailed) {
       try {
         log.info('🔄 Starting GitHub branch/PR creation workflow...');
 
@@ -1906,6 +1941,16 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
     // Handle response based on streaming mode
     if (stream) {
+      // hl(动态 P1-1):流式也要有一帧明确的失败(error 帧早就发过,但调用方按
+      // 最后一帧判断时只看得到 done)。
+      if (turnFailed) {
+        writer.send({
+          type: 'error',
+          error: turnOutcome.error,
+          message: `Failed: ${turnOutcome.error}`,
+          status: turnOutcome.aborted ? 'aborted' : 'failed',
+        });
+      }
       // Streaming mode: end the SSE stream
       writer.end();
     } else {
@@ -1913,13 +1958,18 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       const assistantMessages = writer.getAssistantMessages();
       const tokenSummary = writer.getTotalTokens();
 
+      // hl(动态 P1-1):失败的回合 `success:false` + 原因 + 502(上游模型 / CLI 失败);
+      // 已经收到的助手文本照样给,调用方能看到失败前说了什么。
       const response = {
-        success: true,
+        success: !turnFailed,
+        status: turnFailed ? (turnOutcome.aborted ? 'aborted' : 'failed') : 'completed',
+        ...(turnFailed ? { error: turnOutcome.error } : {}),
         sessionId: writer.getSessionId(),
         messages: assistantMessages,
         tokens: tokenSummary,
         projectPath: finalProjectPath
       };
+      if (turnFailed) res.status(502);
 
       // Add branch/PR info if created
       if (branchInfo) {
@@ -1948,6 +1998,18 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     if (finalProjectPath && cleanup && githubUrl) {
       const sessionIdForCleanup = writer ? writer.getSessionId() : null;
       cleanupProject(finalProjectPath, sessionIdForCleanup);
+    }
+
+    /*
+     * hl(动态 P3):**回合还没开跑就被拒的,按拒绝的状态码回。**
+     *
+     * `assertViewerMayCreateSessionAt` 抛的是带 statusCode=404 的 AppError(与"项目不存在"
+     * 同形),此前这里一律 500(非流式)或 200 + SSE error 帧(流式)—— 调用方分不清
+     * "没权限"和"服务器炸了",而 500 还会被反代当故障计数。响应头还没发出去时
+     * (流式模式的 SSE 头在 writer 建立后才写),直接按状态码回 JSON。
+     */
+    if (!res.headersSent && !writer && Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode < 500) {
+      return res.status(error.statusCode).json({ success: false, error: error.message, code: error.code ?? undefined });
     }
 
     if (stream) {

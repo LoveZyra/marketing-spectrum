@@ -1,9 +1,10 @@
-import { auditLogDb, projectsDb, resolveVisibleProjectRoot, userDb } from '@/modules/database/index.js';
+import { auditLogDb, resolveVisibleProjectRoot, userDb } from '@/modules/database/index.js';
 import { deleteOrArchiveProject } from '@/modules/projects/services/project-delete.service.js';
 import {
-  applyProjectPermissions, canArchiveProject, canDeleteProject, canManageProject,
+  applyProjectPermissions, canArchiveProject, canDeleteProject, canManageProject, transferProjectOwner,
   type PermissionsActor, type ProjectVisibilityChoice,
 } from '@/modules/projects/services/project-permissions.service.js';
+import { prepareProjectChangeBroadcast } from '@/modules/websocket/index.js';
 import { setProjectStarForActor } from '@/modules/projects/services/project-star.service.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -117,13 +118,17 @@ export async function bulkProjectAction(
       continue;
     }
 
+    // hl(动态 P2-4):与单条入口同一套项目级推送;名单在动行之前收。
+    const announce = prepareProjectChangeBroadcast(projectId);
     try {
       switch (input.action) {
         case 'archive':
           await deleteOrArchiveProject(projectId, false, bulkActor);
+          announce('archived');
           break;
         case 'delete':
           await deleteOrArchiveProject(projectId, true, bulkActor);
+          announce('deleted');
           break;
         case 'star':
           setProjectStarForActor(projectId, actingUserId, true);
@@ -136,18 +141,14 @@ export async function bulkProjectAction(
             throw new AppError('缺少权限设置', { code: 'MISSING_PERMISSIONS', statusCode: 400 });
           }
           applyProjectPermissions(projectId, input.permissions, actingUserId);
+          announce('permissions');
           break;
         case 'owner': {
-          const owner = input.ownerUserId ?? null;
-          if (!projectsDb.setProjectOwner(projectId, owner)) {
+          // hl(动态 P2-5):与单条同一份 —— 原 owner 自动进授权名单,审计带 targetUserId。
+          if (!transferProjectOwner(projectId, input.ownerUserId ?? null, actor)) {
             throw new AppError('项目不存在', { code: 'PROJECT_NOT_FOUND', statusCode: 404 });
           }
-          auditLogDb.record({
-            userId: actingUserId,
-            username: actor.username ?? null,
-            event: 'project_owner_changed',
-            detail: `${projectId} -> ${owner === null ? 'public' : `user ${owner}`}`,
-          });
+          announce('owner');
           break;
         }
       }

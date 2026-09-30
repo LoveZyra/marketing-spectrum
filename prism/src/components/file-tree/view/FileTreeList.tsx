@@ -34,6 +34,10 @@ type FileTreeListProps = {
   selectedPaths?: ReadonlySet<string>;
   onToggleSelect?: (item: FileTreeNodeType, event: React.MouseEvent) => void;
   selectionMode?: boolean;
+  /** hl(动态 P2-10):截断目录的懒加载,见 FileTreeNode。 */
+  onLoadMore?: (item: FileTreeNodeType) => void;
+  loadingSubtrees?: ReadonlySet<string>;
+  nodeLabels?: { loadMore: string; loading: string; symlink: string };
 };
 
 export default function FileTreeList({
@@ -64,6 +68,9 @@ export default function FileTreeList({
   selectedPaths,
   onToggleSelect,
   selectionMode,
+  onLoadMore,
+  loadingSubtrees,
+  nodeLabels,
 }: FileTreeListProps) {
   return (
     <div>
@@ -98,6 +105,9 @@ export default function FileTreeList({
           handleCancelRename={handleCancelRename}
           renameInputRef={renameInputRef}
           operationLoading={operationLoading}
+          onLoadMore={onLoadMore}
+          loadingSubtrees={loadingSubtrees}
+          labels={nodeLabels}
         />
       ))}
     </div>

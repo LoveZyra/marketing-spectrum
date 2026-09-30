@@ -19,13 +19,15 @@ function QuickSettingsToggleRow({
   return (
     <label className={TOGGLE_ROW_CLASS}>
       <span className="flex items-center gap-2 text-sm text-foreground">
-        <Icon className="h-4 w-4 text-muted-foreground" />
+        <Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
         {label}
       </span>
       <input
         type="checkbox"
         checked={checked}
         onChange={(event) => onCheckedChange(event.target.checked)}
+        // hl(P3 可访问性):显式名称 —— 隐式 label 在部分读屏器 / 自动化里取不到(图标节点干扰)。
+        aria-label={label}
         className={CHECKBOX_CLASS}
       />
     </label>

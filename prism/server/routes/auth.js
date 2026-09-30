@@ -14,7 +14,7 @@ import {
   recordLoginFailure,
 } from '../middleware/rate-limit.js';
 import { issueTicket, WS_TICKET_TTL_MS } from '../shared/ws-tickets.js';
-import { isApprovalRequired, isRootUser } from '../shared/root-users.js';
+import { isApprovalRequired, isRootUser, validateNewUsername } from '../shared/root-users.js';
 import { broadcastPendingApprovalCount } from '../modules/websocket/index.js';
 
 const log = createLogger('auth');
@@ -79,6 +79,11 @@ router.post('/register', authRateLimiter, async (req, res) => {
 
     if (username.length < 3 || password.length < 6) {
       return res.status(400).json({ error: 'Username must be at least 3 characters, password at least 6 characters' });
+    }
+    // hj(审计 P0-2 / P2-3):长度上限、空白与控制字符、兼容字符与冒名 root 的写法。
+    const usernameProblem = validateNewUsername(username);
+    if (usernameProblem) {
+      return res.status(400).json({ error: usernameProblem });
     }
 
     // 先算哈希,再开事务。
@@ -183,12 +188,16 @@ router.post('/login', authRateLimiter, loginLockout, async (req, res) => {
     const user = userDb.getUserByUsername(String(username).trim());
     if (!user) {
       const failure = recordLoginFailure(req);
+      // hl(动态 P3):停用账号来登录,审计写 `inactive user` 而不是 `unknown user` ——
+      // 后者会让翻记录的管理员以为有人在猜用户名。对外响应仍与"不存在"同形。
+      const inactive = userDb.findUserByUsernameIncludingInactive(String(username).trim());
       auditLogDb.record({
         ...auditContext(req),
-        username,
+        userId: inactive?.id ?? null,
+        username: inactive?.username ?? username,
         event: failure?.lockedUntil ? 'login_locked' : 'login_failed',
         outcome: 'failure',
-        detail: 'unknown user',
+        detail: inactive ? 'inactive user' : 'unknown user',
       });
       return res.status(401).json({ error: 'Invalid username or password' });
     }

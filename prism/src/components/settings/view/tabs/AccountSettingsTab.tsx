@@ -7,6 +7,7 @@ import { api, isValidRefreshedToken } from '../../../../utils/api';
 
 import AttachmentUsageCard from './AttachmentUsageCard';
 import AuditLogList from './accounts-settings/AuditLogList';
+import SkillSurveyToggleCard from './SkillSurveyToggleCard';
 
 /**
  * 我的账号:当前登录身份 + 退出登录/切换账号 + 退出所有设备。
@@ -165,6 +166,9 @@ export default function AccountSettingsTab() {
       </div>
 
       <AttachmentUsageCard />
+
+      {/* gy:技能效果询问开关 —— 技能优化没挂载时整卡不画 */}
+      <SkillSurveyToggleCard />
 
       {/* 修改密码 */}
       <div className="overflow-hidden rounded-lg border border-border">

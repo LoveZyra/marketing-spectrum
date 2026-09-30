@@ -117,6 +117,8 @@ export default function AttachmentQuotaSection() {
                         min={1}
                         value={editing.value}
                         onChange={(event) => setEditing({ userId: row.userId, value: event.target.value })}
+                        // hl 复核 P3-4:Esc 只退出额度编辑,不关整个设置弹窗。
+                        data-esc-local="true"
                         onKeyDown={(event) => {
                           if (event.key === 'Enter') void save(row.userId, editing.value);
                           if (event.key === 'Escape') setEditing(null);

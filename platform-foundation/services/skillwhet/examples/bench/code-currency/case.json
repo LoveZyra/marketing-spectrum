@@ -1,0 +1,7 @@
+{
+ "runner": "pytest",
+ "defects": [
+  "normalize_cell no longer strips currency symbols"
+ ],
+ "notes": "wrong-result defect; frame in the test"
+}

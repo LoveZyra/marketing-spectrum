@@ -1,0 +1,8 @@
+{
+ "runner": "pytest",
+ "defects": [
+  "accents not folded",
+  "truncation leaves a trailing '-'"
+ ],
+ "notes": "two wrong-result defects in one function; probe = a different accented input"
+}

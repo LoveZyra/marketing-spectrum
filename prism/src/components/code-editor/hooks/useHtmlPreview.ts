@@ -9,6 +9,13 @@ type PreviewTicketResponse = {
 };
 
 /**
+ * hl(P3 文件组):票 5 分钟过期(server/shared/preview-tickets.js 的 PREVIEW_TICKET_TTL_MS)。
+ * 过期后 iframe 里是一份 401 JSON、页面上是一块空白 —— iframe 是不透明源,从外面看不出来。
+ * 所以在客户端自己计时,到点把 `expired` 置真,预览区显示「预览已过期 · 重新加载」。
+ */
+export const HTML_PREVIEW_TICKET_TTL_MS = 5 * 60_000;
+
+/**
  * The sandboxed HTML preview's source URL.
  *
  * The preview used to open a new window and hand the iframe a `srcdoc` of the
@@ -37,6 +44,7 @@ export function useHtmlPreview({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [expired, setExpired] = useState(false);
 
   const requestTicket = useCallback(async () => {
     if (!projectId || !relPath) {
@@ -60,6 +68,7 @@ export function useHtmlPreview({
       if (!response.ok || !payload.url) {
         throw new Error(payload.error || 'Failed to open preview');
       }
+      setExpired(false);
       setPreviewUrl(payload.url);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Failed to open preview');
@@ -73,10 +82,18 @@ export function useHtmlPreview({
     if (!enabled) {
       setPreviewUrl(null);
       setError(null);
+      setExpired(false);
       return;
     }
     void requestTicket();
   }, [enabled, requestTicket]);
 
-  return { previewUrl, error, isLoading, reload: requestTicket };
+  // 每换一张票重新计时。
+  useEffect(() => {
+    if (!previewUrl) return undefined;
+    const timer = setTimeout(() => setExpired(true), HTML_PREVIEW_TICKET_TTL_MS);
+    return () => clearTimeout(timer);
+  }, [previewUrl]);
+
+  return { previewUrl, error, isLoading, expired, reload: requestTicket };
 }

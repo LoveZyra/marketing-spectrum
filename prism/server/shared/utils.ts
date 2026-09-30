@@ -261,6 +261,13 @@ export async function validateWorkspacePath(requestedPath: string): Promise<Work
         throw fileError;
       }
 
+      // hj(审计 P1-4):ENOENT 可能是「悬空软链」而不是「还不存在」—— 那种情况不能退到父目录判断
+      // (父目录在根内 → 放行 → 随后的写会跟着软链落到根外)。悬空软链一律拒绝。
+      const leafStat = await lstat(absolutePath).catch(() => null);
+      if (leafStat?.isSymbolicLink()) {
+        return { valid: false, error: 'Symlink target does not exist' };
+      }
+
       const parentPath = path.dirname(absolutePath);
       try {
         const parentRealPath = await realpath(parentPath);

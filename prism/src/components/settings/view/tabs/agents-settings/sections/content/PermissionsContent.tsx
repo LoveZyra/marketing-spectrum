@@ -97,13 +97,16 @@ export default function PermissionsContent({
               type="checkbox"
               checked={skipPermissions}
               onChange={(event) => onSkipPermissionsChange(event.target.checked)}
+              // hl(P3 可访问性):名称只取标题,说明走 aria-describedby(原来整段说明都塞进名称里)。
+              aria-label={t('permissions.skipPermissions.label')}
+              aria-describedby="skip-permissions-description"
               className="h-4 w-4 accent-primary"
             />
             <div>
               <div className="font-medium text-foreground">
                 {t('permissions.skipPermissions.label')}
               </div>
-              <div className="text-sm text-muted-foreground">
+              <div id="skip-permissions-description" className="text-sm text-muted-foreground">
                 {t('permissions.skipPermissions.claudeDescription')}
               </div>
             </div>

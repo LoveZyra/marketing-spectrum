@@ -33,7 +33,7 @@ export type ProviderModelsCacheInfo = {
   source: 'memory' | 'disk' | 'fresh';
 };
 
-export type AppTab = 'chat' | 'tasks' | 'files' | 'shell' | 'notebook';
+export type AppTab = 'chat' | 'tasks' | 'skillwhet' | 'files' | 'shell' | 'notebook';
 
 export interface ProjectSession {
   id: string;
@@ -87,6 +87,8 @@ export interface Project {
   sharedUserCount?: number;
   sessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
+  /** hl 复核 P3-8:正在看的项目已被移除(归档 / 删除 / 收回可见性);对话区保留,只显示提示。 */
+  removedFromView?: boolean;
   [key: string]: unknown;
 }
 

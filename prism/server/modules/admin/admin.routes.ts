@@ -6,6 +6,7 @@ import { auditLogDb, getConnection, userDb, type ApprovalStatus } from '@/module
 import { collectServerStatus } from '@/modules/admin/services/server-status.service.js';
 import { collectRuntimeStats, type RuntimePoolSnapshot } from '@/modules/admin/services/runtime-stats.service.js';
 import { formatBytes, getAttachmentQuotaBytes } from '@/shared/attachment-storage.js';
+import { clientIp } from '@/shared/client-ip.js';
 import { broadcastPendingApprovalCount } from '@/modules/websocket/index.js';
 import { createLogger } from '@/shared/logger.js';
 const log = createLogger('admin');
@@ -32,6 +33,22 @@ type RequestUser = { id: number; username: string };
 const readUserId = (raw: unknown): number | null => {
   const parsed = Number.parseInt(String(raw ?? ''), 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+/**
+ * hl(动态 P2-9):管理类审计的公共字段 —— 操作者、ip / user-agent,以及 **targetUserId**。
+ * 此前这几条 `record` 都没传 targetUserId,「与我有关的操作记录」查的是 target_user_id 列,
+ * 于是被审批 / 驳回 / 重置密码 / 停用 / 改配额的人在自己的记录里一条都看不到。
+ */
+const adminAuditBase = (req: express.Request, targetUserId: number) => {
+  const actor = (req as typeof req & { user?: RequestUser }).user ?? null;
+  return {
+    userId: actor?.id ?? null,
+    username: actor?.username ?? null,
+    ip: clientIp(req) ?? null,
+    userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+    targetUserId,
+  };
 };
 
 /**
@@ -72,8 +89,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): Router
       }
 
       auditLogDb.record({
-        userId: reviewer?.id ?? null,
-        username: reviewer?.username ?? null,
+        ...adminAuditBase(req, targetUserId),
         event: status === 'approved' ? 'user_approved' : 'user_rejected',
         detail: `target user id ${targetUserId}`,
       });
@@ -109,10 +125,8 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): Router
       const passwordHash = await bcrypt.hash(newPassword, 12);
       userDb.updatePassword(targetUserId, passwordHash);
 
-      const actor = (req as typeof req & { user?: RequestUser }).user ?? null;
       auditLogDb.record({
-        userId: actor?.id ?? null,
-        username: actor?.username ?? null,
+        ...adminAuditBase(req, targetUserId),
         event: 'password_reset_by_admin',
         detail: `target user ${target.username} (id ${targetUserId})`,
       });
@@ -139,8 +153,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): Router
         return res.status(404).json({ error: 'User not found' });
       }
       auditLogDb.record({
-        userId: actor?.id ?? null,
-        username: actor?.username ?? null,
+        ...adminAuditBase(req, targetUserId),
         event: active ? 'user_activated' : 'user_deactivated',
         detail: `target user id ${targetUserId}`,
       });
@@ -241,10 +254,8 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): Router
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const actor = (req as typeof req & { user?: RequestUser }).user ?? null;
     auditLogDb.record({
-      userId: actor?.id ?? null,
-      username: actor?.username ?? null,
+      ...adminAuditBase(req, targetUserId),
       event: 'attachment_quota_changed',
       detail: `target user id ${targetUserId} → ${quotaMb === null ? '跟随全局默认' : `${quotaMb} MB`}`,
     });

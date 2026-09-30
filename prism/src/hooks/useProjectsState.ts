@@ -46,6 +46,61 @@ type FetchProjectsOptions = {
   showLoadingState?: boolean;
 };
 
+/**
+ * hl(动态 P2-4):项目级实时推送。服务端在新建 / 改名 / 权限 / 归档 / 还原 / 转移属主 /
+ * 删除项目时按可见性逐 socket 推:能看见的收 `project_upserted`(带按我视角算的
+ * isStarred / sharedWithViewer),看不见了的收 `project_removed`。帧里**不带会话列表**。
+ */
+export type ProjectUpsertedEvent = ServerEvent & {
+  kind: 'project_upserted';
+  projectId: string;
+  reason?: string;
+  project: Pick<Project, 'projectId' | 'path' | 'fullPath' | 'displayName' | 'isStarred' | 'ownerUserId' | 'isPublic' | 'sharedWithViewer' | 'sharedUserCount'> & {
+    customName?: string | null;
+    isArchived?: boolean;
+  };
+};
+
+/**
+ * 把一帧 `project_upserted` 合进列表。已知项目只换元数据、**保留会话列表与分页状态**;
+ * 陌生项目返回 null —— 调用方静默重拉整份列表(它可能已经有几十条会话,一帧塞不下)。
+ */
+export const mergeProjectUpsert = (projects: Project[], event: ProjectUpsertedEvent): Project[] | null => {
+  const incoming = event.project;
+  if (!incoming || !incoming.projectId) return projects;
+  const index = projects.findIndex((project) => project.projectId === incoming.projectId);
+  if (index === -1) return null;
+  const existing = projects[index];
+  const merged: Project = {
+    ...existing,
+    path: incoming.path ?? existing.path,
+    fullPath: incoming.fullPath ?? existing.fullPath,
+    displayName: incoming.displayName ?? existing.displayName,
+    isStarred: incoming.isStarred ?? existing.isStarred,
+    ownerUserId: incoming.ownerUserId ?? null,
+    isPublic: incoming.isPublic ?? existing.isPublic,
+    sharedWithViewer: incoming.sharedWithViewer ?? existing.sharedWithViewer,
+    sharedUserCount: incoming.sharedUserCount ?? existing.sharedUserCount,
+  };
+  if (serialize(merged) === serialize(existing)) return projects;
+  return projects.map((project, position) => (position === index ? merged : project));
+};
+
+/** `project_removed`:从列表拿掉;不在列表里就原样返回(引用不变,免得触发一次空渲染)。 */
+export const removeProjectById = (projects: Project[], projectId: string): Project[] => {
+  if (!projects.some((project) => project.projectId === projectId)) return projects;
+  return projects.filter((project) => project.projectId !== projectId);
+};
+
+/**
+ * hl 复核 P3-8:当前选中的项目被移除(归档 / 删除 / 收回可见性)时的处理 —— 保留对话区,
+ * 只打 `removedFromView` 标记。不是它就原样返回(引用不变)。
+ */
+export function markSelectedProjectRemoved(selected: Project | null, removedId: string): Project | null {
+  if (!selected || selected.projectId !== removedId || selected.removedFromView) return selected;
+  return { ...selected, removedFromView: true };
+}
+
 type RegisterOptimisticSessionArgs = {
   sessionId: string;
   provider: LLMProvider;
@@ -493,6 +548,9 @@ export function useProjectsState({
   selectedSessionRef.current = selectedSession;
   const activeSessionsRef = useRef(activeSessions);
   activeSessionsRef.current = activeSessions;
+  // hl:project_upserted 要判"这个项目我认不认识"(不认识就重拉整份列表)。
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
 
   const markSessionAttention = useCallback((targetSessionId?: string | null) => {
     if (!targetSessionId) {
@@ -791,6 +849,47 @@ export function useProjectsState({
         return;
       }
 
+      /**
+       * hl(动态 P2-4):项目级变更。已知项目就地合并元数据;陌生项目(别人刚建了一个
+       * 共享给我的、或权限改公开了)静默重拉列表 —— 会话列表跟着列表接口来,一帧不带。
+       */
+      if (event.kind === 'project_upserted') {
+        const upsert = event as ProjectUpsertedEvent;
+        if (!upsert.projectId) return;
+        if (!projectsRef.current.some((project) => project.projectId === upsert.projectId)) {
+          // 被移除后又回来了(重新共享 / 还原):撤掉「已不可见」标记。
+          setSelectedProject((previousProject) => (
+            previousProject?.projectId === upsert.projectId && previousProject.removedFromView
+              ? { ...previousProject, removedFromView: undefined }
+              : previousProject
+          ));
+          void fetchProjects({ showLoadingState: false });
+          return;
+        }
+        setProjects((previousProjects) => mergeProjectUpsert(previousProjects, upsert) ?? previousProjects);
+        setSelectedProject((previousProject) => {
+          if (!previousProject || previousProject.projectId !== upsert.projectId) return previousProject;
+          const merged = mergeProjectUpsert([previousProject], upsert);
+          return merged && merged[0] !== previousProject ? merged[0] : previousProject;
+        });
+        return;
+      }
+
+      /**
+       * 项目被归档 / 删除 / 对我收回了可见性:从侧栏拿掉。正在看的是它 → 退回空状态
+       * (会话页自己会由 session_removed 切成「已被删除」态;归档 / 收回可见性时对话区
+       * 保持原样,用户下一次操作会得到 404,不在这里替他跳走)。
+       */
+      if (event.kind === 'project_removed') {
+        const removedId = typeof event.projectId === 'string' ? event.projectId : '';
+        if (!removedId) return;
+        setProjects((previousProjects) => removeProjectById(previousProjects, removedId));
+        // hl 复核 P3-8:与上面注释一致 —— 正在看的项目被移除时**不清空**(原来置 null,
+        // 对话区当场被切掉);只打标,主区给一条「项目已不可见」的提示。
+        setSelectedProject((previousProject) => markSelectedProjectRemoved(previousProject, removedId));
+        return;
+      }
+
       if (event.kind !== 'session_upserted') {
         return;
       }
@@ -897,7 +996,7 @@ export function useProjectsState({
     };
 
     return subscribe(handleEvent);
-  }, [clearSessionAttention, markSessionAttention, setSessionAwaitingApproval, navigate, sessionId, subscribe]);
+  }, [clearSessionAttention, fetchProjects, markSessionAttention, setSessionAwaitingApproval, navigate, sessionId, subscribe]);
 
   useEffect(() => {
     return () => {

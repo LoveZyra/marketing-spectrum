@@ -102,6 +102,12 @@ export function normalizePublicSubPath(rawTail: string): string | null {
  * be switched off.
  */
 export const PREVIEW_PAGE_CSP = [
+  // hj(审计 P0-1):**sandbox 必须写在响应头里,不能只靠 iframe 的 sandbox 属性。**
+  // 预览口不要登录、与 Prism 同源;iframe 属性只在嵌入时生效 —— 有人把预览链接
+  // 直接发给你、或你右键「在新标签页打开框架」,页面就以 Prism 的源运行,能读走
+  // localStorage 里的登录令牌。这里的令牌集合与 HtmlPreview.tsx 的 iframe 属性逐字相同
+  // (都不给 allow-same-origin),所以嵌入时的行为一点不变。
+  'sandbox allow-scripts allow-forms allow-modals allow-popups',
   "default-src 'self' data: blob:",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:",
   "style-src 'self' 'unsafe-inline' data:",

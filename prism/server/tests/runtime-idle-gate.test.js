@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 import { describe, test } from 'vitest';
 
-import { readMaintenanceWatchdogConfig, runtimeIsIdle } from '../claude-sdk.js';
+import { readCompactionIdleTimeout, runtimeIsIdle } from '../claude-sdk.js';
 
 /**
  * db:"忙不忙"以 CLI 的在途工具为准,以及维护回合的独立预算。
@@ -37,6 +37,11 @@ describe('runtimeIsIdle', () => {
     assert.equal(runtimeIsIdle(runtime), true);
   });
 
+  test('hl(09-24 P2-18):CLI 自己发起的一轮开着(orphanTurnOpen)= 忙', () => {
+    assert.equal(runtimeIsIdle({ ...clean(), orphanTurnOpen: true }), false);
+    assert.equal(runtimeIsIdle({ ...clean(), orphanTurnOpen: false }), true);
+  });
+
   test('已丢弃的 runtime 不算闲', () => {
     assert.equal(runtimeIsIdle({ ...clean(), disposed: true }), false);
   });
@@ -47,38 +52,25 @@ describe('runtimeIsIdle', () => {
   });
 });
 
-describe('维护回合的预算', () => {
-  test('默认 idle 90s / 绝对上限 5 分钟', () => {
-    const budget = readMaintenanceWatchdogConfig({});
-    assert.equal(budget.idleMs, 90 * 1000, 'idle 要盖得住接近满窗时的首字延迟');
-    assert.equal(budget.absoluteMs, 5 * 60 * 1000, '压缩跑过 5 分钟就不该再等了');
+describe('压缩阶段的静默上限(hl 09-24 P2-19)', () => {
+  test('默认 15 分钟 —— 远小于用户回合的一小时 idle(压缩期间无保活帧,太小会死循环)', () => {
+    const ms = readCompactionIdleTimeout({});
+    assert.equal(ms, 15 * 60 * 1000);
+    assert.ok(ms < 60 * 60 * 1000, '压缩不该按"跑一小时的 SQL"来容忍');
   });
 
-  test('和用户回合的预算不是一套 —— 用户回合 idle 一小时、绝对上限默认关闭', () => {
-    const budget = readMaintenanceWatchdogConfig({});
-    assert.ok(budget.idleMs < 60 * 60 * 1000, '压缩不该按"跑一小时的 SQL"来容忍');
-    assert.ok(budget.absoluteMs > 0, '维护回合必须有绝对上限,否则卡住没人管');
+  test('可以用环境变量覆盖;0 = 关闭', () => {
+    assert.equal(readCompactionIdleTimeout({ PRISM_COMPACT_TIMEOUT_MS: '120000' }), 120000);
+    assert.equal(readCompactionIdleTimeout({ PRISM_COMPACT_TIMEOUT_MS: '0' }), 0);
   });
 
-  test('维护回合不留工具静默这一档 —— 它本就不该有工具在途', () => {
-    assert.equal(readMaintenanceWatchdogConfig({}).toolSilenceMaxMs, 0);
+  test('填了废值回落到默认,而不是变成 0(0 等于把上限关了)', () => {
+    assert.equal(readCompactionIdleTimeout({ PRISM_COMPACT_TIMEOUT_MS: 'abc' }), 15 * 60 * 1000);
+    assert.equal(readCompactionIdleTimeout({ PRISM_COMPACT_TIMEOUT_MS: '' }), 15 * 60 * 1000);
   });
 
-  test('可以用环境变量覆盖', () => {
-    const budget = readMaintenanceWatchdogConfig({
-      PRISM_COMPACT_IDLE_TIMEOUT_MS: '30000',
-      PRISM_COMPACT_TIMEOUT_MS: '120000',
-    });
-    assert.equal(budget.idleMs, 30000);
-    assert.equal(budget.absoluteMs, 120000);
-  });
-
-  test('填了废值回落到默认,而不是变成 0(0 等于把看门狗关了)', () => {
-    const budget = readMaintenanceWatchdogConfig({
-      PRISM_COMPACT_IDLE_TIMEOUT_MS: 'abc',
-      PRISM_COMPACT_TIMEOUT_MS: '',
-    });
-    assert.equal(budget.idleMs, 90 * 1000);
-    assert.equal(budget.absoluteMs, 5 * 60 * 1000);
+  test('gt 之后没有独立的维护回合:旧的 readMaintenanceWatchdogConfig 已删', async () => {
+    const mod = await import('../claude-sdk.js');
+    assert.equal(typeof mod.readMaintenanceWatchdogConfig, 'undefined');
   });
 });

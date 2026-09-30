@@ -710,6 +710,8 @@ export const sessionsService = {
 
     const sessionId = randomUUID();
     sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, ownerUserId);
+    // hl(动态 P2-4):新建的会话记录也推给能看见它的人(此前要等第一条消息落 jsonl 才由 watcher 推)。
+    void chatRunRegistry.announceSessionUpsert(sessionId).catch(() => { /* 推送失败不影响建会话 */ });
 
     return {
       sessionId,
@@ -1113,22 +1115,44 @@ export const sessionsService = {
       || hasPendingSendForSession(sessionId);
   },
 
-  /** gk:谁能永久删这条会话(root / 项目 owner)。判定在 database 模块,这里只是转出去。 */
+  /**
+   * gk:谁能永久删这条会话(root / 项目 owner);hl(动态 P2-6)起归档 / 还原同门,
+   * 并多一维"会话发起人"。判定在 database 模块,这里只是转出去。
+   */
   canViewerManageSession(sessionId: string, viewer: Viewer): boolean {
     return canViewerManageSession(sessionId, viewer);
   },
 
   /**
-   * gk:永久删除的权限门。看得见但不能永久删 → 403 并说清楚该怎么办(归档);
+   * gk:永久删除的权限门。看得见但不能永久删 → 403 并说清楚该怎么办;
    * 看不见 → 与 assertViewerCanSeeSession 同形的 404(不当存在性预言机)。
    */
   assertViewerMayPermanentlyDelete(sessionId: string, viewer: Viewer): void {
     this.assertViewerCanSeeSession(sessionId, viewer);
     if (!this.canViewerManageSession(sessionId, viewer)) {
-      throw new AppError('只有项目负责人或管理员可以永久删除这条会话;你可以把它归档。', {
+      throw new AppError('只有会话发起人、项目负责人或管理员可以永久删除这条会话。', {
         code: 'SESSION_DELETE_FORBIDDEN',
         statusCode: 403,
       });
+    }
+  },
+
+  /**
+   * hl(动态 P2-6):归档 / 还原的权限门 —— 与永久删除同一条判定。
+   *
+   * `sessions.isArchived` 是全局的一列,归档等于让所有人当场看不见;此前"看得见就能归档",
+   * 共享项目里的协作者能把 owner 的会话整条收起来。403 的文案与永久删分开写:
+   * 两个动作的措辞不同,用户才知道自己被挡的是哪一件事。
+   */
+  assertViewerMayArchiveOrRestore(sessionId: string, viewer: Viewer, action: 'archive' | 'restore'): void {
+    this.assertViewerCanSeeSession(sessionId, viewer);
+    if (!this.canViewerManageSession(sessionId, viewer)) {
+      throw new AppError(
+        action === 'archive'
+          ? '只有会话发起人、项目负责人或管理员可以归档这条会话。'
+          : '只有会话发起人、项目负责人或管理员可以还原这条会话。',
+        { code: action === 'archive' ? 'SESSION_ARCHIVE_FORBIDDEN' : 'SESSION_RESTORE_FORBIDDEN', statusCode: 403 },
+      );
     }
   },
 
@@ -1310,6 +1334,8 @@ export const sessionsService = {
     }
 
     sessionsDb.updateSessionIsArchived(sessionId, false);
+    // hl(动态 P2-4):还原后回到活跃列表,别人的标签页也要看到。
+    void chatRunRegistry.announceSessionUpsert(sessionId).catch(() => { /* 推送失败不影响还原 */ });
     return { sessionId, isArchived: false };
   },
 
@@ -1341,7 +1367,8 @@ export const sessionsService = {
         continue;
       }
       // gk:批量永久删除逐条过 owner / root 门 —— 看得见但不能永久删的静默跳过,计入 skipped。
-      if (action === 'delete' && !this.canViewerManageSession(sessionId, viewer)) {
+      // hl(动态 P2-6):归档 / 还原同门(发起人 / owner / root),与单条入口不许分叉。
+      if (!this.canViewerManageSession(sessionId, viewer)) {
         skipped.push(sessionId);
         continue;
       }
@@ -1466,6 +1493,8 @@ export const sessionsService = {
     }
 
     sessionsDb.updateSessionCustomName(sessionId, summary);
+    // hl(动态 P2-4):改名不碰 jsonl,watcher 不会推;这里主动推一帧 session_upserted。
+    void chatRunRegistry.announceSessionUpsert(sessionId).catch(() => { /* 推送失败不影响改名 */ });
     return { sessionId, summary };
   },
 };

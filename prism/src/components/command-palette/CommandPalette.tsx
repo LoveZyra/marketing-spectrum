@@ -290,9 +290,10 @@ export default function CommandPalette({
 
           {/* 底部提示条(设计稿 2a/2b):等宽 10.5px,沉降底 */}
           <div className="flex items-center gap-3 border-t border-border bg-card px-4 py-2.5 font-mono text-[10.5px] text-muted-foreground">
-            <span>↑↓ 选择</span>
-            <span>↵ 打开</span>
-            <span>esc 关闭</span>
+            {/* hl(P3 中英混排):en 界面下原来是中文。 */}
+            <span>{t('palette.footer.navigate', { defaultValue: '↑↓ 选择' })}</span>
+            <span>{t('palette.footer.open', { defaultValue: '↵ 打开' })}</span>
+            <span>{t('palette.footer.close', { defaultValue: 'esc 关闭' })}</span>
           </div>
         </Command>
       </DialogContent>

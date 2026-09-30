@@ -122,7 +122,7 @@ export default function McpServers({ selectedProvider, currentProjects }: McpSer
             <span className="text-xs text-muted-foreground">{t('saveStatus.success')}</span>
           )}
           {isLoadingProjectScopes && (
-            <span className="text-xs text-muted-foreground">Refreshing project scopes...</span>
+            <span className="text-xs text-muted-foreground">{t('mcpServers.refreshingScopes', { defaultValue: '正在刷新项目作用域…' })}</span>
           )}
         </div>
       </div>
@@ -135,7 +135,7 @@ export default function McpServers({ selectedProvider, currentProjects }: McpSer
 
       <div className="space-y-2">
         {isLoading && servers.length === 0 && (
-          <div className="py-8 text-center text-muted-foreground">Loading MCP servers...</div>
+          <div className="py-8 text-center text-muted-foreground">{t('mcpServers.loading', { defaultValue: '正在加载 MCP 服务…' })}</div>
         )}
 
         {servers.map((server) => {

@@ -1,7 +1,9 @@
+import { useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { AlertTriangle, EyeOff, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
+import { useModalKeyboard } from './hooks/useModalKeyboard';
 import { Button } from './ui';
 
 export type SessionDeleteTarget = {
@@ -35,6 +37,15 @@ type Props = {
  * 文案与两档语义(归档 / 永久删除)只此一份。
  */
 export default function SessionDeleteDialog({ target, onCancel, onConfirm, t }: Props) {
+  // hl(P3 可访问性):原来没有 dialog 语义、焦点留在背后的页面上。接共用的模态键盘行为,
+  // 初始焦点落在「取消」—— 不可逆操作的对话框不该让回车默认落在删除上。
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useModalKeyboard(dialogRef, { open: Boolean(target), onClose: onCancel });
+  useEffect(() => {
+    if (target) cancelRef.current?.focus();
+  }, [target]);
+
   if (!target) return null;
 
   const mayDelete = target.canDeletePermanently !== false;
@@ -43,14 +54,20 @@ export default function SessionDeleteDialog({ target, onCancel, onConfirm, t }: 
 
   return ReactDOM.createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(16,16,16,0.72)] p-4">
-      <div className="prism-modal-shadow w-full max-w-md overflow-hidden rounded-dialog border border-border bg-card">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="session-delete-title"
+        className="prism-modal-shadow w-full max-w-md overflow-hidden rounded-dialog border border-border bg-card"
+      >
         <div className="p-6">
           <div className="flex items-start gap-4">
             <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-destructive/10">
               <AlertTriangle className="h-6 w-6 text-destructive" />
             </div>
             <div className="min-w-0 flex-1">
-              <h3 className="mb-2 text-lg font-semibold text-foreground">
+              <h3 id="session-delete-title" className="mb-2 text-lg font-semibold text-foreground">
                 {t('deleteConfirmation.deleteSession')}
               </h3>
               <p className="mb-1 text-sm text-muted-foreground">
@@ -97,7 +114,7 @@ export default function SessionDeleteDialog({ target, onCancel, onConfirm, t }: 
               {t('deleteConfirmation.deleteSessionPermanently', 'Delete permanently')}
             </Button>
           )}
-          <Button variant="ghost" className="w-full" onClick={onCancel}>
+          <Button ref={cancelRef} variant="ghost" className="w-full" onClick={onCancel}>
             {nothingToDo ? t('actions.close', '关闭') : t('actions.cancel')}
           </Button>
         </div>

@@ -1,7 +1,10 @@
+import { useTranslation } from 'react-i18next';
+
 import type { MobileMenuButtonProps } from '../../types/types';
 import { useMobileMenuHandlers } from '../../hooks/useMobileMenuHandlers';
 
 export default function MobileMenuButton({ onMenuClick, compact = false }: MobileMenuButtonProps) {
+  const { t } = useTranslation();
   const { handleMobileMenuClick, handleMobileMenuTouchEnd } = useMobileMenuHandlers(onMenuClick);
 
   const buttonClasses = compact
@@ -10,12 +13,14 @@ export default function MobileMenuButton({ onMenuClick, compact = false }: Mobil
 
   return (
     <button
+      type="button"
       onClick={handleMobileMenuClick}
       onTouchEnd={handleMobileMenuTouchEnd}
       className={buttonClasses}
-      aria-label="Open menu"
+      // hl(P3 中英混排):原来写死 "Open menu"。
+      aria-label={t('mainContent.openMenu', { defaultValue: '打开菜单' })}
     >
-      <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg className="h-5 w-5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
       </svg>
     </button>

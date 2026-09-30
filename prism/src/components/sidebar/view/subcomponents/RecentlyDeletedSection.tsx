@@ -3,6 +3,7 @@ import { RotateCcw, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { api } from '../../../../utils/api';
+import { uiLocale } from '../../../../utils/uiLocale';
 
 export type TrashedSessionItem = {
   sessionId: string;
@@ -53,7 +54,7 @@ const PAGE = 100;
 const formatWhen = (value: string | null): string => {
   if (!value) return '';
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString(uiLocale());
 };
 
 const daysUntil = (value: string | null): number | null => {

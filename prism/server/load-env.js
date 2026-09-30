@@ -15,6 +15,7 @@ if (!process.env.UV_THREADPOOL_SIZE) {
   process.env.UV_THREADPOOL_SIZE = '16';
 }
 
+import { parseDotEnv } from './utils/dotenv-parse.js';
 import { findAppRoot, getModuleDir, getDataDir, migrateLegacyDataDir } from './utils/runtime-paths.js';
 
 const __dirname = getModuleDir(import.meta.url);
@@ -25,15 +26,11 @@ const APP_ROOT = findAppRoot(__dirname);
 try {
   const envPath = path.join(APP_ROOT, '.env');
   const envFile = fs.readFileSync(envPath, 'utf8');
-  envFile.split('\n').forEach(line => {
-    const trimmedLine = line.trim();
-    if (trimmedLine && !trimmedLine.startsWith('#')) {
-      const [key, ...valueParts] = trimmedLine.split('=');
-      if (key && valueParts.length > 0 && !process.env[key]) {
-        process.env[key] = valueParts.join('=').trim();
-      }
-    }
-  });
+  // hl(静态 P2-24):解析规则收进 utils/dotenv-parse.js —— 行内注释与引号在那里剥,
+  // prism.sh 的 read_env 按同一套规则。环境里已有的键仍然优先于文件(部署脚本 export 的赢)。
+  for (const [key, value] of Object.entries(parseDotEnv(envFile))) {
+    if (!process.env[key]) process.env[key] = value;
+  }
 } catch (e) {
   // 这一行**刻意不走 logger**:load-env.js 是整个进程的第一个 import,
   // 它跑完之前 `PRISM_LOG_LEVEL` 还没进 process.env —— 用 logger 的话,

@@ -40,7 +40,10 @@
     "openCommandPalette": "開啟指令面板",
     "attentionRequiredIndicator": "工作階段需要處理",
     "approvalPendingIndicator": "等待你確認工具權限",
-    "exportSession": "匯出工作階段 (Markdown)"
+    "exportSession": "匯出工作階段 (Markdown)",
+    "hideSkillNav": "收起技能導覽",
+    "showSkillNav": "展開技能導覽",
+    "noSidebarOnNotebook": "Notebook 頁不顯示專案欄"
   },
   "actions": {
     "settings": "設定",

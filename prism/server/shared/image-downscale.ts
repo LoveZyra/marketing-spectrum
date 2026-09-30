@@ -56,7 +56,9 @@ export type DownscaleResult = {
   output: { bytes: number; width?: number; height?: number };
 };
 
-type SharpModule = typeof import('sharp');
+// hl(静态 P2-26):sharp 0.35 起类型走 ESM 声明,`typeof import('sharp')` 是模块命名空间
+// (不可调用),可调用的构造函数是它的 default。运行时下面 `mod.default ?? mod` 两版都对。
+type SharpModule = typeof import('sharp').default;
 let sharpModule: Promise<SharpModule | null> | null = null;
 
 /**

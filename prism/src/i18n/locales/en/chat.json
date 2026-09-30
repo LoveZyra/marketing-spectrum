@@ -39,12 +39,12 @@
     "send": "Send",
     "stop": "Stop",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands",
-      "enter": "Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands",
+      "ctrlEnter": "Ctrl+Enter to send • Shift+Enter for new line • Shift+Tab to change modes • / for slash commands",
+      "enter": "Enter to send • Shift+Enter for new line • Shift+Tab to change modes • / for slash commands",
       "queue": "Enter to queue your next message",
       "updateQueued": "Enter to update queued message"
     },
-    "clickToChangeMode": "Click to change permission mode (or press Tab in input)",
+    "clickToChangeMode": "Click to change permission mode (or press Shift+Tab in input)",
     "showAllCommands": "Show all commands",
     "scrollToBottom": "Scroll to bottom",
     "queue": {
@@ -311,12 +311,22 @@
     "help": {
       "eyebrow": "Command center",
       "title": "Help & Shortcuts",
-      "subtitle": "Search built-ins, syntax patterns, and command usage without leaving the chat."
+      "subtitle": "Search built-ins, syntax patterns, and command usage without leaving the chat.",
+      "noMatch": "No commands match that filter.",
+      "syntax": "Syntax",
+      "allArgs": "passes all args.",
+      "positionalArgs": "pass positional args.",
+      "fileArg": "includes file contents.",
+      "quickTip": "Quick tip",
+      "quickTipBody": "Type / in the composer to open the command menu, then use arrows and Enter to run a command."
     },
     "models": {
       "eyebrow": "Model selection",
       "title": "Choose a Model",
-      "subtitle": "Pick the model this provider should use."
+      "subtitle": "Pick the model this provider should use.",
+      "searchPlaceholder": "Search {{provider}} models…",
+      "current": "Current selection",
+      "appliesNext": "Applies next response"
     },
     "cost": {
       "eyebrow": "Session telemetry",
@@ -343,7 +353,8 @@
     "closeAria": "Close command result modal",
     "escHint": "Esc closes the modal.",
     "sessionCost": "Session cost",
-    "ledgerCost": "Ledger total (all time)"
+    "ledgerCost": "Ledger total (all time)",
+    "close": "Close"
   },
   "retry": {
     "lastTurn": "Resend last message"
@@ -399,7 +410,36 @@
   },
   "home": {
     "toolHint": "{{name}} · opens in a new tab",
-    "starters": "Try one of these"
+    "starters": "Try one of these",
+    "starterCards": {
+      "campaign": {
+        "label": "Campaign diagnosis",
+        "prompts": {
+          "0": "Diagnose this marketing campaign: is the audience selection and reach funnel sound?",
+          "1": "Review this campaign’s conversion funnel and find the weak steps"
+        }
+      },
+      "analyst": {
+        "label": "Analyst",
+        "prompts": {
+          "0": "External research: competitive landscape and key players in this industry over the past year",
+          "1": "Internal business review: break down this business line’s revenue mix and year-over-year change"
+        }
+      },
+      "modeling": {
+        "label": "Algorithm modeling",
+        "prompts": {
+          "0": "Build a user churn prediction model and propose features",
+          "1": "Design a retrieval + ranking pipeline for this recommendation scenario"
+        }
+      },
+      "consulting": {
+        "label": "Solution advice",
+        "prompts": {
+          "0": "Recommend an algorithm approach for cold-start recommendation"
+        }
+      }
+    }
   },
   "externalApps": {
     "recsys": {
@@ -418,5 +458,96 @@
     "notRestorableHint": "This session cannot be restored.",
     "draftKept": "What you just typed is kept — a new session will carry it over.",
     "startNew": "Continue in a new session"
+  },
+  "feedback": {
+    "failed": "Feedback was not saved",
+    "up": "Helpful",
+    "down": "Something's wrong",
+    "markedDown": "Marked as problematic · click to change",
+    "category": "Category",
+    "note": "Note",
+    "notePlaceholder": "What went wrong? One sentence is enough",
+    "expected": "Expected result",
+    "expectedPlaceholder": "Optional. If filled in, it becomes the training criterion — the more specific the better",
+    "skill": "Skill used",
+    "skillPlaceholder": "Leave empty if no skill was used",
+    "skillAuto": "auto-detected, editable",
+    "retract": "Retract",
+    "cancel": "Cancel",
+    "submit": "Submit",
+    "categories": {
+      "wrong_result": "Wrong result",
+      "not_as_asked": "Not as asked",
+      "wrong_tool": "Wrong skill/tool",
+      "too_slow": "Too slow",
+      "other": "Other"
+    }
+  },
+  "survey": {
+    "thanks": "Thanks, noted — this feeds the next optimization of this skill.",
+    "skipped": "Okay, not asking this time.",
+    "question": "How did “{{skill}}” do this time?",
+    "skip": "Skip",
+    "good": "Good",
+    "neutral": "Okay",
+    "bad": "Poor",
+    "hintPick": "Picking one records it; add a note below if you want",
+    "hintRecorded": "Recorded. Add what to improve, or just close",
+    "notePlaceholder": "What to improve (optional). E.g. missed the channel definition / table lacks a column / should have asked for the time window first",
+    "footnote": "Turns that used a skill are sampled; the same skill isn't asked again within an hour; turn off under “My account”",
+    "close": "That's all",
+    "submit": "Submit"
+  },
+  "visionPanel": {
+    "headlineLead": "Break complex algorithm and data problems ",
+    "headlineTail": "into clear, executable, traceable AI workflows",
+    "pillars": {
+      "entry": {
+        "title": "One entry point",
+        "desc": "Algorithm R&D · Data analysis · Multi-agent collaboration"
+      },
+      "trusted": {
+        "title": "Trusted execution",
+        "desc": "Every change is visible · auditable · reversible"
+      },
+      "reuse": {
+        "title": "Build on what you learn",
+        "desc": "Your team’s algorithm assets and methods keep accumulating"
+      }
+    }
+  },
+  "composer": {
+    "notice": {
+      "uploadStartFailed": "Upload could not start (HTTP {{status}})",
+      "reminder": "Note: {{message}}",
+      "messageWithPath": "{{message}}\n\nPath: `{{path}}`",
+      "commandCancelled": "Command cancelled",
+      "commandFailed": "Command failed: {{message}}",
+      "fileEmpty": "This file is empty",
+      "imageTooLarge": "Over 5MB — images are limited to 5MB",
+      "tooManyImages": "Up to 5 images can be attached; {{extra}} more were not attached.",
+      "documentTooLarge": "{{name}} is over 20MB, too large for document parsing.",
+      "parseFailed": "Parsing failed (HTTP {{status}})",
+      "readFailed": "Could not read {{name}}",
+      "attachmentTooLarge": "{{name}} is over 500MB; attachments are limited to 500MB each.",
+      "attachmentUploadFailed": "{{name}} failed to upload: {{error}}",
+      "fetchUrlFailed": "Failed to fetch the web page: {{error}}",
+      "forkPointMissing": "Could not locate the fork point",
+      "editRerunFailed": "Edit and re-run failed: {{error}}",
+      "filesRejected": "{{rejected}} file(s) could not be attached.",
+      "newSessionNoId": "Failed to create a session: the server returned no session id.",
+      "newSessionFailed": "Failed to create a session: {{message}}",
+      "attachmentsUploading": "Attachments are still uploading — send once they finish.",
+      "imageUploadFailedWithReason": "Image upload failed: {{message}}",
+      "imageUploadFailed": "Image upload failed",
+      "queuedImagesLost": "{{images}} image(s) attached while queued need to be added again.",
+      "deliveryAbandoned": "This message was not acknowledged after several attempts, so automatic resending stopped — the text is back in the composer; send it again when ready.",
+      "queueReplacedElsewhere": "Another tab queued a new message — the text queued here is back in the composer.",
+      "queuedImagesLostGeneric": "Images attached while queued need to be added again.",
+      "queueHandledElsewhere": "This queued message was sent or cancelled in another tab — the text is back in the composer.",
+      "permissionNotSent": "Disconnected — the approval was not sent. Retry once the connection is back.",
+      "retryBlockedByDraft": "The composer has unsent text — send or clear it before retrying.",
+      "sendFailed": "Send failed"
+    }
   }
 }

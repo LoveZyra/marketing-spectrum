@@ -121,19 +121,25 @@ export default function PromptStarterCards({ onPick }: PromptStarterCardsProps) 
                 <span className="bg-primary/8 grid h-8 w-8 place-items-center rounded-sm">
                   <Icon className="h-5 w-5 text-primary" strokeWidth={2} aria-hidden />
                 </span>
-                <span className="text-sm font-semibold text-foreground">{category.label}</span>
+                {/* hl(P3 中英混排):en 界面下原来整块中文。中文原文仍是 CATEGORIES 里那份(作兜底)。 */}
+                <span className="text-sm font-semibold text-foreground">
+                  {t(`home.starterCards.${category.key}.label`, { defaultValue: category.label })}
+                </span>
               </div>
               <div className="space-y-2">
-                {category.prompts.map((prompt) => (
-                  <button
-                    key={prompt}
-                    type="button"
-                    onClick={() => onPick(prompt)}
-                    className="hover:bg-primary/8 block w-full rounded-md border border-transparent bg-card px-3.5 py-2.5 text-left text-sm leading-relaxed text-body transition-colors hover:border-primary/30 hover:text-foreground"
-                  >
-                    {prompt}
-                  </button>
-                ))}
+                {category.prompts.map((rawPrompt, index) => {
+                  const prompt = t(`home.starterCards.${category.key}.prompts.${index}`, { defaultValue: rawPrompt });
+                  return (
+                    <button
+                      key={`${category.key}-${index}`}
+                      type="button"
+                      onClick={() => onPick(prompt)}
+                      className="hover:bg-primary/8 block w-full rounded-md border border-transparent bg-card px-3.5 py-2.5 text-left text-sm leading-relaxed text-body transition-colors hover:border-primary/30 hover:text-foreground"
+                    >
+                      {prompt}
+                    </button>
+                  );
+                })}
                 {category.withExternalApps
                   && EXTERNAL_APPS.map((app) => {
                     const label = t(app.labelKey, { defaultValue: app.labelFallback });

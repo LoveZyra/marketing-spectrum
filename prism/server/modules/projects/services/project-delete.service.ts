@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { attachmentsDb, auditLogDb, projectsDb, sessionsDb, getConnection } from '@/modules/database/index.js';
+import { attachmentsDb, auditLogDb, projectsDb, scheduledTasksDb, sessionsDb, getConnection } from '@/modules/database/index.js';
 import { sessionsService, type SessionActor } from '@/modules/providers/index.js';
 import { ATTACHMENT_DIR_NAME } from '@/shared/attachment-storage.js';
 import { AppError } from '@/shared/utils.js';
@@ -86,7 +86,14 @@ export async function deleteOrArchiveProject(
   };
 
   if (!force) {
-    projectsDb.updateProjectIsArchivedById(projectId, true);
+    // hl(09-24 P1-9):归档同时停用这个项目上的定时任务 —— 否则任务照跑,还会把
+    // 项目重建出来。还原项目**不**自动恢复(留给人决定,见 disableByProjectPath)。
+    const archiveProject = getConnection().transaction(() => {
+      projectsDb.updateProjectIsArchivedById(projectId, true);
+      return scheduledTasksDb.disableByProjectPath(row.project_path);
+    });
+    const disabledTasks = archiveProject();
+    if (disabledTasks > 0) log.info(`[projects] 归档项目 ${row.project_path}:停用 ${disabledTasks} 个定时任务`);
     auditLogDb.record({
       ...auditBase,
       event: 'project_archived',
@@ -154,6 +161,9 @@ export async function deleteOrArchiveProject(
 
   const commitRemoval = getConnection().transaction(() => {
     sessionsDb.deleteSessionsByProjectPath(row.project_path);
+    // hl(09-24 P1-9):定时任务(含运行记录)与项目同事务删除 —— 留着它们,
+    // 到点就会以任务主人的身份把项目重建出来。
+    scheduledTasksDb.deleteByProjectPath(row.project_path);
     projectsDb.deleteProjectById(projectId);
   });
   commitRemoval();

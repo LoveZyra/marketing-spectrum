@@ -80,44 +80,77 @@ const collectReadVariables = () => {
         const name = match[1];
         if (!found.has(name)) found.set(name, path.relative(ROOT, file));
       }
+      // hl:依赖注入写法 `env.PRISM_X`(skillwhet / ma-service / budget 都这么读)。只收 PRISM_ 前缀 ——
+      // `env` 这个名字太常见,别的前缀误报面太大。PRISM_SKILLWHET_MODEL_ALLOWLIST 就是这样漏过文档的。
+      for (const match of source.matchAll(/\benv\??\.(PRISM_[A-Z0-9_]*)/g)) {
+        const name = match[1];
+        if (!found.has(name)) found.set(name, path.relative(ROOT, file));
+      }
     }
   }
   return found;
 };
 
 /**
- * 宽松扫描:变量名在非测试源码里**以任何形式出现过**。
+ * 「文档写了 → 代码要读」这一侧的扫描:变量名必须以**读环境变量的形状**出现过。
  *
- * 严格的 `process.env.X` 扫描漏掉一大片,因为这个仓库读环境变量有四种写法:
- *   1. `process.env.PRISM_X`                      —— 直接读
- *   2. `envInt('PRISM_LOGIN_MAX_ATTEMPTS', 5)`    —— 经封装,名字是字符串字面量
- *   3. `env.PRISM_APPROVAL_REQUIRED`              —— 依赖注入,`env` 是个参数
- *   4. `import.meta.env.VITE_PRISM_API_KEY`       —— Vite 前端
- * 再加上 `prism.sh` 里的 shell 变量(`PRISM_LOG_KEEP`)。
+ * 这个仓库读环境变量有这几种写法,全部认:
+ *   1. `process.env.X` / `process.env['X']`          —— 直接读
+ *   2. `env.X` / `env['X']` / `env?.X`              —— 依赖注入,`env` 是个参数
+ *   3. `envInt('X', 5)` 之类 —— 名字作为**字符串字面量**出现(引号包着)
+ *   4. `import.meta.env.X`                           —— Vite 前端
+ *   5. shell:`read_env X`、`$X`、`${X}`、`${X:-默认}` —— prism.sh / deploy.sh / Dockerfile
  *
- * 我前两版分别只覆盖了 1 和 1+2,于是把十几个**真的在用**的变量报成"没人读"。
- * 与其继续追加模式,不如直接**子串匹配** —— 这些名字都是 `PRISM_` / `VITE_` /
- * `CLAUDE_` 打头的长名,撞车概率可以忽略。
- *
- * 两个方向用不同的严格度是刻意的,因为误判的代价不对称:
- * - 「代码读了→文档要有」用**严格**扫描:宁可漏报,也不能因为某个字符串碰巧同名,
- *   就逼人往 .env.example 里加一行根本不存在的旋钮;
- * - 「文档写了→代码要读」用**宽松**扫描:这边误判会让人删掉一行其实有用的文档,
- *   比留着一行死配置更糟。
+ * hl(静态 P3「死配置」):此前这一侧是**子串匹配** —— 名字在源码里任何地方出现过就算"有人读"。
+ * 结果 `PRISM_CREDENTIAL_HEADERS`(其实是 proxy-kit.js 里一个**常量**的名字)和
+ * `PRISM_DATA_DIR_EXPLICIT_GUARD`(只出现在一行**注释**里)都被放了过去,运维配了没有任何效果。
+ * 现在只认上面五种形状(shell 文件先剥掉 `#` 注释行)。JS 注释**不剥**:按字符剥注释要
+ * 同时懂字符串、模板串和正则字面量,字符串里的 glob(src 下两个星号那种)就会被误当成块注释开头、
+ * 吞掉后面整段代码 —— 第一版就这样把三个真在读的变量报成了死配置。五种形状本身已经够严:
+ * 注释里裸写的名字、同名常量都不匹配。
  */
-const collectMentionedNames = () => {
-  const chunks = [];
+const stripShellComments = (source) => source
+  .split('\n')
+  .map((line) => (/^\s*#/.test(line) ? '' : line))
+  .join('\n');
+
+const collectReadNames = () => {
+  const names = new Set();
+  const add = (regex, text) => { for (const m of text.matchAll(regex)) names.add(m[1]); };
+  const NAME = '([A-Z_][A-Z0-9_]*)';
+  const jsPatterns = [
+    new RegExp(`\\benv\\??\\.${NAME}\\b`, 'g'),                       // process.env.X / env.X / env?.X / import.meta.env.X
+    new RegExp(`\\benv\\??\\.?\\[\\s*['"\`]${NAME}['"\`]\\s*\\]`, 'g'), // env['X']
+    new RegExp(`['"\`]${NAME}['"\`]`, 'g'),                               // 'X'(经封装读取)
+  ];
+  const shellPatterns = [
+    new RegExp(`read_env\\s+${NAME}\\b`, 'g'),
+    new RegExp(`\\$\\{?${NAME}\\b`, 'g'),
+  ];
+
   for (const dir of ['server', 'src', 'scripts']) {
     const abs = path.join(ROOT, dir);
     if (!fs.existsSync(abs)) continue;
-    for (const file of walk(abs)) chunks.push(fs.readFileSync(file, 'utf8'));
+    for (const file of walk(abs)) {
+      const text = fs.readFileSync(file, 'utf8');
+      for (const re of jsPatterns) add(re, text);
+    }
   }
-  // 部署脚本也算:PRISM_LOG_KEEP 只有 prism.sh 读,但它确实是个真旋钮。
-  for (const extra of ['prism.sh', 'vite.config.ts', 'vite.config.js', 'Dockerfile', 'docker-compose.yml']) {
+  for (const extra of ['vite.config.ts', 'vite.config.js']) {
     const abs = path.join(ROOT, extra);
-    if (fs.existsSync(abs)) chunks.push(fs.readFileSync(abs, 'utf8'));
+    if (!fs.existsSync(abs)) continue;
+    const text = fs.readFileSync(abs, 'utf8');
+    for (const re of jsPatterns) add(re, text);
   }
-  return chunks.join('\n');
+  for (const extra of ['prism.sh', 'deploy.sh', 'Dockerfile', 'docker-compose.yml']) {
+    const abs = path.join(ROOT, extra);
+    if (!fs.existsSync(abs)) continue;
+    const text = stripShellComments(fs.readFileSync(abs, 'utf8'));
+    for (const re of shellPatterns) add(re, text);
+    // compose 文件里 `- X=...` / `X: ...` 形式的环境项
+    if (extra === 'docker-compose.yml') add(new RegExp(`^\\s*-?\\s*${NAME}\\s*[=:]`, 'gm'), text);
+  }
+  return names;
 };
 
 const collectDocumentedVariables = (text) => {
@@ -148,11 +181,11 @@ describe('.env.example 与代码双向对账', () => {
   });
 
   test('.env.example 里的每一行都要真有人读(或在白名单里说明理由)', () => {
-    const haystack = collectMentionedNames();
+    const readNames = collectReadNames();
     const documented = collectDocumentedVariables(readEnvExample());
 
     const dead = [...documented].filter(
-      (name) => !haystack.includes(name) && !DOCUMENTED_BUT_NOT_READ.has(name),
+      (name) => !readNames.has(name) && !DOCUMENTED_BUT_NOT_READ.has(name),
     );
 
     assert.deepEqual(

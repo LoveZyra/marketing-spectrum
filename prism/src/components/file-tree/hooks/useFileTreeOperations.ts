@@ -5,6 +5,7 @@ import { api } from '../../../utils/api';
 import { startBrowserDownload } from '../../../utils/browserDownload';
 import { copyTextToClipboard } from '../../../utils/clipboard';
 import type { FileTreeNode } from '../types/types';
+import { describeFileServerError } from '../utils/serverErrorText';
 import type { Project } from '../../../types/app';
 
 // Invalid filename characters
@@ -149,14 +150,16 @@ export function useFileTreeOperations({
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Failed to rename');
+        const data = await response.json().catch(() => ({}));
+        throw new Error(describeFileServerError((data as { error?: string }).error || 'Failed to rename', t));
       }
 
       showToast(t('fileTree.toast.renamed', 'Renamed successfully'), 'success');
       onRefresh();
       handleCancelRename();
     } catch (err) {
+      // hl(P3 文件组):失败**不**退出改名态 —— 输入框留着让人改一个名字再试;
+      // 焦点由 FileTree 里的 effect 在 operationLoading 落回 false 后放回输入框。
       showToast((err as Error).message, 'error');
     } finally {
       setOperationLoading(false);
@@ -184,8 +187,8 @@ export function useFileTreeOperations({
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Failed to delete');
+        const data = await response.json().catch(() => ({}));
+        throw new Error(describeFileServerError((data as { error?: string }).error || 'Failed to delete', t));
       }
 
       showToast(
@@ -211,9 +214,9 @@ export function useFileTreeOperations({
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      throw new Error((data as { error?: string }).error || 'Failed to delete');
+      throw new Error(describeFileServerError((data as { error?: string }).error || 'Failed to delete', t));
     }
-  }, [selectedProject]);
+  }, [selectedProject, t]);
 
   // Create operations
   const handleStartCreate = useCallback((parentPath: string, type: 'file' | 'directory') => {
@@ -248,8 +251,8 @@ export function useFileTreeOperations({
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Failed to create');
+        const data = await response.json().catch(() => ({}));
+        throw new Error(describeFileServerError((data as { error?: string }).error || 'Failed to create', t));
       }
 
       showToast(
@@ -292,7 +295,11 @@ export function useFileTreeOperations({
    * 403/404 无权限或文件不存在(files/content 对看不见的项目回 404、路径越界回 403),
    * 其余给出状态码兜底。
    */
-  const describeDownloadFailure = useCallback((status: number, name: string): string => {
+  const describeDownloadFailure = useCallback((status: number, name: string, serverMessage?: string): string => {
+    // hl(P3 文件组):打包名额满时签票就回 429(带中文原因)—— 原样给用户。
+    if (status === 429 && serverMessage) {
+      return serverMessage;
+    }
     if (status === 401) {
       return t('fileTree.download.unauthorized', { name, defaultValue: `登录已失效,请重新登录后再下载「${name}」` });
     }
@@ -314,17 +321,20 @@ export function useFileTreeOperations({
 
     const response = await api.issueDownloadTicket(selectedProject.projectId, paths);
     if (!response.ok) {
-      throw new Error(describeDownloadFailure(response.status, label));
+      const body = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(describeDownloadFailure(response.status, label, body?.error));
     }
     const { url, kind } = await response.json() as { url: string; kind: 'file' | 'zip' };
 
     // 打包要先在服务端走一遍目录才开始出字节,慢一点;给一句话填上这段静默。
     // 直传不需要 —— 下载栏是立刻出现的,那本身就是最好的反馈。
+    // hl(P3 文件组):这条 info 现在有 8 秒上限(见 FileTree 的自动隐藏)—— 浏览器导航式下载
+    // 拿不到"完成"事件,永不消失的「正在准备」比没有更糟;打包排队满的失败已在签票时拦下。
     if (kind === 'zip') {
       showToast(
         t('fileTree.toast.downloadPreparing', {
           name: label,
-          defaultValue: `正在打包「${label}」,浏览器下载栏里可以看到进度…`,
+          defaultValue: `已开始打包「${label}」,进度与结果请看浏览器下载栏`,
         }),
         'info',
       );

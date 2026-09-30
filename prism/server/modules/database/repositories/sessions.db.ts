@@ -371,6 +371,56 @@ export const sessionsDb = {
   },
 
   /**
+   * hl(动态 P2-6):**这条会话是谁发起的** —— 显示日志里第一条用户消息的 `senderUserId`。
+   *
+   * `sessions` 表没有"创建者"一列(会话挂在项目上,归属看项目)。但归档 / 还原 / 永久删
+   * 需要"这是不是我自己开的对话"这一维:共享项目里协作者开的会话,项目 owner 能删,他自己
+   * 反而不能;反过来协作者却能把别人的会话归档掉(归档是全局的)。
+   * 显示日志的用户行(网页 `origin:'web'`、外部 API `origin:'api'`)都带发送者 id,
+   * 从这里反查,不加列、不迁移。磁盘上发现的老会话没有显示日志 → null(回落到 owner / root)。
+   *
+   * 只扫最前面几十行:第一条用户消息一定在开头;整段读出来解析对长会话是无谓的开销。
+   *
+   * hl 复核:**日志被裁剪过(超上限、最早那批被物理删掉)就返回 null。** 裁剪后剩下的
+   * "第一条用户消息"可能是协作者中途发的,拿它当发起人等于把永久删除权交给了他。
+   * 确定不了首条就按"未知发起人"走保守路径(只剩 owner / root)。
+   */
+  getSessionInitiatorUserId(sessionId: string): number | null {
+    const db = getConnection();
+    try {
+      const state = cachedPrepare(db,
+        'SELECT trimmed FROM session_display_log_state WHERE session_id = ?',
+      ).get(sessionId) as { trimmed?: number } | undefined;
+      if (Number(state?.trimmed || 0) > 0) return null;
+    } catch {
+      // 标记表还没建(测试里的裸库):当作没裁过
+    }
+    let rows: Array<{ payload: string }> = [];
+    try {
+      rows = cachedPrepare(db,
+        `SELECT payload FROM session_display_messages
+         WHERE session_id = ? AND kind = 'text'
+         ORDER BY id ASC
+         LIMIT 40`,
+      ).all(sessionId) as Array<{ payload: string }>;
+    } catch {
+      return null; // 表还没建(测试里的裸库)当作没有显示日志
+    }
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.payload) as { role?: unknown; senderUserId?: unknown };
+        if (parsed?.role !== 'user') continue;
+        const raw = parsed.senderUserId;
+        const id = typeof raw === 'number' ? raw : Number.parseInt(String(raw ?? ''), 10);
+        return Number.isInteger(id) && id > 0 ? id : null;
+      } catch {
+        // 单行坏了就看下一行
+      }
+    }
+    return null;
+  },
+
+  /**
    * Resolves one session row through the provider-native id.
    *
    * The filesystem watcher only knows provider ids (they come from transcript

@@ -4,7 +4,8 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" href="/favicon.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
+    <!-- hl(P3 可访问性):去掉 maximum-scale / minimum-scale / user-scalable=no —— 禁止缩放让低视力用户无法放大(WCAG 1.4.4)。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>棱镜</title>
 
     <!--
@@ -13,19 +14,31 @@
         纸构蓝图   IBM Plex Sans  + IBM Plex Mono
         棱光玻璃   Space Grotesk  + JetBrains Mono
       拉不到时按 --font-ui 里的回落链退到系统字体,界面照常可用。
+
+      hl(P3 首屏):原来是渲染阻塞的 <link rel="stylesheet"> —— 内网没有外网时,首屏要等
+      fonts.googleapis.com 连接失败才开始画。改成 media="print" + onload 切回 all:
+      样式表异步拉,拉到之前用系统字体(display=swap 本来就允许这段换字),拉不到也不挡首屏。
     -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
     />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+        rel="stylesheet"
+      />
+    </noscript>
 
     <!-- Theme Color -->
     <meta name="theme-color" content="#101010" />
     <meta name="msapplication-TileColor" content="#ffffff" />
     
-    <!-- Prevent zoom on iOS -->
+    <!-- 不把数字串识别成电话链接(与缩放无关) -->
     <meta name="format-detection" content="telephone=no" />
   </head>
   <body>

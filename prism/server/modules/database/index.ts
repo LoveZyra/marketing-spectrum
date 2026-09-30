@@ -20,6 +20,8 @@ export { sessionsDb } from '@/modules/database/repositories/sessions.db.js';
 export { sessionTrashDb } from '@/modules/database/repositories/session-trash.db.js';
 export type { SessionTrashRow, TrashDeletedVia } from '@/modules/database/repositories/session-trash.db.js';
 export { uiSettingsDb, type UiSettingsRecord } from '@/modules/database/repositories/ui-settings.db.js';
+export { skillWhetNightlyDb, NIGHTLY_AUTOPAUSE_AFTER, type NightlyPlanRow, type NightlyPlanInput, type NightlyResult } from '@/modules/database/repositories/skillwhet-nightly.db.js';
+export { messageFeedbackDb, type MessageFeedbackRow, type SkillFeedbackStats, type FeedbackSource, type FeedbackStatus } from '@/modules/database/repositories/message-feedback.db.js';
 export { userDb } from '@/modules/database/repositories/users.js';
 export type { ApprovalStatus, UserAdminRow } from '@/modules/database/repositories/users.js';
 export { attachmentsDb, type AttachmentKind, type AttachmentRecord } from '@/modules/database/repositories/attachments.db.js';

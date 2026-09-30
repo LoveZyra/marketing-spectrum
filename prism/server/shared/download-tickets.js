@@ -40,7 +40,7 @@ import { createTicketStore } from './ticket-store.js';
  * 项目可能被移走。一张票能证明"是谁在下",不能证明"现在还能下"。
  */
 /**
- * @typedef {import('./project-visibility.js').Viewer} TicketViewer
+ * @typedef {{ userId: number|string|null, username: string|null, tokenVersion?: number|null }} TicketViewer
  * @typedef {{ absPath: string, entryName: string, isDirectory: boolean }} ZipEntry
  * @typedef {{ kind: 'project-file', viewer: TicketViewer, projectId: string, filePath: string }} ProjectFileTicket
  * @typedef {{ kind: 'project-zip', viewer: TicketViewer, projectId: string, entries: ZipEntry[], zipName: string }} ProjectZipTicket
@@ -148,5 +148,8 @@ function normalizeViewer(viewer) {
   return {
     userId,
     username: typeof viewer?.username === 'string' ? viewer.username : null,
+    // hj:签票那一刻的 token_version。直传口拿它比对 ——「退出所有设备」/ 停用 / 驳回之后,
+    // 手里的票立刻作废(原来注释说会被重跑拦下,实际可见性判定不看账号状态)。
+    tokenVersion: typeof viewer?.tokenVersion === 'number' ? viewer.tokenVersion : null,
   };
 }

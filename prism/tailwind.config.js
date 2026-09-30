@@ -5,6 +5,14 @@ export default {
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
+  /*
+   * hl(静态 P3「工程」):JS 里的取反(`!user`、`!errorMessage` 前缀、`!container`、`!relative`)
+   * 被 Tailwind 的内容扫描当成 important 变体的类名候选,于是给 index.css 里 `.chat-message.user`
+   * 这类组件规则生成 `.\!user` 版本,剩下的选择器被掏空成 ` { … }` —— esbuild 压缩时报
+   * 21 条 css-syntax-error(不影响渲染,但把真正的 CSS 警告淹没了)。这些名字没有一处是真想写
+   * important 类,直接屏蔽。以后再冒出新的,构建日志里 `grep css-syntax-error` 会先看到。
+   */
+  blocklist: ['!user', '!error', '!container', '!relative'],
   theme: {
     container: {
       center: true,

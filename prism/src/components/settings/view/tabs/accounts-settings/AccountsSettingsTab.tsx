@@ -169,7 +169,8 @@ export default function AccountsSettingsTab() {
                               <span className="hidden xl:inline">{t('accounts.actions.approve', '通过')}</span>
                             </button>
                           )}
-                          {user.approval_status !== 'rejected' && (
+                          {/* hl(动态 P3):自己那行不画「驳回」—— 服务端本来就 400「不能审自己」 */}
+                          {user.approval_status !== 'rejected' && user.id !== Number(currentUser?.id) && (
                             <button
                               type="button"
                               onClick={() => void decide(user.id, 'reject')}
@@ -258,6 +259,8 @@ export default function AccountsSettingsTab() {
                           placeholder={t('accounts.resetPlaceholder', '新密码(至少 6 位)')}
                           autoFocus
                           className="w-52 rounded-md border border-input bg-transparent px-2 py-1 text-xs transition-colors focus:border-primary focus:outline-none"
+                          // hl 复核 P3-4:Esc 只取消这次重置,不关整个设置弹窗(见 modalStack)。
+                          data-esc-local="true"
                           onKeyDown={(event) => {
                             if (event.key === 'Escape') setResetTargetId(null);
                           }}

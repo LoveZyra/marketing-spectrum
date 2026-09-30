@@ -2,13 +2,14 @@ import crypto from 'node:crypto';
 import fs, { promises as fsPromises } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { finished } from 'node:stream';
 
 import archiver from 'archiver';
 import express, { type RequestHandler, type Router } from 'express';
 import mime from 'mime-types';
 import multer from 'multer';
 
-import { attachmentsDb, resolveVisibleProjectRoot } from '@/modules/database/index.js';
+import { attachmentsDb, resolveVisibleProjectRoot, userDb } from '@/modules/database/index.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
 import {
   getFileTree,
@@ -19,9 +20,12 @@ import {
   resolveReadablePath as resolveReadablePathWith,
   validateFilename,
   validatePathInProject,
+  validateEntryInProject,
   type ProjectPathValidation,
 } from '@/modules/files/services/path-validation.service.js';
 import { searchProjectFiles } from '@/modules/files/services/project-search.service.js';
+import { decodeForDisplay, EDITOR_MAX_BYTES, sniffExistingFile, sniffText } from '@/modules/files/services/text-sniff.js';
+import { acquireZipSlot, hasZipSlot, streamZipEntries } from '@/modules/files/services/zip-stream.js';
 import { validateWorkspacePath, WORKSPACES_ROOT } from '@/shared/utils.js';
 import { setDownloadHeaders, attachmentDisposition } from '@/shared/download-headers.js';
 import {
@@ -130,6 +134,8 @@ const UPLOAD_CHUNK_REQUEST_BYTES = UPLOAD_CHUNK_BYTES + 1024 * 1024;
 const UPLOAD_CHUNK_TTL_MS = 60 * 60 * 1000;
 
 type ChunkSession = {
+  /** hk:谁开的会话 —— 按人限制同时进行的分片上传数与总字节数。 */
+  userId: string;
   name: string;
   relativePath: string;
   targetPath: string;
@@ -166,14 +172,67 @@ const appendChunkFile = (partPath: string, chunkPath: string): Promise<void> => 
   })
 );
 
+/**
+ * hk(审计 P2-9):每个人同时进行的分片上传数与声明总字节数的上限。原来不限:每人可以开无数个会话、
+ * 每个 1GB,全部写进临时盘。
+ */
+const UPLOAD_MAX_PENDING_PER_USER = (() => {
+  const raw = Number.parseInt(process.env.PRISM_UPLOAD_MAX_PENDING_PER_USER ?? '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 8;
+})();
+const UPLOAD_MAX_PENDING_BYTES_PER_USER = 2 * MAX_FILE_UPLOAD_SIZE_BYTES;
+
+const pendingUploadsOf = (userId: string): { count: number; bytes: number } => {
+  let count = 0;
+  let bytes = 0;
+  for (const session of uploadChunkSessions.values()) {
+    if (session.userId !== userId) continue;
+    count += 1;
+    bytes += session.declaredSize;
+  }
+  return { count, bytes };
+};
+
+/**
+ * hk(审计 P2-9):清掉**没人认领**的临时分片文件。
+ *
+ * 会话只存在内存里:服务一重启,`chunkasm-*.part`(拼接中的文件)与 `chunkpart-*`(multer 落下、
+ * 还没拼进去的单片)就再也没人收,临时盘只涨不落。按修改时间超过保留时长、且不属于任何在途会话来判。
+ */
+const sweepOrphanChunkFiles = async (): Promise<void> => {
+  const tracked = new Set([...uploadChunkSessions.values()].map((session) => session.partPath));
+  const cutoff = Date.now() - UPLOAD_CHUNK_TTL_MS;
+  let names: string[] = [];
+  try {
+    names = await fsPromises.readdir(os.tmpdir());
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!/^chunkasm-[a-f0-9]{32}\.part$/.test(name) && !/^chunkpart-\d+-\d+$/.test(name)) continue;
+    const full = path.join(os.tmpdir(), name);
+    if (tracked.has(full)) continue;
+    try {
+      const stat = await fsPromises.lstat(full);
+      if (stat.isFile() && stat.mtimeMs < cutoff) await fsPromises.unlink(full);
+    } catch {
+      /* 别的进程已经删了 */
+    }
+  }
+};
+
 // 过期会话清扫。unref() 保证它不会把进程钉在事件循环里。
 const uploadChunkSweeper = setInterval(() => {
   const cutoff = Date.now() - UPLOAD_CHUNK_TTL_MS;
   for (const [uploadId, session] of uploadChunkSessions) {
     if (session.updatedAt < cutoff) dropUploadChunkSession(uploadId);
   }
+  void sweepOrphanChunkFiles();
 }, 10 * 60_000);
 if (typeof uploadChunkSweeper.unref === 'function') uploadChunkSweeper.unref();
+// 启动后不久先扫一遍上一次运行留下的孤儿文件。
+const uploadChunkStartupSweep = setTimeout(() => { void sweepOrphanChunkFiles(); }, 30_000);
+if (typeof uploadChunkStartupSweep.unref === 'function') uploadChunkStartupSweep.unref();
 
 const chunkUploadMiddleware = multer({
   storage: multer.diskStorage({
@@ -193,6 +252,16 @@ const chunkUploadMiddleware = multer({
  * 是一串 `../`。zip 条目名里的 `../` 是路径穿越,解压工具要么警告要么直接拒绝,
  * 所以这种情况退回 basename。分隔符一律用 `/` —— zip 规范只认这一个。
  */
+/** 目录项是否已存在(用 lstat:悬空软链也算「已有同名」,覆盖它同样该提示)。 */
+const pathExists = async (target: string): Promise<boolean> => {
+  try {
+    await fsPromises.lstat(target);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const zipEntryName = (projectRoot: string, absPath: string): string => {
   const rel = path.relative(projectRoot, absPath);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
@@ -223,6 +292,10 @@ export function createFileDownloadRouter(): Router {
       const payload = readDownloadTicket(req.query.ticket as string, 'project-file');
       if (!payload) {
         return res.status(401).json({ error: '下载链接已过期,请重新点一次下载。' });
+      }
+      // hj(审计 P1-2):票里的人现在还能不能用 —— 停用 / 驳回 / 退出所有设备之后票即作废。
+      if (!userDb.getUsableUser(payload.viewer.userId, payload.viewer.tokenVersion ?? null)) {
+        return res.status(401).json({ error: '下载链接已失效,请重新登录后再下载。' });
       }
       const projectId = payload.projectId;
 
@@ -299,6 +372,10 @@ export function createFileDownloadRouter(): Router {
     if (!payload || !Array.isArray(payload.entries)) {
       return res.status(401).json({ error: '下载链接已过期,请重新点一次下载。' });
     }
+    // hj(审计 P1-2):票里的人现在还能不能用。
+    if (!userDb.getUsableUser(payload.viewer.userId, payload.viewer.tokenVersion ?? null)) {
+      return res.status(401).json({ error: '下载链接已失效,请重新登录后再下载。' });
+    }
 
     const projectRoot = resolveVisibleProjectRoot(payload.viewer, payload.projectId);
     if (!projectRoot) {
@@ -315,12 +392,31 @@ export function createFileDownloadRouter(): Router {
       entries.push({ ...entry, absPath: validation.resolved });
     }
 
+    // hk(审计 P1-7):同时打包的数量有上限,满了先回 429 —— 头还没发,浏览器下载栏会显示失败。
+    const releaseSlot = acquireZipSlot();
+    if (!releaseSlot) {
+      return res.status(429).json({ error: '同时打包下载的人太多了,请稍后再试。' });
+    }
+    // 名额与读流的收尾挂在 `finished(res)` 上:它对**已经关闭**的响应也会回调 —— 浏览器在上面几次
+    // await(路径重验)期间就取消了下载时,后挂的 `res.on('close')` 永远等不到事件,名额就永久丢了
+    // (复核实测:4 次之后所有人的打包下载都 429,只能重启)。
+    let zip: ReturnType<typeof streamZipEntries> | null = null;
+    finished(res, () => {
+      releaseSlot();
+      if (!res.writableEnded) zip?.abort();
+    });
+    if (res.destroyed || req.socket?.destroyed) {
+      releaseSlot();
+      return undefined;
+    }
+
     try {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', attachmentDisposition(payload.zipName));
 
     const archive = archiver('zip', { zlib: { level: 6 } });
+    let handle: ReturnType<typeof streamZipEntries> | null = null;
 
     /**
      * 打包开始之后**头已经发出去了**,再也改不成一个错误状态码。所以这里的规矩是:
@@ -332,24 +428,18 @@ export function createFileDownloadRouter(): Router {
     });
     archive.on('error', (error) => {
       log.error('[download-zip] 打包失败:', error);
+      handle?.abort();
       if (!res.headersSent) res.status(500).end();
       else res.destroy();
     });
-    // 客户端取消下载时把打包也停掉,否则它会继续读盘直到整棵目录走完。
-    res.on('close', () => {
-      if (!res.writableEnded) archive.abort();
-    });
-
     archive.pipe(res);
-    for (const entry of entries) {
-      if (entry.isDirectory) {
-        archive.directory(entry.absPath, entry.entryName);
-      } else {
-        archive.file(entry.absPath, { name: entry.entryName });
-      }
-    }
-    return await archive.finalize();
+
+    // hk:条目按需一个一个打开;客户端取消(close 且没写完)时停止追加、关掉所有打开的读流。
+    zip = streamZipEntries(archive, entries, (message) => log.warn('[download-zip] 读取失败:', message));
+    handle = zip;
+    return await zip.done;
     } catch (error) {
+      releaseSlot();
       log.error('Error serving download-zip:', error);
       if (!res.headersSent) {
         return res.status(500).json({ error: (error as Error).message });
@@ -474,7 +564,8 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
 
       // Use existing getFileTree function with shallow depth (only direct children)
-      const fileTree = await getFileTree(resolvedPath, 1, 0, false); // maxDepth=1, showHidden=false
+      // hl:只要直接子目录的名字,深度 0 就够(原来传 1 会把每个子目录也各 readdir 一遍)。
+      const fileTree = await getFileTree(resolvedPath, 0, 0, false);
 
       // Filter only directories and format for suggestions
       const directories = fileTree
@@ -588,11 +679,43 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
       const resolved = validation.resolved;
 
-      const content = await fsPromises.readFile(resolved, 'utf8');
+      // hk(审计 P2-8):先看大小。几百 MB 的日志整份读进内存再 JSON 序列化会拖住整个服务,
+      // 而保存又受请求体 50MB 限制 —— 能打开、改完存不上。超过上限只给下载。
+      const stat = await fsPromises.stat(resolved);
+      // hl(P3 文件组):指向目录的软链(或直接传目录路径)原来一路走到 readFile,回 500 `EISDIR`。
+      if (stat.isDirectory()) {
+        return res.status(400).json({ error: '这是一个目录,不能在编辑器里打开;请在文件树里展开它。', code: 'IS_DIRECTORY' });
+      }
+      if (stat.size > EDITOR_MAX_BYTES) {
+        return res.status(413).json({
+          error: `文件太大(${(stat.size / 1024 / 1024).toFixed(1)} MB),编辑器最多打开 ${(EDITOR_MAX_BYTES / 1024 / 1024).toFixed(0)} MB;请下载后用本地工具查看。`,
+          code: 'FILE_TOO_LARGE',
+          size: stat.size,
+          maxBytes: EDITOR_MAX_BYTES,
+        });
+      }
+      const buffer = await fsPromises.readFile(resolved);
       // 带上 mtime 作保存冲突检测的基线(D1)。前端保存时回传,不一致就 409。
-      let mtimeMs: number | null = null;
-      try { mtimeMs = (await fsPromises.stat(resolved)).mtimeMs; } catch { /* 读得到内容通常也 stat 得到,取不到就置空、退化为不检测 */ }
-      res.json({ content, path: resolved, mtimeMs });
+      const mtimeMs: number | null = stat.mtimeMs;
+      // hk(审计 P1-6):二进制与非 UTF-8 文本**只读**。原来一律按 UTF-8 读,非法字节变成替换字符,
+      // 按一次保存就把 .pkl / .parquet / GBK 的 csv 写坏,不可逆。
+      const sniff = sniffText(buffer);
+      if (sniff.binary) {
+        return res.json({ content: '', path: resolved, mtimeMs, binary: true, readOnly: true, readOnlyReason: 'binary' });
+      }
+      if (!sniff.utf8) {
+        const decoded = decodeForDisplay(buffer, sniff);
+        return res.json({
+          content: decoded.content,
+          path: resolved,
+          mtimeMs,
+          readOnly: true,
+          readOnlyReason: 'encoding',
+          encoding: decoded.encoding,
+          lineEnding: sniff.lineEnding,
+        });
+      }
+      res.json({ content: buffer.toString('utf8'), path: resolved, mtimeMs, lineEnding: sniff.lineEnding });
     } catch (error) {
       log.error('Error reading file:', error);
       const code = (error as NodeJS.ErrnoException).code;
@@ -767,11 +890,13 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
        * `/api/downloads` 这一个前缀下,审计时一眼能数清。
        */
       const base = '/api/downloads';
+      // hj:票里记下签发时的 token_version,直传口比对(见 download-tickets.js)。
+      const ticketViewer = { ...viewer, tokenVersion: (req as { user?: { token_version?: number | null } }).user?.token_version ?? 0 };
 
       // 单个文件才走直传 —— 只有它能事先算出 Content-Length,也就只有它有百分比。
       if (entries.length === 1 && !entries[0].isDirectory) {
         const ticket = issueProjectFileTicket({
-          viewer,
+          viewer: ticketViewer,
           projectId,
           filePath: entries[0].absPath,
         });
@@ -783,11 +908,17 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         });
       }
 
+      // hl(P3 文件组):名额满时签票就拒 —— 导航到 /zip 才 429 的话浏览器只在下载栏里写一行
+      // 「失败」,应用内那条「正在准备打包」永远等不到结果。
+      if (!hasZipSlot()) {
+        return res.status(429).json({ error: '同时打包下载的人太多了,请稍后再试。', code: 'ZIP_BUSY' });
+      }
+
       const zipName = entries.length === 1
         ? `${path.basename(entries[0].absPath)}.zip`
         : `${path.basename(projectRoot) || 'download'}.zip`;
       const ticket = issueProjectZipTicket({
-        viewer,
+        viewer: ticketViewer,
         projectId,
         zipName,
         entries: entries.map(({ absPath, entryName, isDirectory }) => ({
@@ -844,23 +975,49 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       // 事故)。回 409 让前端提示"磁盘已变化:重载 / 仍覆盖"。基线缺省(旧前端 / 新建
       // 文件)时退化为不检测,保持兼容。
       if (typeof baseMtimeMs === 'number') {
+        let currentMtimeMs: number | null = null;
         try {
-          const currentMtimeMs = (await fsPromises.stat(resolved)).mtimeMs;
-          // 留 1ms 容差:某些文件系统 mtime 精度有限。
-          if (Math.abs(currentMtimeMs - baseMtimeMs) > 1) {
+          currentMtimeMs = (await fsPromises.stat(resolved)).mtimeMs;
+        } catch (statError) {
+          // hk(审计 P2-6):带着基线却找不到文件 = 打开之后被删了或改名了。原来吞掉错误继续
+          // writeFile,于是改名 foo→bar 之后在 foo 的标签页里保存,会把 foo 重新建出来、新内容
+          // 也没进 bar。现在回 409,让用户明确选择「另存到原路径」(再点一次保存,不带基线)。
+          if ((statError as NodeJS.ErrnoException).code === 'ENOENT') {
             return res.status(409).json({
-              error: '文件在你编辑期间被改动过,保存已中止以免覆盖。请重载后再改,或选择仍然覆盖。',
-              code: 'FILE_MODIFIED',
-              currentMtimeMs,
+              error: '这个文件在你打开之后被删除或改名了,保存已中止。再次点击保存会在原路径重新建出这个文件。',
+              code: 'FILE_DELETED',
             });
           }
-        } catch {
-          // stat 失败(文件被删等):交给下面的 writeFile 处理/报错。
+        }
+        // 留 1ms 容差:某些文件系统 mtime 精度有限。
+        if (currentMtimeMs !== null && Math.abs(currentMtimeMs - baseMtimeMs) > 1) {
+          return res.status(409).json({
+            error: '文件在你编辑期间被改动过,保存已中止以免覆盖。请重载后再改,或选择仍然覆盖。',
+            code: 'FILE_MODIFIED',
+            currentMtimeMs,
+          });
         }
       }
 
+      // hk(审计 P1-6):磁盘上已有的文件是二进制或非 UTF-8 文本时,**服务端**也拒绝按文本覆盖 ——
+      // 不只靠前端只读(旧前端、别的调用方)。要真的整份替换,删掉再建。
+      const existing = await sniffExistingFile(resolved);
+      if (existing && existing.size > 0 && (existing.binary || !existing.utf8)) {
+        return res.status(409).json({
+          error: existing.binary
+            ? '这是二进制文件,不能用文本编辑器保存(会把它写坏)。'
+            : '这个文件不是 UTF-8 编码(多半是 GBK),按文本保存会把中文写坏,已拒绝。请用本地工具转码后再编辑。',
+          code: 'FILE_NOT_TEXT',
+        });
+      }
+
+      // hk(审计 P2-7):原文件是 CRLF 换行、而编辑器发来的是纯 \n(CodeMirror 一律按 \n 存)时还原成 CRLF ——
+      // 否则改一个字,整份文件在 git diff 里全变了。
+      const text = typeof content === 'string' ? content : String(content);
+      const toWrite = existing?.lineEnding === 'crlf' && !text.includes('\r') ? text.replace(/\n/g, '\r\n') : text;
+
       // Write the new content
-      await fsPromises.writeFile(resolved, content, 'utf8');
+      await fsPromises.writeFile(resolved, toWrite, 'utf8');
       let newMtimeMs: number | null = null;
       try { newMtimeMs = (await fsPromises.stat(resolved)).mtimeMs; } catch { /* 忽略 */ }
 
@@ -933,6 +1090,10 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       const files = await getFileTree(listedPath, 10, 0, true, budget);
       if (budget.truncated) {
         res.setHeader('X-Prism-Truncated', '1');
+      }
+      // hl(动态 P2-10):被列的根目录自己的直接子项被砍了 —— 根没有节点可打标,单独一个头。
+      if (budget.rootTruncated) {
+        res.setHeader('X-Prism-Root-Truncated', '1');
       }
       await setTreeLocationHeaders(res, listedPath, actualPath);
       res.json(files);
@@ -1050,8 +1211,8 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         return res.status(404).json({ error: 'Project not found' });
       }
 
-      // Validate old path
-      const oldValidation = await validatePathInProject(projectRoot, oldPath);
+      // Validate old path —— hj:源路径按目录项本身校验(不跟随软链),见 validateEntryInProject
+      const oldValidation = await validateEntryInProject(projectRoot, oldPath);
       if (!oldValidation.valid) {
         return res.status(403).json({ error: oldValidation.error });
       }
@@ -1125,8 +1286,8 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         return res.status(404).json({ error: 'Project not found' });
       }
 
-      // Validate path
-      const validation = await validatePathInProject(projectRoot, targetPath);
+      // Validate path —— hj:删除作用在目录项本身(软链删的是链接),不跟随最后一段软链
+      const validation = await validateEntryInProject(projectRoot, targetPath);
       if (!validation.valid) {
         return res.status(403).json({ error: validation.error });
       }
@@ -1134,9 +1295,10 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       const resolvedPath = validation.resolved;
 
       // Check if path exists and get stats
+      // hj:lstat —— 悬空软链用 stat 会 404(删不掉);指向目录的软链用 stat 会被当成目录。
       let stats;
       try {
-        stats = await fsPromises.stat(resolvedPath);
+        stats = await fsPromises.lstat(resolvedPath);
       } catch {
         return res.status(404).json({ error: 'File or directory not found' });
       }
@@ -1319,6 +1481,9 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
 
         // Move uploaded files from temp to target directory
         const uploadedFiles = [];
+        // hl(动态 P2-12):同名文件此前被 copyFile 静默覆盖,响应里只有「上传完成」。
+        // 落盘前查一次存在性,把被覆盖的相对名列在响应里,前端据此提示。
+        const overwritten: string[] = [];
         log.debug('Processing files:', uploadedRequestFiles.map(f => ({ originalname: f.originalname, path: f.path })));
         for (let i = 0; i < uploadedRequestFiles.length; i++) {
           const file = uploadedRequestFiles[i];
@@ -1353,6 +1518,8 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
             await fsPromises.mkdir(parentDir, { recursive: true });
           }
 
+          if (await pathExists(destPath)) overwritten.push(fileName);
+
           // Move file (copy + unlink to handle cross-device scenarios)
           await fsPromises.copyFile(file.path, destPath);
           await fsPromises.unlink(file.path);
@@ -1370,6 +1537,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
           files: uploadedFiles,
           uploadedCount: uploadedFiles.length,
           requestedFileCount,
+          overwritten,
           targetPath: resolvedTargetDir,
           message: `Uploaded ${uploadedFiles.length} ${uploadedFiles.length === 1 ? 'file' : 'files'} successfully`
         });
@@ -1420,6 +1588,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       query,
       matches: result.matches,
       truncated: result.truncated,
+      skippedLargeFiles: result.skippedLargeFiles,
       error: result.error,
     });
   });
@@ -1475,10 +1644,21 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         if (!validation.valid) return res.status(403).json({ error: validation.error });
       }
 
+      // hk(审计 P2-9):按人限并发会话数与声明总字节数。
+      const ownerId = String(readRequestViewer(req).userId ?? '');
+      const pending = pendingUploadsOf(ownerId);
+      if (pending.count >= UPLOAD_MAX_PENDING_PER_USER) {
+        return res.status(429).json({ error: `你同时进行中的大文件上传已有 ${pending.count} 个,请等它们传完(或刷新页面放弃)再传。` });
+      }
+      if (pending.bytes + declaredSize > UPLOAD_MAX_PENDING_BYTES_PER_USER) {
+        return res.status(413).json({ error: '你进行中的大文件上传总量超过上限,请等前面的传完再传。' });
+      }
+
       const uploadId = crypto.randomBytes(16).toString('hex');
       const partPath = path.join(os.tmpdir(), `chunkasm-${uploadId}.part`);
       await fsPromises.writeFile(partPath, '');   // 占位,后续一律追加
       uploadChunkSessions.set(uploadId, {
+        userId: ownerId,
         name: typeof req.body?.name === 'string' && req.body.name ? req.body.name : 'upload',
         relativePath: typeof req.body?.relativePath === 'string' ? req.body.relativePath : '',
         targetPath,
@@ -1532,7 +1712,9 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
       // 上限在服务端累加校验 —— 客户端声明的 size 只是提示,不能当约束。
       const chunkSize = req.file.size || 0;
-      if (session.received + chunkSize > MAX_FILE_UPLOAD_SIZE_BYTES) {
+      // hk:不许超过 start 时声明的大小(原来只看全局 1GB 上限 —— 声明 1 字节也能往里追加 1GB,
+      // 按人的总量上限就被绕过了)。留一个分片的余量给客户端的取整误差。
+      if (session.received + chunkSize > Math.min(MAX_FILE_UPLOAD_SIZE_BYTES, session.declaredSize + UPLOAD_CHUNK_BYTES)) {
         discardTempFile();
         dropUploadChunkSession(uploadId);
         return res.status(413).json({ error: `File too large. Maximum size is ${MAX_FILE_UPLOAD_SIZE_LABEL}.` });
@@ -1600,6 +1782,8 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         return res.status(403).json({ error: destValidation.error });
       }
       await fsPromises.mkdir(path.dirname(destPath), { recursive: true });
+      // hl(动态 P2-12):与批量上传同口径,报出被覆盖的同名文件。
+      const overwritten = (await pathExists(destPath)) ? [fileName] : [];
 
       // copy + unlink:分片是攒在 os.tmpdir() 的,与项目目录很可能不在同一设备上。
       await fsPromises.copyFile(session.partPath, destPath);
@@ -1611,6 +1795,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         files: [{ name: fileName, path: destPath, size: session.received, mimeType: mime.lookup(fileName) || 'application/octet-stream' }],
         uploadedCount: 1,
         requestedFileCount: 1,
+        overwritten,
         targetPath: resolvedTargetDir,
         message: `Uploaded ${fileName} successfully`,
       });

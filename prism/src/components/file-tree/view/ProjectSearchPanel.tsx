@@ -32,6 +32,8 @@ export default function ProjectSearchPanel({ projectId, onOpenMatch, onClose }: 
   const [regex, setRegex] = useState(false);
   const [matches, setMatches] = useState<SearchMatch[]>([]);
   const [truncated, setTruncated] = useState(false);
+  // hl(P3 文件组):因体积被跳过的文件数 —— 以前静默跳过,用户以为「项目里真的没有」。
+  const [skippedLargeFiles, setSkippedLargeFiles] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
@@ -61,7 +63,7 @@ export default function ProjectSearchPanel({ projectId, onOpenMatch, onClose }: 
       if (glob.trim()) params.set('glob', glob.trim());
 
       const response = await authenticatedFetch(`/api/projects/${projectId}/search?${params.toString()}`);
-      const payload = (await response.json()) as { matches?: SearchMatch[]; truncated?: boolean; error?: string };
+      const payload = (await response.json()) as { matches?: SearchMatch[]; truncated?: boolean; skippedLargeFiles?: number; error?: string };
       if (requestSeqRef.current !== seq) return;
 
       if (!response.ok) {
@@ -70,6 +72,7 @@ export default function ProjectSearchPanel({ projectId, onOpenMatch, onClose }: 
       } else {
         setMatches(payload.matches ?? []);
         setTruncated(Boolean(payload.truncated));
+        setSkippedLargeFiles(typeof payload.skippedLargeFiles === 'number' ? payload.skippedLargeFiles : 0);
         setError(payload.error ?? null);
       }
       setHasSearched(true);
@@ -145,6 +148,15 @@ export default function ProjectSearchPanel({ projectId, onOpenMatch, onClose }: 
 
         {!error && hasSearched && matches.length === 0 && !searching && (
           <p className="px-1 py-2 text-xs text-muted-foreground">{t('fileTree.search.noMatches', '没有找到匹配内容')}</p>
+        )}
+
+        {!error && hasSearched && skippedLargeFiles > 0 && !searching && (
+          <p className="px-1 py-1 text-[11px] text-muted-foreground">
+            {t('fileTree.search.skippedLarge', {
+              skipped: skippedLargeFiles,
+              defaultValue: `有 ${skippedLargeFiles} 个文件因体积过大未参与搜索`,
+            })}
+          </p>
         )}
 
         {matches.length > 0 && (

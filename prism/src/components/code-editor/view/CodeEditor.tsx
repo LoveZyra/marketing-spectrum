@@ -70,6 +70,7 @@ export default function CodeEditor({
     saveSuccess,
     saveError,
     loadError,
+    readOnlyReason,
     isBinary,
     isDiffView,
     previewKind,
@@ -81,25 +82,29 @@ export default function CodeEditor({
     projectPath,
   });
 
+  // 真正的"脏":用户改了、而且这份改动是能保存的。diff 视图与读失败缓冲不算
+  // (那不是用户的编辑);只读文件不算(改不了也存不了,拦人没有意义)。
+  // hl(P3 文件组):beforeunload 原来只看 hasUnsavedChanges —— 读失败 / 只读文件也会弹「离开站点?」。
+  const isDirty = hasUnsavedChanges && !isDiffView && !loadError && !readOnlyReason;
+
   // 有未保存改动时,离开页面/刷新/关标签给浏览器原生拦截。编辑器不像聊天草稿
   // 那样有持久化,直接关掉就丢了。
   useEffect(() => {
-    if (!hasUnsavedChanges) return;
+    if (!isDirty) return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [hasUnsavedChanges]);
+  }, [isDirty]);
 
   // 应用内的关闭/换文件同样要拦(beforeunload 只管浏览器级离开):把脏态登记进
-  // 单例,useEditorSidebar 在关闭与打开新文件前查它。diff 视图与读失败缓冲不算
-  // 脏(那不是用户的编辑);卸载时清零,别让残影拦住下一次打开。
+  // 单例,useEditorSidebar 在关闭与打开新文件前查它;卸载时清零,别让残影拦住下一次打开。
   useEffect(() => {
-    setEditorDirty(hasUnsavedChanges && !isDiffView && !loadError);
+    setEditorDirty(isDirty);
     return () => setEditorDirty(false);
-  }, [hasUnsavedChanges, isDiffView, loadError]);
+  }, [isDirty]);
 
   const isMarkdownFile = useMemo(() => {
     const extension = file.name.split('.').pop()?.toLowerCase();
@@ -155,6 +160,12 @@ export default function CodeEditor({
 
     return normalizedFile.slice(normalizedRoot.length + 1);
   }, [file.path, projectPath]);
+
+  // hl 复核 P3-5:固定引用 —— 每次渲染新建对象会让 markdown 图片整批重挂载、重复下载。
+  const markdownBase = useMemo(
+    () => ({ projectId: fileProjectId, relPath: previewRelPath }),
+    [fileProjectId, previewRelPath],
+  );
 
   const htmlPreviewState = useHtmlPreview({
     projectId: fileProjectId,
@@ -342,8 +353,11 @@ export default function CodeEditor({
             notebookRaw={notebookRaw}
             saving={saving}
             saveSuccess={saveSuccess}
+            dirty={isDirty}
             // ei:会话产出通道是只读的(项目目录之外的产出),保存按钮不渲染。
-            canSave={!isDiffView && !file.outputSessionId}
+            // hl(动态 P2-11):读失败的标签页保存与下载按钮都不渲染 —— 缓冲区里是错误注释,不是文件。
+            canSave={!isDiffView && !file.outputSessionId && !readOnlyReason && !loadError}
+            canDownload={!loadError}
             onToggleMarkdownPreview={() => setMarkdownPreview((previous) => !previous)}
             onToggleHtmlPreview={() => setHtmlPreview((previous) => !previous)}
             onToggleNotebookRaw={() => setNotebookRaw((previous) => !previous)}
@@ -369,6 +383,7 @@ export default function CodeEditor({
               save: t('actions.save'),
               saving: t('actions.saving'),
               saved: t('actions.saved'),
+              unsaved: t('unsaved.marker', '未保存'),
               fullscreen: t('actions.fullscreen'),
               exitFullscreen: t('actions.exitFullscreen'),
               ...maximizeLabels,
@@ -376,14 +391,21 @@ export default function CodeEditor({
             }}
           />
 
+          {/* hl(P3 文件组):错误态横幅用警示色,与只读说明(中性)区分开 —— 深色下原来三条一个样。 */}
           {loadError && (
-            <div className="border-b border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
-              文件加载失败:{loadError} —— 已禁止保存以免覆盖原文件,请关闭后重新打开。
+            <div role="alert" className="border-b border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+              {t('loadFailedBanner', { error: loadError, defaultValue: `文件加载失败:${loadError} —— 已禁止保存以免覆盖原文件,请关闭后重新打开。` })}
+            </div>
+          )}
+
+          {readOnlyReason && !loadError && (
+            <div className="border-b border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground" data-testid="editor-readonly-reason">
+              {readOnlyReason}
             </div>
           )}
 
           {saveError && (
-            <div className="border-b border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
+            <div role="alert" className="border-b border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300">
               {saveError}
             </div>
           )}
@@ -395,14 +417,17 @@ export default function CodeEditor({
             <CodeEditorSurface
               content={content}
               onChange={setContent}
+              readOnly={Boolean(readOnlyReason)}
               markdownPreview={markdownPreview}
               isMarkdownFile={isMarkdownFile}
+              markdownBase={markdownBase}
               htmlPreview={{
                 active: htmlPreview && isHtmlPreviewFile,
                 previewUrl: htmlPreviewState.previewUrl,
                 error: htmlPreviewState.error,
                 isLoading: htmlPreviewState.isLoading,
                 hasUnsavedChanges,
+                expired: htmlPreviewState.expired,
                 onReload: htmlPreviewState.reload,
                 labels: {
                   loading: t('filePreview.loading', 'Loading preview...'),
@@ -411,6 +436,7 @@ export default function CodeEditor({
                     'filePreview.unsavedNotice',
                     'Preview shows the saved file. Save to see your latest edits.',
                   ),
+                  expiredNotice: t('filePreview.expiredNotice', '预览链接已过期(5 分钟有效):页面里之后加载的资源可能失败,点「重新加载」换一张新链接。'),
                 },
               }}
               isDarkMode={isDarkMode}

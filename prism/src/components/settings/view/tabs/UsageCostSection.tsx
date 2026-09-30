@@ -97,6 +97,10 @@ export default function UsageCostSection() {
 
   useEffect(() => { void load(by, days); }, [load, by, days]);
 
+  // hj:按日期看时按日期倒序(新的在上)。服务端 hj 起对日期维度已按日期排、且不截天;
+  // 这里再排一次只是保险 —— 其余维度保持服务端的「谁最贵」顺序。
+  const displayRows = by === 'day' ? [...rows].sort((a, b) => String(b.key).localeCompare(String(a.key))) : rows;
+
   const totalCost = rows.reduce((sum, row) => sum + (Number(row.cost_usd) || 0), 0);
   const totalRuns = rows.reduce((sum, row) => sum + (Number(row.runs) || 0), 0);
 
@@ -174,6 +178,8 @@ export default function UsageCostSection() {
               <th className="px-3 py-2 text-left font-medium">{t('usage.columns.key', '维度')}</th>
               <th className="px-3 py-2 text-right font-medium">{t('usage.columns.runs', '轮次')}</th>
               <th className="px-3 py-2 text-right font-medium">{t('usage.columns.input', '输入')}</th>
+              <th className="px-3 py-2 text-right font-medium">{t('usage.columns.cacheRead', '缓存读')}</th>
+              <th className="px-3 py-2 text-right font-medium">{t('usage.columns.cacheWrite', '缓存写')}</th>
               <th className="px-3 py-2 text-right font-medium">{t('usage.columns.output', '输出')}</th>
               <th className="px-3 py-2 text-right font-medium">{t('usage.columns.cost', '费用')}</th>
             </tr>
@@ -181,14 +187,14 @@ export default function UsageCostSection() {
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                <td colSpan={7} className="px-3 py-6 text-center text-sm text-muted-foreground">
                   {loading
                     ? t('usage.loading', '加载中…')
                     : t('usage.empty', '这段时间还没有用量记录。跑一轮对话之后就会出现。')}
                 </td>
               </tr>
             )}
-            {rows.map((row) => (
+            {displayRows.map((row) => (
               <tr key={row.key} className="border-t border-border">
                 <td className="max-w-[220px] truncate px-3 py-1.5 text-xs font-medium" title={row.key}>
                   {renderKey(row)}
@@ -196,6 +202,12 @@ export default function UsageCostSection() {
                 <td className="px-3 py-1.5 text-right text-xs text-muted-foreground">{row.runs}</td>
                 <td className="px-3 py-1.5 text-right font-mono text-[11px] text-muted-foreground">
                   {formatTokens(row.input_tokens)}
+                </td>
+                <td className="px-3 py-1.5 text-right font-mono text-[11px] text-muted-foreground">
+                  {formatTokens(row.cache_read_tokens)}
+                </td>
+                <td className="px-3 py-1.5 text-right font-mono text-[11px] text-muted-foreground">
+                  {formatTokens(row.cache_creation_tokens)}
                 </td>
                 <td className="px-3 py-1.5 text-right font-mono text-[11px] text-muted-foreground">
                   {formatTokens(row.output_tokens)}
@@ -211,7 +223,7 @@ export default function UsageCostSection() {
 
       <p className="text-xs text-muted-foreground">
         {t('usage.footnote',
-          '费用取自模型返回的计费值,按轮记账。与对话页 /cost 里的数字不是一回事 —— 那个是当前上下文占用,这里是累计花销。')}
+          '费用取自模型返回的计费值,按轮记账。与对话页 /cost 里的数字不是一回事 —— 那个是当前上下文占用,这里是累计花销。「输入」不含缓存,命中缓存的部分记在「缓存读」里(按约一折计费)。升级到 hj 版本之前的 token 数记录不全 —— 网关把用量放在流的末尾,旧版本没读到;费用不受影响。')}
       </p>
     </div>
   );

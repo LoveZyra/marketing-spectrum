@@ -1,6 +1,9 @@
+import { useSyncExternalStore } from 'react';
 import { X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import type { CodeEditorFile } from '../types/types';
+import { isEditorDirty, subscribeEditorDirty } from '../utils/editorDirtyState';
 
 type Props = {
   files: CodeEditorFile[];
@@ -19,6 +22,9 @@ type Props = {
  * 否则一排 ✕ 会把本来就短的文件名挤没。
  */
 export default function EditorTabs({ files, activePath, onSelect, onClose }: Props) {
+  const { t } = useTranslation('codeEditor');
+  // hl(P3 文件组):活动标签有未保存改动时画 ●(只有活动标签挂着编辑器,后台标签没有脏态)。
+  const dirty = useSyncExternalStore(subscribeEditorDirty, isEditorDirty, () => false);
   if (files.length < 2) return null;
 
   return (
@@ -44,10 +50,13 @@ export default function EditorTabs({ files, activePath, onSelect, onClose }: Pro
                 : 'border-b-2 border-transparent text-muted-foreground hover:bg-accent hover:text-foreground'
             }`}
           >
+            {isActive && dirty && (
+              <span className="shrink-0 text-primary" aria-label={t('unsaved.marker', { defaultValue: '未保存' })} title={t('unsaved.marker', { defaultValue: '未保存' })}>●</span>
+            )}
             <span className="truncate">{file.name}</span>
             <button
               type="button"
-              aria-label={`关闭 ${file.name}`}
+              aria-label={t('tabs.close', { name: file.name, defaultValue: `关闭 ${file.name}` })}
               onClick={(event) => {
                 event.stopPropagation();
                 onClose(file.path);

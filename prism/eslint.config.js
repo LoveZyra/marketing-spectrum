@@ -209,6 +209,7 @@ export default tseslint.config(
             "server/shared/fork-anchor.ts", // 「编辑重跑」分叉锚点的判据:落库(database)与端点(system)共用,纯函数零依赖,放叶子上
             "server/shared/client-ip.js", // gk:客户端 IP 判定(X-Forwarded-For 只在 PRISM_TRUST_PROXY 下可信):限流器与删除路由的审计共用,零依赖
             "server/shared/upload-filename.ts", // multipart 文件名的 latin1→UTF-8 恢复:文档/图片/文件树三条上传路共用,纯函数零依赖
+            "server/shared/account-usable.js", // hj:「账号现在还能不能用」的唯一判定(审批 + token_version):票据 / API key / Jupyter 共用,只依赖 root-users
           ], // classify shared utility files so modules can depend on them explicitly
           mode: "file",
         },

@@ -184,6 +184,11 @@ export interface ChatInterfaceProps {
   onFileOpen?: (filePath: string, diffInfo?: any) => void;
   /** dy:右侧文件预览栏是否开着 —— 开着时工作面板自动折起来让位。 */
   isEditorOpen?: boolean;
+  /**
+   * hl(09-24 P1-12):聊天页签是不是当前页签。ChatInterface 在 Shell / 文件 / 任务
+   * 页签下只是隐藏不卸载,全局 Esc 只在它是当前页签时才中止回合。不传 = 当前。
+   */
+  isActive?: boolean;
   onInputFocusChange?: (focused: boolean) => void;
   onSessionProcessing?: MarkSessionProcessing;
   onSessionIdle?: MarkSessionIdle;

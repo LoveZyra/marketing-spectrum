@@ -5,6 +5,7 @@ import { AlertTriangleIcon, History, RotateCcwIcon, XIcon } from 'lucide-react';
 import { authenticatedFetch } from '../../../../utils/api';
 import { Shimmer } from '../../../../shared/view/ui';
 import { useModalKeyboard } from '../../../../shared/view/hooks/useModalKeyboard';
+import { uiLocale } from '../../../../utils/uiLocale';
 
 import { RestoreForceDialog } from './ChangedFilesCard';
 import type { RestoreBlockerPayload } from './ChangedFilesCard';
@@ -122,7 +123,7 @@ export default function CheckpointHistoryPanel({
 
   const formatTime = (iso: string) => {
     try {
-      return new Date(iso).toLocaleString();
+      return new Date(iso).toLocaleString(uiLocale());
     } catch {
       return iso;
     }

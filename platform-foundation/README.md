@@ -28,6 +28,7 @@ docs/       → 跨组件的方案、复盘、接口说明
 | `skills/html-edit-mode/` | `~/.claude/skills/html-edit-mode/` | 直接覆盖 | 无 |
 | `skills/upload-html/` | `~/.claude/skills/upload-html/` | 直接覆盖 | 无 |
 | `services/ma-api/` | `~/prism/ma-api-mode/` | 见 `services/ma-api/DEPLOY.md` | **必须** `bash ~/prism/restart_prism.sh` |
+| `services/skillwhet/` | `~/prism/skillwhet/` | `pip install -e ".[gates,test]"` | 无（当前是 CLI，无常驻进程；融入 Prism 后改为**必须**重启） |
 | `jobs/private-domain-diagnosis/` | `/home/jovyan/营销诊断/` | 直接覆盖三个 .py | 无（手工按活动触发） |
 
 **不纳管**：`~/schedule_task/<任务名>/` 下的 cron 任务实例（含 `tasks/prompt.md`）只存在于服务器上。
@@ -43,6 +44,11 @@ docs/       → 跨组件的方案、复盘、接口说明
 
 都不是 → `docs/`。触发方式（cron / 手工 / API）写在 `JOB.md` 第一行，**不为它再开一层目录** ——
 触发方式会变，部署位置不会。
+
+**一个已知的例外**：`services/skillwhet/` 今天是纯 CLI、不是常驻进程，按上面三问它一条都不占。
+它按**将来的部署目标**落位 —— 融入 Prism 之后它就是 ma-api 的形状（回环进程 + 8080 反代 +
+随 Prism 起停）。与其先放一处再搬一次，不如现在就落在终点。理由写在
+`services/skillwhet/DEPLOY.md` 里，那里也是这条例外撤销时要改的地方。
 
 ## 不进仓库的东西
 

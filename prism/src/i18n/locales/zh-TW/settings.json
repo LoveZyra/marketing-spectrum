@@ -8,7 +8,7 @@
   "account": {
     "signedInAs": "目前登入帳號",
     "logoutTitle": "登出 / 切換帳號",
-    "logoutHelp": "登出後回到登入頁；用另一個帳號登入即完成切換。本機會話與草稿保存在此瀏覽器中，不會遺失。",
+    "logoutHelp": "登出後回到登入頁；用另一個帳號登入即完成切換。本機的介面偏好與未送出的草稿會一併清除（偏好已同步到帳號，再次登入自動恢復）。",
     "logoutButton": "登出",
     "revokeAllTitle": "登出所有裝置",
     "revokeAllHelp": "吊銷此帳號在所有瀏覽器/裝置上已簽發的登入權杖（懷疑權杖外洩時使用），隨後本機也會回到登入頁。",
@@ -31,7 +31,11 @@
     },
     "language": "語言",
     "languageLabel": "語言選擇",
-    "languageDescription": "介面顯示用哪種語言"
+    "languageDescription": "介面顯示用哪種語言",
+    "skillSurvey": {
+      "title": "技能效果詢問",
+      "help": "調過技能的回合結束後,按抽樣在回答下方問一句「這次處理得怎麼樣」。你的答覆與所有人的一起,只用於最佳化這個技能本身。"
+    }
   },
   "quickSettings": {
     "title": "快速設定",
@@ -197,7 +201,8 @@
     "confirmDelete": "確定要刪除此 API 金鑰嗎？",
     "status": {
       "active": "啟用",
-      "inactive": "未啟用"
+      "inactive": "未啟用",
+      "revoked": "已作廢（登出所有裝置 / 改密後失效，可重新啟用）"
     },
     "github": {
       "title": "GitHub 權杖",

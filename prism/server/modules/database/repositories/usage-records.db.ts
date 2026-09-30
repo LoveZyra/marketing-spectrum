@@ -195,8 +195,10 @@ export const usageRecordsDb = {
     limit = 50,
   ): UsageSummaryRow[] {
     const db = getConnection();
+    // hj:按**服务器本地日期**分天(`created_at` 存的是 UTC)。原来按 UTC 分天,东八区
+    // 凌晨 0–8 点的对话记到了前一天 —— 「今天花了多少」对不上。
     const expression = groupBy === 'day'
-      ? "date(created_at)"
+      ? "date(created_at, 'localtime')"
       : groupBy;
     // 白名单已经在类型上收死,这里再挡一道:类型只在编译期,这条在运行期。
     if (!['username', 'project_path', 'model', 'source', 'day'].includes(groupBy)) {
@@ -211,6 +213,13 @@ export const usageRecordsDb = {
       params.push(`-${Math.floor(sinceDays)} days`);
     }
     const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
+    // hj:按日期看就按日期倒序,而且**每一天都要在** —— 原来一律按费用排再截 50 条,
+    // 90 天里有记录的日子超过 50 天时,便宜的那些天被截掉,按日期看就是中间缺日。
+    // `orderBy` 只会是下面两个字面量之一,不来自请求。
+    const orderBy = groupBy === 'day' ? 'key DESC' : 'cost_usd DESC, runs DESC';
+    const effectiveLimit = groupBy === 'day' && sinceDays !== null && sinceDays > 0
+      ? Math.max(limit, Math.floor(sinceDays) + 1)
+      : limit;
 
     return cachedPrepare(db, `
       SELECT COALESCE(${expression}, '(未知)') AS key,
@@ -222,9 +231,9 @@ export const usageRecordsDb = {
              SUM(cost_usd) AS cost_usd
       FROM usage_records${where}
       GROUP BY ${expression}
-      ORDER BY cost_usd DESC, runs DESC
+      ORDER BY ${orderBy}
       LIMIT ?
-    `).all(...params, Math.min(Math.max(1, limit), 200)) as UsageSummaryRow[];
+    `).all(...params, Math.min(Math.max(1, effectiveLimit), 400)) as UsageSummaryRow[];
   },
 
   /** 一个会话花了多少 —— 会话详情里那一行。 */

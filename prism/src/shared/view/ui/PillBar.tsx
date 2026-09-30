@@ -22,12 +22,17 @@ type PillProps = {
   onClick: () => void;
   children: ReactNode;
   className?: string;
+  /** hl(P3 可访问性):只画图标时(手机顶栏)必须给一个可访问名称。 */
+  ariaLabel?: string;
 };
 
-export function Pill({ isActive, onClick, children, className }: PillProps) {
+export function Pill({ isActive, onClick, children, className, ariaLabel }: PillProps) {
   return (
     <button
+      type="button"
       onClick={onClick}
+      aria-label={ariaLabel}
+      aria-pressed={isActive}
       className={cn(
         'flex touch-manipulation items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors',
         isActive

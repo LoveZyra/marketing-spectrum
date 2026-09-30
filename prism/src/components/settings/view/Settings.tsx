@@ -1,8 +1,10 @@
+import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import ProviderLoginModal from '../../provider-auth/view/ProviderLoginModal';
 import { Button } from '../../../shared/view/ui';
+import { useModalKeyboard } from '../../../shared/view/hooks/useModalKeyboard';
 import SettingsSidebar from '../view/SettingsSidebar';
 import AccountsSettingsTab from '../view/tabs/accounts-settings/AccountsSettingsTab';
 import AgentsSettingsTab from '../view/tabs/agents-settings/AgentsSettingsTab';
@@ -41,6 +43,15 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
     initialTab
   });
 
+  // hl(动态 P2-22):Esc 关、Tab 不跑到弹窗背后、打开时焦点落在关闭按钮。
+  // 登录子弹窗开着时让它自己接 Esc(否则一按 Esc 连设置一起关掉)。
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useModalKeyboard(dialogRef, { open: isOpen && !showLoginModal, onClose });
+  useEffect(() => {
+    if (isOpen) closeButtonRef.current?.focus();
+  }, [isOpen]);
+
   if (!isOpen) {
     return null;
   }
@@ -52,10 +63,16 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
         账号审批与操作记录那两张表在里面根本铺不开(「详情」列被挤成一条缝、「操作」列
         被整个切掉)。放宽到 5xl,超宽屏再到 6xl;表格自己也做了响应式收列,两头一起让。
       */}
-      <div className="prism-modal-shadow flex h-full w-full flex-col overflow-hidden border border-border bg-background md:h-[90vh] md:max-w-5xl md:rounded-lg xl:max-w-6xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-dialog-title"
+        className="prism-modal-shadow flex h-full w-full flex-col overflow-hidden border border-border bg-background md:h-[90vh] md:max-w-5xl md:rounded-lg xl:max-w-6xl"
+      >
         {/* Header */}
         <div className="flex flex-shrink-0 items-center justify-between border-b border-border px-4 py-3 md:px-5">
-          <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>
+          <h2 id="settings-dialog-title" className="text-base font-semibold text-foreground">{t('title')}</h2>
           <div className="flex items-center gap-2">
             {saveStatus === 'success' && (
               <span className="text-xs text-muted-foreground">{t('saveStatus.success')}</span>
@@ -65,9 +82,11 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               <span className="text-xs text-destructive">{t('saveStatus.error', { defaultValue: '保存失败,请重试' })}</span>
             )}
             <Button
+              ref={closeButtonRef}
               variant="ghost"
               size="sm"
               onClick={onClose}
+              aria-label={t('close', { defaultValue: '关闭设置' })}
               className="h-10 w-10 touch-manipulation p-0 text-muted-foreground hover:text-foreground active:bg-accent"
             >
               <X className="h-5 w-5" />

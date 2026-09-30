@@ -28,6 +28,7 @@ import type {
   ModelCommandData,
   StatusCommandData,
 } from '../../hooks/useChatComposerState';
+import { uiLocale } from '../../../../utils/uiLocale';
 
 type CommandResultModalProps = {
   payload: CommandModalPayload | null;
@@ -95,7 +96,7 @@ const formatNumber = (value: number) => {
   if (!Number.isFinite(value)) {
     return '0';
   }
-  return value.toLocaleString();
+  return value.toLocaleString(uiLocale());
 };
 
 function MetricCard({
@@ -208,7 +209,7 @@ function HelpContent({ data }: { data: HelpCommandData }) {
 
           {filteredCommands.length === 0 && (
             <div className="rounded-lg border border-dashed border-border bg-card px-4 py-10 text-center text-sm text-muted-foreground">
-              No commands match that filter.
+              {t('commandResult.help.noMatch', { defaultValue: '没有匹配的命令。' })}
             </div>
           )}
         </div>
@@ -218,23 +219,24 @@ function HelpContent({ data }: { data: HelpCommandData }) {
         <div className="rounded-lg border border-border bg-card p-4">
           <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
             <TerminalSquare className="h-4 w-4 text-primary" />
-            Syntax
+            {/* hl(P3 中英混排):中文界面下原来这一栏整块英文。 */}
+            {t('commandResult.help.syntax', { defaultValue: '语法' })}
           </div>
           <div className="space-y-2 text-sm text-muted-foreground">
             <p><code className="text-foreground">/command arg1 arg2</code></p>
-            <p><code className="text-foreground">$ARGUMENTS</code> passes all args.</p>
-            <p><code className="text-foreground">$1</code>, <code className="text-foreground">$2</code> pass positional args.</p>
-            <p><code className="text-foreground">@file</code> includes file contents.</p>
+            <p><code className="text-foreground">$ARGUMENTS</code> {t('commandResult.help.allArgs', { defaultValue: '传入全部参数。' })}</p>
+            <p><code className="text-foreground">$1</code>, <code className="text-foreground">$2</code> {t('commandResult.help.positionalArgs', { defaultValue: '按位置传参。' })}</p>
+            <p><code className="text-foreground">@file</code> {t('commandResult.help.fileArg', { defaultValue: '把文件内容带进来。' })}</p>
           </div>
         </div>
 
         <div className="rounded-lg border border-primary/25 bg-primary/10 p-4">
           <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
             <Sparkles className="h-4 w-4 text-primary" />
-            Quick tip
+            {t('commandResult.help.quickTip', { defaultValue: '小技巧' })}
           </div>
           <p className="text-sm leading-5 text-muted-foreground">
-            Type <code className="text-foreground">/</code> in the composer to open the command palette, then use arrows and Enter to run a command.
+            {t('commandResult.help.quickTipBody', { defaultValue: '在输入框里输入 / 打开命令菜单,用方向键选择、回车执行。' })}
           </p>
         </div>
       </aside>
@@ -517,7 +519,7 @@ function ModelsContent({
       )}
 
       {showSearch && (
-        <SearchField value={query} onChange={setQuery} placeholder={`Search ${providerLabel} models...`} />
+        <SearchField value={query} onChange={setQuery} placeholder={t('commandResult.models.searchPlaceholder', { provider: providerLabel, defaultValue: `搜索 ${providerLabel} 模型…` })} />
       )}
 
       {filteredOptions.length > 0 ? (
@@ -613,11 +615,11 @@ function ModelsContent({
                     return rows.length > 0 ? <>{rows}</> : null;
                   })()}
                   {isCurrent && (
-                    <span className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground dark:text-primary">Current selection</span>
+                    <span className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground dark:text-primary">{t('commandResult.models.current', { defaultValue: '当前选择' })}</span>
                   )}
                   {isPendingSelection && !isCurrent && (
                     <span className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground dark:text-primary">
-                      Applies next response
+                      {t('commandResult.models.appliesNext', { defaultValue: '下一次回复起生效' })}
                     </span>
                   )}
                 </button>
@@ -731,11 +733,11 @@ function CostContent({ data }: { data: CostCommandData }) {
       <div className="rounded-lg border border-border bg-card p-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Provider</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{t('commandResult.status.provider', { defaultValue: '提供方' })}</p>
             <p className="mt-1 text-sm font-semibold text-foreground">{provider}</p>
           </div>
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Model</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{t('commandResult.status.model', { defaultValue: '模型' })}</p>
             <p className="mt-1 break-all font-mono text-sm text-foreground">{model}</p>
           </div>
         </div>
@@ -896,7 +898,7 @@ export default function CommandResultModal({
             <span>{t('commandResult.escHint')}</span>
           </div>
           <Button type="button" variant="outline" size="sm" onClick={onClose} className="rounded-lg">
-            Close
+            {t('commandResult.close', { defaultValue: '关闭' })}
           </Button>
         </div>
       </DialogContent>

@@ -37,10 +37,10 @@
     "send": "Invia",
     "stop": "Ferma",
     "hintText": {
-      "ctrlEnter": "Ctrl+Invio per inviare • Shift+Invio per nuova riga • Tab per cambiare modalità • / per comandi",
-      "enter": "Invio per inviare • Shift+Invio per nuova riga • Tab per cambiare modalità • / per comandi"
+      "ctrlEnter": "Ctrl+Invio per inviare • Shift+Invio per nuova riga • Shift+Tab per cambiare modalità • / per comandi",
+      "enter": "Invio per inviare • Shift+Invio per nuova riga • Shift+Tab per cambiare modalità • / per comandi"
     },
-    "clickToChangeMode": "Clicca per cambiare modalità permessi (o premi Tab nell'input)",
+    "clickToChangeMode": "Clicca per cambiare modalità permessi (o premi Shift+Tab nell'input)",
     "showAllCommands": "Mostra tutti i comandi",
     "scrollToBottom": "Scorri in basso",
     "attachmentPath": "percorso",

@@ -25,6 +25,7 @@ import MobileMenuButton from './subcomponents/MobileMenuButton';
 // CodeMirror itself, since it returns null until a file is actually open.
 const FileTree = lazy(() => import('../../file-tree/view/FileTree'));
 const TasksPage = lazy(() => import('../../tasks/TasksPage'));
+const SkillWhetPage = lazy(() => import('../../skillwhet/SkillWhetPage'));
 const StandaloneShell = lazy(() => import('../../standalone-shell/view/StandaloneShell'));
 const JupyterPanel = lazy(() => import('../../jupyter/JupyterPanel'));
 // Imported by concrete path rather than through the package barrels: the
@@ -129,6 +130,42 @@ function MainContent({
     // 定时任务列表是全局的(不挂在某个项目下),没选项目也照常可看可建 ——
     // 表单里有自己的项目下拉。其余标签页(聊天/文件/终端)都以项目为前提,
     // 保持原来的"先选项目"空态。
+    // gy:技能优化同理 —— 全局页面,不挂在项目下。
+    if (activeTab === 'skillwhet') {
+      return (
+        <div className="flex h-full flex-col">
+          {isMobile && (
+            <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-2">
+              <MobileMenuButton onMenuClick={onMenuClick} compact />
+              <span className="text-sm font-medium text-foreground">{t('tabs.skillwhet', { defaultValue: '技能优化' })}</span>
+            </div>
+          )}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <LazyPanel label={t('tabs.skillwhet', { defaultValue: '技能优化' })}>
+              <SkillWhetPage />
+            </LazyPanel>
+          </div>
+        </div>
+      );
+    }
+    // hh:Notebook 也不挂在项目下(JupyterLab 自己的文件浏览器从 home 起)—— 没选项目照样能开
+    if (activeTab === 'notebook') {
+      return (
+        <div className="flex h-full flex-col">
+          {isMobile && (
+            <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-2">
+              <MobileMenuButton onMenuClick={onMenuClick} compact />
+              <span className="text-sm font-medium text-foreground">{t('tabs.notebook', { defaultValue: 'Notebook' })}</span>
+            </div>
+          )}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <LazyPanel label={t('tabs.notebook', { defaultValue: 'Notebook' })}>
+              <JupyterPanel target={jupyterTarget ?? { path: null, nonce: 0 }} />
+            </LazyPanel>
+          </div>
+        </div>
+      );
+    }
     if (activeTab === 'tasks') {
       return (
         <div className="flex h-full flex-col">
@@ -158,6 +195,17 @@ function MainContent({
 
   return (
     <div className="flex h-full flex-col">
+      {/* hc:技能优化是全局页面 —— 不挂项目标题 / 项目徽标(原来显示「技能优化 · <当前项目>」),
+          页面自己有面包屑;手机上留一条带菜单按钮的窄栏,和没选项目时同一个样子 */}
+      {/* hh:Notebook 同理 —— JupyterLab 有自己的菜单栏,顶上再挂「JupyterLab · <项目>」只会让人以为它跟着项目走 */}
+      {activeTab === 'skillwhet' || activeTab === 'notebook' ? (isMobile && (
+        <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-2">
+          <MobileMenuButton onMenuClick={onMenuClick} compact />
+          <span className="text-sm font-medium text-foreground">{activeTab === 'notebook'
+            ? t('tabs.notebook', { defaultValue: 'Notebook' })
+            : t('tabs.skillwhet', { defaultValue: '技能优化' })}</span>
+        </div>
+      )) : (
       <MainContentHeader
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -169,6 +217,15 @@ function MainContent({
         onRenameSession={onRenameSession}
         onDeleteSession={onDeleteSession}
       />
+      )}
+
+      {/* hl 复核 P3-8:项目被移除(归档 / 删除 / 收回可见性)时不再把对话区切掉 —— 留着能看,
+          给一条提示:再操作多半会失败,去侧栏换个项目。 */}
+      {selectedProject.removedFromView && (
+        <div role="status" className="border-b border-amber-500/40 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+          {t('mainContent.projectRemovedNotice', { defaultValue: '这个项目已被归档、删除,或你已不再能访问它。当前对话仅供查看,后续操作可能失败。' })}
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* dy:下限交给 min-content,不再写死。
@@ -192,6 +249,7 @@ function MainContent({
                 sendMessage={sendMessage}
                 onFileOpen={handleFileOpen}
                 isEditorOpen={Boolean(editingFile)}
+                isActive={activeTab === 'chat'}
                 onInputFocusChange={onInputFocusChange}
                 onSessionProcessing={onSessionProcessing}
                 onSessionIdle={onSessionIdle}
@@ -213,6 +271,14 @@ function MainContent({
             <div className="h-full overflow-hidden">
               <LazyPanel label={t('tabs.files')}>
                 <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpen} />
+              </LazyPanel>
+            </div>
+          )}
+
+          {activeTab === 'skillwhet' && (
+            <div className="h-full overflow-hidden">
+              <LazyPanel label={t('tabs.skillwhet', { defaultValue: '技能优化' })}>
+                <SkillWhetPage />
               </LazyPanel>
             </div>
           )}

@@ -1,0 +1,7 @@
+{
+ "runner": "agent",
+ "defects": [
+  "references are silent about currency stripping, whitespace, empty documents and the separators"
+ ],
+ "notes": "prose loop must ADD information, not correct it; the answers exist only in the code"
+}

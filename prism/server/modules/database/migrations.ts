@@ -526,6 +526,24 @@ const migrateApiKeysToHashed = (db: Database): void => {
    */
   relaxLegacyApiKeyNotNull(db);
 
+  /*
+   * hl(动态 P3):key 记下签发时的 users.token_version,让「退出所有设备 / 改密 / 重置密码」
+   * 也作废 API key(此前只作废 JWT 与票据,key 永远有效)。存量 key 回填成用户**当前**的
+   * 版本 —— 今天仍然能用,下一次作废动作起跟着失效;不回填的话 NULL 永远视为有效。
+   * 放在 relaxLegacyApiKeyNotNull **之后**:那一步是按写死列清单重建表(见 REQUIRED_COLUMNS
+   * 的说明),加列若在它前面就会被重建吞掉 —— 2026-09-15 users 表那次事故的同一形状。
+   */
+  addColumnToTableIfNotExists(
+    db, 'api_keys', getTableInfo(db, 'api_keys').map((column) => column.name), 'token_version', 'INTEGER',
+  );
+  if (tableExists(db, 'users') && getTableInfo(db, 'users').some((column) => column.name === 'token_version')) {
+    db.exec(`
+      UPDATE api_keys SET token_version = (
+        SELECT token_version FROM users WHERE users.id = api_keys.user_id
+      ) WHERE token_version IS NULL
+    `);
+  }
+
   // Plaintext rows that predate hashing.
   const legacyRows = db
     .prepare(
@@ -595,12 +613,13 @@ const relaxLegacyApiKeyNotNull = (db: Database): void => {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_used DATETIME,
         is_active BOOLEAN DEFAULT 1,
+        token_version INTEGER,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
     `);
     db.exec(`
       INSERT INTO api_keys__new
-        (id, user_id, key_name, api_key, api_key_hash, api_key_prefix, created_at, last_used, is_active)
+        (id, user_id, key_name, api_key, api_key_hash, api_key_prefix, created_at, last_used, is_active, token_version)
       SELECT
         id,
         user_id,
@@ -612,7 +631,8 @@ const relaxLegacyApiKeyNotNull = (db: Database): void => {
         ${pick('api_key_prefix', 'NULL')},
         ${pick('created_at', 'CURRENT_TIMESTAMP')},
         ${pick('last_used', 'NULL')},
-        COALESCE(${pick('is_active', '1')}, 1)
+        COALESCE(${pick('is_active', '1')}, 1),
+        ${pick('token_version', 'NULL')}
       FROM api_keys
     `);
     db.exec('DROP TABLE api_keys');
@@ -961,6 +981,24 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
     'git_name', 'git_email', 'has_completed_onboarding', 'token_version',
     'approval_status', 'approved_at', 'reviewed_by', 'attachment_quota_mb',
   ],
+  // hl:API key 加了 token_version(见 migrateApiKeysToHashed)。这张表没有重建函数,列清单钉住即可。
+  api_keys: [
+    'id', 'user_id', 'key_name', 'api_key', 'api_key_hash', 'api_key_prefix',
+    'created_at', 'last_used', 'is_active', 'token_version',
+  ],
+  // gy:反馈表。整张表是新建的(CREATE TABLE IF NOT EXISTS 在 INIT 里),这里只是把
+  // 列清单钉住 —— 将来有人在这张表上做重建,漏列会在启动日志里被点名。
+  message_feedback: [
+    'id', 'session_id', 'project_id', 'message_id', 'message_uuid', 'user_id', 'source',
+    'verdict', 'status', 'category', 'note', 'expected_output', 'skill_hint', 'task_id',
+    'created_at', 'updated_at',
+  ],
+  // he:夜训计划。同上,整张表新建,列清单钉住。
+  skillwhet_nightly_plan: [
+    'skill_name', 'enrolled', 'window_start', 'window_end', 'max_cost_usd', 'rounds', 'config_json',
+    'min_new_tasks', 'copy_id', 'last_night', 'last_run_at', 'last_job_id', 'last_result', 'last_detail',
+    'consecutive_noop', 'auto_paused_at', 'updated_by', 'updated_at',
+  ],
 };
 
 /** @returns 每张表缺了哪些列(全齐时是空对象) */
@@ -1184,6 +1222,12 @@ export const runMigrations = (db: Database) => {
     db.exec(INDEX_SCHEMA_SQL);
 
     db.exec(LAST_SCANNED_AT_SQL);
+
+    // he:夜训计划表在 he 开发中途加了 copy_id —— 早先建出来的表补上这一列(新库建表时已带)
+    if (tableExists(db, 'skillwhet_nightly_plan')) {
+      const planColumns = (db.prepare('PRAGMA table_info(skillwhet_nightly_plan)').all() as TableInfoRow[]).map((c) => c.name);
+      addColumnToTableIfNotExists(db, 'skillwhet_nightly_plan', planColumns, 'copy_id', 'TEXT');
+    }
 
     // gs:重建过的表,列不许少(见函数说明)。放在最后 —— 那时所有加列都跑过了。
     verifyRebuiltTableColumns(db);

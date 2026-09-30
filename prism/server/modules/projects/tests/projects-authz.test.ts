@@ -201,10 +201,10 @@ describe('项目路由的可见性闸门', () => {
       const aliceArchive = await call(baseUrl, 'alice', 'DELETE', `/api/projects/${ownedPublicProjectId}`);
       assert.equal(aliceArchive.status, 200, `负责人归档自己的项目应当放行,实际 ${aliceArchive.status}`);
 
-      // **无主**项目没有"负责人"这一档 —— 看得见就能归档,这一条不许被收紧掉,
-      // 否则普通用户连自己在终端里开出来的项目都归档不了(监视器建的行都是无主的)。
+      // hl(动态 P2-7):**无主**(公共目录)项目的归档 / 永久删只给 root —— 它对所有人可见,
+      // "看得见就能归档"等于任何人都能让所有人当场看不见它(用户拍板收紧)。
       const bobArchivesUnowned = await call(baseUrl, 'bob', 'DELETE', `/api/projects/${publicProjectId}`);
-      assert.equal(bobArchivesUnowned.status, 200, `无主项目应当仍可归档,实际 ${bobArchivesUnowned.status}`);
+      assert.equal(bobArchivesUnowned.status, 403, `无主项目非 root 不能归档,实际 ${bobArchivesUnowned.status}`);
     });
   });
 

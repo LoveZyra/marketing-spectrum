@@ -45,7 +45,8 @@
     "loading": "Loading preview...",
     "error": "Unable to display this file.",
     "openInNewTab": "Open in new tab",
-    "unsavedNotice": "Preview shows the saved file. Save to see your latest edits."
+    "unsavedNotice": "Preview shows the saved file. Save to see your latest edits.",
+    "expiredNotice": "The preview link has expired (valid for 5 minutes): resources the page loads from now on may fail. Click Reload for a fresh link."
   },
   "notebook": {
     "legacyFormat": "This notebook uses the ancient nbformat 3 layout, which the preview does not support — switch to the source view, or open it in JupyterLab (which upgrades the format).",
@@ -53,6 +54,11 @@
     "empty": "Empty notebook — no cells yet."
   },
   "unsaved": {
-    "confirmDiscard": "This file has unsaved changes that will be lost if you leave. Discard them?"
-  }
+    "confirmDiscard": "This file has unsaved changes that will be lost if you leave. Discard them?",
+    "marker": "Unsaved"
+  },
+  "tabs": {
+    "close": "Close {{name}}"
+  },
+  "loadFailedBanner": "Failed to load the file: {{error}} — saving is disabled so the original is not overwritten. Close and reopen it."
 }

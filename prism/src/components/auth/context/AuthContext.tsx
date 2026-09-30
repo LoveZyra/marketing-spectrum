@@ -1,7 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { IS_PLATFORM } from '../../../constants/config';
 import { api } from '../../../utils/api';
+import { clearLocalAccountStateOnLogout } from '../../../utils/accountSettings';
 import { decodeJwtPayload } from '../../../utils/tokenRefresh';
 import { AUTH_ERROR_MESSAGES, AUTH_TOKEN_STORAGE_KEY } from '../constants';
 import type {
@@ -41,8 +42,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * hl(动态 P3「每条请求打两遍」):登录 / 注册刚拿到的会话**不再重新核验一遍**。
+   *
+   * `checkAuthStatus` 依赖 `token`,login 之后 token 变了 → effect 重跑 → `setIsLoading(true)`
+   * → ProtectedRoute 换成加载页,**整个 AppContent 卸载**;/auth/user 回来再挂一次 ——
+   * 首屏那 18 个 /api 请求(项目列表、运行中会话、偏好……)于是每条都打两遍,
+   * 中间还闪一下加载页。登录响应里本来就带 user,核验是多余的。
+   */
+  const skipNextStatusCheckRef = useRef(false);
 
   const setSession = useCallback((nextUser: AuthUser, nextToken: string) => {
+    skipNextStatusCheckRef.current = true;
     setUser(nextUser);
     setToken(nextToken);
     persistToken(nextToken);
@@ -55,6 +66,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const checkAuthStatus = useCallback(async () => {
+    if (skipNextStatusCheckRef.current) {
+      skipNextStatusCheckRef.current = false;
+      return;
+    }
     try {
       setIsLoading(true);
       setError(null);
@@ -213,6 +228,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const stored = localStorage.getItem('auth-token');
       if (stored) tokenToInvalidate = stored;
     } catch { /* 隐私模式等取不到就用 state 里那张 */ }
+    // hl(动态 P1-7 / 09-24 P1-5):登出清掉本机草稿与时间戳 —— 此前只清令牌,下一个在这台
+    // 浏览器登录的人会把上一个人的草稿正文推成自己的。
+    // hl 复核 P3-7:同步键**不**在这里清(同一个人再登录不必整页重载);换人时由主人标记在拉取前清。
+    clearLocalAccountStateOnLogout();
     clearSession();
 
     if (tokenToInvalidate) {

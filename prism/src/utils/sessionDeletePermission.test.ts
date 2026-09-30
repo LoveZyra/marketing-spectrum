@@ -49,14 +49,19 @@ describe('canArchiveOrDeleteProject', () => {
     ['root', { isRoot: true, viewerUserId: 4, projectOwnerUserId: 2 }],
     ['负责人', { viewerUserId: 4, projectOwnerUserId: 4 }],
     ['路人', { viewerUserId: 4, projectOwnerUserId: 2 }],
-    ['无主项目', { viewerUserId: 4, projectOwnerUserId: null }],
     ['项目未知', { viewerUserId: 4, projectOwnerUserId: 2, projectKnown: false }],
   ];
 
-  it('与会话那条逐例一致(共用一份实现,不许漂)', () => {
+  it('有主项目 / root / 项目未知:与会话永久删同一条规则', () => {
     for (const [label, input] of cases) {
       expect(canArchiveOrDeleteProject(input), label).toBe(canPermanentlyDeleteSession(input));
     }
+  });
+
+  it('hl(动态 P2-7):无主项目只给 root —— 会话级仍回落到可见性,项目级不再', () => {
+    expect(canArchiveOrDeleteProject({ viewerUserId: 4, projectOwnerUserId: null })).toBe(false);
+    expect(canArchiveOrDeleteProject({ isRoot: true, viewerUserId: 4, projectOwnerUserId: null })).toBe(true);
+    expect(canPermanentlyDeleteSession({ viewerUserId: 4, projectOwnerUserId: null })).toBe(true);
   });
 
   it('路人归档别人的项目:不画按钮 —— 这一条就是 2026-09-15 实测那件事', () => {

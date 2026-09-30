@@ -25,7 +25,14 @@ import path from 'node:path';
  *
  * 所以判据落在一个**谁也不依赖**的叶子模块上。两边都往下引,不互相引。
  */
-export const PRISM_INTERNAL_CWD_MARKERS = ['prism-model-probe'] as const;
+export const PRISM_INTERNAL_CWD_MARKERS = [
+  'prism-model-probe',
+  // gy:技能优化(SkillWhet)的工作根与它的 TMPDIR。`whet serve` 每次调 `claude -p` 都会
+  // mkdtemp 一个 cwd —— 与 9-03 那次 `skillopt_claude_*` 长出幽灵项目是同一个病根,
+  // 修法也一样:路径带标记、watcher 按标记忽略。默认 home `~/.prism/skillwhet` 自带
+  // 标记;用户把 home 配到别处时,serve 会在 tmp/ 下再套一层 `prism-skillwhet/`。
+  'prism-skillwhet',
+] as const;
 
 /**
  * 比较前把下划线抹平成连字符。
@@ -64,7 +71,8 @@ export function isPrismInternalTranscript(filePath: string): boolean {
 export function isPrismInternalProjectPath(projectPath: string): boolean {
   if (!projectPath) return false;
   const normalized = path.normalize(projectPath).replace(/\\/g, '/');
-  return normalized.split('/').some(
-    (segment) => normalizeSeparators(segment).includes('prism-model-probe'),
-  );
+  const segments = normalized.split('/');
+  if (segments.some((segment) => normalizeSeparators(segment).includes('prism-model-probe'))) return true;
+  // gy:技能优化的临时目录是 `<home>/tmp/prism-skillwhet/<mkdtemp>`,标记是一整个目录段。
+  return segments.some((segment) => segment === 'prism-skillwhet');
 }

@@ -5,7 +5,7 @@ import path from 'node:path';
 import express, { type RequestHandler, type Router } from 'express';
 import mime from 'mime-types';
 
-import { canViewerSeeSession, sessionMessagesDb } from '@/modules/database/index.js';
+import { canViewerSeeSession, sessionMessagesDb, userDb } from '@/modules/database/index.js';
 import { isInlineSafeContentType } from '@/modules/files/index.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
 import { setDownloadHeaders } from '@/shared/download-headers.js';
@@ -261,7 +261,9 @@ export function createSessionOutputsRouter({ authenticateToken }: Deps): Router 
       return res.status(gate.status).json({ error: gate.error });
     }
 
-    const ticket = issueSessionOutputTicket({ viewer, sessionId, filePath: gate.resolved });
+    // hj:票里记下签发时的 token_version,直传口比对。
+    const tokenVersion = (req as { user?: { token_version?: number | null } }).user?.token_version ?? 0;
+    const ticket = issueSessionOutputTicket({ viewer: { ...viewer, tokenVersion }, sessionId, filePath: gate.resolved });
     return res.json({
       kind: 'file',
       name: path.basename(gate.resolved),
@@ -287,6 +289,10 @@ export function createSessionOutputDownloadRouter(): Router {
     const payload = readDownloadTicket(req.query.ticket as string, 'session-output');
     if (!payload) {
       return res.status(401).json({ error: '下载链接已过期,请重新点一次下载。' });
+    }
+    // hj(审计 P1-2):票里的人现在还能不能用。
+    if (!userDb.getUsableUser(payload.viewer.userId, payload.viewer.tokenVersion ?? null)) {
+      return res.status(401).json({ error: '下载链接已失效,请重新登录后再下载。' });
     }
 
     const gate = await checkSessionOutputAccess(payload.sessionId, payload.viewer, payload.filePath);

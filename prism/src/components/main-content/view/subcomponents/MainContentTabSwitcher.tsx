@@ -1,9 +1,10 @@
-import { MessageSquare, Terminal, Folder, NotebookPen, Clock, type LucideIcon } from 'lucide-react';
+import { MessageSquare, Terminal, Folder, NotebookPen, Clock, Sparkles, type LucideIcon } from 'lucide-react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Tooltip, PillBar, Pill } from '../../../../shared/view/ui';
 import type { AppTab } from '../../../../types/app';
+import { useSkillWhetEnabled } from '../../../skillwhet/hooks/useSkillWhetStatus';
 
 type MainContentTabSwitcherProps = {
   activeTab: AppTab;
@@ -22,6 +23,7 @@ type TabDefinition = BuiltInTab;
 const BASE_TABS: BuiltInTab[] = [
   { kind: 'builtin', id: 'chat',  labelKey: 'tabs.chat',  icon: MessageSquare },
   { kind: 'builtin', id: 'tasks', labelKey: 'tabs.tasks', icon: Clock },
+  { kind: 'builtin', id: 'skillwhet', labelKey: 'tabs.skillwhet', icon: Sparkles },
   { kind: 'builtin', id: 'shell', labelKey: 'tabs.shell', icon: Terminal },
   { kind: 'builtin', id: 'files', labelKey: 'tabs.files', icon: Folder },
   { kind: 'builtin', id: 'notebook', labelKey: 'tabs.notebook', icon: NotebookPen },
@@ -34,10 +36,9 @@ export default function MainContentTabSwitcher({
   setActiveTab,
 }: MainContentTabSwitcherProps) {
   const { t } = useTranslation();
+  const skillWhetEnabled = useSkillWhetEnabled();
 
-  const builtInTabs: BuiltInTab[] = [
-    ...BASE_TABS,
-  ];
+  const builtInTabs: BuiltInTab[] = BASE_TABS.filter((tab) => tab.id !== 'skillwhet' || skillWhetEnabled);
 
   const tabs: TabDefinition[] = builtInTabs;
 
@@ -53,8 +54,10 @@ export default function MainContentTabSwitcher({
               isActive={isActive}
               onClick={() => setActiveTab(tab.id)}
               className="px-3 py-2.5"
+              // hl(P3 可访问性):lg 以下文字是 hidden 的,按钮只剩图标 —— 读屏器念不出是哪个页签。
+              ariaLabel={displayLabel}
             >
-              <tab.icon className="h-4 w-4" strokeWidth={2} />
+              <tab.icon className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
               <span className="hidden lg:inline">{displayLabel}</span>
             </Pill>
           </Tooltip>

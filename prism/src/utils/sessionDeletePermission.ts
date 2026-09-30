@@ -63,7 +63,8 @@ export function canPermanentlyDeleteSession(input: SessionDeletePermissionInput)
 }
 
 /**
- * gn:**归档或永久删除一个项目** —— 与上面那条同一条规则,故意共用一份实现。
+ * gn:**归档或永久删除一个项目** —— 与上面那条同一条规则(hl 起只差"无主项目":
+ * 项目级只给 root,见函数体)。
  *
  * 项目归档以前是"看得见就能做"。但归档一个项目,它会从**所有人**的活跃侧栏里
  * 消失,而按钮上没有任何"这不是你的项目"的提示 —— 2026-09-15 实测,非 root
@@ -73,5 +74,11 @@ export function canPermanentlyDeleteSession(input: SessionDeletePermissionInput)
  * (会话级归档不受影响:那只影响归档的人自己看到的列表。)
  */
 export function canArchiveOrDeleteProject(input: SessionDeletePermissionInput): boolean {
-  return canPermanentlyDeleteSession(input);
+  const { isRoot, viewerUserId, projectOwnerUserId, projectKnown = true } = input;
+  if (isRoot) return true;
+  if (!projectKnown) return true;
+  // hl(动态 P2-7):**项目级**的无主回落取消 —— 公共目录下的无主项目归档 / 永久删只给 root
+  // (服务端 canDeleteProject === canManageProject)。会话级的判定(上面)不变。
+  if (projectOwnerUserId === null || projectOwnerUserId === undefined) return false;
+  return sameUser(projectOwnerUserId, viewerUserId);
 }

@@ -51,6 +51,8 @@ const RETIRED_FILES = [
   'src/components/chat/view/subcomponents/HomeToolsSection.tsx',
   'src/components/chat/utils/recentSessions.ts',
   'src/components/chat/utils/recentSessions.test.ts',
+  // gz —— 技能优化三页(优化运行 / 评测 / 版本)接了真数据,"第二期开放"的空态组件退役
+  'src/components/skillwhet/view/ComingSoon.tsx',
 ];
 
 /*

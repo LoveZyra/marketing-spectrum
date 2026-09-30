@@ -31,7 +31,7 @@ const translatorFor = (lang: string) => {
   };
 };
 
-const TABS: AppTab[] = ['chat', 'tasks', 'files', 'shell', 'notebook'];
+const TABS: AppTab[] = ['chat', 'tasks', 'skillwhet', 'files', 'shell', 'notebook'];
 
 describe('getTabTitle', () => {
   it('中文界面下没有一个页签回落成英文 Project', () => {
@@ -46,10 +46,13 @@ describe('getTabTitle', () => {
     expect(getTabTitle('tasks', zh)).toBe('定时任务');
     expect(getTabTitle('shell', zh)).toBe('终端');
     expect(getTabTitle('files', zh)).toBe('项目文件');
+    // gy:技能优化页签走同一组键
+    expect(getTabTitle('skillwhet', zh)).toBe('技能优化');
 
     const en = translatorFor('en');
     expect(getTabTitle('tasks', en)).toBe('Tasks');
     expect(getTabTitle('shell', en)).toBe('Shell');
+    expect(getTabTitle('skillwhet', en)).toBe('Skill optimization');
   });
 
   it('每个页签在两个 locale 里都真有键,不靠兜底', () => {

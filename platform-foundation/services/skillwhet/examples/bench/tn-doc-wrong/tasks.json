@@ -1,0 +1,61 @@
+{
+ "format": "skillwhet.tasks.v1",
+ "tasks": [
+  {
+   "id": "w1",
+   "intent": "What does slugify('Caf\u00e9 d\u00e9j\u00e0 vu') return? Explain what happens to the accented letters.",
+   "reference_kind": "rubric",
+   "reference": "'cafe-deja-vu': accented letters are folded to plain ASCII (\u00e9\u2192e), not kept.",
+   "split": "train"
+  },
+  {
+   "id": "w2",
+   "intent": "dedupe_lines('b\\\\na\\\\nb\\\\nc\\\\na') \u2014 which occurrence of a duplicate line survives, and what is the output?",
+   "reference_kind": "rubric",
+   "reference": "The FIRST occurrence survives and order is preserved: 'b\\\\na\\\\nc'.",
+   "split": "train"
+  },
+  {
+   "id": "w3",
+   "intent": "Does slugify leave a trailing '-' when it truncates to max_len? What does slugify('a b c d e f', max_len=5) give?",
+   "reference_kind": "rubric",
+   "reference": "No trailing dash: the result is 'a-b-c'.",
+   "split": "train"
+  },
+  {
+   "id": "w4",
+   "intent": "How many words does word_count('well-known fact -- really !') report and why?",
+   "reference_kind": "rubric",
+   "reference": "3: 'well-known', 'fact', 'really'; '--' and '!' are bare punctuation and do not count.",
+   "split": "train"
+  },
+  {
+   "id": "w1v",
+   "intent": "I passed '\u00dcber stra\u00dfe' to slugify. Will the umlaut survive in the slug?",
+   "reference_kind": "rubric",
+   "reference": "No: accents/umlauts are folded to ASCII (\u00dc\u2192U, \u00df dropped), giving 'uber-strae'.",
+   "split": "val"
+  },
+  {
+   "id": "w2v",
+   "intent": "If a line appears three times, does dedupe_lines keep its first or its last occurrence?",
+   "reference_kind": "rubric",
+   "reference": "The first occurrence; original order is kept.",
+   "split": "val"
+  },
+  {
+   "id": "w4v",
+   "intent": "Does '--' count as a word for word_count?",
+   "reference_kind": "rubric",
+   "reference": "No, standalone punctuation does not count.",
+   "split": "val"
+  },
+  {
+   "id": "gen_t",
+   "intent": "A colleague says dedupe_lines returns the most recent copy of a repeated line and that slugify keeps '\u00f1' intact. Is either claim right?",
+   "reference_kind": "rubric",
+   "reference": "Both wrong: dedupe_lines keeps the FIRST occurrence; slugify folds accented letters such as \u00f1 to ASCII (n).",
+   "split": "test"
+  }
+ ]
+}

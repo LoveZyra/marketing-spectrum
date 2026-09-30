@@ -16,6 +16,7 @@ import { extractSessionOutputs } from '../utils/sessionOutputs';
 import { turnOutputsFromServer } from '../utils/turnOutputs';
 import { changedFilesToMessages } from '../utils/workFrames';
 import { useSessionWorkFrames } from '../hooks/useSessionWorkFrames';
+import { useMessageFeedback } from '../hooks/useMessageFeedback';
 import {
   EMPTY_SERVER_QUEUE,
   queuedForSession,
@@ -47,6 +48,7 @@ function ChatInterface({
   sendMessage,
   onFileOpen,
   isEditorOpen = false,
+  isActive = true,
   onInputFocusChange,
   onSessionProcessing,
   onSessionIdle,
@@ -498,8 +500,16 @@ function ChatInterface({
     onSessionRestored: handleSessionRestored,
   });
 
+  /**
+   * hl(09-24 P1-12):全局 Esc 的根容器 —— 判"聊天页签此刻看得见"用它。
+   * ChatInterface 在 Shell / 文件 / 任务页签下只是 `hidden`,不卸载;监听器还挂着。
+   */
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
-    if (!canAbortSession) {
+    // 不是当前页签就不挂监听 —— 在终端里用 vim / less、在编辑器里关搜索框按 Esc,
+    // 都不该中止聊天里正在跑的那一轮。
+    if (!canAbortSession || !isActive) {
       return;
     }
 
@@ -507,12 +517,27 @@ function ChatInterface({
       if (event.key !== 'Escape' || event.repeat || event.defaultPrevented) {
         return;
       }
+      // 中文输入法按 Esc 是"取消候选",不是"停止回合"。
+      if (event.isComposing || event.keyCode === 229) {
+        return;
+      }
+      // 容器不可见(页签切走、布局把它藏起来)时不处理。
+      const root = rootRef.current;
+      if (root && root.getClientRects().length === 0) {
+        return;
+      }
+      // 事件源在终端 / 代码编辑器里:那两处的 Esc 各有各的语义(vim、关搜索框)。
+      const from = event.target as HTMLElement | null;
+      if (from?.closest?.('.xterm, .cm-editor')) {
+        return;
+      }
 
       // 这个监听挂在 document 的 capture 阶段、且注册得早,所以它比弹层/面板自己
       // 的 Esc(冒泡阶段)先跑,`defaultPrevented` 这时还是 false —— 于是在"Skip·Esc"
       // 的问答面板里、或 /models 这类弹窗里按 Esc,会直接把整轮 run 中止掉。
       // 有它们在场就放行,让各自的 Esc 生效,不抢。查找条同理。
-      if (document.querySelector('[role="dialog"], [data-interactive-prompt="true"], [data-find-bar-open="true"]')) {
+      // hl:斜杠菜单 / @ 下拉(role=listbox / menu)在场时 Esc 是"关掉它们"。
+      if (document.querySelector('[role="dialog"], [data-interactive-prompt="true"], [data-find-bar-open="true"], [role="listbox"], [role="menu"]')) {
         return;
       }
 
@@ -522,7 +547,6 @@ function ChatInterface({
       // 一边把正在跑的那一轮也中止了(`canAbortSession` 为真时必然发生)。
       // 用 closest 而不是 querySelector:别的地方开着改名框,不该影响你在
       // 输入框外按 Esc 中止本轮。
-      const from = event.target as HTMLElement | null;
       if (from?.closest?.('[data-inline-rename="true"]')) {
         return;
       }
@@ -535,7 +559,7 @@ function ChatInterface({
     return () => {
       document.removeEventListener('keydown', handleGlobalEscape, { capture: true });
     };
-  }, [canAbortSession, handleAbortSession]);
+  }, [canAbortSession, handleAbortSession, isActive]);
 
   useEffect(() => {
     return () => {
@@ -615,11 +639,18 @@ function ChatInterface({
     revertedPaths: workRevertedPaths,
     turnOutputs: serverTurnOutputsRaw,
     truncated: workHistoryTruncated,
+    skillSurveys,
     refresh: refreshWorkFrames,
   } = useSessionWorkFrames(
     selectedSession?.id || currentSessionId || null,
     isProcessing,
   );
+  // gy:我对本会话各条回答的反馈(👍/👎 与效果调查卡);会话切换整表重拉。
+  const {
+    byMessageId: feedbackByMessageId,
+    submit: submitFeedback,
+    remove: removeFeedback,
+  } = useMessageFeedback(selectedSession?.id || currentSessionId || null);
   /**
    * ej:对话正文下面那张「产出」卡的数据,来自**服务端按全量历史算好的**回合
    * 映射(不是从当前消息窗口现推)。展示名要项目根,所以在这里落地成卡片形状。
@@ -748,7 +779,7 @@ function ChatInterface({
     <PermissionContext.Provider value={permissionContextValue}>
       {/* do:对话区分两栏 —— 左边消息流 + 输入框,右边 Cowork 式工作面板
           (上任务清单、下产出文件)。面板两块都空时自己不渲染,布局即回到单栏。 */}
-      <div className="flex h-full min-h-0">
+      <div ref={rootRef} className="flex h-full min-h-0">
       {/* dy:正文自己的下限 —— 低于这个数输入框就没法用了。
           这 280 和 EditorSidebar 的 MIN_CHAT_BODY_WIDTH 是**同一个数**,必须
           一起改:那边按它给预览栏发宽度,这边是硬约束。以前这里是 min-w-0,
@@ -802,6 +833,10 @@ function ChatInterface({
           onRetryLastTurn={viewedRemovedInfo ? undefined : handleRetryLastTurn}
           isHome={isHome}
           serverTurnOutputs={serverTurnOutputs}
+          skillSurveys={skillSurveys}
+          feedbackByMessageId={feedbackByMessageId}
+          onFeedbackSubmit={submitFeedback}
+          onFeedbackRemove={removeFeedback}
           />
         </div>
 

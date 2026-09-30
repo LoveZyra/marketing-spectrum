@@ -22,6 +22,7 @@
  */
 
 import { clientIp } from '@/shared/client-ip.js';
+import { usernameKey } from '@/shared/root-users.js';
 
 const envFlag = (name, fallback) => {
   const raw = process.env[name];
@@ -152,8 +153,10 @@ const loginSweeper = setInterval(() => {
 loginSweeper.unref();
 
 const loginKey = (req) => {
+  // hj:与登录查询同口径 —— 先 trim(否则 " alice" 与 "alice" 各算各的锁,加个空格就绕过),
+  // 再用与 COLLATE NOCASE 相同的比对键;截到 64 字符,免得超长用户名把键撑大。
   const username =
-    typeof req.body?.username === 'string' ? req.body.username.toLowerCase() : '';
+    typeof req.body?.username === 'string' ? usernameKey(req.body.username).slice(0, 64) : '';
   return `${clientIp(req)}|${username}`;
 };
 

@@ -247,6 +247,8 @@ export const sessionTrashDb = {
 
       cachedPrepare(db, 'DELETE FROM session_trash_messages WHERE session_id = ?').run(sessionId);
       cachedPrepare(db, 'DELETE FROM session_trash WHERE session_id = ?').run(sessionId);
+      // gy:反馈随会话一起彻底清掉(进回收站那一步不动它,恢复后反馈还在)。
+      cachedPrepare(db, 'DELETE FROM message_feedback WHERE session_id = ?').run(sessionId);
       return { restored: true, row };
     });
     try {
@@ -265,6 +267,8 @@ export const sessionTrashDb = {
       if (!row) return null;
       cachedPrepare(db, 'DELETE FROM session_trash_messages WHERE session_id = ?').run(sessionId);
       cachedPrepare(db, 'DELETE FROM session_trash WHERE session_id = ?').run(sessionId);
+      // gy:反馈随会话一起彻底清掉(进回收站那一步不动它,恢复后反馈还在)。
+      cachedPrepare(db, 'DELETE FROM message_feedback WHERE session_id = ?').run(sessionId);
       return row;
     });
     return purge();

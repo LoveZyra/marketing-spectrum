@@ -14,7 +14,7 @@ import {
 } from '@/modules/database/index.js';
 import { isRootUser } from '@/shared/root-users.js';
 import { assertViewerMayCreateSessionAt } from '@/modules/providers/index.js';
-import { computeNextRunAt, runTaskNow, toDbUtc } from '@/modules/tasks/services/scheduled-tasks.service.js';
+import { computeNextRunAt, runTaskNow, serverTimeInfo, toDbUtc } from '@/modules/tasks/services/scheduled-tasks.service.js';
 
 /**
  * 定时任务 REST(cj 轮)。
@@ -96,6 +96,8 @@ async function checkProjectPath(projectPath: string, user: RequestUser): Promise
 }
 
 const FREQUENCIES: TaskFrequency[] = ['manual', 'hourly', 'daily', 'weekdays', 'weekly', 'monthly'];
+/** hl(动态 P3):执行指令的字节上限。 */
+export const INSTRUCTIONS_MAX_BYTES = 64 * 1024;
 const SESSION_MODES: TaskSessionMode[] = ['fixed', 'new'];
 
 type TaskBody = {
@@ -123,6 +125,11 @@ function validateBody(body: TaskBody, partial: boolean): { ok: true; value: Reco
   }
   if (!partial || body.instructions !== undefined) {
     if (!instructions) return { ok: false, error: '执行指令不能为空' };
+    // hl(动态 P3):via-ticket 的 256KB 解析上限被全局解析器架空(全局那份先跑、
+    // 更大);指令本身给个上限 —— 它每次运行都整段发给模型,几百 KB 只会白花钱。
+    if (Buffer.byteLength(instructions, 'utf8') > INSTRUCTIONS_MAX_BYTES) {
+      return { ok: false, error: `执行指令过长(上限 ${Math.round(INSTRUCTIONS_MAX_BYTES / 1024)}KB)` };
+    }
     out.instructions = instructions;
   }
   if (!partial || body.projectPath !== undefined) {
@@ -143,10 +150,26 @@ function validateBody(body: TaskBody, partial: boolean): { ok: true; value: Reco
     if (!FREQUENCIES.includes(frequency)) return { ok: false, error: 'frequency 无效' };
     out.frequency = frequency;
   }
-  if (body.runAtHour !== undefined) out.run_at_hour = readInt(body.runAtHour);
-  if (body.runAtMinute !== undefined) out.run_at_minute = readInt(body.runAtMinute);
-  if (body.runAtWeekday !== undefined) out.run_at_weekday = readInt(body.runAtWeekday);
-  if (body.runAtDay !== undefined) out.run_at_day = readInt(body.runAtDay);
+  /**
+   * hl(09-24 P2-11):时 / 分 / 星期 / 日按范围校验,越界 400。
+   *
+   * UI 走 NumberInput 夹在范围里,但 via-ticket(Claude 手写 JSON)与 API 直调
+   * 可以传 `hour=99`(卡片显示「每天 99:00」,`setHours(99)` 推到 4 天后)、
+   * `weekday=7`、`minute=-5`。`null`(清空)仍允许,由 computeNextRunAt 取默认。
+   */
+  const rangeCheck = (key: 'runAtHour' | 'runAtMinute' | 'runAtWeekday' | 'runAtDay', column: string, min: number, max: number, label: string) => {
+    if (body[key] === undefined) return null;
+    if (body[key] === null || body[key] === '') { out[column] = null; return null; }
+    const value = readInt(body[key]);
+    if (value === null || value < min || value > max) return `${label}必须是 ${min}–${max} 的整数`;
+    out[column] = value;
+    return null;
+  };
+  const rangeError = rangeCheck('runAtHour', 'run_at_hour', 0, 23, 'runAtHour(小时)')
+    ?? rangeCheck('runAtMinute', 'run_at_minute', 0, 59, 'runAtMinute(分钟)')
+    ?? rangeCheck('runAtWeekday', 'run_at_weekday', 0, 6, 'runAtWeekday(0=周日…6=周六)')
+    ?? rangeCheck('runAtDay', 'run_at_day', 1, 28, 'runAtDay(每月几号)');
+  if (rangeError) return { ok: false, error: rangeError };
   if (body.model !== undefined) out.model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null;
   if (body.permissionMode !== undefined) {
     const mode = typeof body.permissionMode === 'string' && body.permissionMode.trim()
@@ -155,7 +178,29 @@ function validateBody(body: TaskBody, partial: boolean): { ok: true; value: Reco
     out.permission_mode = mode;
   }
   if (body.enabled !== undefined) out.enabled = body.enabled ? 1 : 0;
+  // hl(动态 P3):`sessionMode:"new"` 与 `fixedSessionId` 同时给是自相矛盾的 ——
+  // 原来静默收下,库里留着一个永远用不上的会话 id,详情页还把它当"固定会话"显示。
+  if (out.session_mode === 'new' && typeof out.fixed_session_id === 'string' && out.fixed_session_id) {
+    return { ok: false, error: 'sessionMode 为 "new" 时不能同时指定 fixedSessionId' };
+  }
   return { ok: true, value: out };
+}
+
+/**
+ * hl(09-24 P2-13):固定会话必须**属于任务的项目**。
+ *
+ * 前端切项目不清 `fixedSessionId`、服务端也不校验 —— 任务会 resume 一段挂在别的
+ * 项目上的对话,cwd 却是任务项目:每次都按错误的目录跑,或者干脆失败并重试 3 次。
+ * 建 / 改 / via-ticket 三条入口共用;`projectPath` 取"这次请求里的,没有就取任务上的"。
+ */
+function validateFixedSessionProject(sessionId: string, projectPath: string): string | null {
+  const session = sessionsDb.getSessionById(sessionId);
+  if (!session) return '固定会话不存在或无权访问';
+  const sessionProject = (session.project_path ?? '').trim();
+  if (sessionProject && sessionProject !== projectPath.trim()) {
+    return '固定会话不属于这个项目:换一个该项目下的会话,或改成「自动新建并固定」';
+  }
+  return null;
 }
 
 function toWire(task: ScheduledTaskRow) {
@@ -199,6 +244,8 @@ function toWire(task: ScheduledTaskRow) {
  */
 const claudeTickets = new Map<string, {
   userId: number;
+  /** hj:签票时的 token_version,建任务时比对。 */
+  tokenVersion?: number | null;
   expiresAt: number;
   originSessionId: string | null;
   usedTaskId?: string;
@@ -289,7 +336,13 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
     if (!parsed.ok) return res.status(400).json({ error: parsed.error });
     // 票据的权限面等同签发人 —— 项目路径走和登录路由完全一样的两道门。
     // 这条通道是给会话里的 Claude 用的,更不能比人工建任务松。
-    const ticketUser = userDb.getUserById(entry.userId) ?? null;
+    // hj(审计 P1-2):签票的人**现在**还得能用 —— 停用 / 驳回 / 退出所有设备之后,
+    // 30 分钟内这张票原来照样能建出一个以他名义、按 bypass 跑的定时任务。
+    const ticketUser = userDb.getUsableUser(entry.userId, entry.tokenVersion ?? null) ?? null;
+    if (!ticketUser) {
+      claudeTickets.delete(ticket);
+      return res.status(401).json({ error: '票据已失效(签发人的登录状态已变化),请回到定时任务页重新发起「让 Claude 创建」' });
+    }
     const pathError = await checkProjectPath(
       parsed.value.project_path as string,
       { id: entry.userId, username: ticketUser?.username ?? '' },
@@ -297,12 +350,13 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
     if (pathError) return res.status(400).json({ error: pathError });
     const fixedSessionId = parsed.value.fixed_session_id as string | null | undefined;
     if (fixedSessionId) {
-      const sessionError = validateFixedSession(fixedSessionId, entry.userId, null);
+      const sessionError = validateFixedSession(fixedSessionId, entry.userId, null)
+        ?? validateFixedSessionProject(fixedSessionId, parsed.value.project_path as string);
       if (sessionError) return res.status(400).json({ error: sessionError });
     }
     const task = applyScheduleAndInsert(parsed.value, entry.userId);
     entry.usedTaskId = task.id; // 创建额度烧掉;条目留到过期,供撤销自己这单
-    return res.status(201).json({ success: true, task: toWire(task) });
+    return res.status(201).json({ success: true, task: toWire(task), serverTime: serverTimeInfo() });
   });
 
   /** 同一张票据在 TTL 内可删除**它自己刚建的那一个**任务 —— 建错当场可撤。 */
@@ -330,7 +384,8 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
     // 自己建的 ∪ 跑在自己能看见的项目上的(root 全看)。
     const rows = isRootUser(user.username) ? scheduledTasksDb.listAll() : scheduledTasksDb.listVisibleTo(user.id);
-    res.json({ success: true, tasks: rows.map(toWire) });
+    // hl(09-24 P2-12):带上服务器时区,前端按它显示「下一次」与表单时刻。
+    res.json({ success: true, tasks: rows.map(toWire), serverTime: serverTimeInfo() });
   });
 
   router.post('/', async (req, res) => {
@@ -342,11 +397,12 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
     if (pathError) return res.status(400).json({ error: pathError });
     const fixedSessionId = parsed.value.fixed_session_id as string | null | undefined;
     if (fixedSessionId) {
-      const sessionError = validateFixedSession(fixedSessionId, user.id, user.username);
+      const sessionError = validateFixedSession(fixedSessionId, user.id, user.username)
+        ?? validateFixedSessionProject(fixedSessionId, parsed.value.project_path as string);
       if (sessionError) return res.status(400).json({ error: sessionError });
     }
     const task = applyScheduleAndInsert(parsed.value, user.id);
-    res.status(201).json({ success: true, task: toWire(task) });
+    res.status(201).json({ success: true, task: toWire(task), serverTime: serverTimeInfo() });
   });
 
   /**
@@ -368,7 +424,8 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
       : null;
 
     const ticket = `tt_${crypto.randomBytes(24).toString('hex')}`;
-    claudeTickets.set(ticket, { userId: user.id, expiresAt: Date.now() + TICKET_TTL_MS, originSessionId });
+    const tokenVersion = (req as { user?: { token_version?: number | null } }).user?.token_version ?? 0;
+    claudeTickets.set(ticket, { userId: user.id, tokenVersion, expiresAt: Date.now() + TICKET_TTL_MS, originSessionId });
     res.json({ success: true, ticket, expiresInMs: TICKET_TTL_MS, hasOriginSession: Boolean(originSessionId) });
   });
 
@@ -376,7 +433,7 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
     const user = readUser(req);
     const task = scheduledTasksDb.getById(req.params.id);
     if (!task || !canTouch(task, user)) return res.status(404).json({ error: 'Task not found' });
-    res.json({ success: true, task: toWire(task) });
+    res.json({ success: true, task: toWire(task), serverTime: serverTimeInfo() });
   });
 
   /** 运行记录。分页,默认最近 20 条 —— 详情页只铺前几条,展开再往下翻。 */
@@ -420,9 +477,21 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
       if (pathError) return res.status(400).json({ error: pathError });
     }
     const fixedSessionId = parsed.value.fixed_session_id as string | null | undefined;
+    // 改 projectPath 但没换会话:原来的固定会话也要对得上新项目。
+    const effectiveProjectPath = (parsed.value.project_path as string | undefined) ?? task.project_path;
+    const effectiveFixedSessionId = fixedSessionId
+      ?? (parsed.value.project_path !== undefined && parsed.value.fixed_session_id === undefined ? task.fixed_session_id : null);
     if (fixedSessionId) {
       const sessionError = validateFixedSession(fixedSessionId, user!.id, user!.username);
       if (sessionError) return res.status(400).json({ error: sessionError });
+    }
+    if (effectiveFixedSessionId) {
+      const projectError = validateFixedSessionProject(effectiveFixedSessionId, effectiveProjectPath);
+      if (projectError) return res.status(400).json({ error: projectError });
+    }
+    // hl(动态 P3):部分更新也要拦"new + 固定会话"—— 只改 sessionMode 时看库里那个 id。
+    if (parsed.value.session_mode === 'new' && parsed.value.fixed_session_id === undefined && task.fixed_session_id) {
+      parsed.value.fixed_session_id = null;
     }
 
     scheduledTasksDb.update(task.id, parsed.value as Partial<ScheduledTaskRow>);
@@ -430,7 +499,7 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
     const updated = scheduledTasksDb.getById(task.id)!;
     const next = updated.enabled ? computeNextRunAt(updated, new Date()) : null;
     scheduledTasksDb.update(task.id, { next_run_at: next ? toDbUtc(next) : null });
-    res.json({ success: true, task: toWire(scheduledTasksDb.getById(task.id)!) });
+    res.json({ success: true, task: toWire(scheduledTasksDb.getById(task.id)!), serverTime: serverTimeInfo() });
   });
 
   router.delete('/:id', (req, res) => {

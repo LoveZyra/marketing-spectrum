@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import type { ReactNode, RefObject } from 'react';
-import { ChevronRight, Folder, FolderOpen } from 'lucide-react';
+import { ChevronRight, Folder, FolderOpen, Link2, Loader2, MoreHorizontal } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
 import type { FileTreeNode as FileTreeNodeType, FileTreeViewMode } from '../types/types';
@@ -47,15 +47,40 @@ type FileTreeNodeProps = {
   selectedPaths?: ReadonlySet<string>;
   onToggleSelect?: (item: FileTreeNodeType, event: React.MouseEvent) => void;
   selectionMode?: boolean;
+  /**
+   * hl(动态 P2-10):被截断的目录展开后多一行「…还有更多」,点击把这个目录单独列一遍。
+   * 文案由上层翻译好传进来 —— 这个组件是 memo 的,不订阅 i18n。
+   */
+  onLoadMore?: (item: FileTreeNodeType) => void;
+  loadingSubtrees?: ReadonlySet<string>;
+  labels?: {
+    loadMore: string;
+    loading: string;
+    symlink: string;
+  };
 };
 
 type TreeItemIconProps = {
   item: FileTreeNodeType;
   isOpen: boolean;
   renderFileIcon: (filename: string) => ReactNode;
+  symlinkLabel?: string;
 };
 
-function TreeItemIcon({ item, isOpen, renderFileIcon }: TreeItemIconProps) {
+/** 软链角标:叠在图标右下角的小链环。目录软链画成文件夹(可展开),角标说明它是链接。 */
+function SymlinkBadge({ label }: { label?: string }) {
+  return (
+    <span
+      className="pointer-events-none absolute -bottom-0.5 -right-1 rounded-full bg-background p-px"
+      title={label}
+      aria-label={label}
+    >
+      <Link2 className="h-2.5 w-2.5 text-muted-foreground" />
+    </span>
+  );
+}
+
+function TreeItemIcon({ item, isOpen, renderFileIcon, symlinkLabel }: TreeItemIconProps) {
   if (item.type === 'directory') {
     return (
       <span className="flex flex-shrink-0 items-center gap-0.5">
@@ -65,16 +90,24 @@ function TreeItemIcon({ item, isOpen, renderFileIcon }: TreeItemIconProps) {
             isOpen && 'rotate-90',
           )}
         />
-        {isOpen ? (
-          <FolderOpen className="h-4 w-4 flex-shrink-0 text-primary" />
-        ) : (
-          <Folder className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-        )}
+        <span className="relative flex flex-shrink-0 items-center">
+          {isOpen ? (
+            <FolderOpen className="h-4 w-4 flex-shrink-0 text-primary" />
+          ) : (
+            <Folder className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+          )}
+          {item.isSymlink && <SymlinkBadge label={symlinkLabel} />}
+        </span>
       </span>
     );
   }
 
-  return <span className="ml-[18px] flex flex-shrink-0 items-center">{renderFileIcon(item.name)}</span>;
+  return (
+    <span className="relative ml-[18px] flex flex-shrink-0 items-center">
+      {renderFileIcon(item.name)}
+      {item.isSymlink && <SymlinkBadge label={symlinkLabel} />}
+    </span>
+  );
 }
 
 /**
@@ -111,12 +144,18 @@ function FileTreeNode({
   selectedPaths,
   onToggleSelect,
   selectionMode,
+  onLoadMore,
+  loadingSubtrees,
+  labels,
 }: FileTreeNodeProps) {
   const isDropTarget = dropTarget === item.path;
   const isSelected = Boolean(selectedPaths?.has(item.path));
   const isDirectory = item.type === 'directory';
   const isOpen = isDirectory && expandedDirs.has(item.path);
   const hasChildren = Boolean(isDirectory && item.children && item.children.length > 0);
+  // hl(动态 P2-10):没列全的目录即便 children 为空也要展开出「…还有更多」那一行。
+  const isTruncated = Boolean(isDirectory && item.truncated && onLoadMore);
+  const isLoadingMore = Boolean(loadingSubtrees?.has(item.path));
   const isRenaming = renamingItem?.path === item.path;
 
   /**
@@ -159,7 +198,7 @@ function FileTreeNode({
         style={{ paddingLeft: `${level * 16 + 4}px` }}
         onClick={(e) => e.stopPropagation()}
       >
-        <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
+        <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} symlinkLabel={labels?.symlink} />
         <Input
           ref={renameInputRef}
           type="text"
@@ -178,7 +217,10 @@ function FileTreeNode({
             }, 100);
           }}
           className="h-6 flex-1 text-sm"
-          disabled={operationLoading}
+          // hl(P3 文件组):请求期间用 readOnly 而不是 disabled —— disabled 会让输入框失焦,
+          // 失焦又触发 onBlur 再确认一次;改名失败后焦点已经丢了,输入框就"卡死"在那里。
+          readOnly={operationLoading}
+          aria-busy={operationLoading}
         />
       </div>
     );
@@ -231,7 +273,7 @@ function FileTreeNode({
                 className="h-3.5 w-3.5 flex-shrink-0"
               />
             )}
-            <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
+            <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} symlinkLabel={labels?.symlink} />
             <span className={nameClassName}>{item.name}</span>
           </div>
           <div className="col-span-2 font-mono text-sm tabular-nums text-muted-foreground">
@@ -243,7 +285,7 @@ function FileTreeNode({
       ) : viewMode === 'compact' ? (
         <>
           <div className="flex min-w-0 items-center gap-1.5">
-            <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
+            <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} symlinkLabel={labels?.symlink} />
             <span className={nameClassName}>{item.name}</span>
           </div>
           <div className="ml-2 flex flex-shrink-0 items-center gap-3 text-sm text-muted-foreground">
@@ -257,7 +299,7 @@ function FileTreeNode({
         </>
       ) : (
         <>
-          <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
+          <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} symlinkLabel={labels?.symlink} />
           <span className={nameClassName}>{item.name}</span>
         </>
       )}
@@ -286,7 +328,7 @@ function FileTreeNode({
         rowContent
       )}
 
-      {isDirectory && isOpen && hasChildren && (
+      {isDirectory && isOpen && (hasChildren || isTruncated) && (
         <div className="relative">
           <span
             className="absolute bottom-0 top-0 border-l border-border"
@@ -324,8 +366,31 @@ function FileTreeNode({
               selectedPaths={selectedPaths}
               onToggleSelect={onToggleSelect}
               selectionMode={selectionMode}
+              onLoadMore={onLoadMore}
+              loadingSubtrees={loadingSubtrees}
+              labels={labels}
             />
           ))}
+          {isTruncated && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (!isLoadingMore) onLoadMore?.(item);
+              }}
+              disabled={isLoadingMore}
+              aria-busy={isLoadingMore}
+              className="flex w-full items-center gap-1.5 rounded-sm py-[3px] pr-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-70"
+              style={{ paddingLeft: `${(level + 1) * 16 + 4 + 18}px` }}
+            >
+              {isLoadingMore ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              )}
+              <span>{isLoadingMore ? (labels?.loading ?? '正在加载…') : (labels?.loadMore ?? '…还有更多,点击加载')}</span>
+            </button>
+          )}
         </div>
       )}
     </div>

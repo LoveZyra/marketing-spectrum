@@ -2,6 +2,7 @@ import { Trash2, MessageSquarePlus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { SessionRemovedInfo } from '../../utils/sessionRemoved';
+import { uiLocale } from '../../../../utils/uiLocale';
 
 type Props = {
   info: SessionRemovedInfo;
@@ -12,7 +13,7 @@ type Props = {
 
 const formatTime = (value: string): string => {
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString(uiLocale());
 };
 
 /**

@@ -156,6 +156,44 @@ const lazyResourceBackend = {
  * language switches keep displaying the previous language until the new one has
  * finished loading.
  */
+/**
+ * hl(动态 P3 首屏):**首屏只加载当前语言**。
+ *
+ * i18next 在 init 时会把 `fallbackLng` 的全部 namespace 一起拉下来 —— 默认语言是 zh-CN,
+ * 于是每个访客首屏都要多下一整套英文(108KB 源文件)。zh-CN 对 en 是完整的(有测试钉住
+ * 「每个 namespace 在每个语种下都能解析」),首屏根本用不到那套英文。
+ *
+ * 做法:init 时先不挂 fallback,只装当前语言;init 完成后**后台**把 en 拉下来,拉到了再把
+ * `fallbackLng` 挂上(LanguageUtils / Translator 持有的是同一个 options 对象,改这一处即生效),
+ * 并发一次 `loaded` 让已挂载的组件按新 fallback 重渲。当前语言就是 en 时什么都不用做。
+ *
+ * 代价:某个不完整的小语种在 en 到达前那几十毫秒里会把缺的键渲染成键路径。zh-CN 没有缺键,
+ * 而选了小语种的用户本来就要等它自己的文件 —— 两个请求几乎同时回来。
+ * `fallbackReady` 给测试与需要确定性的调用方等这一步。
+ */
+let fallbackReady = Promise.resolve();
+
+const attachFallbackLanguage = () => {
+  if (i18n.options.fallbackLng) return Promise.resolve();
+  const attach = () => {
+    i18n.options.fallbackLng = FALLBACK_LANGUAGE;
+    i18n.emit('loaded');
+  };
+  if (i18n.language === FALLBACK_LANGUAGE) {
+    attach();
+    return Promise.resolve();
+  }
+  return i18n
+    .loadLanguages(FALLBACK_LANGUAGE)
+    .catch((error) => {
+      console.error('[i18n] Failed to load fallback language:', error);
+    })
+    .then(attach);
+};
+
+/** 等 fallback 语言(en)挂好 —— 只有测试和"必须确定回退可用"的地方需要等。 */
+export const whenFallbackReady = () => fallbackReady;
+
 export const initI18n = () =>
   i18n
     .use(lazyResourceBackend)
@@ -163,7 +201,8 @@ export const initI18n = () =>
     .use(initReactI18next)
     .init({
       lng: resolveInitialLanguage(readStorage()),
-      fallbackLng: FALLBACK_LANGUAGE,
+      // 见 attachFallbackLanguage:先不挂,init 之后后台补上。
+      fallbackLng: false,
 
       debug: false,
 
@@ -200,6 +239,10 @@ export const initI18n = () =>
         lookupLocalStorage: LANGUAGE_CHOICE_STORAGE_KEY,
         caches: [],
       },
+    })
+    .then((t) => {
+      fallbackReady = attachFallbackLanguage();
+      return t;
     });
 
 i18n.on('languageChanged', (language) => {

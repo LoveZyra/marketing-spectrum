@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next';
+
 import PrismLogo from '../../../PrismLogo';
 import PrismWordmark from '../../../PrismWordmark';
 
@@ -16,10 +18,12 @@ import PrismWordmark from '../../../PrismWordmark';
  * ef 那版,对着 CHANGELOG 的 ef / ex 两条互查即可。
  */
 export default function PrismVisionPanel() {
+  // hl(P3 中英混排):版式与中文原文一字不动,只是文案走 t() —— en 界面下原来整块中文。
+  const { t } = useTranslation('chat');
   const pillars = [
-    { title: '一个入口', desc: '算法研发 · 数据分析 · 多 Agent 协作' },
-    { title: '可信执行', desc: '每轮改动可视化 · 可审计 · 可回滚' },
-    { title: '沉淀复用', desc: '团队的算法资产与方法持续积累' },
+    { key: 'entry', title: t('visionPanel.pillars.entry.title', { defaultValue: '一个入口' }), desc: t('visionPanel.pillars.entry.desc', { defaultValue: '算法研发 · 数据分析 · 多 Agent 协作' }) },
+    { key: 'trusted', title: t('visionPanel.pillars.trusted.title', { defaultValue: '可信执行' }), desc: t('visionPanel.pillars.trusted.desc', { defaultValue: '每轮改动可视化 · 可审计 · 可回滚' }) },
+    { key: 'reuse', title: t('visionPanel.pillars.reuse.title', { defaultValue: '沉淀复用' }), desc: t('visionPanel.pillars.reuse.desc', { defaultValue: '团队的算法资产与方法持续积累' }) },
   ];
 
   return (
@@ -32,12 +36,12 @@ export default function PrismVisionPanel() {
       </div>
 
       <p className="mt-4 text-[1.3rem] font-medium leading-snug text-foreground">
-        把复杂的算法与数据问题，<br className="hidden sm:block" />分解为清晰、可执行、可回溯的智能工作流
+        {t('visionPanel.headlineLead', { defaultValue: '把复杂的算法与数据问题，' })}<br className="hidden sm:block" />{t('visionPanel.headlineTail', { defaultValue: '分解为清晰、可执行、可回溯的智能工作流' })}
       </p>
 
       <div className="mt-5 space-y-2.5">
         {pillars.map((pillar) => (
-          <div key={pillar.title} className="flex gap-2.5">
+          <div key={pillar.key} className="flex gap-2.5">
             <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" aria-hidden />
             <div>
               <span className="text-sm font-medium text-foreground">{pillar.title}</span>

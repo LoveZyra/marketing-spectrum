@@ -66,12 +66,43 @@ export type AuditEvent =
   | 'project_deleted'
   | 'project_archived'
   | 'session_trash_restored'
-  | 'session_trash_purged';
+  | 'session_trash_purged'
+  /*
+   * gy:技能优化(SkillWhet)。反馈本身低频,不进裁剪豁免;其余都是 root 的动作。
+   */
+  | 'message_feedback'
+  | 'skillwhet_import'
+  | 'skillwhet_upload'
+  | 'skillwhet_remove'
+  | 'skillwhet_bootstrap'
+  | 'skillwhet_tasks_add'
+  | 'skillwhet_tasks_derive'
+  | 'skillwhet_job_start'
+  | 'skillwhet_job_cancel'
+  | 'skillwhet_adopt'
+  | 'skillwhet_publish'
+  | 'skillwhet_rollback'
+  | 'skillwhet_feedback_accept'
+  // ha:从会话挖任务 / 挖出的任务入库 / 一次性留出集评估
+  | 'skillwhet_harvest'
+  | 'skillwhet_harvest_import'
+  | 'skillwhet_release_eval'
+  | 'skillwhet_feedback_overlay'
+  // he:夜训 —— 纳入 / 移出 / 连续无收益自动暂停(调度器以系统身份记,user 为空)
+  | 'skillwhet_nightly_enroll'
+  | 'skillwhet_nightly_unenroll'
+  | 'skillwhet_nightly_autopause';
 
 /**
  * gk:这几类事件不参与"只留最新 5000 行"的常规裁剪 —— `ws_ticket_issued` 每次
  * 连 WebSocket 都记一条,几天就能把 5000 行冲满,而"上个月谁删了我的会话"正是
  * 审计日志最该答得上的问题。它们另有一个宽得多的上限(见 trim)。
+ *
+ * hj(审计 P2-4):**再加上只有 root 能触发的管理类事件。** 原来只有删除类耐久,于是任何登录用户
+ * 每换一张 WS 票写一行、限流允许 600 次/分,约 8 分钟就能把「谁驳回了谁 / 谁重置了谁的密码 /
+ * 谁发布了技能」挤出去。这里只收**普通用户刷不了**的事件(root 专属操作 + gk 的删除类):
+ * 普通用户能高频触发的(开关 API key、归档、装技能、上传副本……)留在常规那一档 ——
+ * 放进来的话,这一档就又能被刷满(第二双眼睛复核时指出过,34 分钟冲满 20000 行)。
  */
 export const DURABLE_AUDIT_EVENTS: readonly AuditEvent[] = [
   'session_deleted',
@@ -81,6 +112,21 @@ export const DURABLE_AUDIT_EVENTS: readonly AuditEvent[] = [
   'projects_bulk_deleted',
   'session_trash_restored',
   'session_trash_purged',
+  // hj:root 专属的管理类
+  'password_reset_by_admin',
+  'user_deactivated',
+  'user_activated',
+  'user_approved',
+  'user_rejected',
+  'project_owner_changed',
+  'attachment_quota_changed',
+  'skillwhet_import',
+  'skillwhet_adopt',
+  'skillwhet_publish',
+  'skillwhet_rollback',
+  'skillwhet_nightly_enroll',
+  'skillwhet_nightly_unenroll',
+  'skillwhet_nightly_autopause',
 ];
 
 export type AuditOutcome = 'success' | 'failure';
@@ -204,7 +250,9 @@ export const auditLogDb = {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         entry.userId ?? null,
-        entry.username ?? null,
+        // hj(审计 P2-3):登录失败会把**客户端提交的原始用户名**写进来,不截断的话一个 5MB 的
+        // 用户名就是一行 5MB,拖垮审计页。正常用户名 ≤ 64(注册时校验)。
+        entry.username ? String(entry.username).slice(0, 128) : null,
         entry.event,
         entry.outcome ?? 'success',
         entry.ip ?? null,
@@ -272,7 +320,7 @@ export const auditLogDb = {
   /**
    * Drops the oldest rows beyond MAX_ROWS.
    *
-   * gk:分两档。常规事件仍是"只留最新 MAX_ROWS 行";删除类事件(DURABLE_AUDIT_EVENTS)
+   * gk:分两档。常规事件仍是"只留最新 MAX_ROWS 行";删除类与 root 专属的管理类事件(DURABLE_AUDIT_EVENTS)
    * 不进这一刀,另按 MAX_DURABLE_ROWS 裁 —— 否则一周的 ws_ticket_issued 就能把
    * 上个月那条删除记录挤出去。
    */

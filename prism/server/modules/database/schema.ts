@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_used DATETIME,
     is_active BOOLEAN DEFAULT 1,
+    -- hl(动态 P3):签发这把 key 时 users.token_version 的值。退出所有设备 / 改密 /
+    -- 重置密码 / 停用都会递增 users.token_version,校验时两者不等即作废 ——
+    -- 与 JWT、WS 票据同一套失效机制。NULL = 老库里迁移前的 key(迁移会回填)。
+    token_version INTEGER,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 `;
@@ -395,6 +399,82 @@ CREATE TABLE IF NOT EXISTS session_display_log_state (
  * 没有对 `users` 建外键:用户删除时附件该怎么处理是另一件事,不该让台账写入
  * 依赖用户行还在。
  */
+/**
+ * gy:用户对助手回答的反馈 —— 👍/👎(`source='vote'`)与「调过 skill 的回合结束后
+ * 抽样问一句效果如何」的调查卡(`source='survey'`)。两者写同一张表、同一行:一人对
+ * 一条回答只有一份意见,后来的覆盖先来的。
+ *
+ * 这是技能优化(SkillWhet)的**数据源**,但它记的是"用户怎么评价这条回答",不是
+ * 优化状态 —— 哪天技能优化撤掉,这份数据照样有用,所以它进 SQLite 而优化状态不进。
+ *
+ * `message_id` 是显示日志里的 app 消息 id(assistant 正文是 `<uuid>_text`,稳定、
+ * 刷新不变);`message_uuid` 是从它反推的原生 uuid(`nativeUuidFromMessageId`),
+ * 给第三期 harvest 按转录 uuid 对上用。`verdict`:+1 好 / 0 一般 / -1 差;调查卡
+ * 「跳过」时为 NULL、`status='dismissed'`,留着算响应率,不进训练。
+ */
+export const MESSAGE_FEEDBACK_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS message_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    project_id TEXT,
+    message_id TEXT NOT NULL,
+    message_uuid TEXT,
+    user_id INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'vote',
+    verdict INTEGER,
+    status TEXT NOT NULL DEFAULT 'answered',
+    category TEXT,
+    note TEXT,
+    expected_output TEXT,
+    skill_hint TEXT,
+    task_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (message_id, user_id)
+);
+`;
+
+/**
+ * he:技能优化的**夜训计划** —— root 逐个「纳入夜训」的决定(D3:默认零纳入)。
+ *
+ * 和 `message_feedback` 一样,这是"人的决定",所以进 SQLite;训练本身的状态
+ * (作业、进度、staging、checkpoint)仍只在 SkillWhet 的 home 里。
+ *
+ * - `window_start` / `window_end`:服务器本地时间 `HH:MM`,可跨零点(22:00–06:00);
+ * - `max_cost_usd`:这个 skill 单次夜训的费用上限,NULL = 沿用 `PRISM_SKILLWHET_MAX_COST_USD`;
+ *   一晚所有 skill 合计另有 `PRISM_SKILLWHET_NIGHTLY_MAX_COST_USD`;
+ * - `config_json`:runner / 三个角色的模型等训练参数(与新建训练表单同一套键);
+ * - `min_new_tasks`:自上次夜训起新进库的可判分任务少于它就跳过;
+ * - `last_night`:最近一次被调度器处理过的那一晚(`YYYY-MM-DD`;一晚 = 当天中午到次日中午,记当天),一晚只处理一次;
+ * - `copy_id`:纳入时副本的身份(来源 | 上传者 | 导入时间)。副本被移除 / 重新上传 / 重新导入后对不上,
+ *   调度器不跑它、自动移出 —— root 批准的是那一份副本,不是这个名字;
+ * - `last_result`:`running | improved | unchanged | no_candidate | budget | skipped_no_new_tasks |
+ *   skipped_busy | deferred_budget | interrupted | cancelled | error`;
+ * - `consecutive_noop`:连续几晚跑了却没收益;到 3 自动 `enrolled=0` 并记 `auto_paused_at`。
+ */
+export const SKILLWHET_NIGHTLY_PLAN_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS skillwhet_nightly_plan (
+    skill_name TEXT PRIMARY KEY,
+    enrolled INTEGER NOT NULL DEFAULT 0,
+    window_start TEXT NOT NULL DEFAULT '02:00',
+    window_end TEXT NOT NULL DEFAULT '06:00',
+    max_cost_usd REAL,
+    rounds INTEGER NOT NULL DEFAULT 2,
+    config_json TEXT,
+    min_new_tasks INTEGER NOT NULL DEFAULT 5,
+    copy_id TEXT,
+    last_night TEXT,
+    last_run_at DATETIME,
+    last_job_id TEXT,
+    last_result TEXT,
+    last_detail TEXT,
+    consecutive_noop INTEGER NOT NULL DEFAULT 0,
+    auto_paused_at DATETIME,
+    updated_by INTEGER,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`;
+
 export const ATTACHMENTS_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -471,6 +551,10 @@ ${SESSION_TRASH_TABLE_SCHEMA_SQL}
 
 ${ATTACHMENTS_TABLE_SCHEMA_SQL}
 
+${MESSAGE_FEEDBACK_TABLE_SCHEMA_SQL}
+
+${SKILLWHET_NIGHTLY_PLAN_TABLE_SCHEMA_SQL}
+
 ${LAST_SCANNED_AT_SQL}
 
 ${APP_CONFIG_TABLE_SCHEMA_SQL}
@@ -529,6 +613,10 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_task ON scheduled_task_runs(task_id, id
 
 -- fg:用量台账的三条聚合路径。
 -- 按时间倒序翻页(总账页)、按人按时间(个人账单)、按会话(会话详情里的那一行)。
+CREATE INDEX IF NOT EXISTS idx_message_feedback_skill ON message_feedback(skill_hint, status);
+CREATE INDEX IF NOT EXISTS idx_message_feedback_session ON message_feedback(session_id);
+CREATE INDEX IF NOT EXISTS idx_message_feedback_user_skill ON message_feedback(user_id, skill_hint, updated_at);
+
 CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_records(created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_records(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_records(session_id, id DESC);

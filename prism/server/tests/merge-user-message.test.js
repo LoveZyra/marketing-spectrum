@@ -86,12 +86,8 @@ describe('mergeRefusalReason', () => {
     assert.equal(mergeRefusalReason({ ...liveRuntime, suspect: true }, 'x'), 'suspect');
   });
 
-  it('正在跑维护回合(自动压缩)→ 退回排队', () => {
-    assert.equal(mergeRefusalReason({ ...liveRuntime, turn: { internal: true } }, 'x'), 'maintenance-turn');
-  });
-
-  it('正在跑**普通**回合 → 照常合流(这正是合流要解决的场景)', () => {
-    assert.equal(mergeRefusalReason({ ...liveRuntime, turn: { internal: false } }, 'x'), null);
+  it('正在跑回合 → 照常合流(这正是合流要解决的场景;hl 起没有"维护回合"这一档)', () => {
+    assert.equal(mergeRefusalReason({ ...liveRuntime, turn: {} }, 'x'), null);
   });
 });
 

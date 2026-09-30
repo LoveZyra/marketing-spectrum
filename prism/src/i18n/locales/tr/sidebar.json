@@ -36,7 +36,10 @@
     "clearSearch": "Aramayı temizle",
     "openCommandPalette": "Komut paletini aç",
     "attentionRequiredIndicator": "Oturum ilgi bekliyor",
-    "approvalPendingIndicator": "Araç iznini onaylamanız bekleniyor"
+    "approvalPendingIndicator": "Araç iznini onaylamanız bekleniyor",
+    "hideSkillNav": "Hide skill navigation",
+    "showSkillNav": "Show skill navigation",
+    "noSidebarOnNotebook": "No project sidebar on the Notebook page"
   },
   "actions": {
     "settings": "Ayarlar",

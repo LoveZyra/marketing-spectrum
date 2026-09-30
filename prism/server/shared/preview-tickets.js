@@ -10,8 +10,8 @@
 // 7 天有效的 JWT 小得多。
 //
 // 契约(其它模块按这两个名字导入,不要改名):
-//   issuePreviewTicket({ projectId, relDir }) -> 64 位十六进制串
-//   readPreviewTicket(ticket) -> { projectId, relDir } | null
+//   issuePreviewTicket({ projectId, relDir, viewer? }) -> 64 位十六进制串
+//   readPreviewTicket(ticket) -> { projectId, relDir, viewer? } | null
 //
 // **和 WS 票据不同,这些不是一次性的**:一次预览要加载文档本身,外加它引用的
 // 每一个资源。取出即删会让第一张图之后的所有请求全部失败。
@@ -28,15 +28,24 @@ const store = createTicketStore({
 /**
  * 签发一张限定到某项目某目录的预览票据。
  *
- * @param {{ projectId: string, relDir: string }} scope
+ * @param {{ projectId: string, relDir: string, viewer?: { userId: number|string|null, username: string|null, tokenVersion?: number|null } | null }} scope
  *   `relDir` 是被预览文档所在的项目内相对目录,项目根用 ''。预览能读到的一切
  *   都在它之下。
  * @returns {string} 32 字节随机数的 64 位十六进制串
  */
-export function issuePreviewTicket({ projectId, relDir }) {
+export function issuePreviewTicket({ projectId, relDir, viewer = null }) {
   return store.issue({
     projectId: String(projectId),
     relDir: String(relDir ?? ''),
+    // hj(审计 P1-2):记下是谁、签票时的 token_version。公开口据此重跑「这个人现在还能不能用、
+    // 还能不能看这个项目」—— 原来票里只有项目和目录,5 分钟内停用 / 取消共享都拦不住。
+    ...(viewer && viewer.userId != null ? {
+      viewer: {
+        userId: viewer.userId,
+        username: typeof viewer.username === 'string' ? viewer.username : null,
+        tokenVersion: typeof viewer.tokenVersion === 'number' ? viewer.tokenVersion : null,
+      },
+    } : {}),
   });
 }
 
@@ -44,11 +53,13 @@ export function issuePreviewTicket({ projectId, relDir }) {
  * 解析一张票据。未知或已过期返回 null。
  *
  * @param {string} ticket
- * @returns {{ projectId: string, relDir: string } | null}
+ * @returns {{ projectId: string, relDir: string, viewer?: { userId: number|string|null, username: string|null, tokenVersion: number|null } } | null}
  */
 export function readPreviewTicket(ticket) {
   const payload = store.consume(ticket);
-  return payload ? { projectId: payload.projectId, relDir: payload.relDir } : null;
+  if (!payload) return null;
+  const scope = { projectId: payload.projectId, relDir: payload.relDir };
+  return payload.viewer ? { ...scope, viewer: payload.viewer } : scope;
 }
 
 /** 测试钩子:丢弃所有未过期票据。 */

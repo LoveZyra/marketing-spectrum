@@ -10,6 +10,7 @@ export { Collapsible, CollapsibleTrigger, CollapsibleContent } from './Collapsib
 export { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandSeparator } from './Command';
 export { Dialog, DialogTrigger, DialogContent, DialogTitle } from './Dialog';
 export { Input } from './Input';
+export { NumberInput } from './NumberInput';
 export { ScrollArea } from './ScrollArea';
 export { Reasoning, ReasoningTrigger, ReasoningContent, useReasoning } from './Reasoning';
 export { Shimmer } from './Shimmer';

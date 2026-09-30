@@ -242,6 +242,9 @@ export type GatewayEventKind =
    * 其中一个的过滤条件就会把另一个需要的场景挡死。
    */
   | 'session_restored'
+  // hl(动态 P2-4):项目级变更(新建 / 改名 / 权限 / 归档 / 还原 / 转移属主 / 删除)
+  | 'project_upserted'
+  | 'project_removed'
   | 'loading_progress'
   | 'protocol_error';
 
@@ -276,6 +279,12 @@ export type NormalizedMessage = {
   /** 这条事件属于哪一轮。客户端据此判断补发游标还作不作数。 */
   runId?: string;
   role?: 'user' | 'assistant';
+  /**
+   * gy:用户气泡落库时记下发起人与来源(网页 / 定时任务)。效果调查卡只弹给发起这一轮
+   * 的人,而且只对网页回合弹;历史行没有这两个字段 —— 一律当"不弹"。
+   */
+  senderUserId?: string | number;
+  origin?: 'web' | 'scheduled' | 'api';
   /**
    * 这一轮实际服务的模型(assistant 文本消息携带;取自响应元数据的 message.model)。
    * 前端在每条回答的时间戳旁显示 —— 模型的自我介绍会顺着上下文复述历史,不可信,

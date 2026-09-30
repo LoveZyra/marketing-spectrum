@@ -537,7 +537,11 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
         <div className="min-w-0 space-y-1">
           <h3 className="text-lg font-medium text-foreground">{t('tabs.skills', { defaultValue: 'Skills' })}</h3>
           <p className="text-sm text-muted-foreground">
-            Manage {providerName} skills from local files, complete folders, and project-aware locations.
+            {/* hl(P3 中英混排):中文界面下原来是一句英文。 */}
+            {t('skills.description', {
+              provider: providerName,
+              defaultValue: `管理 ${providerName} 的技能:可从本地文件、整个文件夹或项目目录添加。`,
+            })}
           </p>
         </div>
       </div>

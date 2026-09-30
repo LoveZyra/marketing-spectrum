@@ -216,25 +216,31 @@ export function useSlashCommands({
     clearCommandQueryTimer();
   }, [clearCommandQueryTimer]);
 
+  // hl(09-24 静态 P2-30):依赖只取真正用到的**原始值**。原来依赖整个 selectedProject 对象 ——
+  // 项目列表每刷新一次(会话写盘、sessions-watcher 推送)它就换一个新引用,斜杠命令与技能列表
+  // 跟着整套重拉两个接口。
+  const selectedProjectId = selectedProject?.projectId ?? null;
+  const selectedProjectWorkspacePath = selectedProject ? (selectedProject.fullPath || selectedProject.path || '') : null;
+
   useEffect(() => {
     let cancelled = false;
 
     const fetchCommands = async () => {
-      if (!selectedProject) {
+      if (selectedProjectWorkspacePath === null || !selectedProjectId) {
         setStaticCommands([]);
         setFilteredCommands([]);
         return;
       }
 
       try {
-        const workspacePath = selectedProject.fullPath || selectedProject.path || '';
+        const workspacePath = selectedProjectWorkspacePath;
         const response = await authenticatedFetch('/api/commands/list', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            projectPath: workspacePath || selectedProject.path,
+            projectPath: workspacePath,
           }),
         });
 
@@ -268,7 +274,7 @@ export function useSlashCommands({
           })),
         ];
 
-        const parsedHistory = readCommandHistory(selectedProject.projectId);
+        const parsedHistory = readCommandHistory(selectedProjectId);
         const sortedCommands = [...allCommands].sort((commandA, commandB) => {
           const commandAUsage = parsedHistory[commandA.name] || 0;
           const commandBUsage = parsedHistory[commandB.name] || 0;
@@ -290,7 +296,7 @@ export function useSlashCommands({
     return () => {
       cancelled = true;
     };
-  }, [selectedProject, provider]);
+  }, [selectedProjectId, selectedProjectWorkspacePath, provider]);
 
   // Prism: once a session is live, merge in the CLI's real slash commands
   // (from the runtime's supportedCommands()) that the static list may miss.

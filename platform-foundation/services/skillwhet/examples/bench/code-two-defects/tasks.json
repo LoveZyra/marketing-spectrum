@@ -1,0 +1,47 @@
+{
+ "format": "skillwhet.tasks.v1",
+ "tasks": [
+  {
+   "id": "tests/unit/test_extract.py::test_normalize_cell_strips_currency",
+   "intent": "strip currency",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_extract.py::test_extract_tables_splits_on_blank_line",
+   "intent": "split tables",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_extract.py::test_extract_tables_skips_comment_lines",
+   "intent": "skip comments",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_extract.py::test_normalize_cell_none_is_empty",
+   "intent": "None",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_extract.py::test_extract_tables_skips_comment_lines",
+   "intent": "skip comments",
+   "reference_kind": "rule",
+   "split": "val"
+  },
+  {
+   "id": "tests/unit/test_extract.py::test_normalize_cell_none_is_empty",
+   "intent": "None",
+   "reference_kind": "rule",
+   "split": "val"
+  },
+  {
+   "id": "tests/unit/test_extract.py::test_extract_tables_skips_trailing_comment",
+   "intent": "trailing comment (never trained on)",
+   "reference_kind": "rule",
+   "split": "test"
+  }
+ ]
+}

@@ -1,0 +1,7 @@
+{
+ "runner": "pytest",
+ "defects": [
+  "normalize_cell no longer strips currency symbols"
+ ],
+ "notes": "same seeded defect as code-currency, plus a stated CONTRACT `example` (pound sign) the baseline fails. Tests whether making the general case executable changes which patch the search selects \u2014 REVIEW \u00a79.4. The probe (euro) is still never trained on and is a different input from the contract example."
+}

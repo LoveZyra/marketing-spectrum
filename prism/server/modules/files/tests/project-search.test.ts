@@ -110,7 +110,7 @@ describe('searchProjectFiles', () => {
   test('空查询直接返回空,不去起进程', async () => {
     const root = await seedRepo();
     const result = await searchProjectFiles(root, '   ');
-    assert.deepEqual(result, { matches: [], truncated: false, error: null });
+    assert.deepEqual(result, { matches: [], truncated: false, skippedLargeFiles: 0, error: null });
   });
 
   test('无命中不是错误', async () => {

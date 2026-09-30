@@ -1083,6 +1083,9 @@ async function handleChatSend(
             kind: 'text',
             role: 'user',
             content: rawContent,
+            // gy:谁发起的这一轮 + 来源。效果调查卡只弹给发起人,定时任务 / API 的回合不弹。
+            senderUserId: authUserId ?? undefined,
+            origin: 'web',
           } as Parameters<typeof sessionMessagesDb.append>[1]);
         }
         /**
@@ -1200,6 +1203,9 @@ async function handleChatSend(
       role: 'user',
       content: command,
       ...(Array.isArray(sanitizedImages) && sanitizedImages.length > 0 ? { images: sanitizedImages } : {}),
+      // gy:同上 —— 发起人与来源,调查卡的两道闸靠它。
+      senderUserId: authUserId ?? undefined,
+      origin: 'web',
     } as Parameters<typeof sessionMessagesDb.append>[1]);
   }
 

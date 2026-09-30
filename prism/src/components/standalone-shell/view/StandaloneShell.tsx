@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { Project, ProjectSession } from '../../../types/app';
 import Shell from '../../shell/view/Shell';
+import { currentNavigationType, decideShellTabPrefix } from '../utils/shellTabPrefix';
 
 import StandaloneShellEmptyState from './subcomponents/StandaloneShellEmptyState';
 import StandaloneShellHeader from './subcomponents/StandaloneShellHeader';
@@ -26,6 +27,40 @@ type StandaloneShellProps = {
 
 /** 终端标签上限。开到第七个通常意味着人想要的是别的东西(比如后台任务)。 */
 const MAX_SHELL_TABS = 6;
+
+/**
+ * hl(动态 P2-2):**每个浏览器标签页一个随机前缀,终端 id 不再全站固定 `t1`。**
+ *
+ * 服务端 PTY 的复用键是 `用户 + 项目 + 会话 + terminalId`。两个浏览器标签页在同一
+ * 项目开终端,都叫 `t1` → 命中同一个 PTY,服务端把输出重定向到后来的那条连接
+ * (`existingSession.ws = ws`),第一个标签页无声失明,A 敲的命令回显在 B。
+ *
+ * 前缀存 sessionStorage:同一标签页刷新不变(还能连回自己的 PTY),新标签页
+ * 各不相同。拿不到 sessionStorage(隐私模式 / 被禁)就每次随机 —— 代价只是
+ * 刷新后接不回旧 PTY,比两个标签页串线好。
+ */
+const SHELL_TAB_PREFIX_KEY = 'prism.shell.tabPrefix';
+/** 本次页面加载的前缀 —— 同一次加载里只算一次(之后每次调用都返回它)。 */
+let pageLoadPrefix: string | null = null;
+function browserTabPrefix(): string {
+  if (pageLoadPrefix) return pageLoadPrefix;
+  const make = () => Math.random().toString(36).slice(2, 8);
+  let stored: string | null = null;
+  try {
+    stored = window.sessionStorage.getItem(SHELL_TAB_PREFIX_KEY);
+  } catch {
+    /* 拿不到 sessionStorage:下面照样生成 */
+  }
+  // hl 复核 P2-3:只有刷新本页才沿用;「复制标签页」连 sessionStorage 一起复制,不能沿用。
+  const { prefix } = decideShellTabPrefix(currentNavigationType(), stored, make);
+  try {
+    window.sessionStorage.setItem(SHELL_TAB_PREFIX_KEY, prefix);
+  } catch {
+    /* 同上 */
+  }
+  pageLoadPrefix = prefix;
+  return prefix;
+}
 
 export default function StandaloneShell({
   project = null,
@@ -54,8 +89,12 @@ export default function StandaloneShell({
    * (登录、setup-token),给它们加标签条既没意义又会把布局挤乱。
    */
   const supportsTabs = !minimal && command === null;
-  const [tabs, setTabs] = useState<ShellTab[]>([{ id: 't1', label: t('shellTabs.label', { index: 1, defaultValue: '终端 1' }) }]);
-  const [activeTabId, setActiveTabId] = useState('t1');
+  // 标签 id = 浏览器标签页前缀 + 序号(见 browserTabPrefix);只含字母数字与连字符,
+  // 服务端 terminalId 的白名单就是这三样。
+  const tabPrefixRef = useRef<string | null>(null);
+  if (tabPrefixRef.current === null) tabPrefixRef.current = browserTabPrefix();
+  const [tabs, setTabs] = useState<ShellTab[]>(() => [{ id: `${tabPrefixRef.current}-t1`, label: t('shellTabs.label', { index: 1, defaultValue: '终端 1' }) }]);
+  const [activeTabId, setActiveTabId] = useState(() => `${tabPrefixRef.current}-t1`);
   const nextTabIdRef = useRef(2);
 
   /**
@@ -67,7 +106,7 @@ export default function StandaloneShell({
    */
   const addTab = useCallback(() => {
     if (tabs.length >= MAX_SHELL_TABS) return;
-    const id = `t${nextTabIdRef.current}`;
+    const id = `${tabPrefixRef.current}-t${nextTabIdRef.current}`;
     nextTabIdRef.current += 1;
     setTabs([...tabs, { id, label: t('shellTabs.label', { index: tabs.length + 1, defaultValue: `终端 ${tabs.length + 1}` }) }]);
     setActiveTabId(id);

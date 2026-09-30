@@ -37,10 +37,10 @@
     "send": "Senden",
     "stop": "Stoppen",
     "hintText": {
-      "ctrlEnter": "Strg+Enter zum Senden • Shift+Enter für neue Zeile • Tab zum Moduswechsel • / für Slash-Befehle",
-      "enter": "Enter zum Senden • Shift+Enter für neue Zeile • Tab zum Moduswechsel • / für Slash-Befehle"
+      "ctrlEnter": "Strg+Enter zum Senden • Shift+Enter für neue Zeile • Shift+Tab zum Moduswechsel • / für Slash-Befehle",
+      "enter": "Enter zum Senden • Shift+Enter für neue Zeile • Shift+Tab zum Moduswechsel • / für Slash-Befehle"
     },
-    "clickToChangeMode": "Klicken, um den Berechtigungsmodus zu ändern (oder Tab in der Eingabe drücken)",
+    "clickToChangeMode": "Klicken, um den Berechtigungsmodus zu ändern (oder Shift+Tab in der Eingabe drücken)",
     "showAllCommands": "Alle Befehle anzeigen",
     "scrollToBottom": "Nach unten scrollen",
     "attachmentPath": "Pfad",

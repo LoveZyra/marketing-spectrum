@@ -9,7 +9,8 @@
     "files": "文件",
     "notebook": "Notebook",
     "tasks": "定时任务",
-    "projects": "项目"
+    "projects": "项目",
+    "skillwhet": "技能优化"
   },
   "status": {
     "completed": "已完成"
@@ -41,7 +42,9 @@
     "persistentOnFailed": "暂时挂不上常驻运行时（可能是常驻池已满或本轮正忙）",
     "persistentOffDone": "已释放常驻运行时，下一轮会重建进程",
     "persistentOffBusy": "这一轮还在跑，跑完再释放",
-    "persistentFailed": "常驻开关没生效，请重试"
+    "persistentFailed": "常驻开关没生效，请重试",
+    "openMenu": "打开菜单",
+    "projectRemovedNotice": "这个项目已被归档、删除,或你已不再能访问它。当前对话仅供查看,后续操作可能失败。"
   },
   "fileTree": {
     "loading": "正在加载文件...",
@@ -94,9 +97,9 @@
       "folderCreated": "文件夹已创建",
       "folderDeleted": "文件夹已删除",
       "renamed": "已重命名",
-      "downloadPreparing": "正在准备「{{name}}」,好了浏览器会弹出保存框…"
+      "downloadPreparing": "已开始打包「{{name}}」,进度与结果请看浏览器下载栏"
     },
-    "truncatedNotice": "目录条目过多,仅显示部分内容。可进入子目录查看更多。",
+    "truncatedNotice": "目录条目过多,只显示了一部分。没列全的文件夹展开后有「…还有更多」,点击即可加载。",
     "selectionMode": "多选",
     "selectedCount": "已选 {{count}} 项",
     "batchDownload": "批量下载",
@@ -117,13 +120,16 @@
       "noMatches": "没有找到匹配内容",
       "tooShort": "搜索内容至少 2 个字符",
       "summary": "{{matches}} 处命中 · {{files}} 个文件",
-      "truncated": "已达上限,结果被截断"
+      "truncated": "已达上限,结果被截断",
+      "skippedLarge": "有 {{skipped}} 个文件因体积过大未参与搜索"
     },
     "delete": {
       "confirm": "删除",
       "fileWarning": "这个文件将被永久删除。",
       "folderWarning": "这个文件夹及其全部内容将被永久删除。",
-      "title": "删除{{type}}"
+      "title": "删除{{type}}",
+      "typeFolder": "文件夹",
+      "typeFile": "文件"
     },
     "download": {
       "unauthorized": "登录已失效,请重新登录后再下载「{{name}}」",
@@ -141,9 +147,54 @@
       "emptyName": "文件名不能为空",
       "invalidChars": "文件名里有不允许的字符",
       "reserved": "这是系统保留的文件名"
+    },
+    "loadMore": "…还有更多,点击加载",
+    "loadingMore": "正在加载…",
+    "symlink": "符号链接",
+    "loadMoreFailed": "加载失败",
+    "upload": {
+      "fileTooLarge": "「{{name}}」超过单文件上限 {{limit}}",
+      "totalTooLarge": "这批文件共 {{total}},一次上传最多 {{limit}}",
+      "partial": "已上传 {{uploaded}} / {{total}} 个文件",
+      "success": "已上传 {{uploaded}} 个文件",
+      "overwritten": "已覆盖同名文件:{{names}}",
+      "overwrittenMany": "已覆盖同名文件:{{names}},另有 {{rest}} 个",
+      "overwriteConfirm": "目标目录里已有 {{count}} 个同名文件,上传会覆盖它们:\n{{names}}\n\n确定覆盖吗?",
+      "noProject": "请先选择一个项目再上传",
+      "readDropFailed": "无法读取拖入的文件"
+    },
+    "serverErrors": {
+      "directoryExists": "同名文件夹已存在",
+      "fileExists": "同名文件已存在",
+      "nameExists": "已存在同名的文件或文件夹",
+      "notFound": "文件或文件夹不存在(可能已被删除或改名)",
+      "fileNotFound": "文件不存在",
+      "permissionDenied": "没有权限执行这个操作",
+      "projectNotFound": "项目不存在或你没有访问权限",
+      "parentNotFound": "上级文件夹不存在",
+      "notEmpty": "文件夹不是空的",
+      "cannotDeleteRoot": "不能删除项目根目录",
+      "crossDevice": "不能跨文件系统移动",
+      "invalidPath": "文件路径无效",
+      "notDirectory": "这个路径不是文件夹",
+      "unsupportedType": "不支持的文件类型",
+      "noFiles": "没有选择任何文件",
+      "tooManyFiles": "一次上传的文件太多",
+      "fileTooLarge": "文件太大,超过单文件上限",
+      "uploadTooLarge": "这批文件总量超过上限",
+      "uploadExpired": "上传会话已过期,请重新上传",
+      "uploadIncomplete": "上传不完整(有分片丢失),已作废,请重试",
+      "renameFailed": "重命名失败",
+      "deleteFailed": "删除失败",
+      "createFailed": "创建失败",
+      "uploadNetwork": "上传失败,请检查网络后重试",
+      "uploadCanceled": "上传已取消",
+      "unknown": "操作失败"
     }
   },
   "projectWizard": {
+    "revivedTitle": "已还原一个归档的项目",
+    "revivedHint": "这个路径之前已有项目并被归档；现在按你选择的可见性还原了它，旧会话一并回来。",
     "title": "创建新项目",
     "steps": {
       "configure": "配置",
@@ -181,14 +232,27 @@
     },
     "errors": {
       "providePath": "请提供工作区路径",
-      "failedToCreate": "创建工作区失败"
+      "failedToCreate": "创建工作区失败",
+      "codes": {
+        "PROJECT_PATH_REQUIRED": "请填写项目路径",
+        "INVALID_PROJECT_PATH": "项目路径无效,或不在允许的工作区范围内",
+        "PROJECT_PATH_NOT_DIRECTORY": "这个路径已存在,但不是文件夹",
+        "PROJECT_ALREADY_EXISTS": "这个路径已经是一个项目了",
+        "INVALID_PROJECT_VISIBILITY": "可见性设置无效",
+        "INVALID_TEMPLATE_ID": "模板名不合法",
+        "TEMPLATE_NOT_FOUND": "模板不存在",
+        "TEMPLATE_HAS_SYMLINK": "模板里含有符号链接,已拒绝",
+        "TEMPLATE_TOO_MANY_FILES": "模板文件太多",
+        "TEMPLATE_TOO_LARGE": "模板太大"
+      }
     },
     "template": {
       "label": "从模板创建",
       "none": "不使用模板(空目录)",
       "help": "模板会把一棵现成的目录树复制进新项目(CLAUDE.md、目录结构等)。目标目录里已存在的同名文件不会被覆盖。",
       "stats": "{{count}} 个文件 · {{size}}"
-    }
+    },
+    "close": "关闭"
   },
   "notifications": {
     "codes": {
@@ -259,7 +323,12 @@
     "goToShell": "前往终端",
     "settingsPrefix": "设置：{{label}}",
     "browseAllSessions": "浏览全部会话（{{count}}）",
-    "browseAllFiles": "浏览全部文件（{{count}}）"
+    "browseAllFiles": "浏览全部文件（{{count}}）",
+    "footer": {
+      "navigate": "↑↓ 选择",
+      "open": "↵ 打开",
+      "close": "esc 关闭"
+    }
   },
   "reasoning": {
     "thinking": "思考中…",
@@ -285,7 +354,9 @@
     "select": "选择"
   },
   "imageViewer": {
-    "loading": "图片加载中…"
+    "loading": "图片加载中…",
+    "loadFailed": "图片加载失败",
+    "cannotDisplay": "无法显示:这个文件不是有效的图片,或已损坏"
   },
   "tasksPage": {
     "title": "定时任务",
@@ -348,6 +419,7 @@
       "frequency": "频率",
       "time": "时刻",
       "manualHint": "只在点「立即运行」时执行",
+      "serverTzHint": "按服务器时区 {{tz}} 理解,服务器现在 {{local}}",
       "sessionMode": "会话",
       "sessionFixed": "固定会话（历史连续，推荐）",
       "sessionNew": "每次新建会话",

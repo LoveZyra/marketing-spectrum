@@ -20,6 +20,7 @@ import { redactMcpSecretsInList, shouldRedactScope } from '@/modules/providers/s
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
+import { resolveFeedbackTarget } from '@/modules/providers/services/feedback-target.service.js';
 import { assertViewerMayCreateSessionAt } from '@/modules/providers/services/session-project-path-guard.service.js';
 import { sessionsService, type SessionActor } from '@/modules/providers/services/sessions.service.js';
 import { clientIp } from '@/shared/client-ip.js';
@@ -33,7 +34,8 @@ import type {
   ProviderSkillCreateInput,
   UpsertProviderMcpServerInput,
 } from '@/shared/types.js';
-import { auditLogDb, sessionsDb } from '@/modules/database/index.js';
+import { auditLogDb, messageFeedbackDb, projectsDb, sessionMessagesDb, sessionsDb, uiSettingsDb } from '@/modules/database/index.js';
+import { collectSkillSurveyCandidates, decideSkillSurveys, readSurveyConfig } from '@/modules/providers/services/skill-survey.service.js';
 import {
   renderSessionExport,
   type ExportableMessage,
@@ -593,6 +595,11 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const provider = parseProvider(req.params.provider);
     const workspacePath = readOptionalQueryString(req.query.workspacePath);
+    // hl(09-24 P2-16):带 workspacePath 时与 MCP 同门(路径合法 + 项目可见)—— 此前能列任意目录下
+    // `.claude/skills` 的名称 / 描述 / 路径。不带时只列全局技能库,不需要项目归属。
+    if (workspacePath) {
+      await assertViewerMayCreateSessionAt(readRequestViewer(req), workspacePath);
+    }
     const skills = await providerSkillsService.listProviderSkills(provider, { workspacePath });
     res.json(createApiSuccessResponse({ provider, skills }));
   }),
@@ -1007,8 +1014,9 @@ router.delete(
     const viewer = readRequestViewer(req);
     sessionsService.assertViewerCanSeeSession(sessionId, viewer);
     const force = parseOptionalBooleanQuery(req.query.force, 'force') ?? false;
-    // gk:永久删除只给 root / 项目 owner;归档仍是看得见就能做。
+    // gk:永久删除只给 root / 项目 owner;hl(动态 P2-6):归档同门(多一维会话发起人)。
     if (force) sessionsService.assertViewerMayPermanentlyDelete(sessionId, viewer);
+    else sessionsService.assertViewerMayArchiveOrRestore(sessionId, viewer, 'archive');
     const deletedFromDisk = parseOptionalBooleanQuery(req.query.deletedFromDisk, 'deletedFromDisk') ?? force;
     const result = await sessionsService.deleteOrArchiveSessionById(sessionId, {
       force,
@@ -1024,7 +1032,8 @@ router.post(
   '/sessions/:sessionId/restore',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
-    sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
+    // hl(动态 P2-6):还原与归档同门。
+    sessionsService.assertViewerMayArchiveOrRestore(sessionId, readRequestViewer(req), 'restore');
     const result = sessionsService.restoreSessionById(sessionId);
     res.json(createApiSuccessResponse(result));
   }),
@@ -1169,7 +1178,170 @@ router.get(
     // 那张产出卡直接读它 —— 由服务端从全量日志算好、随会话一次到达,不再由前端
     // 从"当前加载到的窗口"现推(那会随历史补齐而变)。
     const { frames, revertedPaths, truncated, turnOutputs } = await sessionsService.fetchWorkFrames(sessionId);
-    res.json(createApiSuccessResponse({ frames, revertedPaths, turnOutputs, truncated: truncated === true }));
+    // gy:调过 skill 的回合结束后的「效果如何」卡 —— 由服务端按显示日志算,不存"已弹出"状态;
+    // 刷新、换设备结果一致。前端每回合结束都会重取这个接口,所以不需要单独的实时帧。
+    const skillSurveys = await computeSkillSurveys(sessionId, req);
+    res.json(createApiSuccessResponse({ frames, revertedPaths, turnOutputs, truncated: truncated === true, skillSurveys }));
+  }),
+);
+
+/** gy:从账号同步的界面偏好里读「技能效果询问」开关;读不到一律当开着。 */
+export function readSkillSurveyEnabled(settings: Record<string, unknown> | null | undefined): boolean {
+  const values = (settings as { values?: Record<string, unknown> } | null | undefined)?.values;
+  const raw = values?.uiPreferences;
+  if (typeof raw !== 'string') return true;
+  try {
+    const parsed = JSON.parse(raw) as { skillSurveyEnabled?: unknown };
+    return parsed?.skillSurveyEnabled !== false && parsed?.skillSurveyEnabled !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * gy:效果调查卡的判定入口。显示日志 → 候选(调过 Skill 且我发起的网页回合)→ 抽样与三道闸。
+ * 关掉了询问(`user_ui_settings.skillSurveyEnabled === false`)或没登录 → 空。
+ */
+async function computeSkillSurveys(sessionId: string, req: Request) {
+  const viewer = readRequestViewer(req);
+  const userId = typeof viewer.userId === 'number' ? viewer.userId : Number(viewer.userId);
+  if (!Number.isFinite(userId)) return [];
+  // 开关存在账号同步的 `uiPreferences`(localStorage 那份 JSON 串,见 utils/accountSettings.ts):
+  // `settings.values.uiPreferences` 是一段 JSON 文本,里面的 `skillSurveyEnabled === false` 才算关。
+  const enabled = readSkillSurveyEnabled(uiSettingsDb.get(userId)?.settings);
+  const { rate, cooldownMs } = readSurveyConfig();
+  if (!enabled || rate <= 0) return [];
+  const messages = sessionMessagesDb.listForSession(sessionId);
+  const candidates = collectSkillSurveyCandidates(messages, userId);
+  if (candidates.length === 0) return [];
+  const answered = new Set(messageFeedbackDb.listForSessionAndUser(sessionId, userId).map((row) => row.message_id));
+  return decideSkillSurveys(candidates, {
+    viewerUserId: userId,
+    rate,
+    cooldownMs,
+    answeredMessageIds: answered,
+    lastSurveyAt: (skill) => messageFeedbackDb.lastSurveyAt(userId, skill),
+    enabled,
+  });
+}
+
+/**
+ * gy:用户对一条回答的反馈 —— 👍/👎(vote)与效果调查卡(survey)。
+ *
+ * 可见性沿用会话可见性(看得见就能投);一人一条一票,改票 upsert。
+ * `project_id` 从会话所属项目取,按项目切数据时不必回表。
+ */
+const FEEDBACK_MESSAGE_ID = /^[A-Za-z0-9_.:-]{1,200}$/;
+const FEEDBACK_CATEGORIES = new Set(['wrong_result', 'not_as_asked', 'wrong_tool', 'too_slow', 'other']);
+
+const parseFeedbackBody = (body: unknown) => {
+  const input = (body ?? {}) as Record<string, unknown>;
+  const source = input.source === 'survey' ? 'survey' : 'vote';
+  const status = input.status === 'dismissed' ? 'dismissed' : 'answered';
+  let verdict: number | null = null;
+  if (status === 'answered') {
+    const raw = Number(input.verdict);
+    if (![1, 0, -1].includes(raw)) {
+      throw new AppError('verdict 只能是 1(好)/ 0(一般)/ -1(差)', { code: 'INVALID_VERDICT', statusCode: 400 });
+    }
+    verdict = raw;
+  }
+  const category = typeof input.category === 'string' && FEEDBACK_CATEGORIES.has(input.category) ? input.category : null;
+  const asText = (value: unknown, max: number) => (typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : null);
+  // skill_hint 之后会当目录名用(反馈 → 任务集):只认技能名的形状,不像的一律当没有
+  const asSkillName = (value: string | null) => (value && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value) && value !== '.' && value !== '..' ? value : null);
+  return {
+    source: source as 'vote' | 'survey',
+    status: status as 'answered' | 'dismissed',
+    verdict,
+    category,
+    note: asText(input.note, 2000),
+    expectedOutput: asText(input.expectedOutput ?? input.expected_output, 8000),
+    skillHint: asSkillName(asText(input.skillHint ?? input.skill_hint, 128)),
+  };
+};
+
+const projectIdForSession = (sessionId: string): string | null => {
+  const session = sessionsDb.getSessionById(sessionId);
+  const projectPath = session?.project_path?.trim();
+  if (!projectPath) return null;
+  return projectsDb.getProjectPath(projectPath)?.project_id ?? null;
+};
+
+router.get(
+  '/sessions/:sessionId/feedback',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const viewer = readRequestViewer(req);
+    sessionsService.assertViewerCanSeeSession(sessionId, viewer);
+    const userId = Number(viewer.userId);
+    const rows = Number.isFinite(userId) ? messageFeedbackDb.listForSessionAndUser(sessionId, userId) : [];
+    res.json(createApiSuccessResponse({ feedback: rows }));
+  }),
+);
+
+router.post(
+  '/sessions/:sessionId/messages/:messageId/feedback',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const messageId = String(req.params.messageId ?? '');
+    if (!FEEDBACK_MESSAGE_ID.test(messageId)) {
+      throw new AppError('Invalid messageId.', { code: 'INVALID_MESSAGE_ID', statusCode: 400 });
+    }
+    const viewer = readRequestViewer(req);
+    sessionsService.assertViewerCanSeeSession(sessionId, viewer);
+    const userId = Number(viewer.userId);
+    if (!Number.isFinite(userId)) {
+      throw new AppError('Not authenticated', { code: 'UNAUTHENTICATED', statusCode: 401 });
+    }
+    const parsed = parseFeedbackBody(req.body);
+    /*
+     * hl(09-24 P2-21):**messageId 必须是这个会话里的一条助手回答**,skill 由服务端从这一轮的
+     * Skill 工具帧反查;客户端自报的值只在服务端查不到时才用(显示日志被裁过 / 老会话)。
+     * 此前两者都不核对:能看到会话的人可以给任意技能伪造任意多条评价,污染训练数据。
+     * 显示日志为空的会话(磁盘发现的老会话)放行 —— 那类会话本来就不进训练。
+     */
+    const displayLog = sessionMessagesDb.listForSession(sessionId);
+    const target = displayLog.length > 0 ? resolveFeedbackTarget(displayLog, messageId) : null;
+    // hl 复核:日志被裁剪过(最早那批被物理删掉)时,查不到可能只是因为那条回答在被裁掉的
+    // 前半段 —— 页面是从 transcript 回放出来的,用户照样看得见、点得了 👎。这时不 404,
+    // 回落到客户端自报的 skill(与"服务端查不到才用客户端值"的口径一致)。
+    if (target && !target.found && !sessionMessagesDb.isTrimmed(sessionId)) {
+      throw new AppError('这条消息不属于该会话', { code: 'FEEDBACK_MESSAGE_NOT_IN_SESSION', statusCode: 404 });
+    }
+    const skillHint = target?.skill ?? parsed.skillHint;
+    const row = messageFeedbackDb.upsert({
+      sessionId,
+      projectId: projectIdForSession(sessionId),
+      messageId,
+      userId,
+      ...parsed,
+      skillHint,
+    });
+    const actor = readSessionActor(req);
+    auditLogDb.record({
+      userId: typeof actor.userId === 'number' ? actor.userId : Number(actor.userId) || null,
+      username: actor.username ?? null,
+      event: 'message_feedback',
+      detail: `${parsed.source} ${parsed.status}${parsed.verdict === null ? '' : ` verdict=${parsed.verdict}`}${skillHint ? ` skill=${skillHint}` : ''} session=${sessionId}`,
+    });
+    res.json(createApiSuccessResponse({ feedback: row }));
+  }),
+);
+
+router.delete(
+  '/sessions/:sessionId/messages/:messageId/feedback',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const messageId = String(req.params.messageId ?? '');
+    if (!FEEDBACK_MESSAGE_ID.test(messageId)) {
+      throw new AppError('Invalid messageId.', { code: 'INVALID_MESSAGE_ID', statusCode: 400 });
+    }
+    const viewer = readRequestViewer(req);
+    sessionsService.assertViewerCanSeeSession(sessionId, viewer);
+    const userId = Number(viewer.userId);
+    const removed = Number.isFinite(userId) ? messageFeedbackDb.remove(messageId, userId) : false;
+    res.json(createApiSuccessResponse({ removed }));
   }),
 );
 
@@ -1180,11 +1352,12 @@ router.get(
  * 换一张短命票据,再拿它连 `/search/sessions` —— JWT 不进 URL。
  */
 router.post('/search/ticket', (req: Request, res: Response) => {
-  const viewer = (req as Request & { user?: { id?: number } }).user;
+  const viewer = (req as Request & { user?: { id?: number; token_version?: number | null } }).user;
   if (viewer?.id == null) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
-  return res.json({ ticket: issueSseTicket(viewer.id) });
+  // hj:带上签发时的 token_version,消费时比对(见 sse-tickets.js)。
+  return res.json({ ticket: issueSseTicket(viewer.id, viewer.token_version ?? 0) });
 });
 
 router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) => {

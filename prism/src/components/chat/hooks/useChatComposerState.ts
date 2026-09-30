@@ -16,6 +16,8 @@ import { authenticatedFetch } from '../../../utils/api';
 import { uploadFormDataWithProgress } from '../../../utils/uploadWithProgress';
 import type { MarkSessionProcessing } from '../../../hooks/useSessionProtection';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
+import { isImeComposing, shouldCyclePermissionMode } from '../utils/composerKeys';
+import { composerText } from '../utils/composerText';
 import {
   claimQueuedMessage,
   clearQueuedMessage,
@@ -115,7 +117,7 @@ const landFileInChunks = async (
   });
   const startPayload = await started.json().catch(() => ({}));
   if (!started.ok) {
-    throw new Error(startPayload?.error || `上传没能开始(HTTP ${started.status})`);
+    throw new Error(startPayload?.error || composerText('uploadStartFailed', `上传没能开始(HTTP ${started.status})`, { status: started.status }));
   }
   const uploadId: string = startPayload.uploadId;
   const effectiveChunk = Number(startPayload.chunkBytes) || chunkBytes;
@@ -873,13 +875,13 @@ export function useChatComposerState({
           if (data.error) {
             addMessage({
               type: 'assistant',
-              content: `提醒:${data.message}`,
+              content: composerText('reminder', `提醒:${data.message}`, { message: data.message }),
               timestamp: Date.now(),
             });
           } else {
             addMessage({
               type: 'assistant',
-              content: `${data.message}\n\n路径:\`${data.path}\``,
+              content: composerText('messageWithPath', `${data.message}\n\n路径:\`${data.path}\``, { message: data.message, path: data.path }),
               timestamp: Date.now(),
             });
             if (data.exists && onFileOpen) {
@@ -913,7 +915,7 @@ export function useChatComposerState({
       if (!confirmed) {
         addMessage({
           type: 'assistant',
-          content: '命令已取消',
+          content: composerText('commandCancelled', '命令已取消'),
           timestamp: Date.now(),
         });
         return;
@@ -994,7 +996,7 @@ export function useChatComposerState({
         console.error('Error executing command:', error);
         addMessage({
           type: 'assistant',
-          content: `命令执行失败:${message}`,
+          content: composerText('commandFailed', `命令执行失败:${message}`, { message }),
           timestamp: Date.now(),
         });
       }
@@ -1130,7 +1132,7 @@ export function useChatComposerState({
         if (!file.size) {
           setImageErrors((previous) => {
             const next = new Map(previous);
-            next.set(file.name || 'Unknown file', '这个文件是空的');
+            next.set(file.name || 'Unknown file', composerText('fileEmpty', '这个文件是空的'));
             return next;
           });
           return false;
@@ -1138,7 +1140,7 @@ export function useChatComposerState({
         if (file.size > 5 * 1024 * 1024) {
           setImageErrors((previous) => {
             const next = new Map(previous);
-            next.set(file.name || 'Unknown file', '超过 5MB,图片最大 5MB');
+            next.set(file.name || 'Unknown file', composerText('imageTooLarge', '超过 5MB,图片最大 5MB'));
             return next;
           });
           return false;
@@ -1156,7 +1158,7 @@ export function useChatComposerState({
         const merged = [...previous, ...validFiles];
         if (merged.length > 5) {
           // 原来是默默 slice(0,5),多出来的图片凭空消失。
-          emitToast({ message: `最多附 5 张图片,多出的 ${merged.length - 5} 张没有附上。`, variant: 'error' });
+          emitToast({ message: composerText('tooManyImages', `最多附 5 张图片,多出的 ${merged.length - 5} 张没有附上。`, { extra: merged.length - 5 }), variant: 'error' });
         }
         return merged.slice(0, 5);
       });
@@ -1195,7 +1197,7 @@ export function useChatComposerState({
         addMessage({
           type: 'error',
           isLocalNotice: true,
-          content: `${file.name} 超过 20MB,文档解析放不下这么大的文件。`,
+          content: composerText('documentTooLarge', `${file.name} 超过 20MB,文档解析放不下这么大的文件。`, { name: file.name }),
           timestamp: new Date(),
         });
         continue;
@@ -1210,7 +1212,7 @@ export function useChatComposerState({
         );
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(payload?.error || `解析失败(HTTP ${response.status})`);
+          throw new Error(payload?.error || composerText('parseFailed', `解析失败(HTTP ${response.status})`, { status: response.status }));
         }
         if (!isStillSameSession(uploadOwner)) return;
         setAttachedDocs((previous) => [...previous, {
@@ -1235,7 +1237,7 @@ export function useChatComposerState({
           isLocalNotice: true,
           content: detail && detail !== 'Failed to fetch'
             ? detail
-            : `无法读取 ${file.name}`,
+            : composerText('readFailed', `无法读取 ${file.name}`, { name: file.name }),
           timestamp: new Date(),
         });
       } finally {
@@ -1262,7 +1264,7 @@ export function useChatComposerState({
         addMessage({
           type: 'error',
           isLocalNotice: true,
-          content: `${file.name} 超过 500MB,单个附件最多 500MB。`,
+          content: composerText('attachmentTooLarge', `${file.name} 超过 500MB,单个附件最多 500MB。`, { name: file.name }),
           timestamp: new Date(),
         });
         continue;
@@ -1319,7 +1321,7 @@ export function useChatComposerState({
         addMessage({
           type: 'error',
           isLocalNotice: true,
-          content: `${file.name} 上传失败:${error instanceof Error ? error.message : String(error)}`,
+          content: composerText('attachmentUploadFailed', `${file.name} 上传失败:${error instanceof Error ? error.message : String(error)}`, { name: file.name, error: error instanceof Error ? error.message : String(error) }),
           timestamp: new Date(),
         });
       } finally {
@@ -1360,7 +1362,7 @@ export function useChatComposerState({
       addMessage({
         type: 'error',
         isLocalNotice: true,
-        content: `抓取网页失败:${error instanceof Error ? error.message : String(error)}`,
+        content: composerText('fetchUrlFailed', `抓取网页失败:${error instanceof Error ? error.message : String(error)}`, { error: error instanceof Error ? error.message : String(error) }),
         timestamp: new Date(),
       });
     } finally {
@@ -1389,7 +1391,7 @@ export function useChatComposerState({
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.providerSessionId) {
-        throw new Error(data?.error || '无法定位分叉点');
+        throw new Error(data?.error || composerText('forkPointMissing', '无法定位分叉点'));
       }
       pendingForkRef.current = {
         // 拿分叉点走了一次网络,期间可能切了会话 —— 归属记的是**发起时**那条。
@@ -1412,7 +1414,7 @@ export function useChatComposerState({
       addMessage({
         type: 'error',
         isLocalNotice: true,
-        content: `编辑重跑失败：${error instanceof Error ? error.message : String(error)}`,
+        content: composerText('editRerunFailed', `编辑重跑失败：${error instanceof Error ? error.message : String(error)}`, { error: error instanceof Error ? error.message : String(error) }),
         timestamp: new Date(),
       });
     }
@@ -1468,7 +1470,7 @@ export function useChatComposerState({
     onDrop: acceptDroppedFiles,
     onDropRejected: (rejections) => {
       if (rejections.length === 0) return;
-      emitToast({ message: `有 ${rejections.length} 个文件没能附上。`, variant: 'error' });
+      emitToast({ message: composerText('filesRejected', `有 ${rejections.length} 个文件没能附上。`, { rejected: rejections.length }), variant: 'error' });
     },
     noClick: true,
     noKeyboard: true,
@@ -1591,7 +1593,7 @@ export function useChatComposerState({
         const body = await response.json();
         const newSessionId = body?.data?.sessionId || null;
         if (!newSessionId) {
-          return { ok: false, reason: 'error', message: '新建会话失败:服务端没有返回会话号。' };
+          return { ok: false, reason: 'error', message: composerText('newSessionNoId', '新建会话失败:服务端没有返回会话号。') };
         }
         target = withSessionId(target, newSessionId);
         establishedSessionId = newSessionId;
@@ -1603,7 +1605,7 @@ export function useChatComposerState({
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         console.error('Session creation failed:', error);
-        return { ok: false, reason: 'error', message: `新建会话失败:${message}` };
+        return { ok: false, reason: 'error', message: composerText('newSessionFailed', `新建会话失败:${message}`, { message }) };
       }
     }
 
@@ -1710,7 +1712,7 @@ export function useChatComposerState({
        * **下一条**消息发出 —— 而用户以为"文件已经给它了"。
        */
       if (parsingDocsCount > 0) {
-        emitToast({ message: '附件还在上传,等它传完再发送。', variant: 'error' });
+        emitToast({ message: composerText('attachmentsUploading', '附件还在上传,等它传完再发送。'), variant: 'error' });
         return;
       }
 
@@ -1752,7 +1754,7 @@ export function useChatComposerState({
           );
 
           if (!response.ok) {
-            throw new Error('图片上传失败');
+            throw new Error(composerText('imageUploadFailed', '图片上传失败'));
           }
 
           const result = await response.json();
@@ -1763,7 +1765,7 @@ export function useChatComposerState({
           addMessage({
             type: 'error',
             isLocalNotice: true,
-            content: `图片上传失败:${message}`,
+            content: composerText('imageUploadFailedWithReason', `图片上传失败:${message}`, { message }),
             timestamp: new Date(),
           });
           // 输入框与附件原样留着,用户改一改还能再发一次。
@@ -1927,9 +1929,9 @@ export function useChatComposerState({
         return;
       }
 
-      addMessage({ type: 'error', isLocalNotice: true, content: result.message ?? '发送失败', timestamp: new Date() });
+      addMessage({ type: 'error', isLocalNotice: true, content: result.message ?? composerText('sendFailed', '发送失败'), timestamp: new Date() });
       // 建会话失败:命令留在 outbox 里,用户可以重试(分叉点也还在命令里)。
-      enqueueCommand(dispatchable, submitSessionKey, { status: 'failed', error: result.message ?? '发送失败' });
+      enqueueCommand(dispatchable, submitSessionKey, { status: 'failed', error: result.message ?? composerText('sendFailed', '发送失败') });
     },
     [
       selectedProjectId,
@@ -2004,7 +2006,7 @@ export function useChatComposerState({
     inputValueRef.current = merged;
     const images = entry?.command.images.length ?? 0;
     emitToast({
-      message: reason + (images > 0 ? `排队时附带的 ${images} 张图片需要重新添加。` : ''),
+      message: reason + (images > 0 ? composerText('queuedImagesLost', `排队时附带的 ${images} 张图片需要重新添加。`, { images }) : ''),
       variant: 'error',
     });
   }, [setInput]);
@@ -2111,8 +2113,8 @@ export function useChatComposerState({
           // 与「编辑排队草稿」同一句提示。不说的话,用户会发出一条指着不存在的图片的消息。
           const abandonedImages = pending.command.images.length;
           emitToast({
-            message: '这条消息连续多次投递都没有得到确认,已停止自动重发 —— 正文退回了输入框,确认后再发一次。'
-              + (abandonedImages > 0 ? `排队时附带的 ${abandonedImages} 张图片需要重新添加。` : ''),
+            message: composerText('deliveryAbandoned', '这条消息连续多次投递都没有得到确认,已停止自动重发 —— 正文退回了输入框,确认后再发一次。')
+              + (abandonedImages > 0 ? composerText('queuedImagesLost', `排队时附带的 ${abandonedImages} 张图片需要重新添加。`, { images: abandonedImages }) : ''),
             variant: 'error',
           });
           return Promise.resolve();
@@ -2145,10 +2147,10 @@ export function useChatComposerState({
             setOutbox((current) => reduceOutbox(current, { type: 'retry' }));
             return;
           }
-          setOutbox((current) => reduceOutbox(current, { type: 'failed', error: result.message ?? '发送失败' }));
+          setOutbox((current) => reduceOutbox(current, { type: 'failed', error: result.message ?? composerText('sendFailed', '发送失败') }));
         }).catch((error) => {
           console.error('排队命令投递失败:', error);
-          setOutbox((current) => reduceOutbox(current, { type: 'failed', error: '发送失败' }));
+          setOutbox((current) => reduceOutbox(current, { type: 'failed', error: composerText('sendFailed', '发送失败') }));
         });
       };
 
@@ -2187,7 +2189,7 @@ export function useChatComposerState({
             projectId: selectedProjectIdRef.current,
           }));
           // 内存这条被盘上那条挤掉了 —— 正文退回输入框,别静默丢掉用户写的字。
-          returnQueuedTextToInput(pending, '另一个标签页排了新的消息 —— 这边排队的那条正文退回了输入框。');
+          returnQueuedTextToInput(pending, composerText('queueReplacedElsewhere', '另一个标签页排了新的消息 —— 这边排队的那条正文退回了输入框。'));
           outboxRef.current = next;
           setOutbox(next);
           return;
@@ -2236,7 +2238,7 @@ export function useChatComposerState({
     setInput(entry.command.text);
     inputValueRef.current = entry.command.text;
     if (entry.command.images.length > 0) {
-      emitToast({ message: '排队时附带的图片需要重新添加。' });
+      emitToast({ message: composerText('queuedImagesLostGeneric', '排队时附带的图片需要重新添加。') });
     }
     textareaRef.current?.focus();
   }, [retireQueuedCommand, setInput]);
@@ -2500,7 +2502,7 @@ export function useChatComposerState({
         if (entry) retiredClientMessageIdsRef.current.add(entry.command.clientMessageId);
         // 别的标签页把它发了 / 取消了。正文退回输入框 —— 撤掉一条用户亲手排的消息而
         // 不留下那句话,是"我明明写了"这类投诉里最说不清的一种。
-        returnQueuedTextToInput(entry, '这条排队消息已在另一个标签页被发出或取消 —— 正文退回了输入框。');
+        returnQueuedTextToInput(entry, composerText('queueHandledElsewhere', '这条排队消息已在另一个标签页被发出或取消 —— 正文退回了输入框。'));
         outboxRef.current = null;
         setOutbox(null);
         return;
@@ -2511,7 +2513,7 @@ export function useChatComposerState({
         : null;
       // 盘上换成了另一条:内存这条被挤掉了。它是这个标签页的用户刚打的,
       // 不能就这么没了(排队槽只有一个,先写的那句会被后写的覆盖)。
-      returnQueuedTextToInput(entry, '另一个标签页排了新的消息 —— 这边排队的那条正文退回了输入框。');
+      returnQueuedTextToInput(entry, composerText('queueReplacedElsewhere', '另一个标签页排了新的消息 —— 这边排队的那条正文退回了输入框。'));
       outboxRef.current = next;
       setOutbox(next);
     };
@@ -2596,7 +2598,8 @@ export function useChatComposerState({
        * (第 1859 行)和发送(第 1885 行)都带了保护。中文/日文输入法按回车
        * 确认候选时,若命令菜单恰好开着且有高亮项,那一下回车就被截胡去插入命令了。
        */
-      if (event.nativeEvent.isComposing) {
+      // hl(静态 P2-30):Safari 确认候选的那次回车 isComposing 已是 false,只剩 keyCode 229。
+      if (isImeComposing(event)) {
         return;
       }
 
@@ -2608,7 +2611,8 @@ export function useChatComposerState({
         return;
       }
 
-      if (event.key === 'Tab' && !showFileDropdown && !showCommandMenu) {
+      // hl(P3 键盘可访问性):只有 Shift+Tab 切执行模式;普通 Tab 不再被吞(原来键盘用户出不去)。
+      if (shouldCyclePermissionMode(event) && !showFileDropdown && !showCommandMenu) {
         event.preventDefault();
         cyclePermissionMode();
         return;
@@ -2621,7 +2625,7 @@ export function useChatComposerState({
         && !showCommandMenu
         && !showFileDropdown
         && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey
-        && !event.nativeEvent.isComposing
+        && !isImeComposing(event)
       ) {
         const direction = event.key === 'ArrowUp' ? 'back' : 'forward';
         const step = stepHistoryWalk(
@@ -2647,7 +2651,7 @@ export function useChatComposerState({
       }
 
       if (event.key === 'Enter') {
-        if (event.nativeEvent.isComposing) {
+        if (isImeComposing(event)) {
           return;
         }
 
@@ -2730,7 +2734,7 @@ export function useChatComposerState({
         // A 组:图片**不退回输入框** —— 它们在提交时就已经上传了,而输入框那侧
         // 是 `File[]`,原文件拿不回来。说一声比装作还挂着诚实。
         if (queuedImageCount > 0) {
-          emitToast({ message: '排队时附带的图片需要重新添加。' });
+          emitToast({ message: composerText('queuedImagesLostGeneric', '排队时附带的图片需要重新添加。') });
         }
         textareaRef.current?.focus();
       } else {
@@ -2826,7 +2830,7 @@ export function useChatComposerState({
         addMessage({
           type: 'error',
           isLocalNotice: true,
-          content: '连接已断开,授权未发送成功,请在恢复连接后重试。',
+          content: composerText('permissionNotSent', '连接已断开,授权未发送成功,请在恢复连接后重试。'),
           timestamp: new Date(),
         });
       }
@@ -2855,7 +2859,7 @@ export function useChatComposerState({
     // dn-B3:输入框里有未发送的字时不覆盖 —— 提示一句,让用户自己处理。
     // 静默吃掉正在打的内容,比"重试没反应"糟得多。
     if (inputValueRef.current.trim()) {
-      emitToast({ message: '输入框里有未发送的内容 —— 先发送或清空它,再点重试。', variant: 'error' });
+      emitToast({ message: composerText('retryBlockedByDraft', '输入框里有未发送的内容 —— 先发送或清空它,再点重试。'), variant: 'error' });
       return;
     }
     setInput(content);

@@ -69,7 +69,8 @@ describe('ee:最大化时项目侧栏也收起(源码守门)', () => {
     const main = read('../../main-content/view/MainContent.tsx');
     expect(main).toMatch(/onEditorMaximizedChange\?\.\(editorExpanded\)/);
     const app = read('../../app/AppContent.tsx');
-    expect(app).toMatch(/const isSidebarCollapsed = !isMobile && \(!uiPreferences\.sidebarVisible \|\| editorMaximized\)/);
+    // hl:「此处侧栏是否展开」改由 sidebarOpenHere 表达(聊天页走偏好、其他页走不落盘的本地状态)。
+    expect(app).toMatch(/const isSidebarCollapsed = !isMobile && \(!sidebarOpenHere \|\| editorMaximized\s*\|\| activeTab === 'skillwhet' \|\| activeTab === 'notebook'\)/);
     expect(app).toMatch(/onEditorMaximizedChange=\{setEditorMaximized\}/);
     // 不能走 setPreference:那会把用户自己的侧栏开合状态覆盖掉
     expect(app).not.toMatch(/setPreference\('sidebarVisible', !?editorMaximized/);

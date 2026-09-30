@@ -71,6 +71,22 @@ describe('SDK 选项的写入位置', () => {
     assert.equal(ownerOf('settings?: string | Settings;'), 'Options');
   });
 
+  test('hl(09-24 P2-17):一次性路径(mapCliOptionsToSDK)也吃自动压缩旋钮', () => {
+    // 旋钮抽成了 applyCompactSettings,两条路径都要调它;此前只有常驻路径有,
+    // 定时任务 / Agent API / 常驻失败回退全走 CLI 默认。
+    const oneShot = codeOnly.slice(
+      codeOnly.indexOf('function mapCliOptionsToSDK('),
+      codeOnly.indexOf('function addSession('),
+    );
+    assert.match(oneShot, /applyCompactSettings\(sdkOptions\)/, '一次性路径没有套自动压缩旋钮');
+    const persistent = codeOnly.slice(
+      codeOnly.indexOf('function buildPersistentSdkOptions('),
+      codeOnly.indexOf('async function readPersistentRuntime('),
+    );
+    assert.match(persistent, /applyCompactSettings\(sdkOptions\)/, '常驻路径没有套自动压缩旋钮');
+    assert.equal((codeOnly.match(/const compactSettings = \{\}/g) ?? []).length, 1, '旋钮逻辑只许有一份');
+  });
+
   test('settings 是路径字符串时不硬覆盖,只警告', () => {
     const block = codeOnly.slice(codeOnly.indexOf('const compactSettings'));
     assert.match(block.slice(0, 900), /typeof sdkOptions\.settings === 'string'/);

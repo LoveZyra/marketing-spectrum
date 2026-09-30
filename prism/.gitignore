@@ -42,6 +42,8 @@ logs/
 
 # Runtime data
 pids
+# prism.sh 守护循环的 pid / stop 标记 / 重启计数
+/.run/
 *.pid
 *.seed
 *.pid.lock

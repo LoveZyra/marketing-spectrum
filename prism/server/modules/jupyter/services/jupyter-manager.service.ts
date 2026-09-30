@@ -324,7 +324,20 @@ export function stopJupyter(): void {
 
 const entryTickets = createTicketStore({ ttlMs: ENTRY_TICKET_TTL_MS });
 
-const sessions = new Map<string, { expiresAt: number }>();
+const sessions = new Map<string, { expiresAt: number; userId: string | number | null; tokenVersion: number | null }>();
+
+/**
+ * hj(审计 P1-2):会话 cookie **绑到签票的人**,每次校验都问一句「这个人现在还能用吗」。
+ *
+ * 原来 cookie 不记是谁:账号被停用 / 驳回 / 退出所有设备之后,这个 cookie 仍按 12 小时滑动
+ * 续期一直有效 —— JupyterLab 自带终端,等于这个人还握着一个 shell。判定函数由路由层注入
+ * (那一层才碰得到用户表),这个文件保持不依赖数据库;没注入时(单测)不做这一步。
+ */
+let accountStillUsable: ((userId: string | number | null, tokenVersion: number | null) => boolean) | null = null;
+
+export function setJupyterAccountCheck(check: typeof accountStillUsable): void {
+  accountStillUsable = check;
+}
 
 function sweepSessions(): void {
   const now = Date.now();
@@ -334,8 +347,8 @@ function sweepSessions(): void {
 }
 
 /** 铸一张 iframe 入口票(调用方必须已过 Prism JWT 鉴权)。 */
-export function issueJupyterEntryTicket(userId: string | number): string {
-  return entryTickets.issue({ userId });
+export function issueJupyterEntryTicket(userId: string | number, tokenVersion: number | null = null): string {
+  return entryTickets.issue({ userId, tokenVersion });
 }
 
 /** 消费入口票,换一个会话 cookie 值。无效返回 null。 */
@@ -344,7 +357,11 @@ export function redeemJupyterEntryTicket(ticket: unknown): string | null {
   if (!payload) return null;
   sweepSessions();
   const id = crypto.randomBytes(32).toString('hex');
-  sessions.set(id, { expiresAt: Date.now() + SESSION_TTL_MS });
+  sessions.set(id, {
+    expiresAt: Date.now() + SESSION_TTL_MS,
+    userId: (payload.userId as string | number | undefined) ?? null,
+    tokenVersion: typeof payload.tokenVersion === 'number' ? payload.tokenVersion : null,
+  });
   return id;
 }
 
@@ -354,6 +371,10 @@ export function isJupyterSessionValid(sessionId: string | null): boolean {
   const entry = sessions.get(sessionId);
   if (!entry) return false;
   if (entry.expiresAt <= Date.now()) {
+    sessions.delete(sessionId);
+    return false;
+  }
+  if (accountStillUsable && !accountStillUsable(entry.userId, entry.tokenVersion)) {
     sessions.delete(sessionId);
     return false;
   }

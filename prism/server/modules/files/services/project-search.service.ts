@@ -17,6 +17,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
+import { EDITOR_MAX_BYTES } from '@/modules/files/services/text-sniff.js';
 import { RIPGREP_MISSING_MESSAGE, resolveRipgrepPath } from '@/shared/ripgrep-path.js';
 
 export type SearchMatch = {
@@ -32,6 +33,11 @@ export type SearchResult = {
   matches: SearchMatch[];
   /** 命中数超过上限被截断。 */
   truncated: boolean;
+  /**
+   * hl(P3 文件组):因超过单文件大小上限而**没搜**的文件数。以前静默跳过 >2MB 的文件,
+   * 而编辑器能打开 5MB —— 用户在编辑器里看得见的字,搜索却说「没有」。
+   */
+  skippedLargeFiles: number;
   /** 搜索本身失败(超时/rg 起不来),此时 matches 为空。 */
   error: string | null;
 };
@@ -85,7 +91,7 @@ export async function searchProjectFiles(
   options: SearchOptions = {},
 ): Promise<SearchResult> {
   const pattern = query.trim();
-  if (!pattern) return { matches: [], truncated: false, error: null };
+  if (!pattern) return { matches: [], truncated: false, skippedLargeFiles: 0, error: null };
 
   const maxMatches = Math.min(Math.max(1, options.maxMatches ?? DEFAULT_MAX_MATCHES), 1000);
   const timeoutMs = Math.min(Math.max(1000, options.timeoutMs ?? DEFAULT_TIMEOUT_MS), 60_000);
@@ -96,7 +102,12 @@ export async function searchProjectFiles(
     '--hidden',              // 隐藏文件也搜(.env.example 这类经常正是要找的)
     '--glob', '!.git/*',     // 但 .git 里面永远不是用户要找的
     '--max-count', String(maxMatches),
-    '--max-filesize', '2M',  // 单文件上限:锁文件、打包产物搜进去只有噪音
+    // 单文件上限与编辑器能打开的大小对齐(锁文件、打包产物搜进去只有噪音,但编辑器里
+    // 看得见的内容搜索也必须找得到)。
+    '--max-filesize', String(EDITOR_MAX_BYTES),
+    // 只为数出因体积被跳过的文件:ripgrep 没有别的口子报这个数,debug 日志里每个被跳过
+    // 的文件恰好一行 `ignoring <path>: <n> bytes`。其余 debug 行很少(二十来行)。
+    '--debug',
   ];
   if (!options.caseSensitive) args.push('--ignore-case');
   if (!options.regex) args.push('--fixed-strings');
@@ -114,7 +125,9 @@ export async function searchProjectFiles(
 
     const matches: SearchMatch[] = [];
     let truncated = false;
+    let skippedLargeFiles = 0;
     let buffer = '';
+    let stderrBuffer = '';
     let settled = false;
 
     const finish = (error: string | null) => {
@@ -122,8 +135,20 @@ export async function searchProjectFiles(
       settled = true;
       clearTimeout(timer);
       try { rg.kill(); } catch { /* 已经退了 */ }
-      resolve({ matches, truncated, error });
+      resolve({ matches, truncated, skippedLargeFiles, error });
     };
+
+    // stderr 必须有人读:开了 --debug 之后不读会把管道撑满、rg 卡住直到超时。
+    rg.stderr.on('data', (chunk: Buffer) => {
+      stderrBuffer += chunk.toString('utf8');
+      let newline = stderrBuffer.indexOf('\n');
+      while (newline >= 0) {
+        const line = stderrBuffer.slice(0, newline);
+        stderrBuffer = stderrBuffer.slice(newline + 1);
+        newline = stderrBuffer.indexOf('\n');
+        if (/ignoring .*: \d+ bytes$/.test(line)) skippedLargeFiles += 1;
+      }
+    });
 
     const timer = setTimeout(() => {
       // 超时不是"没找到" —— 如实说,否则用户会以为项目里真的没有。

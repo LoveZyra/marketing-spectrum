@@ -9,7 +9,9 @@
     "projects": "projects",
     "noMatchingProjects": "No matching projects",
     "tryDifferentSearch": "Try adjusting your search term",
-    "runClaudeCli": "Run Claude CLI in a project directory to get started"
+    "runClaudeCli": "Run Claude CLI in a project directory to get started",
+    "sessionCount": "{{sessions}} sessions",
+    "sessionCountOne": "{{sessions}} session"
   },
   "app": {
     "title": "Prism"
@@ -46,7 +48,10 @@
     "exportSessionFailed": "Failed to export session. Please retry.",
     "selectProjects": "Select projects",
     "exitSelection": "Exit selection",
-    "deleteSessionOptions": "Archive or permanently delete this session"
+    "deleteSessionOptions": "Archive or permanently delete this session",
+    "hideSkillNav": "Hide skill navigation",
+    "showSkillNav": "Show skill navigation",
+    "noSidebarOnNotebook": "No project sidebar on the Notebook page"
   },
   "actions": {
     "settings": "Settings",

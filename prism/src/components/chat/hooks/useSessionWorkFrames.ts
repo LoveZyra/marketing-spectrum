@@ -29,12 +29,15 @@ export type SessionWorkFramesState = {
    * "更早的记录未载入",而不是装作这就是全部。
    */
   truncated: boolean;
+  /** gy:服务端抽中的「效果如何」卡:助手回答 id → 本轮调用的 skill。 */
+  skillSurveys: ReadonlyMap<string, string>;
   /** 手动重拉基线(回滚/还原成功后调,拿到含反向帧的新快照)。 */
   refresh: () => void;
 };
 
 const EMPTY_PATHS: ReadonlySet<string> = new Set();
 const EMPTY_TURN_OUTPUTS: Record<string, ServerTurnOutputFile[]> = {};
+const EMPTY_SURVEYS: ReadonlyMap<string, string> = new Map();
 
 /**
  * dq/dt:工作面板的服务端基线。
@@ -48,6 +51,7 @@ export function useSessionWorkFrames(sessionId: string | null, isProcessing: boo
   const [revertedPaths, setRevertedPaths] = useState<ReadonlySet<string>>(EMPTY_PATHS);
   const [truncated, setTruncated] = useState(false);
   const [turnOutputs, setTurnOutputs] = useState<Record<string, ServerTurnOutputFile[]>>(EMPTY_TURN_OUTPUTS);
+  const [skillSurveys, setSkillSurveys] = useState<ReadonlyMap<string, string>>(EMPTY_SURVEYS);
   const sessionRef = useRef(sessionId);
   sessionRef.current = sessionId;
   /**
@@ -70,6 +74,7 @@ export function useSessionWorkFrames(sessionId: string | null, isProcessing: boo
           revertedPaths?: unknown;
           turnOutputs?: unknown;
           truncated?: unknown;
+          skillSurveys?: unknown;
         };
       } | null;
       const frames = body?.data?.frames;
@@ -89,6 +94,13 @@ export function useSessionWorkFrames(sessionId: string | null, isProcessing: boo
         // 服务端是唯一真相:整体替换,不与快照合并(合并会让删掉/回滚的产出赖着不走)。
         setTurnOutputs(nextTurnOutputs);
         writeCachedTurnOutputs(targetSessionId, nextTurnOutputs);
+        const surveys = body?.data?.skillSurveys;
+        setSkillSurveys(Array.isArray(surveys)
+          ? new Map(surveys
+            .filter((entry): entry is { messageId: string; skill: string } =>
+              Boolean(entry) && typeof (entry as { messageId?: unknown }).messageId === 'string' && typeof (entry as { skill?: unknown }).skill === 'string')
+            .map((entry) => [entry.messageId, entry.skill]))
+          : EMPTY_SURVEYS);
       }
     } catch { /* 拉不到就退化为窗口内折叠 */ }
   }, []);
@@ -102,6 +114,7 @@ export function useSessionWorkFrames(sessionId: string | null, isProcessing: boo
     setBaseMessages([]);
     setRevertedPaths(EMPTY_PATHS);
     setTruncated(false);
+    setSkillSurveys(EMPTY_SURVEYS);
     /**
      * ek:产出映射**先用上一次的本地快照顶上**,再等请求覆盖。
      *
@@ -121,5 +134,5 @@ export function useSessionWorkFrames(sessionId: string | null, isProcessing: boo
     }
   }, [isProcessing, sessionId, refreshFor]);
 
-  return { baseMessages, revertedPaths, turnOutputs, truncated, refresh };
+  return { baseMessages, revertedPaths, turnOutputs, truncated, skillSurveys, refresh };
 }

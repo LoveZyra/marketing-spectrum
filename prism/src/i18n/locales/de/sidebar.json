@@ -36,7 +36,10 @@
     "clearSearch": "Suche leeren",
     "openCommandPalette": "Befehlspalette öffnen",
     "attentionRequiredIndicator": "Sitzung erfordert Aufmerksamkeit",
-    "approvalPendingIndicator": "Wartet auf deine Werkzeug-Freigabe"
+    "approvalPendingIndicator": "Wartet auf deine Werkzeug-Freigabe",
+    "hideSkillNav": "Hide skill navigation",
+    "showSkillNav": "Show skill navigation",
+    "noSidebarOnNotebook": "No project sidebar on the Notebook page"
   },
   "actions": {
     "settings": "Einstellungen",

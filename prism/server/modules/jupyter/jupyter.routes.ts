@@ -11,6 +11,7 @@
 
 import express from 'express';
 
+import { userDb } from '@/modules/database/index.js';
 import { asyncHandler, createApiSuccessResponse, WORKSPACES_ROOT } from '@/shared/utils.js';
 
 import {
@@ -18,14 +19,19 @@ import {
   ensureJupyterRunning,
   getJupyterStatus,
   issueJupyterEntryTicket,
+  setJupyterAccountCheck,
 } from './services/jupyter-manager.service.js';
 
 const router = express.Router();
+
+// hj(审计 P1-2):会话 cookie 每次校验都问一句「签票的人现在还能用吗」(停用 / 驳回 / 退出所有设备)。
+setJupyterAccountCheck((userId, tokenVersion) => Boolean(userDb.getUsableUser(userId, tokenVersion)));
 
 type AuthenticatedUser = {
   id?: number;
   userId?: number | string;
   username?: string;
+  token_version?: number | null;
 };
 
 const readUser = (req: express.Request): AuthenticatedUser | undefined =>
@@ -52,7 +58,10 @@ router.post(
     }
 
     const user = readUser(req);
-    const ticket = issueJupyterEntryTicket(user?.id ?? user?.userId ?? 'user');
+    const ticket = issueJupyterEntryTicket(
+      user?.id ?? user?.userId ?? 'user',
+      user?.token_version ?? 0,
+    );
     const body = (req.body ?? {}) as { path?: unknown };
     const targetPath = typeof body.path === 'string' ? body.path : null;
 

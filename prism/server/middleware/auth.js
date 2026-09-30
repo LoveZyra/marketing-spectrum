@@ -4,10 +4,11 @@ import jwt from 'jsonwebtoken';
 
 import { createLogger } from '@/shared/logger.js';
 
-import { userDb, appConfigDb } from '../modules/database/index.js';
+import { userDb, appConfigDb, apiKeysDb } from '../modules/database/index.js';
 import { IS_PLATFORM } from '../constants/config.js';
 import { isRootUser } from '../shared/root-users.js';
-import { consumeSseTicket } from '../shared/sse-tickets.js';
+import { consumeSseTicket, SSE_TICKET_PATHS } from '../shared/sse-tickets.js';
+import { isAccountUsable } from '../shared/account-usable.js';
 
 const log = createLogger('auth');
 
@@ -36,6 +37,15 @@ if (IS_PLATFORM) {
 const validateApiKey = (req, res, next) => {
   const configuredKey = process.env.PRISM_API_KEY;
   if (!configuredKey) {
+    return next();
+  }
+
+  // hj(审计 P2-2):浏览器导航(下载)和 EventSource(会话搜索)**带不上自定义请求头**。
+  // 这两条口各有自己的短命票据(单目标、分用途、比对 token_version),不需要这道闸;
+  // 不豁免的话,配了 PRISM_API_KEY 的部署里下载与搜索会全部静默 401。
+  const fullPath = `${req.baseUrl || ''}${req.path || ''}`;
+  if (req.method === 'GET' && req.query?.ticket
+    && (fullPath.startsWith('/api/downloads/') || SSE_TICKET_PATHS.has(fullPath))) {
     return next();
   }
 
@@ -76,11 +86,16 @@ const authenticateToken = async (req, res, next) => {
 
   // SSE(EventSource)设不了 Authorization 头,只能把凭据放 URL 里。**别放 JWT** ——
   // URL 会进反代日志和浏览器历史。放一张短命票据:泄了 60 秒后也就废了。
-  if (!token && req.query.ticket) {
+  //
+  // hj(审计 P1-1):**只在 SSE 票据的专用路径上认票**,其余路由一律不认(当作没带凭据)。
+  // 原来这里对所有路由生效:搜索用的票能换 WS 票开 shell、能建永久 API key。
+  // 另外比对签发时的 token_version、审批状态 ——「退出所有设备」/ 驳回之后票立刻作废。
+  if (!token && req.query.ticket && req.method === 'GET'
+    && SSE_TICKET_PATHS.has(`${req.baseUrl || ''}${req.path || ''}`)) {
     const consumed = consumeSseTicket(req.query.ticket);
     if (consumed) {
       const user = userDb.getUserById(consumed.userId); // getUserById 只返回 is_active 用户
-      if (user) {
+      if (isAccountUsable(user, { tokenVersion: consumed.tokenVersion })) {
         req.user = withRootFlag(user);
         return next();
       }
@@ -136,6 +151,38 @@ const authenticateToken = async (req, res, next) => {
     log.error('Token verification error:', error);
     return res.status(403).json({ error: 'Invalid token' });
   }
+};
+
+/**
+ * hj(审计 P2-3):这个请求**像不像**带着有效凭据 —— 只给「请求体大小上限」用,不是鉴权。
+ *
+ * 全局 `express.json` 原来是 50MB、而且排在限流和鉴权之前:一个未登录的请求就能让服务器
+ * 解析 50MB 的 JSON(实测 34MB 对象体阻塞事件循环 1.25 秒)。大请求体只有登录用户才有
+ * 正当用途(保存大文件、长对话)。这里只做**不碰库的 JWT 验签**(签名 + 未过期)与 API key
+ * 的哈希查找,真正的鉴权照旧由各路由的 authenticateToken 负责。
+ */
+const hasVerifiableCredential = (req) => {
+  if (IS_PLATFORM) return true;
+  // 与 authenticateToken 同口径:取头里的第二段,不挑 scheme 的大小写。
+  const authHeader = req.headers['authorization'];
+  const token = typeof authHeader === 'string' ? authHeader.trim().split(/\s+/)[1] || null : null;
+  if (token) {
+    try {
+      jwt.verify(token, JWT_SECRET);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const apiKey = req.headers['x-api-key'];
+  if (typeof apiKey === 'string' && apiKey.length > 0 && apiKey.length <= 256) {
+    try {
+      return Boolean(apiKeysDb.validateApiKey(apiKey));
+    } catch {
+      return false;
+    }
+  }
+  return false;
 };
 
 // Gate for root-only routes. Kept next to authenticateToken because it is only
@@ -222,6 +269,7 @@ const authenticateWebSocket = (token) => {
 export {
   validateApiKey,
   authenticateToken,
+  hasVerifiableCredential,
   requireRoot,
   generateToken,
   authenticateWebSocket,

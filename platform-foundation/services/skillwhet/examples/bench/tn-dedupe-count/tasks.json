@@ -1,0 +1,47 @@
+{
+ "format": "skillwhet.tasks.v1",
+ "tasks": [
+  {
+   "id": "tests/unit/test_norm.py::test_dedupe_keeps_first_and_order",
+   "intent": "dedupe order",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_dedupe_ignore_case",
+   "intent": "dedupe case",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_word_count_ignores_bare_punctuation",
+   "intent": "count",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_slugify_basic",
+   "intent": "basic",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_dedupe_ignore_case",
+   "intent": "dedupe case",
+   "reference_kind": "rule",
+   "split": "val"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_word_count_ignores_bare_punctuation",
+   "intent": "count",
+   "reference_kind": "rule",
+   "split": "val"
+  },
+  {
+   "id": "tests/unit/test_norm.py::test_word_count_ignores_lone_dashes",
+   "intent": "lone dashes (never trained on)",
+   "reference_kind": "rule",
+   "split": "test"
+  }
+ ]
+}

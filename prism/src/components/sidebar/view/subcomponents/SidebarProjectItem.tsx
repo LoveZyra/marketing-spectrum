@@ -216,7 +216,11 @@ function SidebarProjectItem({
   const isEditing = editingProject === project.projectId;
   const totalSessionCount = Number(project.sessionMeta?.total ?? sessions.length);
   const sessionCountDisplay = getSessionCountDisplay(project, sessions);
-  const sessionCountLabel = `${sessionCountDisplay} session${totalSessionCount === 1 ? '' : 's'}`;
+  // hl(P3 中英混排):原来写死英文 `0 sessions`,中文界面里一句英文。
+  // 用 `sessions` 而不是 `count` 作插值名:这条不需要复数变体键(同 fileTree.batchDownloadLabel)。
+  const sessionCountLabel = totalSessionCount === 1
+    ? t('projects.sessionCountOne', { sessions: sessionCountDisplay, defaultValue: `${sessionCountDisplay} 个会话` })
+    : t('projects.sessionCount', { sessions: sessionCountDisplay, defaultValue: `${sessionCountDisplay} 个会话` });
 
   // "公共" 只在项目真正对所有人可见时才打(无主且落在 PRISM_PUBLIC_WORKSPACE 下,
   // 由后端 isPublic 判定)。以前拿 ownerUserId===null 当"公共"是错的 —— 没配公共目录
@@ -231,11 +235,17 @@ function SidebarProjectItem({
   const sharedOutCount = !isSharedToViewer ? (project.sharedUserCount ?? 0) : 0;
   // 权限管理入口:root 或项目 owner 才显示。这只是入口显隐 —— 服务端对
   // GET/PUT /permissions 有同样的校验(非 owner/root 一律 403),边界在后端。
+  // hl(动态 P1-5 / P2-7):**改名的铅笔与归档 / 删除的垃圾桶也按这一条画** ——
+  // 显示名是全局的一列,服务端 rename 现在与权限同门(非 owner / root 403);
+  // 无主(公共目录)项目的归档 / 永久删自 hl 起只给 root。给协作者画一枚必然 403 的按钮
+  // 比不画更糟。
   const canManagePermissions =
     user?.isRoot === true ||
     (project.ownerUserId != null &&
       user?.id != null &&
       String(project.ownerUserId) === String(user.id));
+  const canRenameProject = canManagePermissions;
+  const canRemoveProject = canManagePermissions;
 
   /**
    * gq:改名时**点行外关闭**。
@@ -335,6 +345,8 @@ function SidebarProjectItem({
                     toggleStarProject();
                   }}
                   title={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
+                  aria-label={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
+                  aria-pressed={isStarred}
                 >
                   <Star
                     className={cn(
@@ -401,45 +413,57 @@ function SidebarProjectItem({
                 {isEditing ? (
                   <>
                     <button
+                      type="button"
                       className="flex h-8 w-8 items-center justify-center rounded-md bg-primary active:translate-y-px"
                       onClick={(event) => {
                         event.stopPropagation();
                         saveProjectName();
                       }}
+                      aria-label={t('tooltips.save')}
                     >
                       <Check className="h-4 w-4 text-primary-foreground" />
                     </button>
                     <button
+                      type="button"
                       className="flex h-8 w-8 items-center justify-center rounded-md bg-muted active:translate-y-px"
                       onClick={(event) => {
                         event.stopPropagation();
                         onCancelEditingProject();
                       }}
+                      aria-label={t('tooltips.cancel')}
                     >
                       <X className="h-4 w-4 text-foreground" />
                     </button>
                   </>
                 ) : (
                   <>
-                    <button
-                      className="flex h-8 w-8 items-center justify-center rounded-md border border-border active:translate-y-px"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDeleteProject(project);
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4 text-muted-foreground" />
-                    </button>
+                    {canRemoveProject && (
+                      <button
+                        type="button"
+                        className="flex h-8 w-8 items-center justify-center rounded-md border border-border active:translate-y-px"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteProject(project);
+                        }}
+                        aria-label={t('tooltips.deleteProject')}
+                      >
+                        <Trash2 className="h-4 w-4 text-muted-foreground" />
+                      </button>
+                    )}
 
-                    <button
-                      className="flex h-8 w-8 items-center justify-center rounded-md border border-border active:translate-y-px"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onStartEditingProject(project);
-                      }}
-                    >
-                      <Edit3 className="h-4 w-4 text-primary" />
-                    </button>
+                    {canRenameProject && (
+                      <button
+                        type="button"
+                        className="flex h-8 w-8 items-center justify-center rounded-md border border-border active:translate-y-px"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onStartEditingProject(project);
+                        }}
+                        aria-label={t('tooltips.renameProject')}
+                      >
+                        <Edit3 className="h-4 w-4 text-primary" />
+                      </button>
+                    )}
 
                     {canManagePermissions && (
                       <button
@@ -449,6 +473,7 @@ function SidebarProjectItem({
                           setShowPermissions(true);
                         }}
                         title={t('tooltips.managePermissions', { defaultValue: '项目权限' })}
+                        aria-label={t('tooltips.managePermissions', { defaultValue: '项目权限' })}
                       >
                         <ShieldCheck className="h-4 w-4 text-primary" />
                       </button>
@@ -623,16 +648,18 @@ function SidebarProjectItem({
               >
                 <Star className={cn('h-4 w-4', isStarred && 'fill-primary')} strokeWidth={2} />
               </div>
-              <div
-                className="flex h-6 w-6 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onStartEditingProject(project);
-                }}
-                title={t('tooltips.renameProject')}
-              >
-                <Edit3 className="h-3.5 w-3.5" />
-              </div>
+              {canRenameProject && (
+                <div
+                  className="flex h-6 w-6 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onStartEditingProject(project);
+                  }}
+                  title={t('tooltips.renameProject')}
+                >
+                  <Edit3 className="h-3.5 w-3.5" />
+                </div>
+              )}
               {canManagePermissions && (
                 <div
                   className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -645,16 +672,18 @@ function SidebarProjectItem({
                   <ShieldCheck className="h-3.5 w-3.5" />
                 </div>
               )}
-              <div
-                className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDeleteProject(project);
-                }}
-                title={t('tooltips.deleteProject')}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </div>
+              {canRemoveProject && (
+                <div
+                  className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDeleteProject(project);
+                  }}
+                  title={t('tooltips.deleteProject')}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </div>
+              )}
             </div>
           )}
         </Button>

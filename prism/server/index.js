@@ -26,6 +26,7 @@ import {
     removeLocalServerMarker,
 } from '@/modules/system/index.js';
 import { createLogger } from '@/shared/logger.js';
+import { NightlyScheduler, SkillWhetClient, createSkillWhetRouter } from '@/modules/skillwhet/index.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
 
@@ -60,6 +61,8 @@ import {
 import { createMaProxyRouterFromEnv, MA_PROXY_PREFIX } from './routes/ma-proxy.js';
 import { createRecsysProxyRouterFromEnv, RECSYS_PROXY_PREFIX } from './routes/recsys-proxy.js';
 import { createMaServiceFromEnv } from './services/ma-service.js';
+import { createSkillWhetServiceFromConfig, resolveSkillWhetConfig, startSkillWhetJobsPruner } from './services/skillwhet-service.js';
+import { runStartupStep } from './utils/startup-step.js';
 import authRoutes from './routes/auth.js';
 import commandsRoutes from './routes/commands.js';
 import settingsRoutes from './routes/settings.js';
@@ -69,16 +72,17 @@ import providerRoutes from './modules/providers/provider.routes.js';
 import { createSessionOutputsRouter, createSessionOutputDownloadRouter } from './modules/providers/session-outputs.routes.js';
 import { assetsRoutes, attachmentUsageRoutes } from './modules/assets/index.js';
 import { startAttachmentSweeper } from './shared/attachment-storage.js';
-import { canViewerSeeSession, closeConnection, initializeDatabase, sessionMessagesDb, sessionsDb, stopDatabaseBackups } from './modules/database/index.js';
+import { canViewerSeeSession, closeConnection, initializeDatabase, sessionMessagesDb, sessionsDb, stopDatabaseBackups, userDb } from './modules/database/index.js';
 import { readRequestViewer } from './shared/project-visibility.js';
 import { currentHolder } from './modules/websocket/services/conversation-ownership.service.js';
-import { validateApiKey, authenticateToken, requireRoot, authenticateWebSocket } from './middleware/auth.js';
+import { validateApiKey, authenticateToken, requireRoot, authenticateWebSocket, hasVerifiableCredential } from './middleware/auth.js';
 import { createAdminRouter, backfillProjectOwners } from './modules/admin/index.js';
 import { createPreviewRouter, createPreviewPublicRouter } from './modules/preview/index.js';
 import { jupyterRoutes, createJupyterProxyHandler, handleJupyterUpgrade, stopJupyter } from './modules/jupyter/index.js';
 import { apiRateLimiter, createRateLimiter, TRUST_PROXY } from './middleware/rate-limit.js';
 import { consumeTicket } from './shared/ws-tickets.js';
 import { listRootUsernames } from './shared/root-users.js';
+import { trustProxyHops } from './shared/client-ip.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { c } from './utils/colors.js';
 
@@ -187,7 +191,8 @@ setOrphanTurnHook(observeOrphanFrames);
 // X-Forwarded-For unconditionally would let any direct client forge a fresh
 // source IP per request and walk straight through the rate limiters below.
 if (TRUST_PROXY) {
-    app.set('trust proxy', true);
+    // hj(审计 P2-5):`true` 让 req.ip 取 XFF 最左项(客户端可伪造);按层数信任才取对。
+    app.set('trust proxy', trustProxyHops() || 1);
 }
 
 // JupyterLab 反代(/jupyter/* -> 127.0.0.1 上 Prism 托管的 lab 实例)。
@@ -227,7 +232,15 @@ const corsOrigins = (process.env.PRISM_CORS_ORIGINS || '')
 //
 // threshold 1024:比这更小的响应压缩收益抵不过两边的 CPU。
 // 已经压过的内容(Content-Encoding 已设)compression 自己会跳过。
-app.use(compression({ threshold: 1024 }));
+// hj(审计 P2-1):**下载直传口不压缩。** 压缩会去掉 Content-Length、改成分块传输,
+// 浏览器下载栏就只剩「已下载 XX MB」没有百分比 —— csv / txt / json / md 这类最常下的
+// 文本文件,gw 做的原生进度条一直不生效。下载本来就是要原样落盘的字节,压它没有意义。
+app.use(compression({
+    threshold: 1024,
+    // 用 originalUrl 不用 path:compression 的 filter 在**第一次写响应时**才调,那时请求已经进了
+    // `app.use('/api/downloads', router)`,req.url / req.path 被挂载点剥成了 `/file`。
+    filter: (req, res) => ((req.originalUrl || '').startsWith('/api/downloads/') ? false : compression.filter(req, res)),
+}));
 
 app.use(cors({
     ...(corsOrigins.length > 0 ? { origin: corsOrigins } : {}),
@@ -333,15 +346,17 @@ if (recsysProxyRouter) {
 // 从根上杜绝"反代指 8092、服务听 8091"这类两边日志都正常的故障。默认不配=不启动。
 const maService = createMaServiceFromEnv(process.env, console);
 
-app.use(express.json({
-    limit: '50mb',
-    type: (req) => {
-        // Skip multipart/form-data requests (for file uploads like images)
-        const contentType = req.headers['content-type'] || '';
-        return contentType.includes('multipart/form-data') ? false : contentType.includes('json');
-    }
-}));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+// gy:技能优化(SkillWhet)。`PRISM_SKILLWHET_ENABLE=1` 才挂整层;`PRISM_SKILLWHET_AUTOSTART=1`
+// 再由 Prism 拉起 `whet serve`(照 ma-service 那套:healthz、退避重启、退出一起收)。
+// 不配就一个字不打、一条路由不挂、轨上没有那一格 —— 与 ma / recsys 同一规矩。
+const skillWhetConfig = resolveSkillWhetConfig(process.env, console);
+const skillWhetService = createSkillWhetServiceFromConfig(skillWhetConfig, console, process.env);
+// he:夜训调度器 —— 只在技能优化挂载时跑;一个 skill 都没纳入就什么都不做(D3:默认零纳入)。
+const skillWhetNightly = skillWhetConfig.enabled
+    ? new NightlyScheduler({ client: new SkillWhetClient({ baseUrl: skillWhetConfig.baseUrl, token: skillWhetConfig.token }) })
+    : null;
+// hl:SkillWhet home 的 jobs/ 保留策略(PRISM_SKILLWHET_JOBS_RETENTION_DAYS,默认 90 天)—— 只在挂载时起。
+let skillWhetJobsPruner = null;
 
 // Public system endpoints (no authentication): GET /health (unchanged) and
 // GET /api/ready (readiness probe). Mounted before the /api API-key gate.
@@ -354,6 +369,29 @@ app.use(createSystemPublicRouter({
 // Editor preview reads: GET /preview/:ticket/*. Authorized by a 5-minute
 // ticket in the path because the sandboxed iframe sends no credentials.
 app.use(createPreviewPublicRouter({ rateLimiter: apiRateLimiter }));
+// hj:上面两个公开路由只有 GET、不需要请求体,排在 /api 限流之前 —— /api/ready 是 Docker 的
+// HEALTHCHECK,同机反代时全员共用一个 IP 桶,排在限流之后的话桶一满健康检查就 429、容器被判不健康。
+
+// hj(审计 P2-3):**限流挪到解析请求体之前**,请求体上限按「像不像登录用户」分两档。
+//
+// 原来 50MB 的 JSON 解析排在限流(原第 376 行)和鉴权之前:未登录的请求也能让服务器解析
+// 50MB(实测 34MB 对象体阻塞事件循环 1.25 秒),限流拦不住。现在:
+//   - 先过 /api 限流;
+//   - 带着能验签的 JWT(或存在的 API key)→ 50MB(保存大文件、长对话要用);
+//   - 其余(未登录、伪造的令牌)→ 1MB,注册 / 登录 / 票据接口都远用不到这么多。
+// 真正的鉴权照旧在各路由上。urlencoded 没有任何接口需要大表单,统一 1MB。
+app.use('/api', apiRateLimiter);
+const jsonBodyType = (req) => {
+    // Skip multipart/form-data requests (for file uploads like images)
+    const contentType = req.headers['content-type'] || '';
+    return contentType.includes('multipart/form-data') ? false : contentType.includes('json');
+};
+const largeJsonParser = express.json({ limit: '50mb', type: jsonBodyType });
+const smallJsonParser = express.json({ limit: '1mb', type: jsonBodyType });
+app.use((req, res, next) => (hasVerifiableCredential(req) ? largeJsonParser : smallJsonParser)(req, res, next));
+app.use(express.urlencoded({ limit: '1mb', extended: true }));
+
+
 
 // Rate limiting on every /api route.
 //
@@ -361,7 +399,7 @@ app.use(createPreviewPublicRouter({ rateLimiter: apiRateLimiter }));
 // it; this is the mitigation that choice requires. Deliberately mounted
 // before validateApiKey so unauthenticated floods are capped too. Static
 // assets and the SPA fallback are not limited — only the API surface is.
-app.use('/api', apiRateLimiter);
+// (hj:/api 限流已挪到解析请求体之前,见上。)
 
 // Optional API key validation (if configured)
 app.use('/api', validateApiKey);
@@ -503,6 +541,23 @@ app.use('/api/projects', authenticateToken, projectModuleRoutes);
 
 // 定时任务(cj 轮):CRUD + 立即运行 + Claude 直建票据通道。
 app.use('/api/tasks', createTasksRouter({ authenticateToken }));
+
+// gy:技能优化。未启用时挂一个真 404(JSON)—— 不接的话 /api/skillwhet/* 会掉到 SPA 的
+// catch-all 回 200 + index.html,前端虽然也能把它当"没有"(解析失败兜底),但 curl 排查时
+// 看到一坨 HTML 只会让人以为路由坏了。
+if (skillWhetConfig.enabled) {
+    app.use('/api/skillwhet', createSkillWhetRouter({
+        authenticateToken,
+        client: new SkillWhetClient({ baseUrl: skillWhetConfig.baseUrl, token: skillWhetConfig.token }),
+        config: skillWhetConfig,
+    }));
+    log.info(`技能优化已挂载: /api/skillwhet -> ${skillWhetConfig.label}(home=${skillWhetConfig.home}${skillWhetConfig.autostart ? ',由 Prism 拉起 serve' : ',serve 由外部起'})`);
+} else {
+    app.use('/api/skillwhet', (req, res) => {
+        res.status(404).json({ success: false, error: '技能优化未启用(PRISM_SKILLWHET_ENABLE 未设置)', code: 'SKILLWHET_DISABLED' });
+    });
+    log.info('技能优化未启用(PRISM_SKILLWHET_ENABLE 未设置)');
+}
 
 // Account administration — approval queue. Root only (PRISM_ROOT_USERS).
 app.use('/api/admin', createAdminRouter({
@@ -683,6 +738,16 @@ app.use((err, req, res, next) => {
     });
   }
 
+  // hj:请求体解析失败(太大 / JSON 写坏 / 编码不认)是客户端的错,不是服务端的 500 ——
+  // body-parser 自己带着 4xx 的 status 和 `type`。原来一律 500 并打一条 ERROR 带堆栈:
+  // 未登录的人发一个超限请求体,日志里就多一条看着像故障的 ERROR。
+  if (err && typeof err.type === 'string' && typeof err.status === 'number' && err.status >= 400 && err.status < 500) {
+    const message = err.type === 'entity.too.large'
+      ? 'Request body too large'
+      : err.type === 'entity.parse.failed' ? 'Malformed JSON body' : 'Bad request body';
+    return res.status(err.status).json({ success: false, error: message, code: 'BAD_REQUEST_BODY' });
+  }
+
   log.error(err);
 
   return res.status(500).json({
@@ -707,7 +772,12 @@ const buildLocalServerMarker = () => ({
 });
 
 // ── Graceful shutdown ────────────────────────────────────────────────────────
-const SHUTDOWN_HARD_EXIT_MS = 8000;
+/**
+ * hl(静态 P2-25):此前是 8s,而 prism.sh 6s 就 kill -9,两个受管子进程又各串行等 4s ——
+ * 两个都开着时数据库关闭那一步永远轮不到。现在:子进程并行停(最多 4s),这里 12s,
+ * prism.sh 等 15s;并且硬退出前也会同步关一次数据库(见 hardExitTimer)。
+ */
+const SHUTDOWN_HARD_EXIT_MS = 12_000;
 let shutdownInProgress = false;
 
 // Runs one cleanup step; failures are logged, never rethrown.
@@ -720,7 +790,7 @@ async function shutdownStep(label, fn) {
 }
 
 // Single shutdown path for SIGTERM/SIGINT. Idempotent: a second signal is
-// ignored; the 8s hard-exit timer still guarantees termination.
+// ignored; the hard-exit timer still guarantees termination.
 async function shutdown(signal) {
     if (shutdownInProgress) {
         log.info(`[Shutdown] ${signal} received while already shutting down — ignoring`);
@@ -731,6 +801,11 @@ async function shutdown(signal) {
 
     const hardExitTimer = setTimeout(() => {
         log.error('[Shutdown] Cleanup exceeded time limit — forcing exit');
+        // hl(静态 P2-25):就算前面哪一步卡死了,数据库也要关干净 —— close 是同步的,
+        // 几毫秒的事;不关的话 WAL 留在需要恢复的状态上,下次启动多一次恢复。
+        try { stopDatabaseBackups(); closeConnection(); } catch (err) {
+            log.error('[Shutdown] database close on hard exit failed:', err?.message || err);
+        }
         process.exit(1);
     }, SHUTDOWN_HARD_EXIT_MS);
     hardExitTimer.unref();
@@ -794,13 +869,20 @@ async function shutdown(signal) {
     await shutdownStep('jupyter stop', () => stopJupyter());
 
     await shutdownStep('sessions watcher close', () => closeSessionsWatcher());
-    // 营销诊断子进程。放在这儿(而不是最后)是因为它可能正在跑一单几十分钟的诊断,
-    // SIGTERM 之后要给它一点收尾时间,别挤到 8s 硬退出的窗口末尾去。
-    await shutdownStep('ma service stop', () => maService?.stop());
+    // 受管子进程(营销诊断、SkillWhet serve)。放在这儿(而不是最后)是因为它们可能正在
+    // 跑一单几十分钟的活,SIGTERM 之后要给一点收尾时间,别挤到硬退出的窗口末尾去。
+    // hl(静态 P2-25):**并行**停 —— 各自最多等 4s TERM 宽限,串行就是 8s,数据库关闭
+    // 那步永远轮不到。夜训调度器只是清定时器,顺带并进来。
+    await shutdownStep('child services stop', () => Promise.allSettled([
+        shutdownStep('ma service stop', () => maService?.stop()),
+        shutdownStep('skillwhet nightly stop', () => skillWhetNightly?.stop()),
+        shutdownStep('skillwhet jobs pruner stop', () => skillWhetJobsPruner?.stop()),
+        shutdownStep('skillwhet service stop', () => skillWhetService?.stop()),
+    ]));
     // Runtime services — the same set the pre-refactor handler stopped.
     await shutdownStep('server marker removal', () => removeLocalServerMarker(LOCAL_SERVER_MARKER_PATH));
     // Database last so every step above could still use it. Stop the backup
-    // timer first — a VACUUM INTO firing mid-close would reopen the handle.
+    // timer first — an incremental `db.backup()` firing mid-close would reopen the handle.
     await shutdownStep('database backup timer stop', () => stopDatabaseBackups());
     await shutdownStep('database close', () => closeConnection());
 
@@ -818,12 +900,16 @@ process.on('SIGINT', () => void shutdown('SIGINT'));
  * `throw` —— 也就是说在补上这两条之前,任何一个没 catch 的 promise、任何一个没挂
  * 监听器的流 error,都是**整机退出**。
  *
- * 为什么记完日志还是要退:进程走到这里说明有一条我们没预料到的路径,状态已经不可信
- * (半开的事务、半写的 transcript)。带着不可信的状态继续服务,比重启一次更糟。
- * 走 `shutdown()` 而不是裸崩,是为了让数据库、备份定时器、子进程有机会收尾 ——
- * 裸崩会把 WAL 留在需要恢复的状态上。
+ * 两种事故分开对待(hl,静态 P1-13):
  *
- * `shutdown` 自己有 8 秒硬退出窗口,所以不会卡死在这里。
+ * - `uncaughtException`:同步栈上抛出来没人接,状态已经不可信(半开的事务、半写的
+ *   transcript)。带着不可信的状态继续服务,比重启一次更糟 —— 走 `shutdown()` 退出,
+ *   让数据库、备份定时器、子进程收尾(裸崩会把 WAL 留在需要恢复的状态上),然后交给
+ *   prism.sh 的守护循环拉起来。`shutdown` 自己有硬退出窗口,所以不会卡死在这里。
+ * - `unhandledRejection`:**只记日志,不退出。** 一个没 catch 的 promise 几乎总是某个
+ *   请求 / 某个会话自己的事(它那条链路已经断了),让所有人一起断线并不能让谁的状态
+ *   更可信 —— 而在 Node 22 的默认下它和 uncaughtException 同样是整机退出。审计时线上
+ *   多次"全员掉线"都是这一类。日志里带 `[UNHANDLED]` 前缀,排障时 grep 它。
  */
 const fatal = (kind) => (error) => {
   log.error(`[FATAL] ${kind}:`, error);
@@ -837,7 +923,9 @@ const fatal = (kind) => (error) => {
 };
 
 process.on('uncaughtException', fatal('uncaughtException'));
-process.on('unhandledRejection', fatal('unhandledRejection'));
+process.on('unhandledRejection', (reason) => {
+  log.error('[UNHANDLED] unhandledRejection(只记日志,服务继续):', reason);
+});
 
 // Initialize database and start server
 /**
@@ -905,6 +993,14 @@ async function startServer() {
             log.warn('       后果:设置页看不到「账号」标签,新注册的账号会永远卡在待审批、无人能批。');
             log.warn('       解决:在 .env 里设 PRISM_ROOT_USERS=<你的用户名>(用该名字注册后即为 root),然后重启。');
             log.warn('');
+        }
+
+        // hj(审计 P0-2):名单里**还没注册**的名字,谁先注册谁就是 root(注册即 approved)。
+        // 部署时写好名单、本人还没来注册的那段时间,这是一个谁都能捡的管理员位。
+        for (const rootName of listRootUsernames()) {
+            if (!userDb.getUserByUsername(rootName)) {
+                log.warn(`PRISM_ROOT_USERS 里的「${rootName}」还没有注册(或已停用)—— 谁先用这个名字注册,谁就是管理员。请本人尽快注册,或从名单里去掉。`);
+            }
         }
 
         // Production mode = a built dist folder exists
@@ -976,16 +1072,23 @@ async function startServer() {
             log.raw(`${c.tip('[TIP]')}  Run "prism status" for full configuration details`);
             log.raw('');
 
-            // Start watching the projects folder for changes
-            await initializeSessionsWatcher();
-            sessionsWatcherReady = true;
+            // hl 复核(P3):下面各段各自兜底、互不连坐 —— 会话监听起不来,营销诊断 / 技能优化 /
+            // 作业清理照样要起(见 utils/startup-step.js)。
+            // 受管子进程先发起(不 await:它们要等 healthz,慢的时候几十秒,不该拖着启动流程;
+            // 起不来也只是对应的 /api/ma/*、/api/skillwhet/* 不可用,Prism 其余功能不受影响)。
+            void runStartupStep('ma service start', () => maService?.start(), log);
+            // gy:技能优化的 serve 同样不 await、起不来只影响 /api/skillwhet/*。
+            void runStartupStep('skillwhet service start', () => skillWhetService?.start(), log);
+            await runStartupStep('skillwhet nightly start', () => skillWhetNightly?.start(), log);
+            await runStartupStep('skillwhet jobs pruner start', () => {
+                skillWhetJobsPruner = startSkillWhetJobsPruner(skillWhetConfig, { env: process.env, logger: console });
+            }, log);
 
-            // 营销诊断服务。不 await:它要等 healthz,慢的时候几十秒,不该拖着
-            // "Server Ready" 之后的启动流程。起不来也只是 /api/ma/* 返回 502,
-            // Prism 其余功能一概不受影响 —— 所以这里 catch 掉,绝不让它把 Prism 带崩。
-            maService?.start().catch(err => {
-                log.error('[ma-service] 自启失败:', err?.message || err);
-            });
+            // Start watching the projects folder for changes.失败时 sessionsWatcherReady 保持 false,
+            // /api/ready 如实报 pending,而不是假装就绪。
+            if (await runStartupStep('sessions watcher', () => initializeSessionsWatcher(), log)) {
+                sessionsWatcherReady = true;
+            }
         });
     } catch (error) {
         log.error('Failed to start server:', error);

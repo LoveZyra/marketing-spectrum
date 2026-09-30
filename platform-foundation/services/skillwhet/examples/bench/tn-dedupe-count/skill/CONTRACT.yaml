@@ -1,0 +1,39 @@
+version: 1
+allowed_imports:
+- __future__
+- re
+- unicodedata
+entrypoints:
+- id: slugify
+  module: scripts/norm.py
+  signature: 'slugify(text: str, max_len: int = 60) -> str'
+  doc_anchor: references/api.md#slugify
+  preconditions: []
+  postconditions: []
+  side_effects:
+  - none
+  stability: stable
+  cost_class: cpu_bound
+  checks: []
+- id: dedupe_lines
+  module: scripts/norm.py
+  signature: 'dedupe_lines(text: str, ignore_case: bool = False) -> str'
+  doc_anchor: references/api.md#dedupe_lines
+  preconditions: []
+  postconditions: []
+  side_effects:
+  - none
+  stability: stable
+  cost_class: cpu_bound
+  checks: []
+- id: word_count
+  module: scripts/norm.py
+  signature: 'word_count(text: str) -> int'
+  doc_anchor: references/api.md#word_count
+  preconditions: []
+  postconditions: []
+  side_effects:
+  - none
+  stability: stable
+  cost_class: cpu_bound
+  checks: []

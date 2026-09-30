@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, FolderOpen, FolderPlus, Plus, X } from 'lucide-react';
 
@@ -6,6 +6,7 @@ import { Button, Input } from '../../../shared/view/ui';
 import { browseFilesystemFolders, createFolderInFilesystem } from '../data/workspaceApi';
 import { getParentPath, joinFolderPath } from '../utils/pathUtils';
 import type { FolderSuggestion } from '../types';
+import { useModalKeyboard } from '../../../shared/view/hooks/useModalKeyboard';
 
 type FolderBrowserModalProps = {
   isOpen: boolean;
@@ -95,13 +96,23 @@ export default function FolderBrowserModal({
 
   const parentPath = getParentPath(currentPath);
 
+  // hl 复核 P2-2:接入弹层栈 —— 它叠在新建项目向导上面,Esc 只关它自己。
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalKeyboard(dialogRef, { open: isOpen, onClose: handleClose, lockScroll: false });
+
   if (!isOpen) {
     return null;
   }
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[rgba(16,16,16,0.72)] p-4">
-      <div className="prism-modal-shadow flex max-h-[80vh] w-full max-w-2xl flex-col rounded-lg border border-border bg-background">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('folderBrowser.title')}
+        className="prism-modal-shadow flex max-h-[80vh] w-full max-w-2xl flex-col rounded-lg border border-border bg-background"
+      >
         <div className="flex items-center justify-between border-b border-border p-4">
           <div className="flex items-center gap-3">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/[0.08]">
@@ -159,6 +170,7 @@ export default function FolderBrowserModal({
                     resetNewFolderState();
                   }
                 }}
+                data-esc-local="true"
                 autoFocus
               />
               <Button

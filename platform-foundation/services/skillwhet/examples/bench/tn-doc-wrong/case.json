@@ -1,0 +1,8 @@
+{
+ "runner": "agent",
+ "defects": [
+  "api.md says accents are kept (they are folded)",
+  "api.md says the LAST occurrence survives (it is the first)"
+ ],
+ "notes": "prose loop; probe combines both seeded errors in one question"
+}

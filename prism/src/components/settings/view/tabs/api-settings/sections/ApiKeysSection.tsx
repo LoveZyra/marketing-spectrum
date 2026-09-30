@@ -112,7 +112,11 @@ export default function ApiKeysSection({
                     className={`h-1.5 w-1.5 rounded-full ${key.is_active ? 'bg-primary' : 'bg-muted-foreground/60'}`}
                     aria-hidden
                   />
-                  {key.is_active ? t('apiKeys.status.active') : t('apiKeys.status.inactive')}
+                  {key.is_active
+                    ? t('apiKeys.status.active')
+                    : key.revoked
+                      ? t('apiKeys.status.revoked', { defaultValue: '已作废(退出所有设备 / 改密后)' })
+                      : t('apiKeys.status.inactive')}
                 </span>
                 <Button
                   size="sm"

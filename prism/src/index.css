@@ -41,7 +41,8 @@
 
     --code-foreground: 40 8% 12%;
 
-    --destructive: 0 84.2% 60.2%;
+    /* hl(P3 可访问性):原 0 84.2% 60.2% 配白字只有 3.8:1(「永久删除」按钮);压到 48% 亮度 → 5.2:1。 */
+    --destructive: 0 74% 48%;
     --destructive-foreground: 0 0% 100%;
 
     /* ef:圆角三档 —— 6 芯片 / 输入 / 按钮(rounded-md),10 卡片 / 面板 / 下拉
@@ -610,13 +611,19 @@
   }
 
   /* select 的下拉箭头:两版共用一张 SVG,颜色由 currentColor 无法作用于
-     background-image,所以按明暗各写一条,取值即 volt-mute */
+     background-image,所以按明暗各写一条,取值即 volt-mute
+
+     hf:箭头占的是右内边距那一块。原来 padding-right 写在 base 层,而几乎每个 select 都带
+     `p-2` / `px-2` / `px-3` 这类工具类 —— 工具类层级高,把右内边距改小了,箭头就压在文字上
+     (技能优化页夜训设置的 runner / 模型、设置页语言 / 外观、MCP 表单、项目批量操作……一共十几处)。
+     现在右内边距 !important 固定为"箭头宽 + 两侧留白",随字号走;左内边距仍由各处的工具类决定。
+     箭头也从 1.5em 缩到 1.125em,小号 select(text-xs、h-7)里不再显得挤。 */
   select {
     background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236f6d6c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
     background-repeat: no-repeat;
-    background-position: right 0.5rem center;
-    background-size: 1.5em 1.5em;
-    padding-right: 2.5rem;
+    background-position: right 0.4rem center;
+    background-size: 1.125em 1.125em;
+    padding-right: calc(1.125em + 0.8rem) !important;
     -webkit-appearance: none;
     -moz-appearance: none;
     appearance: none;

@@ -9,7 +9,8 @@
     "files": "Files",
     "notebook": "Notebook",
     "tasks": "Tasks",
-    "projects": "Projects"
+    "projects": "Projects",
+    "skillwhet": "Skill optimization"
   },
   "status": {
     "completed": "Completed"
@@ -41,7 +42,9 @@
     "persistentOnFailed": "Could not start a resident runtime (pool full, or this turn is busy)",
     "persistentOffDone": "Resident runtime released — the next turn rebuilds it",
     "persistentOffBusy": "This turn is still running; release it once it finishes",
-    "persistentFailed": "The resident toggle did not take effect, please retry"
+    "persistentFailed": "The resident toggle did not take effect, please retry",
+    "openMenu": "Open menu",
+    "projectRemovedNotice": "This project was archived or deleted, or you no longer have access to it. The conversation stays visible, but further actions may fail."
   },
   "fileTree": {
     "loading": "Loading files...",
@@ -94,9 +97,9 @@
       "folderCreated": "Folder created successfully",
       "folderDeleted": "Folder deleted",
       "renamed": "Renamed successfully",
-      "downloadPreparing": "Preparing \"{{name}}\" — your browser will show the save dialog when it is ready…"
+      "downloadPreparing": "Started packaging \"{{name}}\" — watch your browser's download bar for progress"
     },
-    "truncatedNotice": "This directory has too many entries; only part of it is shown. Open a subfolder to see more.",
+    "truncatedNotice": "Too many entries — only part of the tree is shown. Folders that were cut short show \"…more items\" when expanded; click it to load them.",
     "selectionMode": "Select multiple",
     "selectedCount": "{{count}} selected",
     "batchDownload": "Download selected",
@@ -117,13 +120,16 @@
       "noMatches": "No matches found",
       "tooShort": "Enter at least 2 characters",
       "summary": "{{matches}} matches in {{files}} files",
-      "truncated": "limit reached, results truncated"
+      "truncated": "limit reached, results truncated",
+      "skippedLarge": "{{skipped}} file(s) were skipped because they are too large"
     },
     "delete": {
       "confirm": "Delete",
       "fileWarning": "This file will be permanently deleted.",
       "folderWarning": "This folder and all its contents will be permanently deleted.",
-      "title": "Delete {{type}}"
+      "title": "Delete {{type}}",
+      "typeFolder": "Folder",
+      "typeFile": "File"
     },
     "download": {
       "unauthorized": "Your session expired — sign in again before downloading \"{{name}}\"",
@@ -141,9 +147,54 @@
       "emptyName": "Filename cannot be empty",
       "invalidChars": "Filename contains invalid characters",
       "reserved": "Filename is a reserved name"
+    },
+    "loadMore": "…more items, click to load",
+    "loadingMore": "Loading…",
+    "symlink": "Symbolic link",
+    "loadMoreFailed": "Failed to load",
+    "upload": {
+      "fileTooLarge": "\"{{name}}\" is larger than {{limit}}",
+      "totalTooLarge": "This selection is {{total}}; uploads are limited to {{limit}} at a time",
+      "partial": "Uploaded {{uploaded}} of {{total}} files",
+      "success": "Uploaded {{uploaded}} file(s)",
+      "overwritten": "Overwrote existing file(s): {{names}}",
+      "overwrittenMany": "Overwrote existing files: {{names}} and {{rest}} more",
+      "overwriteConfirm": "{{count}} file(s) with the same name already exist in the target folder and will be overwritten:\n{{names}}\n\nOverwrite them?",
+      "noProject": "Select a project before uploading files.",
+      "readDropFailed": "Could not read dropped files"
+    },
+    "serverErrors": {
+      "directoryExists": "A folder with this name already exists",
+      "fileExists": "A file with this name already exists",
+      "nameExists": "A file or folder with this name already exists",
+      "notFound": "File or folder not found (it may have been deleted or renamed)",
+      "fileNotFound": "File not found",
+      "permissionDenied": "Permission denied",
+      "projectNotFound": "Project not found, or you do not have access",
+      "parentNotFound": "Parent folder not found",
+      "notEmpty": "Folder is not empty",
+      "cannotDeleteRoot": "The project root cannot be deleted",
+      "crossDevice": "Cannot move across file systems",
+      "invalidPath": "Invalid file path",
+      "notDirectory": "This path is not a folder",
+      "unsupportedType": "Unsupported file type",
+      "noFiles": "No files selected",
+      "tooManyFiles": "Too many files in one upload",
+      "fileTooLarge": "File exceeds the per-file size limit",
+      "uploadTooLarge": "This batch exceeds the total upload limit",
+      "uploadExpired": "Upload session expired — please upload again",
+      "uploadIncomplete": "Upload incomplete (chunks missing) — discarded, please retry",
+      "renameFailed": "Rename failed",
+      "deleteFailed": "Delete failed",
+      "createFailed": "Create failed",
+      "uploadNetwork": "Upload failed — check your connection and try again",
+      "uploadCanceled": "Upload canceled",
+      "unknown": "Operation failed"
     }
   },
   "projectWizard": {
+    "revivedTitle": "Restored an archived project",
+    "revivedHint": "This path already had a project that was archived; it has been restored with the visibility you chose, along with its old sessions.",
     "title": "Create New Project",
     "steps": {
       "configure": "Configure",
@@ -181,14 +232,27 @@
     },
     "errors": {
       "providePath": "Please provide a workspace path",
-      "failedToCreate": "Failed to create workspace"
+      "failedToCreate": "Failed to create workspace",
+      "codes": {
+        "PROJECT_PATH_REQUIRED": "Please enter a project path",
+        "INVALID_PROJECT_PATH": "Invalid project path, or outside the allowed workspace",
+        "PROJECT_PATH_NOT_DIRECTORY": "This path exists but is not a folder",
+        "PROJECT_ALREADY_EXISTS": "This path is already a project",
+        "INVALID_PROJECT_VISIBILITY": "Invalid visibility setting",
+        "INVALID_TEMPLATE_ID": "Invalid template name",
+        "TEMPLATE_NOT_FOUND": "Template not found",
+        "TEMPLATE_HAS_SYMLINK": "The template contains symbolic links and was rejected",
+        "TEMPLATE_TOO_MANY_FILES": "The template has too many files",
+        "TEMPLATE_TOO_LARGE": "The template is too large"
+      }
     },
     "template": {
       "label": "Create from template",
       "none": "No template (empty folder)",
       "help": "A template copies a ready-made directory tree into the new project (CLAUDE.md, folder structure). Files that already exist in the target are never overwritten.",
       "stats": "{{count}} files · {{size}}"
-    }
+    },
+    "close": "Close"
   },
   "notifications": {
     "codes": {
@@ -259,7 +323,12 @@
     "goToShell": "Go to Shell",
     "settingsPrefix": "Settings: {{label}}",
     "browseAllSessions": "Browse all sessions ({{count}})",
-    "browseAllFiles": "Browse all files ({{count}})"
+    "browseAllFiles": "Browse all files ({{count}})",
+    "footer": {
+      "navigate": "↑↓ select",
+      "open": "↵ open",
+      "close": "esc close"
+    }
   },
   "reasoning": {
     "thinking": "Thinking...",
@@ -285,7 +354,9 @@
     "select": "Select"
   },
   "imageViewer": {
-    "loading": "Loading image..."
+    "loading": "Loading image...",
+    "loadFailed": "Unable to load image",
+    "cannotDisplay": "Cannot display: this file is not a valid image or is corrupted"
   },
   "tasksPage": {
     "title": "Scheduled tasks",
@@ -348,6 +419,7 @@
       "frequency": "Frequency",
       "time": "Time",
       "manualHint": "Runs only when you click “Run now”",
+      "serverTzHint": "Interpreted in the server time zone {{tz}}; server time now {{local}}",
       "sessionMode": "Session",
       "sessionFixed": "Fixed session (continuous history, recommended)",
       "sessionNew": "New session each run",

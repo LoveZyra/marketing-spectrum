@@ -30,7 +30,8 @@ describe('无主帧路由的接线', () => {
 
   it('任务生命周期通道在回合内也送(前台转后台的任务就在那一轮里报)', () => {
     expect(sdk).toMatch(/const taskRowInTurn = taskLifecycleMessage\(message, runtime\.sessionId \|\| null\);/);
-    expect(sdk).toMatch(/if \(!turn\.internal\) turn\.ws\.send\(taskRowInTurn\);/);
+    // hl(09-24 P3):`internal` 维护回合已删,回合内一律直接送。
+    expect(sdk).toMatch(/^\s*turn\.ws\.send\(taskRowInTurn\);/m);
   });
 
   it('钩子没接线时行为退回改动前 —— 只计数、不转发(这是总开关)', () => {

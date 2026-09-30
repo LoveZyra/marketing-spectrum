@@ -39,12 +39,12 @@
     "send": "发送",
     "stop": "停止",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令",
-      "enter": "Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令",
+      "ctrlEnter": "Ctrl+Enter 发送 • Shift+Enter 换行 • Shift+Tab 切换模式 • / 斜杠命令",
+      "enter": "Enter 发送 • Shift+Enter 换行 • Shift+Tab 切换模式 • / 斜杠命令",
       "queue": "回车把下一条消息加入队列",
       "updateQueued": "回车更新排队中的消息"
     },
-    "clickToChangeMode": "点击更改权限模式（或在输入框中按 Tab）",
+    "clickToChangeMode": "点击更改权限模式（或在输入框中按 Shift+Tab）",
     "showAllCommands": "显示所有命令",
     "scrollToBottom": "滚动到底部",
     "queue": {
@@ -311,12 +311,22 @@
     "help": {
       "eyebrow": "命令中心",
       "title": "帮助与快捷键",
-      "subtitle": "不离开聊天即可检索内置命令、语法与用法。"
+      "subtitle": "不离开聊天即可检索内置命令、语法与用法。",
+      "noMatch": "没有匹配的命令。",
+      "syntax": "语法",
+      "allArgs": "传入全部参数。",
+      "positionalArgs": "按位置传参。",
+      "fileArg": "把文件内容带进来。",
+      "quickTip": "小技巧",
+      "quickTipBody": "在输入框里输入 / 打开命令菜单,用方向键选择、回车执行。"
     },
     "models": {
       "eyebrow": "模型选择",
       "title": "选择模型",
-      "subtitle": "为当前提供方挑选要使用的模型。"
+      "subtitle": "为当前提供方挑选要使用的模型。",
+      "searchPlaceholder": "搜索 {{provider}} 模型…",
+      "current": "当前选择",
+      "appliesNext": "下一次回复起生效"
     },
     "cost": {
       "eyebrow": "会话统计",
@@ -343,7 +353,8 @@
     "closeAria": "关闭命令结果弹窗",
     "escHint": "按 Esc 关闭。",
     "sessionCost": "本会话累计费用",
-    "ledgerCost": "台账累计(含历史)"
+    "ledgerCost": "台账累计(含历史)",
+    "close": "关闭"
   },
   "retry": {
     "lastTurn": "重发上一条消息"
@@ -399,7 +410,36 @@
   },
   "home": {
     "toolHint": "{{name}} · 新标签页打开",
-    "starters": "试试这些开始"
+    "starters": "试试这些开始",
+    "starterCards": {
+      "campaign": {
+        "label": "营销活动诊断",
+        "prompts": {
+          "0": "帮我诊断这个营销活动，评估人群圈选和触达链路是否合理",
+          "1": "复盘这个活动的转化漏斗，找出效果不佳的环节"
+        }
+      },
+      "analyst": {
+        "label": "分析专家",
+        "prompts": {
+          "0": "做一份外部专题调研：这个行业近一年的竞争格局和主要玩家动向",
+          "1": "做一份内部业务经营分析：拆解这条业务线的收入结构和同比变化"
+        }
+      },
+      "modeling": {
+        "label": "算法建模",
+        "prompts": {
+          "0": "构建一个用户流失预测模型，给出特征方案",
+          "1": "为这个推荐场景设计召回 + 排序链路"
+        }
+      },
+      "consulting": {
+        "label": "方案咨询",
+        "prompts": {
+          "0": "推荐一个适合冷启动推荐的算法方案"
+        }
+      }
+    }
   },
   "externalApps": {
     "recsys": {
@@ -418,5 +458,96 @@
     "notRestorableHint": "这条会话不能恢复。",
     "draftKept": "你刚才输入的内容还在,新建会话会把它带过去。",
     "startNew": "新建会话继续"
+  },
+  "feedback": {
+    "failed": "反馈没有保存成功",
+    "up": "有帮助",
+    "down": "有问题",
+    "markedDown": "已标记有问题 · 点击可改",
+    "category": "问题类别",
+    "note": "说明",
+    "notePlaceholder": "哪里不对?一句话就行",
+    "expected": "期望结果",
+    "expectedPlaceholder": "可不填。填了就是训练时的判据 —— 越具体越好",
+    "skill": "这次的技能",
+    "skillPlaceholder": "没调技能可留空",
+    "skillAuto": "自动识别,可改",
+    "retract": "撤回",
+    "cancel": "取消",
+    "submit": "提交",
+    "categories": {
+      "wrong_result": "结果不对",
+      "not_as_asked": "没按要求做",
+      "wrong_tool": "用错了技能/工具",
+      "too_slow": "太慢",
+      "other": "其他"
+    }
+  },
+  "survey": {
+    "thanks": "谢谢,已记下 —— 这会成为这个技能下次优化的依据。",
+    "skipped": "好的,这次不问了。",
+    "question": "这次「{{skill}}」处理得怎么样?",
+    "skip": "跳过",
+    "good": "好",
+    "neutral": "一般",
+    "bad": "差",
+    "hintPick": "选一档即记录;想多说两句再填下面",
+    "hintRecorded": "已记录。可以补一句待优化点,或直接关掉",
+    "notePlaceholder": "待优化点(可不填)。例:漏了渠道口径 / 表格少一列 / 该先问我时间窗",
+    "footnote": "调过技能的回合按抽样询问;同一技能一小时内不再问;可在「我的账号」关闭",
+    "close": "就这样",
+    "submit": "提交"
+  },
+  "visionPanel": {
+    "headlineLead": "把复杂的算法与数据问题，",
+    "headlineTail": "分解为清晰、可执行、可回溯的智能工作流",
+    "pillars": {
+      "entry": {
+        "title": "一个入口",
+        "desc": "算法研发 · 数据分析 · 多 Agent 协作"
+      },
+      "trusted": {
+        "title": "可信执行",
+        "desc": "每轮改动可视化 · 可审计 · 可回滚"
+      },
+      "reuse": {
+        "title": "沉淀复用",
+        "desc": "团队的算法资产与方法持续积累"
+      }
+    }
+  },
+  "composer": {
+    "notice": {
+      "uploadStartFailed": "上传没能开始(HTTP {{status}})",
+      "reminder": "提醒:{{message}}",
+      "messageWithPath": "{{message}}\n\n路径:`{{path}}`",
+      "commandCancelled": "命令已取消",
+      "commandFailed": "命令执行失败:{{message}}",
+      "fileEmpty": "这个文件是空的",
+      "imageTooLarge": "超过 5MB,图片最大 5MB",
+      "tooManyImages": "最多附 5 张图片,多出的 {{extra}} 张没有附上。",
+      "documentTooLarge": "{{name}} 超过 20MB,文档解析放不下这么大的文件。",
+      "parseFailed": "解析失败(HTTP {{status}})",
+      "readFailed": "无法读取 {{name}}",
+      "attachmentTooLarge": "{{name}} 超过 500MB,单个附件最多 500MB。",
+      "attachmentUploadFailed": "{{name}} 上传失败:{{error}}",
+      "fetchUrlFailed": "抓取网页失败:{{error}}",
+      "forkPointMissing": "无法定位分叉点",
+      "editRerunFailed": "编辑重跑失败：{{error}}",
+      "filesRejected": "有 {{rejected}} 个文件没能附上。",
+      "newSessionNoId": "新建会话失败:服务端没有返回会话号。",
+      "newSessionFailed": "新建会话失败:{{message}}",
+      "attachmentsUploading": "附件还在上传,等它传完再发送。",
+      "imageUploadFailedWithReason": "图片上传失败:{{message}}",
+      "imageUploadFailed": "图片上传失败",
+      "queuedImagesLost": "排队时附带的 {{images}} 张图片需要重新添加。",
+      "deliveryAbandoned": "这条消息连续多次投递都没有得到确认,已停止自动重发 —— 正文退回了输入框,确认后再发一次。",
+      "queueReplacedElsewhere": "另一个标签页排了新的消息 —— 这边排队的那条正文退回了输入框。",
+      "queuedImagesLostGeneric": "排队时附带的图片需要重新添加。",
+      "queueHandledElsewhere": "这条排队消息已在另一个标签页被发出或取消 —— 正文退回了输入框。",
+      "permissionNotSent": "连接已断开,授权未发送成功,请在恢复连接后重试。",
+      "retryBlockedByDraft": "输入框里有未发送的内容 —— 先发送或清空它,再点重试。",
+      "sendFailed": "发送失败"
+    }
   }
 }

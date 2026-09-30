@@ -1,0 +1,35 @@
+{
+ "format": "skillwhet.tasks.v1",
+ "tasks": [
+  {
+   "id": "tests/unit/test_extract.py::test_normalize_cell_strips_currency",
+   "intent": "strip $",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_extract.py::test_extract_tables_splits_on_blank_line",
+   "intent": "split tables",
+   "reference_kind": "rule",
+   "split": "train"
+  },
+  {
+   "id": "tests/unit/test_extract.py::test_normalize_cell_strips_currency",
+   "intent": "strip $",
+   "reference_kind": "rule",
+   "split": "val"
+  },
+  {
+   "id": "tests/unit/test_extract.py::test_extract_tables_splits_on_blank_line",
+   "intent": "split tables",
+   "reference_kind": "rule",
+   "split": "val"
+  },
+  {
+   "id": "tests/unit/test_extract.py::test_normalize_cell_strips_euro",
+   "intent": "strip \u20ac (never trained on)",
+   "reference_kind": "rule",
+   "split": "test"
+  }
+ ]
+}
