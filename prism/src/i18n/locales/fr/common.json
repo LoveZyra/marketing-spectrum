@@ -125,5 +125,11 @@
         }
       }
     }
+  },
+  "tasksPage": {
+    "form": {
+      "privateModel": "Privé",
+      "modelUnavailable": "Indisponible"
+    }
   }
 }

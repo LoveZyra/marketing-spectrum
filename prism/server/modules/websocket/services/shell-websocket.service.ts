@@ -11,6 +11,7 @@ import { canViewerSeeSession, projectsDb, userDb } from '@/modules/database/inde
 import { claimForShell, releaseShellClaim } from '@/modules/websocket/services/conversation-ownership.service.js';
 import { pushReplayChunk } from '@/modules/websocket/services/shell-replay-buffer.js';
 import { readSocketViewer, stampSocketViewer } from '@/shared/project-visibility.js';
+import { resolveClaudeCommandForShell, withBundledClaudeOnPath } from '@/shared/claude-cli-path.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
 import { createLogger } from '@/shared/logger.js';
@@ -32,6 +33,8 @@ type ShellIncomingMessage = {
   forceRestart?: boolean;
   /** F10:多标签时每个终端一个 id;不传则与改动前行为逐字一致。 */
   terminalId?: string;
+  /** hm(A3.3):接管时这段对话在 chat 里的权限档位(前端从 localStorage 读来),服务端再过白名单与策略。 */
+  permissionMode?: string;
 };
 
 type PtySessionEntry = {
@@ -76,6 +79,15 @@ type ShellWebSocketDependencies = {
    * import claude-sdk.js。
    */
   releaseConversation?: (providerSessionId: string) => Promise<{ released: boolean; reason: string }>;
+  /**
+   * hm(A3.3):接管命令里的 `--permission-mode` 过服务端策略(PRISM_ALLOW_BYPASS_USERS 降级、
+   * root 下的 bypass 说明)。由组合根注入 —— 策略住在 claude-sdk.js,模块不 import 它。
+   * 不注入时只做白名单,不降级。
+   */
+  policeTakeoverPermissionMode?: (
+    requestedMode: string,
+    actorUsername: string | null,
+  ) => { mode: string; notice: string | null };
   resolveProviderSessionId: (
     sessionId: string,
     provider: string,
@@ -180,19 +192,42 @@ function resolveResumeSessionId(
  *
  * 要在终端里继续对话仍然可以,但要显式接管(`takeover`),走释放 → 交接的流程。
  */
-function buildShellCommand(
+/**
+ * hm(A3.3):接管命令里能出现的档位 —— 要拼进 `bash -c` 串,只收白名单里的字面量。
+ * `auto` 映射成 `default`(网关给不了 auto 的分类器;与 claude-sdk.js 的 VALID_PERMISSION_MODES 同口径),
+ * 其余认不出来的一律 `default`。
+ */
+const TAKEOVER_PERMISSION_MODES = new Set(['default', 'plan', 'acceptEdits', 'bypassPermissions']);
+export function normalizeTakeoverPermissionMode(value: unknown): string {
+  const mode = typeof value === 'string' ? value.trim() : '';
+  if (mode === 'auto') return 'default';
+  return TAKEOVER_PERMISSION_MODES.has(mode) ? mode : 'default';
+}
+
+export function buildShellCommand(
   message: ShellIncomingMessage,
-  resume: ResumeResolution
+  resume: ResumeResolution,
+  options: { permissionMode?: string; claudeCommand?: string } = {},
 ): string {
   const initialCommand = readString(message.initialCommand);
   const wantsTakeover = readBoolean(message.takeover);
+  const claudeCommand = options.claudeCommand || 'claude';
 
   if (initialCommand) {
-    return initialCommand;
+    /*
+     * hm(A2):登录弹窗发来的是 `claude --dangerously-skip-permissions /login` 这类串 ——
+     * 开头的 `claude` 换成 Prism 实际用的那一个(`CLAUDE_CLI_PATH` 显式配了就是它),
+     * 免得登录的是 PATH 上另一个版本的 CLI。其余命令原样。
+     */
+    return /^claude(\s|$)/.test(initialCommand)
+      ? `${claudeCommand}${initialCommand.slice('claude'.length)}`
+      : initialCommand;
   }
 
   if (wantsTakeover && resume.ok) {
-    return `claude --resume "${resume.sessionId}"`;
+    // hm(A3.3):显式带档位 —— CLI 2.1.283/2.1.284 起交互式会话不指定就进 auto。
+    const mode = normalizeTakeoverPermissionMode(options.permissionMode);
+    return `${claudeCommand} --resume "${resume.sessionId}" --permission-mode ${mode}`;
   }
 
   // 空串 = 起用户的登录 shell(下面 pty.spawn 的 `-c ''` 会落到交互式 shell)。
@@ -553,7 +588,9 @@ export function handleShellConnection(
             } else {
               takeoverNote = released.reason === 'turn_in_flight'
                 ? '\x1b[33mchat 里有一轮对话正在进行,现在接管会打断它。等它跑完再试。已为你打开普通终端。\x1b[0m\r\n'
-                : '\x1b[33m释放 chat 侧运行时失败,没有接管。已为你打开普通终端。\x1b[0m\r\n';
+                : released.reason === 'background_tasks'
+                  ? '\x1b[33mchat 里还有后台任务在跑,现在接管会把它们一起杀掉。先在对话的后台任务条上停掉(或等它们跑完)再试。已为你打开普通终端。\x1b[0m\r\n'
+                  : '\x1b[33m释放 chat 侧运行时失败,没有接管。已为你打开普通终端。\x1b[0m\r\n';
             }
           } else {
             const claim = claimForShell(appSessionId || resume.sessionId, viewer);
@@ -567,7 +604,25 @@ export function handleShellConnection(
           }
         }
 
-        const shellCommand = buildShellCommand(data, takeoverGranted ? resume : { ok: false, reason: 'no_session' });
+        /*
+         * hm(A3.3):接管用的档位 = chat 里这段对话的档位(前端带来),过白名单与服务端策略。
+         * root 下选了 bypass、而 CLI 会拒 —— 退回 default 并在终端里说一声,而不是让 CLI 立刻退出。
+         */
+        let takeoverMode = normalizeTakeoverPermissionMode(data.permissionMode);
+        if (takeoverGranted && dependencies.policeTakeoverPermissionMode) {
+          const policed = dependencies.policeTakeoverPermissionMode(takeoverMode, viewer.username ?? null);
+          takeoverMode = normalizeTakeoverPermissionMode(policed.mode);
+          if (policed.notice) takeoverNote = `${takeoverNote}\x1b[33m${policed.notice}\x1b[0m\r\n`;
+        }
+        const claudeCommand = resolveClaudeCommandForShell();
+        if (claudeCommand.source === 'path') {
+          log.warn('[Shell] 没找到 SDK 随包的 claude,也没配 CLAUDE_CLI_PATH —— 终端里用的是 PATH 上的 claude');
+        }
+        const shellCommand = buildShellCommand(
+          data,
+          takeoverGranted ? resume : { ok: false, reason: 'no_session' },
+          { permissionMode: takeoverMode, claudeCommand: claudeCommand.command },
+        );
         const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
         const shellArgs = shellCommand
           ? (os.platform() === 'win32' ? ['-Command', shellCommand] : ['-c', shellCommand])
@@ -575,6 +630,17 @@ export function handleShellConnection(
         const termCols = readNumber(data.cols, 80);
         const termRows = readNumber(data.rows, 24);
         const prioritizedPath = prioritizeUserNpmGlobalBin(process.env);
+        /*
+         * hm(A2 / Q10):SDK 随包 claude 所在目录放到 PATH 最前 —— 终端里敲 `claude`、接管、登录
+         * 与对话用同一个版本。`CLAUDE_CLI_PATH` 配成路径就放它的目录;配成裸命令名(`claude`)不动 PATH
+         * (运维要退回全局 CLI)。
+         * `DISABLE_AUTOUPDATER=1`:终端里的 claude 不自己去装新版本(装到 ~/.local/bin 会变成
+         * cron 与别的入口用的那个)。
+         */
+        const ptyEnv = withBundledClaudeOnPath({
+          ...process.env,
+          [prioritizedPath.key]: prioritizedPath.value,
+        });
 
         shellProcess = pty.spawn(shell, shellArgs, {
           name: 'xterm-256color',
@@ -582,8 +648,10 @@ export function handleShellConnection(
           rows: termRows,
           cwd: resolvedProjectPath,
           env: {
-            ...process.env,
-            [prioritizedPath.key]: prioritizedPath.value,
+            ...ptyEnv,
+            DISABLE_AUTOUPDATER: '1',
+            // hm(复审):接管后任务清单工具别凭空消失 —— 与对话里的 CLI 一致(见 buildClaudeSdkEnv)
+            CLAUDE_CODE_ENABLE_TODO_TOOLS: '1',
             TERM: 'xterm-256color',
             COLORTERM: 'truecolor',
             FORCE_COLOR: '3',

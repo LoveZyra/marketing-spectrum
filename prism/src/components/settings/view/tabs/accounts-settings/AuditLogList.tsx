@@ -6,7 +6,8 @@ import { api } from '../../../../../utils/api';
 import { middleTruncate } from '../../../../../utils/middleTruncate';
 
 import {
-  DELETION_AUDIT_EVENTS, type AuditTranslator, auditEventLabel, describeAuditDetail, isDeletionAuditEvent,
+  DELETION_AUDIT_EVENTS, MODEL_GATEWAY_AUDIT_EVENTS, type AuditTranslator, auditEventLabel, describeAuditDetail, isDeletionAuditEvent,
+  isModelGatewayAuditEvent,
 } from './auditDetail';
 
 type AuditEntry = {
@@ -66,6 +67,14 @@ const EVENT_GROUPS: ReadonlyArray<{ key: string; labelZh: string; events: readon
     key: 'skills',
     labelZh: '技能装卸',
     events: ['skill_installed', 'skill_removed'],
+  },
+  {
+    // hn:模型目录的增删改 + settings.json 别名映射的保存(root 管理动作)
+    // hq:再加网关与 key —— 共享网关 / 默认 key / 替人填 key / 私有网关开关(root),个人 key / 私有网关 / 私有模型(本人)
+    key: 'models',
+    labelZh: '模型、网关与 key',
+    events: ['model_catalog_created', 'model_catalog_updated', 'model_catalog_deleted', 'model_config_updated', 'subagent_model_updated',
+      ...MODEL_GATEWAY_AUDIT_EVENTS],
   },
   {
     key: 'credentials',
@@ -281,7 +290,7 @@ export default function AuditLogList({ title }: AuditLogListProps = {}) {
                 <td className="w-px whitespace-nowrap px-3 py-1.5">
                   <span
                     /* -ml-1.5 抵掉徽标自己的 px-1.5,文字左边才与表头「事件」对齐(同账号审批表的状态列) */
-                    className={`-ml-1.5 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] ${isDeletionAuditEvent(entry.event) ? '' : 'font-mono'} ${
+                    className={`-ml-1.5 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] ${isDeletionAuditEvent(entry.event) || isModelGatewayAuditEvent(entry.event) ? '' : 'font-mono'} ${
                       entry.outcome === 'failure'
                         ? 'bg-muted text-muted-foreground'
                         : 'bg-muted text-body'

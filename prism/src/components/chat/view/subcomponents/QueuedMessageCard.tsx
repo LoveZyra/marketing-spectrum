@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { PencilIcon, XIcon } from 'lucide-react';
+import { ArrowUpIcon, PencilIcon, XIcon } from 'lucide-react';
 
 interface QueuedMessageCardProps {
   content: string;
@@ -7,12 +7,17 @@ interface QueuedMessageCardProps {
   /** 省略即不显示铅笔 —— 服务端那条已经发出去了,没有"编辑"可言。 */
   onEdit?: () => void;
   onDelete: () => void;
+  /**
+   * ho:「立即发送」(send now)—— 不等这一轮结束,现在就插进去(模型在下一个工具间隙看到它)。
+   * 省略即不显示(服务端那条、带图片的那条都不给)。
+   */
+  onSendNow?: () => void;
   /** 覆盖标题(默认「Queued」)。服务端排队用不同的措辞,以免和本地排队混淆。 */
   label?: string;
   hint?: string;
 }
 
-export default function QueuedMessageCard({ content, imageCount = 0, onEdit, onDelete, label, hint }: QueuedMessageCardProps) {
+export default function QueuedMessageCard({ content, imageCount = 0, onEdit, onDelete, onSendNow, label, hint }: QueuedMessageCardProps) {
   const { t } = useTranslation('chat');
 
   return (
@@ -36,6 +41,18 @@ export default function QueuedMessageCard({ content, imageCount = 0, onEdit, onD
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
+          {onSendNow && (
+            <button
+              type="button"
+              onClick={onSendNow}
+              data-queue-action="send-now"
+              title={t('input.queue.sendNowHint')}
+              className="mr-1 inline-flex items-center gap-1 rounded-md border border-primary/30 bg-background px-2 py-1 text-[12px] font-medium text-foreground transition-colors hover:bg-primary/[0.08] dark:text-primary"
+            >
+              <ArrowUpIcon className="h-3.5 w-3.5" aria-hidden />
+              {t('input.queue.sendNow')}
+            </button>
+          )}
           {onEdit && (
             <button
               type="button"

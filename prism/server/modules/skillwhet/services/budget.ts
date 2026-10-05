@@ -28,9 +28,11 @@ export const readBudget = (env: NodeJS.ProcessEnv) => {
     nightlyMaxCostUsd: num('PRISM_SKILLWHET_NIGHTLY_MAX_COST_USD', 100, 500),
     nightlyHardMaxCostUsd: NIGHTLY_HARD_MAX_COST_USD,
     nightlyMaxRounds: NIGHTLY_MAX_ROUNDS,
-    // hl(静态 P1-10):非 root 能指定的模型别名(逗号分隔);root 不受限
+    // hl(静态 P1-10):非 root 能指定的模型(逗号分隔);root 不受限。
+    // hn(B7):**配了才是唯一口径**;没配时 = 三个别名 + 模型目录里上架的条目(见 model-policy.ts)。
     modelAllowlist: String(env.PRISM_SKILLWHET_MODEL_ALLOWLIST ?? '').split(',').map((s) => s.trim()).filter(Boolean).length > 0
       ? String(env.PRISM_SKILLWHET_MODEL_ALLOWLIST).split(',').map((s) => s.trim()).filter(Boolean)
       : DEFAULT_MODEL_ALLOWLIST,
+    modelAllowlistConfigured: String(env.PRISM_SKILLWHET_MODEL_ALLOWLIST ?? '').split(',').map((s) => s.trim()).filter(Boolean).length > 0,
   };
 };

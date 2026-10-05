@@ -78,7 +78,9 @@ export default function PermissionRequestsBanner({
               <ConfirmationRequest>
                 <div className="flex min-w-0 flex-1 flex-col gap-[5px]">
                   <span className="text-[13.5px] font-semibold leading-5 text-card-foreground">
-                    {t('permission.title', { defaultValue: '需要授权才能继续' })}
+                    {request.background
+                      ? t('permission.backgroundTitle')
+                      : t('permission.title', { defaultValue: '需要授权才能继续' })}
                   </span>
                   {/* 工具名 + 规则合成一行等宽元信息 —— 整行已是等宽,不再套芯片底色 */}
                   <span className="font-mono text-[11.5px] leading-[17px] text-muted-foreground">
@@ -109,18 +111,21 @@ export default function PermissionRequestsBanner({
               >
                 {t('permission.deny', { defaultValue: '拒绝' })}
               </ConfirmationAction>
-              <ConfirmationAction
-                variant="outline"
-                onClick={() => {
-                  if (permissionEntry && !alreadyAllowed) {
-                    handleGrantToolPermission({ entry: permissionEntry, toolName: request.toolName });
-                  }
-                  handlePermissionDecision(matchingRequestIds, { allow: true, rememberEntry: permissionEntry });
-                }}
-                disabled={!permissionEntry}
-              >
-                {rememberLabel}
-              </ConfirmationAction>
+              {/* ho(ho-3):CLI 说这一次不该给"总是允许"时(suppressAlwaysAllowRule)不出这个按钮 */}
+              {!request.suppressAlwaysAllow && (
+                <ConfirmationAction
+                  variant="outline"
+                  onClick={() => {
+                    if (permissionEntry && !alreadyAllowed) {
+                      handleGrantToolPermission({ entry: permissionEntry, toolName: request.toolName });
+                    }
+                    handlePermissionDecision(matchingRequestIds, { allow: true, rememberEntry: permissionEntry });
+                  }}
+                  disabled={!permissionEntry}
+                >
+                  {rememberLabel}
+                </ConfirmationAction>
+              )}
               <ConfirmationAction
                 variant="default"
                 onClick={() => handlePermissionDecision(request.requestId, { allow: true })}

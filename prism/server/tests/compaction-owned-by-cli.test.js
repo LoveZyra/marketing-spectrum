@@ -63,7 +63,9 @@ describe('压缩归 CLI(gt)', () => {
      * 位置本身的判据挪到 `settings-shape.test.js`,对着 SDK 的 .d.ts 断言。
      */
     assert.match(codeOnly, /compactSettings\.autoCompactEnabled\s*=\s*false/);
-    assert.match(codeOnly, /compactSettings\.autoCompactWindow\s*=\s*AUTO_COMPACT_WINDOW/);
+    // hn(B2):窗口 = min(模型目录里的窗口, PRISM_AUTO_COMPACT_WINDOW),两者有其一就写
+    assert.match(codeOnly, /\[contextWindow, AUTO_COMPACT_WINDOW\]/);
+    assert.match(codeOnly, /compactSettings\.autoCompactWindow\s*=\s*Math\.min\(\.\.\.windows\)/);
     assert.match(codeOnly, /sdkOptions\.settings\s*=/);
     // Prism 侧那条 0.8 的判据不该再存在
     assert.equal(codeOnly.includes('AUTO_COMPACT_RATIO'), false);

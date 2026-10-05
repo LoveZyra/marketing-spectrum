@@ -131,6 +131,10 @@ export function chatMessageToNormalized(
     // Keep attachment references on the local echo so the user bubble shows
     // its images immediately, before the server-backed copy replaces it.
     images: Array.isArray(msg.images) && msg.images.length > 0 ? msg.images : undefined,
+    // ho(ho-1):本地回声带上幂等键 —— 合流消息的「撤回」按它找到这个气泡
+    ...(msg.clientMessageId ? { clientMessageId: msg.clientMessageId } : {}),
+    // hq(复审五轮):回合在跑时发的 —— 进度区不把它算新回合
+    ...(msg.sentDuringTurn === true ? { sentDuringTurn: true } : {}),
   } as NormalizedMessage;
 }
 

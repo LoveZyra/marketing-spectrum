@@ -72,7 +72,12 @@ const OBSERVABLE_KINDS: ReadonlySet<string> = new Set([
   'task_progress',
 ]);
 
-export type ObservedTrigger = 'task-notification' | 'unknown';
+/**
+ * ho(hp-2):`merged` = 这一轮回答的是用户合流进去的消息(按 `user_message_uuid` 判,claude-sdk 的
+ * frameAnswersMerged);此前靠合流时记一笔、10 分钟内的下一轮就算 —— 当场并进的那种不会有无主帧,
+ * 那一笔没人消费,只能靠过期。
+ */
+export type ObservedTrigger = 'task-notification' | 'merged' | 'unknown';
 
 type ObservedEntry = {
   appSessionId: string;
@@ -85,37 +90,6 @@ type ObservedEntry = {
 };
 
 const entries = new Map<string, ObservedEntry>();
-
-/**
- * gc:**刚刚合流进 CLI 的那条用户消息。**
- *
- * 合流之后模型的回复有两种落法:被 CLI 当场并进这一轮(那就走 `runtime.turn`,
- * 与这里无关),或者等到回合边界才投递 —— 后者对 Prism 来说就是一轮**无主帧**,
- * 会被观测回合接住。可它并不是"CLI 自己发起的",是**用户发起的**:
- * 再盖一枚「📬 这一轮由 Claude Code 自己发起」的标记就是睁眼说瞎话
- * (用户的气泡就在上面几行)。
- *
- * 所以合流时记一笔,观测回合开的时候查一下:是用户的就不盖标记。
- *
- * 带过期时间:当场并进这一轮时根本不会有无主帧,这一笔没人来消费,
- * 挂着不清就会让**下一次**真的后台通知丢掉标记。过期只影响一枚标记,
- * 不影响内容,所以取值宽松一点没关系。
- */
-const MERGED_SEND_TTL_MS = 10 * 60_000;
-const mergedSends = new Map<string, number>();
-
-export function noteMergedSend(appSessionId: string): void {
-  if (!appSessionId) return;
-  mergedSends.set(appSessionId, Date.now());
-}
-
-/** 取走(并清掉)"这一轮其实是用户合流进来的"这一笔。 */
-function takeMergedSend(appSessionId: string): boolean {
-  const at = mergedSends.get(appSessionId);
-  if (at === undefined) return false;
-  mergedSends.delete(appSessionId);
-  return Date.now() - at <= MERGED_SEND_TTL_MS;
-}
 
 /** 观测回合的丢弃计数(可观测性,见 noteOrphanFrame 那一侧)。 */
 let observedTurnsOpened = 0;
@@ -270,9 +244,8 @@ export function observeOrphanFrames(input: {
      * 信息没有丢:后台任务的完成与失败已经归到**它自己那一行**上了
      * (见 useChatMessages 的 backgroundByToolId),那比一句笼统的旁白准得多。
      *
-     * `takeMergedSend` 仍然要调 —— 它是一次性的记账,不取走会挂到下一轮头上。
+     * ho(hp-2):合流消息的那一轮由上游按 uuid 标成 `trigger: 'merged'`(只进日志),不再在这里记账。
      */
-    takeMergedSend(appSessionId);
   }
 
   const run = chatRunRegistry.getRun(appSessionId);
@@ -291,12 +264,23 @@ export function observeOrphanFrames(input: {
   return true;
 }
 
-/** 会话被删/运行时被丢弃时清账。 */
+/**
+ * 会话被删/运行时被丢弃时清账。
+ *
+ * hn(B2):由 claude-sdk 的 `disposePersistentRuntime` 调(此前没有任何调用方)。runtime 没了,
+ * 它开着的观测回合不会再有帧 —— **就地收掉**:不收的话要等静默看门狗,而"工具在途"时它只续不杀,
+ * 最长能挂 2 小时,界面一直转圈。换窗口的重建就会走到这里。
+ */
 export function forgetObservedRun(appSessionId: string): void {
   const entry = entries.get(appSessionId);
   if (!entry) return;
   entries.delete(appSessionId);
   clearTimers(entry);
+  const run = chatRunRegistry.getRun(appSessionId);
+  if (run?.observed && run.status === 'running') {
+    chatRunRegistry.completeRunIfCurrent(run, { exitCode: 1 });
+    log.info(`[observed] ${appSessionId} 的 runtime 被丢弃,观测回合就地收尾`);
+  }
 }
 
 /** 观测统计 —— 与"无主帧丢弃计数"配对看:接住的多了,丢弃的就该少。 */
@@ -308,6 +292,5 @@ export function observedRunStats(): { open: number; opened: number } {
 export function resetObservedRunsForTest(): void {
   for (const entry of entries.values()) clearTimers(entry);
   entries.clear();
-  mergedSends.clear();
   observedTurnsOpened = 0;
 }

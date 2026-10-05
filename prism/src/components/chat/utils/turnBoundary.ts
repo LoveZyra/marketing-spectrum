@@ -20,7 +20,12 @@ import type { ActivityItemRole } from './toolRowSummary';
  * 其余不可展示的行(思考、工具、交互式提示、任务通知)都还在本轮里,继续往下传。
  */
 export function endsTurnForOutputs(item: ChatMessage): boolean {
-  if (item.type === 'user') return true;
+  /**
+   * ho(复审):**插话不是回合边界。** 「立即发送」/ 另一端发来的话被合流进正在跑的这一轮(模型在下一个工具间隙读到、
+   * 接着干),它在列表里落在这一轮中间。当成边界的话:正在跑的子代理卡与工具段被判成"已中断"、当场收起,
+   * 这一轮此前写出的文件也从产出卡里清掉。
+   */
+  if (item.type === 'user') return !(item as { interjection?: boolean }).interjection;
   /**
    * fz:**只有 provider 报的错才终结回合,前端的本地提示不算。**
    *

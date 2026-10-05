@@ -4,14 +4,18 @@ import { ArrowDownIcon } from 'lucide-react';
 
 import { useWebSocket } from '../../../contexts/WebSocketContext';
 import PermissionContext from '../../../contexts/PermissionContext';
+import MergedMessagesContext, { type MergedMessageState, type MergedMessagesContextValue } from '../../../contexts/MergedMessagesContext';
+import { authenticatedFetch } from '../../../utils/api';
+import { emitToast } from '../../../shared/view/ui/toastBus';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
+import type { SettingsMainTab } from '../../settings/types/types';
 import type { ChatInterfaceProps, ChatMessage } from '../types/types';
 import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
-import { extractSessionChecklist } from '../utils/taskChecklist';
+import { extractSessionChecklistWithTurn } from '../utils/taskChecklist';
 import { extractSessionOutputs } from '../utils/sessionOutputs';
 import { turnOutputsFromServer } from '../utils/turnOutputs';
 import { changedFilesToMessages } from '../utils/workFrames';
@@ -25,6 +29,7 @@ import {
 } from '../utils/serverQueue';
 import { carryDraftKey, type SessionRemovedInfo } from '../utils/sessionRemoved';
 import { safeLocalStorage } from '../utils/chatStorage';
+import { fileRewindTurns } from '../utils/fileRewind';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatFindBar from './subcomponents/ChatFindBar';
@@ -40,6 +45,9 @@ import SessionRemovedNotice from './subcomponents/SessionRemovedNotice';
  * 在首屏为一个多数会话里根本不会打开的弹窗付费。
  */
 const CommandResultModal = lazy(() => import('./subcomponents/CommandResultModal'));
+
+/** hq:设置页「模型网关」标签(SETTINGS_MAIN_TABS 里那一行;类型钉住,改名会编译失败)。 */
+const GATEWAY_SETTINGS_TAB: SettingsMainTab = 'gateways';
 
 function ChatInterface({
   selectedProject,
@@ -262,6 +270,7 @@ function ChatInterface({
     queuedDraft,
     editQueuedDraft,
     deleteQueuedDraft,
+    sendQueuedNow,
     handleSendAcked,
     restoreQueuedContent,
     handleInputChange,
@@ -474,6 +483,112 @@ function ChatInterface({
     sendMessage({ type: 'chat.cancel-queued', sessionId: viewedSessionId });
   }, [viewedSessionId, sendMessage]);
 
+  /**
+   * ho(ho-1):**插话(合流进 CLI 队列的消息)的状态**,按 clientMessageId 记。
+   * ACK 带着 mergedUuid 时记 pending(气泡上「模型读到前可撤回」);送达就删;撤回记 withdrawn(气泡置灰)。
+   */
+  const [mergedMessages, setMergedMessages] = useState<Map<string, { sessionId: string; mergedUuid: string; state: MergedMessageState }>>(() => new Map());
+  const handleSendAckedWithMerge = useCallback((ackSessionId: string, clientMessageId: string, mergedUuid?: string | null) => {
+    handleSendAcked(ackSessionId, clientMessageId);
+    if (!mergedUuid) return;
+    // ho(复审):合流进了正在跑的这一轮 —— 本地回声不是回合边界(时间轴 / 产出卡别把这一轮切断)
+    sessionStore.markInterjection(ackSessionId, clientMessageId);
+    setMergedMessages((current) => {
+      const next = new Map(current);
+      next.set(clientMessageId, { sessionId: ackSessionId, mergedUuid, state: 'pending' });
+      // 只留最近的几十条 —— 这份状态只服务于"还撤不撤得回",老的早就有结果了
+      while (next.size > 50) next.delete(next.keys().next().value as string);
+      return next;
+    });
+  }, [handleSendAcked, sessionStore]);
+  const handleMergedOutcome = useCallback((sessionId: string, outcome: { type: 'withdrawn' | 'delivered'; mergedUuids: string[]; clientMessageIds: string[] }) => {
+    setMergedMessages((current) => {
+      let changed = false;
+      const next = new Map(current);
+      for (const [clientMessageId, entry] of current) {
+        if (entry.sessionId !== sessionId) continue;
+        if (!outcome.clientMessageIds.includes(clientMessageId) && !outcome.mergedUuids.includes(entry.mergedUuid)) continue;
+        changed = true;
+        if (outcome.type === 'withdrawn') next.set(clientMessageId, { ...entry, state: 'withdrawn' });
+        else next.delete(clientMessageId);
+      }
+      return changed ? next : current;
+    });
+  }, []);
+  const mergedMessagesValue = useMemo<MergedMessagesContextValue>(() => ({
+    stateFor: (clientMessageId) => (clientMessageId ? mergedMessages.get(clientMessageId)?.state : undefined),
+    withdraw: (clientMessageId) => {
+      const entry = mergedMessages.get(clientMessageId);
+      if (!entry || entry.state !== 'pending') return;
+      sendMessage({ type: 'chat.cancel-queued', sessionId: entry.sessionId, mergedUuid: entry.mergedUuid });
+    },
+  }), [mergedMessages, sendMessage]);
+
+  /**
+   * ho(hq-1):**后台任务条** —— 服务端每次 `background_tasks` 都是全量,按会话替换。
+   */
+  const [backgroundTasksBySession, setBackgroundTasksBySession] = useState<Record<string, Array<{ taskId: string; taskType: string; description: string }>>>({});
+  const handleBackgroundTasks = useCallback((sessionId: string, tasks: Array<{ taskId: string; taskType: string; description: string }>) => {
+    setBackgroundTasksBySession((current) => {
+      if (tasks.length === 0 && !current[sessionId]) return current;
+      const next = { ...current };
+      if (tasks.length === 0) delete next[sessionId];
+      else next[sessionId] = tasks;
+      return next;
+    });
+  }, []);
+  const viewedBackgroundTasks = viewedSessionId ? backgroundTasksBySession[viewedSessionId] ?? null : null;
+  const handleStopBackgroundTask = useCallback(async (taskId: string) => {
+    if (!viewedSessionId) return;
+    try {
+      const response = await authenticatedFetch(
+        `/api/providers/claude/sessions/${encodeURIComponent(viewedSessionId)}/runtime/tasks/${encodeURIComponent(taskId)}/stop`,
+        { method: 'POST' },
+      );
+      const body = (await response.json().catch(() => ({}))) as { stopped?: boolean; reason?: string };
+      if (!body.stopped) emitToast({ message: t('backgroundTasks.stopFailed', { reason: body.reason ?? `HTTP ${response.status}` }) });
+    } catch (error) {
+      emitToast({ message: t('backgroundTasks.stopFailed', { reason: error instanceof Error ? error.message : String(error) }) });
+    }
+  }, [viewedSessionId, t]);
+  /**
+   * ho(hq-1):**「转到后台」只对前台子代理出现。**
+   *
+   * 容器内实测(2.1.285,无头模式):`backgroundTasks()` 对前台子代理立刻生效 —— Agent 调用当场返回
+   * "Async agent launched",这一轮接着往下走;对前台 Bash 却只是登记成后台任务(task_started),
+   * 工具调用照样卡到命令跑完才返回,这一轮并没有往下走。按钮出在 Bash 上就是一个点了没用的按钮,
+   * 所以只在有前台子代理在跑时给,并按它的 tool_use id 定点转(不顺手把同时在跑的 Bash 也登记成后台)。
+   */
+  const foregroundSubagentId = useMemo(() => {
+    if (!isProcessing) return null;
+    for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
+      const message = chatMessages[index];
+      // 只看这一轮(复审:被停掉的子代理永远拿不到 toolResult,扫全量会让之后每一轮都冒出这个按钮)
+      if (message?.type === 'user' && !message.interjection) break;
+      if (!message?.isToolUse || (message.toolName !== 'Agent' && message.toolName !== 'Task') || message.toolResult) continue;
+      const input = (message.toolInput && typeof message.toolInput === 'object' ? message.toolInput : {}) as { run_in_background?: unknown };
+      if (input.run_in_background === true) continue;
+      // 网关转发的模型 tool_use id 不一定是 toolu_ 开头;child_ 是前端给子代理内部行编的号,不是真 id
+      if (typeof message.toolId === 'string' && message.toolId && !message.toolId.startsWith('child_')) return message.toolId;
+    }
+    return null;
+  }, [chatMessages, isProcessing]);
+  const handleBackgroundForeground = useCallback(async () => {
+    if (!viewedSessionId || !foregroundSubagentId) return;
+    try {
+      const response = await authenticatedFetch(
+        `/api/providers/claude/sessions/${encodeURIComponent(viewedSessionId)}/runtime/background`,
+        { method: 'POST', body: JSON.stringify({ toolUseId: foregroundSubagentId }) },
+      );
+      const body = (await response.json().catch(() => ({}))) as { backgrounded?: boolean; reason?: string };
+      if (!body.backgrounded) {
+        emitToast({ message: body.reason === 'no_match' ? t('backgroundTasks.nothingToBackground') : t('backgroundTasks.backgroundFailed', { reason: body.reason ?? `HTTP ${response.status}` }) });
+      }
+    } catch (error) {
+      emitToast({ message: t('backgroundTasks.backgroundFailed', { reason: error instanceof Error ? error.message : String(error) }) });
+    }
+  }, [viewedSessionId, foregroundSubagentId, t]);
+
   useChatRealtimeHandlers({
     subscribe,
     provider,
@@ -492,7 +607,9 @@ function ChatInterface({
     sessionStore,
     onChangedFiles: handleChangedFiles,
     onServerQueueChange: handleServerQueueChange,
-    onSendAcked: handleSendAcked,
+    onSendAcked: handleSendAckedWithMerge,
+    onMergedOutcome: handleMergedOutcome,
+    onBackgroundTasks: handleBackgroundTasks,
     // 排队被中止带走时,正文退回输入框(只在当前正看着这条会话、且输入框为空时)。
     onServerQueueReturned: (sid, content) =>
       sid === (selectedSession?.id ?? currentSessionId) && restoreQueuedContent(content),
@@ -613,6 +730,21 @@ function ChatInterface({
 
   const handleShowCheckpoints = useCallback(() => setShowCheckpoints(true), []);
 
+  /**
+   * hn(B4):当前模型在目录里的那一条(输入框 chip 显示它的名字与厂商图标)。
+   * 别名组的条目也在 OPTIONS 里,但它们没有厂商 —— chip 仍走下面的"别名 → 真实模型"。
+   */
+  const activeModelOption = useMemo(() => {
+    const value = activeSessionModel ?? claudeModel;
+    return providerModelCatalog.claude?.OPTIONS.find((option) => option.value === value) ?? null;
+  }, [activeSessionModel, claudeModel, providerModelCatalog]);
+  const activeModelLabel = activeModelOption?.group === 'catalog' ? (activeModelOption.label || null) : null;
+  const activeModelVendor = activeModelOption?.group === 'catalog' ? (activeModelOption.vendor ?? null) : null;
+  const contextUsedTokens = useMemo(() => {
+    const used = Number((tokenBudget as { used?: unknown } | null)?.used);
+    return Number.isFinite(used) && used > 0 ? used : null;
+  }, [tokenBudget]);
+
   const activeModelReal = useMemo(() => {
     // 优先级:新鲜的实测(端到端真相)> 配置映射(读 settings,随改随新)。
     // 实测过期时不用它 —— 但配置映射恰恰在这时是新值,正好补位。
@@ -620,6 +752,31 @@ function ChatInterface({
     const probed = modelMappingsStale ? null : (modelMappings[alias]?.actualModel ?? null);
     return probed ?? modelConfigMappings[alias]?.configuredModel ?? null;
   }, [activeSessionModel, claudeModel, modelMappingsStale, modelMappings, modelConfigMappings]);
+
+  /** ho:下拉里别名行的「→ 真实模型」—— 与芯片同一套优先级(新鲜实测 > 配置映射)。 */
+  const modelAliasTargets = useMemo(() => {
+    const out: Record<string, string | null> = {};
+    for (const option of providerModelCatalog.claude?.OPTIONS ?? []) {
+      if (option.group === 'catalog') continue;
+      const probed = modelMappingsStale ? null : (modelMappings[option.value]?.actualModel ?? null);
+      out[option.value] = probed ?? modelConfigMappings[option.value]?.configuredModel ?? null;
+    }
+    return out;
+  }, [providerModelCatalog, modelMappingsStale, modelMappings, modelConfigMappings]);
+
+  const pickerSessionId = currentSessionId || selectedSession?.id || null;
+  const handleSelectModelFromDropdown = useCallback(
+    (model: string) => selectProviderModel('claude', model, pickerSessionId),
+    [selectProviderModel, pickerSessionId],
+  );
+  /**
+   * hq:模型菜单 / `/models` 里不能用的模型旁「去填 key」—— 开 设置 → 模型网关。
+   * 走 AppContent 的 openSettings(tab)(命令面板、代码编辑器开指定标签也是这条路);没有设置入口就不出这个链接。
+   */
+  const handleOpenGatewaySettings = useMemo(
+    () => (onShowSettings ? () => onShowSettings(GATEWAY_SETTINGS_TAB) : undefined),
+    [onShowSettings],
+  );
 
   const effectiveFrequentCommands = useMemo(
     () => (commandQuery ? [] : frequentCommands),
@@ -665,7 +822,8 @@ function ChatInterface({
       : chatMessages),
     [workBaseMessages, chatMessages, liveChangedMessages],
   );
-  const latestTodos = useMemo(() => extractSessionChecklist(workMessages), [workMessages]);
+  const sessionChecklist = useMemo(() => extractSessionChecklistWithTurn(workMessages), [workMessages]);
+  const latestTodos = sessionChecklist.items;
   // dt:折叠完再按"已回滚"集合做减法 —— 窗口里的旧 Write 帧会把已回滚的
   // 文件加回来,基线单删不够;回滚后重写的文件不在集合里,照常显示。
   const sessionOutputs = useMemo(() => {
@@ -709,6 +867,9 @@ function ChatInterface({
     <ChatComposer
       serverQueued={serverQueued}
       onCancelServerQueued={handleCancelServerQueued}
+      backgroundTasks={viewedBackgroundTasks}
+      onStopBackgroundTask={handleStopBackgroundTask}
+      onBackgroundForeground={foregroundSubagentId ? handleBackgroundForeground : undefined}
       pendingPermissionRequests={pendingPermissionRequests}
       handlePermissionDecision={handlePermissionDecision}
       handleGrantToolPermission={handleGrantToolPermission}
@@ -717,6 +878,8 @@ function ChatInterface({
       abortDiscardsPending={abortDiscardsPending}
       activeModel={activeSessionModel ?? claudeModel}
       activeModelReal={activeModelReal}
+      activeModelLabel={activeModelLabel}
+      activeModelVendor={activeModelVendor}
       permissionMode={permissionMode}
       onSelectMode={selectPermissionMode}
       availablePermissionModes={availablePermissionModes}
@@ -724,6 +887,11 @@ function ChatInterface({
       availableEffortOptions={currentProviderEffortOptions}
       onSelectEffort={handleSelectEffort}
       onShowModelPicker={showModelsModal}
+      modelOptions={providerModelCatalog.claude?.OPTIONS}
+      onSelectModel={handleSelectModelFromDropdown}
+      onOpenGatewaySettings={handleOpenGatewaySettings}
+      contextUsedTokens={contextUsedTokens}
+      modelAliasTargets={modelAliasTargets}
       onShowCheckpoints={handleShowCheckpoints}
       onToggleCommandMenu={handleToggleCommandMenu}
       onSubmit={handleSubmit}
@@ -731,6 +899,7 @@ function ChatInterface({
       queuedDraft={queuedDraft}
       onEditQueuedDraft={editQueuedDraft}
       onDeleteQueuedDraft={deleteQueuedDraft}
+      onSendQueuedNow={sendQueuedNow}
       attachedImages={attachedImages}
       onRemoveImage={handleRemoveImage}
       uploadingImages={uploadingImages}
@@ -777,6 +946,7 @@ function ChatInterface({
 
   return (
     <PermissionContext.Provider value={permissionContextValue}>
+    <MergedMessagesContext.Provider value={mergedMessagesValue}>
       {/* do:对话区分两栏 —— 左边消息流 + 输入框,右边 Cowork 式工作面板
           (上任务清单、下产出文件)。面板两块都空时自己不渲染,布局即回到单栏。 */}
       <div ref={rootRef} className="flex h-full min-h-0">
@@ -886,6 +1056,7 @@ function ChatInterface({
 
       <ChatWorkPanel
         todos={latestTodos}
+        checklistTurn={sessionChecklist.currentTurn}
         outputs={sessionOutputs}
         historyTruncated={workHistoryTruncated}
         previewOpen={isEditorOpen}
@@ -901,6 +1072,7 @@ function ChatInterface({
         <CheckpointHistoryPanel
           sessionId={selectedSession?.id || currentSessionId || null}
           isProcessing={isProcessing}
+          fileTurns={fileRewindTurns(sessionStore.getMessages(selectedSession?.id || currentSessionId || ''))}
           onClose={() => setShowCheckpoints(false)}
           onReverted={() => {
             const activeId = selectedSession?.id || currentSessionId;
@@ -930,10 +1102,13 @@ function ChatInterface({
         onHardRefreshProviderModels={hardRefreshProviderModels}
         currentSessionId={currentSessionId || selectedSession?.id || null}
         activeModelAlias={activeSessionModel ?? claudeModel}
+        contextUsedTokens={contextUsedTokens}
         onSelectProviderModel={selectProviderModel}
+        onOpenKeySettings={handleOpenGatewaySettings}
       />
       </Suspense>
       )}
+    </MergedMessagesContext.Provider>
     </PermissionContext.Provider>
   );
 }

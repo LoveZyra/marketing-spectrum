@@ -16,6 +16,11 @@ export interface TodoItem {
   status: TodoStatus;
   /** 进行中的现在分词形态(SDK 可选给),显示优先用它。 */
   activeForm?: string;
+  /**
+   * hq:最后一次被 TaskCreate / TaskUpdate 碰到时是第几个用户回合(从 1 数;TodoWrite 清单没有)。
+   * 进度时间轴靠它分辨"这一轮的当前步"与"之前被停下的回合留下的 in_progress / pending"。
+   */
+  turn?: number;
 }
 
 const TODO_STATUSES: ReadonlySet<string> = new Set(['pending', 'in_progress', 'completed']);
@@ -100,7 +105,9 @@ interface ToolEvent {
   resultContent: string;
 }
 
-function applyTaskEvent(tasks: Map<string, TodoItem>, event: ToolEvent): void {
+function applyTaskEvent(tasks: Map<string, TodoItem>, event: ToolEvent, turn?: number): void {
+  // 还没见过用户消息(纯工具帧的服务端基线、测试)时不带回合 —— 当成"没有回合信息"
+  const withTurn = (item: TodoItem): TodoItem => (turn === undefined || turn <= 0 ? item : { ...item, turn });
   if (event.toolName === 'TaskCreate') {
     const match = CREATE_RESULT_RE.exec(event.resultContent);
     const input = parseLooseObject(event.toolInput);
@@ -108,10 +115,10 @@ function applyTaskEvent(tasks: Map<string, TodoItem>, event: ToolEvent): void {
     if (match) {
       const content = (match[2] || '').trim() || subject || `任务 #${match[1]}`;
       // 状态只保不清:乱序时(update 先见于 create 结果)不打回 pending。
-      tasks.set(match[1], { content, status: tasks.get(match[1])?.status ?? 'pending' });
+      tasks.set(match[1], withTurn({ content, status: tasks.get(match[1])?.status ?? 'pending' }));
     } else if (subject) {
       // 结果还在路上(运行中帧):先按主题占位;结果落地后整表重折即自愈。
-      tasks.set(`pending:${subject}`, { content: subject, status: 'pending' });
+      tasks.set(`pending:${subject}`, withTurn({ content: subject, status: 'pending' }));
     }
     return;
   }
@@ -127,10 +134,10 @@ function applyTaskEvent(tasks: Map<string, TodoItem>, event: ToolEvent): void {
     }
     const existing = tasks.get(taskId);
     const subject = typeof input?.subject === 'string' && input.subject.trim() ? input.subject.trim() : '';
-    tasks.set(taskId, {
+    tasks.set(taskId, withTurn({
       content: subject || existing?.content || `任务 #${taskId}`,
       status: TODO_STATUSES.has(status) ? (status as TodoStatus) : existing?.status ?? 'pending',
-    });
+    }));
   }
 }
 
@@ -151,16 +158,49 @@ function applyTaskEvent(tasks: Map<string, TodoItem>, event: ToolEvent): void {
  */
 export const MAX_CHECKLIST_ITEMS = 200;
 
+export interface SessionChecklist {
+  items: TodoItem[] | null;
+  /**
+   * hq(复审五轮):数到最后的用户回合号(跟 `TodoItem.turn` 同一套编号)。比清单里最大的回合号大 =
+   * **最近这条用户消息之后还没动过清单** —— 进度区据此不认锚点(不把上一轮被停下的老任务当成当前步)。
+   * 0 = 没有回合信息。
+   */
+  currentTurn: number;
+}
+
 export function extractSessionChecklist(messages: readonly ChatMessage[]): TodoItem[] | null {
+  return extractSessionChecklistWithTurn(messages).items;
+}
+
+export function extractSessionChecklistWithTurn(messages: readonly ChatMessage[]): SessionChecklist {
   const tasks = new Map<string, TodoItem>();
+  /*
+   * hq:第几个用户回合(插话并进正在跑的那一轮,不算新回合)—— 见 TodoItem.turn。
+   * 服务端基线(workFramesToMessages)的伪消息带着服务端数好的回合号(`taskTurn`,全量日志口径);
+   * 接在后面的已加载窗口照常数用户消息、从基线的回合号往上加 —— 两段编号单调、"最近一轮"的条目
+   * 都落在最大值上(窗口从这一轮中间开始时还沿用基线的号;从这一轮的用户消息开始时整轮 +1,一样一致)。
+   */
+  let turn = 0;
 
   for (const message of messages) {
+    const explicit = (message as { taskTurn?: unknown }).taskTurn;
+    if (typeof explicit === 'number' && Number.isFinite(explicit)) {
+      if (explicit > turn) turn = explicit;
+    } else if (
+      message?.type === 'user'
+      && !(message as { interjection?: boolean }).interjection
+      // 复审(五轮):回合在跑时发出去的本地回声(合流 ACK 未到 / 被排到后面)不算新回合 —— 否则这一轮的当前步
+      // 会在它到达的那一刻消失;它真起了新回合时,服务端那份落库行会替掉这条回声,那时再算。
+      && !(message as { sentDuringTurn?: boolean }).sentDuringTurn
+    ) {
+      turn += 1;
+    }
     if (message?.isToolUse && typeof message.toolName === 'string') {
       applyTaskEvent(tasks, {
         toolName: message.toolName,
         toolInput: message.toolInput,
         resultContent: typeof message.toolResult?.content === 'string' ? message.toolResult.content : '',
-      });
+      }, turn);
     }
     const children = message?.subagentState?.childTools;
     if (Array.isArray(children)) {
@@ -170,14 +210,15 @@ export function extractSessionChecklist(messages: readonly ChatMessage[]): TodoI
           toolName: child.toolName,
           toolInput: child.toolInput,
           resultContent: typeof child.toolResult?.content === 'string' ? child.toolResult.content : '',
-        });
+        }, turn);
       }
     }
   }
 
   if (tasks.size > 0) {
     const items = [...tasks.values()];
-    return items.length > MAX_CHECKLIST_ITEMS ? items.slice(-MAX_CHECKLIST_ITEMS) : items;
+    return { items: items.length > MAX_CHECKLIST_ITEMS ? items.slice(-MAX_CHECKLIST_ITEMS) : items, currentTurn: turn };
   }
-  return extractLatestTodoList(messages);
+  // TodoWrite 清单不带回合号 —— 进度区按状态认锚点,回合号不参与
+  return { items: extractLatestTodoList(messages), currentTurn: 0 };
 }

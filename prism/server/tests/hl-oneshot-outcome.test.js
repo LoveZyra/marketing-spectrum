@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { describe, test, vi } from 'vitest';
+import { afterAll, describe, test, vi } from 'vitest';
 
 /**
  * hl(动态 P1-1):一次性路径 `queryClaudeSDK({ oneShot: true })` 必须把成败**返回**
@@ -20,6 +20,23 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }));
 
 const { queryClaudeSDK, describeOneShotResultError } = await import('../claude-sdk.js');
+
+/*
+ * hq:每一轮都要解析网关与 key(resolveTurnGateway 读 gateway_user_keys)。不给库的话会落到
+ * 仓库里那份没跑过迁移的 legacy auth.db 上(no such table),一轮直接失败 —— 给一份迁移过的临时库。
+ */
+const { closeConnection, initializeDatabase } = await import('@/modules/database/index.js');
+const previousDatabasePath = process.env.DATABASE_PATH;
+const dbDir = mkdtempSync(path.join(tmpdir(), 'hl-oneshot-db-'));
+closeConnection();
+process.env.DATABASE_PATH = path.join(dbDir, 'auth.db');
+await initializeDatabase();
+afterAll(() => {
+  closeConnection();
+  if (previousDatabasePath === undefined) delete process.env.DATABASE_PATH;
+  else process.env.DATABASE_PATH = previousDatabasePath;
+  rmSync(dbDir, { recursive: true, force: true });
+});
 
 const cwd = mkdtemptSafe();
 function mkdtemptSafe() {

@@ -21,3 +21,22 @@ export { getHistoryCacheStats } from './list/claude/claude-sessions.provider.js'
 
 export { initializeSessionsWatcher } from './services/sessions-watcher.service.js';
 export { closeSessionsWatcher } from './services/sessions-watcher.service.js';
+// hm:~/.claude/settings.json 的启动自检(跨会话拒收 / 两个工具禁用 / transcript 保留期 / env 冲突),只 warn
+export { runClaudeSettingsSelfCheck, checkClaudeUserSettings } from './list/claude/claude-settings-selfcheck.js';
+// hn:模型目录 —— 闸口 / 前置检查 / 别名解析 / 播种(websocket、tasks、agent、skillwhet 共用)
+export {
+  claudeModelCatalog,
+  invalidateCatalogCache,
+  ModelNotAllowedError,
+  isModelAlias,
+  modelViewerFor,
+  seedModelCatalogOnce,
+  type CatalogEntry,
+  type ModelViewer,
+} from './list/claude/claude-model-catalog.service.js';
+// hq:模型网关与 key(选择器的"能不能用"、SkillWhet 只认网关 0)
+export { modelsDefinitionFor, DEFAULT_GATEWAY_ID } from './list/claude/claude-gateways.service.js';
+// hq(复审 P1):带 key 的 flag 设置文件 —— 启动时清掉上一个进程留下的
+export { sweepStaleFlagSettingsFiles } from './list/claude/claude-flag-settings-file.js';
+// hn:/cost 的分母要按"会话当前模型"查目录窗口(usage 路由不能 import claude-sdk.js)
+export { providerModelsService } from './services/provider-models.service.js';

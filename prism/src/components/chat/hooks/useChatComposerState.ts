@@ -52,7 +52,7 @@ import type {
   PermissionMode,
   SessionEstablishedContext,
 } from '../types/types';
-import type { Project, ProjectSession, LLMProvider, ProviderModelsCacheInfo } from '../../../types/app';
+import type { Project, ProjectSession, LLMProvider, ProviderModelOption, ProviderModelsCacheInfo } from '../../../types/app';
 import { escapeRegExp } from '../utils/chatFormatting';
 import { buildDocsBlock, type AttachedDoc } from '../utils/attachmentPrompt';
 import { draftStorageKey, mergeQueuedIntoInput } from '../utils/composerDrafts';
@@ -263,11 +263,11 @@ export type ModelCommandData = {
   };
   available?: Partial<Record<LLMProvider, string[]>>;
   availableModels?: string[];
-  availableOptions?: Array<{
-    value: string;
-    label?: string;
-    description?: string;
-  }>;
+  /**
+   * hn:与 `/api/providers/claude/models` 同一份(目录条目 + 别名组,带 group / vendor / contextWindow …)。
+   * hq:同样按人给 —— 带 gatewayId / gatewayName / private / available / unavailableReason(类型见 ProviderModelOption)。
+   */
+  availableOptions?: Array<Partial<ProviderModelOption> & { value: string }>;
   defaultModel?: string;
   cache?: ProviderModelsCacheInfo;
 };
@@ -296,10 +296,16 @@ export type CostCommandData = {
   };
   provider?: string;
   model?: string;
+  /** hn:别名换成的真实模型名(目录条目就是它自己);拿不到为 null。 */
+  realModel?: string | null;
+  /** hn:模型目录里记的厂商(手动指定优先);不在目录里为 null。 */
+  vendor?: string | null;
 };
 
 export type StatusCommandData = {
   version?: string;
+  /** v2.0.0:「v2.0.0 · 2026-10-01 · 3c84d6c」(服务端读包里的 RELEASE.json);老服务端没有。 */
+  release?: string | null;
   packageName?: string;
   uptime?: string;
   model?: string;
@@ -525,6 +531,9 @@ export function useChatComposerState({
     ((event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>) => Promise<void>) | null
   >(null);
   const inputValueRef = useRef(input);
+  // ho(复审):「立即发送」在回合进行中投递 —— 那时不该把活动指示器上的状态行(重试中…)清掉
+  const isLoadingRef = useRef(isLoading);
+  isLoadingRef.current = isLoading;
   /**
    * Prism: pending fork descriptor for edit-and-rerun. When set, the next send
    * starts a brand-new session branched off the parent's native conversation.
@@ -1654,6 +1663,14 @@ export function useChatComposerState({
         content: target.text,
         images: target.images as never,
         timestamp: new Date(),
+        // ho(ho-1):合流进 CLI 队列时,气泡上的「撤回」按它认
+        clientMessageId: target.clientMessageId,
+        /*
+         * hq(复审五轮):回合还在跑时发出去的(立即发送 = 插话,或被服务端排到这一轮后面)—— 进度区数回合时
+         * 不把它算成新回合:合流的 ACK 回来之前、被排队的那段时间里,这一轮的当前步不该消失。
+         * 只给进度区用,不碰 interjection(那个管时间轴 / 产出卡,由 ACK 定)。服务端那份落库行回来后替掉它。
+         */
+        ...(isLoadingRef.current ? { sentDuringTurn: true } : {}),
       });
     } else {
       console.warn(`[queue] 同一条命令再次投递(${target.clientMessageId}),不再重复画气泡`);
@@ -1662,7 +1679,8 @@ export function useChatComposerState({
     // Mark this request as processing in the per-session activity map (the
     // single source of truth the indicator derives from).
     onSessionProcessing?.(target.sessionId!, {
-      statusText: null,
+      // 回合进行中(立即发送 = 插话)不动状态行;新起一轮才清
+      statusText: isLoadingRef.current ? undefined : null,
       canInterrupt: true,
     });
 
@@ -2011,6 +2029,22 @@ export function useChatComposerState({
     });
   }, [setInput]);
 
+  /**
+   * ho:**「立即发送」(send now)—— 排队的那条不等这一轮结束,现在就投给服务端。**
+   *
+   * 服务端看到会话正忙,会把它**合流**进 CLI 的命令队列(priority `'next'`):在下一个工具间隙折进
+   * 正在跑的这一轮,模型带着它继续干(与 Claude 应用里中途发话的 send now 同一个方式),
+   * 送到模型面前之前还能撤回。合流不成立(带图片、没有常驻 runtime……)服务端就自己收下排队,
+   * 卡片换成「服务端已收下」—— 与原来一样,只是不再由这个标签页攒着。
+   * 实现上只是给冲队开一个口子:记下"这一条要立即发",冲队 effect 对它不看 isLoading、不等 750ms。
+   */
+  const [sendNowId, setSendNowId] = useState<string | null>(null);
+  const sendQueuedNow = useCallback(() => {
+    const entry = outboxRef.current;
+    if (!entry || entry.status !== 'queued' || entry.command.images.length > 0) return;
+    setSendNowId(entry.command.clientMessageId);
+  }, []);
+
   // Once the in-flight turn ends, replay the queued draft through the normal
   // submit path (slash commands, image upload, etc. all still apply).
   const wasLoadingRef = useRef(isLoading);
@@ -2068,7 +2102,9 @@ export function useChatComposerState({
     //
     // A 组:附件恢复不回来的那条(`needs_attachment`)同样不发 —— 它在等用户
     // 重新添加图片,自动发出去的会是一条"引用了不存在图片"的话(F12)。
-    if (isLoading || !isSendable(outbox) || !isConnected) {
+    // ho:用户点了「立即发送」的那一条不等这一轮结束(见 sendQueuedNow)
+    const sendNow = Boolean(outbox && sendNowId === outbox.command.clientMessageId);
+    if ((isLoading && !sendNow) || !isSendable(outbox) || !isConnected) {
       return;
     }
     const pending: OutboxEntry = outbox;
@@ -2077,7 +2113,7 @@ export function useChatComposerState({
     // saved draft restored into an apparently idle session — hold it briefly
     // so the `chat_subscribed` ack can flip `isLoading` if a run is actually
     // still live (the cleanup below cancels the send in that case).
-    const delay = wasLoading ? 0 : 750;
+    const delay = wasLoading || sendNow ? 0 : 750;
     const timer = setTimeout(() => {
       const dispatch = () => {
         /**
@@ -2201,7 +2237,7 @@ export function useChatComposerState({
     }, delay);
     return () => clearTimeout(timer);
     // returnQueuedTextToInput 的身份稳定(只依赖 setInput),列在这里只为过 exhaustive-deps。
-  }, [isLoading, outbox, sessionKey, isConnected, markCommandSent, returnQueuedTextToInput]);
+  }, [isLoading, outbox, sessionKey, isConnected, markCommandSent, returnQueuedTextToInput, sendNowId]);
 
   /**
    * 「编辑」排队的那条:正文退回输入框,命令作废。
@@ -2915,6 +2951,7 @@ export function useChatComposerState({
     queuedDraft,
     editQueuedDraft,
     deleteQueuedDraft,
+    sendQueuedNow,
     handleSendAcked,
     restoreQueuedContent,
     handleInputChange,

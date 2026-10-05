@@ -182,3 +182,26 @@ describe('todoProgress', () => {
     expect(todoProgress([{ content: 'a', status: 'completed' }]).allDone).toBe(true);
   });
 });
+
+describe('hq:回合信息(进度时间轴分辨当前轮)', () => {
+  it('每条任务记下最后一次被碰到时是第几个用户回合;插话不算新回合', () => {
+    const extract = extractSessionChecklist;
+    const user = (text: string, extra: Record<string, unknown> = {}) => ({ type: 'user', content: text, timestamp: 0, ...extra });
+    const create = (id: number, subject: string) => ({
+      type: 'assistant', isToolUse: true, toolName: 'TaskCreate', toolInput: { subject }, timestamp: 0,
+      toolResult: { content: `Task #${id} created successfully: ${subject}` },
+    });
+    const update = (id: number, status: string) => ({
+      type: 'assistant', isToolUse: true, toolName: 'TaskUpdate', toolInput: { taskId: String(id), status }, timestamp: 0, toolResult: { content: 'ok' },
+    });
+    const todos = extract([
+      user('第一轮'), create(1, '甲'), create(2, '乙'), update(1, 'in_progress'),
+      user('第二轮'), user('插话', { interjection: true }), create(3, '丙'), update(3, 'in_progress'),
+    ] as never);
+    expect(todos?.map((todo) => [todo.content, todo.status, todo.turn])).toEqual([
+      ['甲', 'in_progress', 1],
+      ['乙', 'pending', 1],
+      ['丙', 'in_progress', 2],
+    ]);
+  });
+});

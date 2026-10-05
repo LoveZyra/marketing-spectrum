@@ -17,6 +17,7 @@ import path from 'path';
 import os from 'os';
 
 import { findAppRoot, getModuleDir, getDataDir } from './utils/runtime-paths.js';
+import { readReleaseInfo } from './shared/release-info.js';
 
 const __dirname = getModuleDir(import.meta.url);
 // The CLI is compiled into dist-server/server, but it still needs to read the top-level
@@ -94,7 +95,8 @@ function showStatus() {
     console.log(c.dim('═'.repeat(60)));
 
     // Version info
-    console.log(`\n${c.info('[INFO]')} Version: ${c.bright(packageJson.version)}`);
+    // v2.0.0:带发布日期与提交号(包里的 RELEASE.json);`prism --version` 仍只打版本号,给脚本用
+    console.log(`\n${c.info('[INFO]')} Version: ${c.bright(readReleaseInfo(APP_ROOT).label ?? packageJson.version)}`);
 
     // Installation location
     const installDir = getInstallDir();
@@ -118,7 +120,7 @@ function showStatus() {
     console.log(`\n${c.info('[INFO]')} Configuration:`);
     console.log(`       SERVER_PORT: ${c.bright(process.env.SERVER_PORT || process.env.PORT || '8080')} ${c.dim(process.env.SERVER_PORT || process.env.PORT ? '' : '(default)')}`);
     console.log(`       DATABASE_PATH: ${c.dim(process.env.DATABASE_PATH || '(using default location)')}`);
-    console.log(`       CLAUDE_CLI_PATH: ${c.dim(process.env.CLAUDE_CLI_PATH || 'claude (default)')}`);
+    console.log(`       CLAUDE_CLI_PATH: ${c.dim(process.env.CLAUDE_CLI_PATH || '(未配置 —— 用 Agent SDK 随包的 claude)')}`);
     console.log(`       CONTEXT_WINDOW: ${c.dim(process.env.CONTEXT_WINDOW || '160000 (default)')}`);
 
     // Claude projects folder
@@ -174,7 +176,7 @@ Environment Variables:
   SERVER_PORT         Set server port (default: 8080)
   PORT                Set server port (default: 8080) (LEGACY)
   DATABASE_PATH       Set custom database location
-  CLAUDE_CLI_PATH     Set custom Claude CLI path
+  CLAUDE_CLI_PATH     Use this Claude CLI instead of the one bundled with the Agent SDK
   CONTEXT_WINDOW      Set context window size (default: 160000)
 ${packageJson.homepage ? `\nDocumentation:\n  ${packageJson.homepage}\n` : ''}${packageJson.bugs?.url ? `\nReport Issues:\n  ${packageJson.bugs.url}\n` : ''}`);
 }

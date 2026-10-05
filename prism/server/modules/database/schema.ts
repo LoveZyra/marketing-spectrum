@@ -496,6 +496,129 @@ CREATE TABLE IF NOT EXISTS scan_state (
 `;
 
 
+/**
+ * hn(B1):**模型目录** —— 选择器里列哪些网关模型、各自的窗口与档位(方案 v3 B1)。
+ *
+ * - `model_id`:网关上的名字,原样传给 SDK。≤ 80 字符,字母数字开头(字符集见 shared/modelVendors.ts);
+ * - `vendor`:图标与分组;NULL = 按 model_id 自动识别;
+ * - `context_window`:NULL = 不设(非 Claude 名 CLI 按 200000);有值 ≥ 100000(CLI 的 autoCompactWindow 下限);
+ * - `effort_levels`:JSON 数组;NULL = 不出档位选择;
+ * - `is_default`:新会话默认选中,最多一条(INDEX_SCHEMA_SQL 里的部分唯一索引);
+ * - `last_probe`:最近一次「实测」的结果 JSON;
+ * - `gateway_id`(hq):走哪个网关;NULL = settings.json 那一套(网关 0);
+ * - `allowed_users`(hq):可用人员,用户 id 的 JSON 数组;NULL = 所有人。
+ *
+ * 纯加表:回到 hl 时这张表留在库里没人读,无害。
+ */
+export const MODEL_CATALOG_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS model_catalog (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_id TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    vendor TEXT,
+    description TEXT,
+    context_window INTEGER,
+    effort_levels TEXT,
+    effort_default TEXT,
+    recommended INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    last_probe TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER,
+    gateway_id INTEGER,
+    allowed_users TEXT
+);
+`;
+
+/**
+ * hq:**模型网关** —— 除了 settings.json 那一套(网关 id 0,不进这张表)之外的网关。
+ *
+ * - `owner_user_id`:NULL = 共享网关(root 管,目录条目可以挂上来);有值 = 这个人的**私有网关**,
+ *   只有他自己看得到、只能挂他自己的私有模型(`user_models`);
+ * - `auth_type`:`bearer` → `ANTHROPIC_AUTH_TOKEN`(Authorization: Bearer);`x-api-key` → `ANTHROPIC_API_KEY`;
+ * - `default_key`:网关的默认 key(AES-256-GCM 密文,见 shared/crypto-box.js);私有网关的 key 就存在这里。
+ *   NULL = 没有默认 key —— 只有填了个人 key 的人能用这个网关上的模型。
+ *
+ * 纯加表:回到 ho 时这张表留在库里没人读,无害。
+ */
+export const MODEL_GATEWAYS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS model_gateways (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    auth_type TEXT NOT NULL DEFAULT 'bearer',
+    default_key TEXT,
+    default_key_last4 TEXT,
+    owner_user_id INTEGER,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by INTEGER,
+    FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+`;
+
+/**
+ * hq:**个人 key** —— 某个人在某个网关上用自己的 key(本人填,或 root 代填,`set_by` 记是谁填的)。
+ * `gateway_id = 0` 指 settings.json 那一套默认网关。值是密文;`key_last4` 只给界面认 key 用。
+ * 唯一索引 (gateway_id, user_id) 在 INDEX_SCHEMA_SQL 里。
+ */
+export const GATEWAY_USER_KEYS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS gateway_user_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gateway_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    key_enc TEXT NOT NULL,
+    key_last4 TEXT,
+    set_by INTEGER,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+`;
+
+/**
+ * hq:**私有模型** —— 挂在本人私有网关上的模型,只有本人看得到、用得了。字段与 `model_catalog` 同义
+ * (没有推荐 / 默认 / 可用人员这些面向全员的字段)。唯一索引 (user_id, model_id) 在 INDEX_SCHEMA_SQL 里。
+ */
+export const USER_MODELS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS user_models (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    gateway_id INTEGER NOT NULL,
+    model_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    vendor TEXT,
+    context_window INTEGER,
+    effort_levels TEXT,
+    effort_default TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+`;
+
+/**
+ * ho(hq-4):**每模型回合健康度**(首字延迟 / 失败率 / 失败原因)。每个用户回合一行,保留 30 天。
+ * 纯加表:回到 hn 时这张表留在库里没人读,无害。
+ */
+export const MODEL_TURN_STATS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS model_turn_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'chat',
+    is_error INTEGER NOT NULL DEFAULT 0,
+    terminal_reason TEXT,
+    ttft_ms INTEGER,
+    duration_ms INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`;
+
 export const APP_CONFIG_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS app_config (
     key TEXT PRIMARY KEY,
@@ -554,6 +677,16 @@ ${ATTACHMENTS_TABLE_SCHEMA_SQL}
 ${MESSAGE_FEEDBACK_TABLE_SCHEMA_SQL}
 
 ${SKILLWHET_NIGHTLY_PLAN_TABLE_SCHEMA_SQL}
+
+${MODEL_CATALOG_TABLE_SCHEMA_SQL}
+
+${MODEL_TURN_STATS_TABLE_SCHEMA_SQL}
+
+${MODEL_GATEWAYS_TABLE_SCHEMA_SQL}
+
+${GATEWAY_USER_KEYS_TABLE_SCHEMA_SQL}
+
+${USER_MODELS_TABLE_SCHEMA_SQL}
 
 ${LAST_SCANNED_AT_SQL}
 
@@ -624,6 +757,19 @@ CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_records(session_id, id DES
 -- 配额按用户求和,清理按时间扫 —— 两条查询各一个索引
 CREATE INDEX IF NOT EXISTS idx_attachments_user_id ON attachments(user_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_created_at ON attachments(created_at);
+
+-- hn:模型目录 —— 默认模型最多一条(部分唯一索引),列表按上架 + 排序取。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_catalog_single_default ON model_catalog(is_default) WHERE is_default = 1;
+CREATE INDEX IF NOT EXISTS idx_model_catalog_enabled_order ON model_catalog(enabled, sort_order, id);
+
+-- hq:网关 / 个人 key / 私有模型
+CREATE INDEX IF NOT EXISTS idx_model_gateways_owner ON model_gateways(owner_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_gateway_user_keys_unique ON gateway_user_keys(gateway_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_gateway_user_keys_user ON gateway_user_keys(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_models_unique ON user_models(user_id, model_id);
+
+-- ho(hq-4):每模型回合健康度 —— 按时间窗汇总、按时间清理。
+CREATE INDEX IF NOT EXISTS idx_model_turn_stats_created ON model_turn_stats(created_at);
 `;
 
 /**

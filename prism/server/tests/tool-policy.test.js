@@ -63,13 +63,13 @@ describe('PRISM_FORCED_DENY_TOOLS', () => {
     });
   });
 
-  test('没配时行为不变', () => {
+  test('没配时行为不变(hm 起无条件多出跨会话消息的两个工具,见 hm-sdk-upgrade.test.js)', () => {
     withEnv({ PRISM_FORCED_DENY_TOOLS: undefined }, () => {
       const sdk = mapCliOptionsToSDK({
         ...baseOptions,
         toolsSettings: { allowedTools: [], disallowedTools: ['Write'], skipPermissions: false },
       });
-      assert.deepEqual(sdk.disallowedTools, ['Write']);
+      assert.deepEqual(sdk.disallowedTools, ['Write', 'SendMessage', 'ListAgents']);
     });
   });
 });

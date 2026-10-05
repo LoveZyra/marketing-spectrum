@@ -440,7 +440,7 @@
     "g1Fail": "G1 安全门是 {{v}},非 root 不能起训练 —— 修好再体检",
     "g1Unknown": "还没体检过;先在技能资产页「重跑体检」",
     "overBudget": "今日剩余额度 ${{left}} 不够这次的费用上限 ${{cost}}",
-    "sameModel": "评估模型必须不同于提议模型(快环与慢环都不能同名)",
+    "sameModel": "评估模型必须不同于提议模型(快环与慢环都不能同名;别名按它映射到的真实模型比)",
     "overHardCost": "费用上限 ${{v}} 超过硬上限 ${{cap}}",
     "overCostCap": "费用上限 ${{v}} 超过管理员设的单次上限 ${{cap}} —— 调低,或请管理员改 .env 的 PRISM_SKILLWHET_MAX_COST_USD",
     "overMinutesCap": "时长上限 {{v}} 分钟超过允许的 {{cap}} 分钟",
@@ -471,7 +471,8 @@
     "models": "模型 · 评估模型必须不同于提议模型",
     "advanced": "高级(每缺陷采样 {{k}} · 编辑预算 {{p2}} · 修补 {{r}} 次 · 并发 {{w}} · 判官 {{j}} 次 · 连续 {{n}} 轮无接受即停)",
     "notice": "训练会在服务器上真的执行包里的代码与 tests/(沙箱:rlimit,机器支持 unshare 时再加网络隔离);产物只进 staging,不会碰技能库。",
-    "submit": "开始训练"
+    "submit": "开始训练",
+    "modelNotAllowed": "这些模型你不能用:{{list}}(管理员在模型目录里上架的、或 .env 白名单里的才行)"
   },
   "overview": {
     "costChart": "近 14 天每天训练费用",
@@ -589,5 +590,12 @@
     "rounds": "轮次 / 停止",
     "stagingCount": "共 {{n}} 份",
     "noRunHint": "这个 skill 还没跑过训练;评测数字随第一次训练产生。"
+  },
+  "models": {
+    "notInCatalog": "不在模型目录里",
+    "searchOrType": "搜索,或直接填网关模型名",
+    "search": "搜索模型",
+    "useCustom": "使用「{{name}}」",
+    "defaultGatewayOnly": "SkillWhet 只能用默认网关上、所有人可见的模型"
   }
 }

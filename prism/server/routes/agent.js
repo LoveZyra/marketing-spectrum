@@ -12,7 +12,7 @@ import { createLogger } from '@/shared/logger.js';
 
 import { userDb, apiKeysDb, githubTokensDb, projectsDb, sessionsDb, sessionMessagesDb, canViewerSeeSession } from '../modules/database/index.js';
 import { chatRunRegistry, drainPendingSendForSession } from '../modules/websocket/index.js';
-import { sessionsService } from '../modules/providers/index.js';
+import { claudeModelCatalog, modelViewerFor, sessionsService } from '../modules/providers/index.js';
 import { assertViewerMayCreateSessionAt } from '../modules/providers/services/session-project-path-guard.service.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
 import { IS_PLATFORM } from '../constants/config.js';
@@ -1062,7 +1062,9 @@ router.post('/sessions/:sessionId/abort', validateExternalApiKey, async (req, re
  *
  * @param {string} model - (Optional) Model identifier.
  *
- *                        Claude models: 'default', 'sonnet', 'opus', 'haiku', 'sonnet[1m]', 'opus[1m]', 'fable'
+ *                        hn 起:能用的模型以 `GET /api/providers/claude/models` 为准 —— 模型目录里上架的
+ *                        网关模型(`group: 'catalog'`)加内置别名组(`group: 'alias'`:default / sonnet /
+ *                        opus / haiku / sonnet[1m] / opus[1m] / fable)。不在里面的回 400 MODEL_NOT_ALLOWED。
  *
  * @param {string} effort - (Optional) Reasoning effort for models that support it.
  *                          Claude supports: 'low', 'medium', 'high', 'xhigh', 'max' depending on model.
@@ -1320,6 +1322,16 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
   if (provider !== 'claude') {
     return res.status(400).json({ error: 'provider must be "claude"' });
+  }
+
+  // hn(B2):模型前置检查(同步 / 异步两种模式都在这里拦)。真正的闸口在 claude-sdk 里再判一次。
+  if (model !== undefined && model !== null && model !== '') {
+    if (typeof model !== 'string' || !claudeModelCatalog.isAllowed(model, modelViewerFor(req.user?.id ?? null, req.user?.username ?? null))) {
+      return res.status(400).json({
+        error: `model "${String(model)}" is not in the model catalog (or is disabled). See GET /api/providers/claude/models.`,
+        code: 'MODEL_NOT_ALLOWED',
+      });
+    }
   }
 
   // 异步模式下这两件事没有落脚点:分支/PR 的结果要等回合跑完才有,而响应
@@ -1583,7 +1595,10 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         // 配了 PRISM_ALLOW_BYPASS_USERS 之后,异步 API **恒定**被降级成
         // acceptEdits —— 而它背后没有人看审批框,只会一路挂到 1 小时审批兜底。
         actorUsername: req.user?.username ?? null,
+        actorUserId: req.user?.id ?? null, // hq:网关 key 按调 API 的账号
         usageSource: 'api',   // fg:外部接口跑的账单独一档
+        // ho(ho-4):调 API 的程序答不了审批 —— 要问人的工具调用立刻拒(模型据此换路),不再挂 1 小时
+        unattended: true,
         oneShot: true,
       }, run.writer).then((outcome) => {
         // hl(动态 P1-1):一次性路径现在返回成败;异步模式没有响应可改,
@@ -1720,7 +1735,10 @@ router.post('/', validateExternalApiKey, async (req, res) => {
           permissionMode: 'bypassPermissions', // Bypass all permissions for API calls
           // 服务端 bypass 白名单要认人(见 claude-sdk 的 readBypassAllowlist)
           actorUsername: req.user?.username ?? null,
+          actorUserId: req.user?.id ?? null, // hq:网关 key 按调 API 的账号
           usageSource: 'api',   // fg:外部接口跑的账单独一档
+          // ho(ho-4):同上,无人审批 → 立刻拒
+          unattended: true,
           oneShot: true // API turns stay on the per-turn path (no resident runtime)
         }, writer);
       } finally {

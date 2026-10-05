@@ -5,9 +5,12 @@ import path from 'node:path';
 import express, { type RequestHandler, type Router } from 'express';
 
 import { canViewerSeeSession, projectsDb, sessionMessagesDb, sessionsDb, usageRecordsDb } from '@/modules/database/index.js';
+import { claudeModelCatalog, modelViewerFor, providerModelsService } from '@/modules/providers/index.js';
 import { nativeUuidFromMessageId } from '@/shared/fork-anchor.js';
 import { readRequestViewer } from '@/shared/project-visibility.js';
 import { createLogger } from '@/shared/logger.js';
+
+import { detectModelVendor } from '../../../shared/modelVendors.js';
 
 const log = createLogger('system');
 
@@ -343,8 +346,23 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
         throw error; // Re-throw other errors to be caught by outer try-catch
       }
 
+      /*
+       * hn(B2):分母按**会话当前模型**查模型目录(别名先换真名);目录没填才退回 CONTEXT_WINDOW,
+       * 再退回 200000(CLI 对不认识的模型名就按它算)。这里不能 import claude-sdk.js(eslint 边界),
+       * 实测的有效窗口在聊天里的 token_budget 帧上,那边优先用它。
+       */
+      let sessionModel: string | null = null;
+      try {
+        sessionModel = (await providerModelsService.getCurrentActiveModel('claude', safeSessionId)).model ?? null;
+      } catch {
+        sessionModel = null;
+      }
+      // hq:按看的人查(他的私有模型的窗口也认得出)
+      const usageViewer = modelViewerFor((req as { user?: { id?: number } }).user?.id ?? null, (req as { user?: { username?: string } }).user?.username ?? null);
+      const resolved = await claudeModelCatalog.resolveEntry(sessionModel, usageViewer).catch(() => ({ realModel: null, entry: null }));
       const parsedContextWindow = parseInt(process.env.CONTEXT_WINDOW ?? '', 10);
-      const contextWindow = Number.isFinite(parsedContextWindow) ? parsedContextWindow : 160000;
+      const contextWindow = resolved.entry?.contextWindow
+        ?? (Number.isFinite(parsedContextWindow) && parsedContextWindow > 0 ? parsedContextWindow : 200000);
       const { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens } = totals;
 
       const totalUsed = inputTokens + outputTokens;
@@ -353,6 +371,10 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
       res.json({
         used: totalUsed,
         total: contextWindow,
+        // hn:给 /cost 用 —— 当前模型、它的真名与厂商(非 Claude 模型的费用是按 Claude 价估算的)。
+        model: sessionModel,
+        realModel: resolved.realModel,
+        vendor: resolved.entry?.vendor ?? detectModelVendor(resolved.realModel ?? sessionModel),
         inputTokens,
         outputTokens,
         cacheReadTokens,

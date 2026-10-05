@@ -91,7 +91,33 @@ export type AuditEvent =
   // he:夜训 —— 纳入 / 移出 / 连续无收益自动暂停(调度器以系统身份记,user 为空)
   | 'skillwhet_nightly_enroll'
   | 'skillwhet_nightly_unenroll'
-  | 'skillwhet_nightly_autopause';
+  | 'skillwhet_nightly_autopause'
+  // hn:模型目录(root)与别名映射(PUT model-config 此前一直没记审计)
+  | 'model_catalog_created'
+  | 'model_catalog_updated'
+  | 'model_catalog_deleted'
+  | 'model_config_updated'
+  // ho:子代理模型(root)
+  | 'subagent_model_updated'
+  // hq:共享网关(root)—— 增删改、默认 key、替人填 / 清 key、私有网关总开关
+  | 'model_gateway_created'
+  | 'model_gateway_updated'
+  | 'model_gateway_deleted'
+  | 'gateway_default_key_set'
+  | 'gateway_default_key_cleared'
+  | 'gateway_key_set_by_root'
+  | 'gateway_key_cleared_by_root'
+  | 'private_gateways_toggled'
+  // hq:本人 —— 个人 key、私有网关、私有模型(值从不进审计)
+  | 'gateway_key_set'
+  | 'gateway_key_cleared'
+  | 'private_gateway_created'
+  | 'private_gateway_updated'
+  | 'private_gateway_deleted'
+  | 'private_gateway_key_set'
+  | 'user_model_created'
+  | 'user_model_updated'
+  | 'user_model_deleted';
 
 /**
  * gk:这几类事件不参与"只留最新 5000 行"的常规裁剪 —— `ws_ticket_issued` 每次
@@ -127,6 +153,22 @@ export const DURABLE_AUDIT_EVENTS: readonly AuditEvent[] = [
   'skillwhet_nightly_enroll',
   'skillwhet_nightly_unenroll',
   'skillwhet_nightly_autopause',
+  // hn:模型目录与别名映射都只有 root 能改
+  'model_catalog_created',
+  'model_catalog_updated',
+  'model_catalog_deleted',
+  'model_config_updated',
+  // ho:子代理模型同样只有 root 能改
+  'subagent_model_updated',
+  // hq:共享网关与 key 的 root 动作(本人的 key / 私有网关普通用户刷得动,留在常规一档)
+  'model_gateway_created',
+  'model_gateway_updated',
+  'model_gateway_deleted',
+  'gateway_default_key_set',
+  'gateway_default_key_cleared',
+  'gateway_key_set_by_root',
+  'gateway_key_cleared_by_root',
+  'private_gateways_toggled',
 ];
 
 export type AuditOutcome = 'success' | 'failure';

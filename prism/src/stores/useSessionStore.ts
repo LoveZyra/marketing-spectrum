@@ -76,6 +76,16 @@ export interface NormalizedMessage {
    * 类型缺一个字段,整条链路就会在某一段悄悄把它丢掉。这条要跟着走完全程。
    */
   isLocalNotice?: boolean;
+  /** ho(ho-1):用户这条的幂等键(只在本地回声上有)—— 合流消息的「撤回」按它认气泡。 */
+  clientMessageId?: string;
+  /** ho(ho-1):合流消息没执行就被撤掉了(服务端落库时标的)。 */
+  withdrawn?: boolean;
+  /** ho(复审):插话(合流进正在跑的这一轮)—— 不是回合边界。服务端落库时标;本地回声在 ACK 带 mergedUuid 时补标。 */
+  interjection?: boolean;
+  /** hq(复审五轮):本地回声 —— 发出时回合还在跑(进度区数回合用,见 ChatMessage.sentDuringTurn)。 */
+  sentDuringTurn?: boolean;
+  /** ho(hq-2):这一轮推进 CLI 时带的 uuid(服务端落库的用户行才有)—— 非 git 目录按它撤销这一轮之后的文件改动。 */
+  turnUuid?: string;
   images?: Array<{ path?: string; data?: string; name?: string }>;
   toolName?: string;
   toolInput?: unknown;
@@ -980,6 +990,44 @@ export function useSessionStore() {
   }, [getSlot, notify]);
 
   /**
+   * hq(复审五轮):一轮结束 —— 回合在跑时发出、又没被合流的本地回声(被服务端排到后面的那条)从这里起就是
+   * 下一轮的开头了,摘掉 `sentDuringTurn`,进度区照常把它算成新回合。不等服务端那份落库行替掉它:
+   * 收尾时的刷新可能抢在服务端落库之前,那样这条标记会一直挂到下一轮结束。
+   */
+  const clearSentDuringTurn = useCallback((sessionId: string) => {
+    const slot = getSlot(sessionId);
+    let changed = false;
+    const next = slot.realtimeMessages.map((row) => {
+      if (!row.sentDuringTurn || row.interjection) return row;
+      changed = true;
+      const { sentDuringTurn: _cleared, ...rest } = row;
+      void _cleared;
+      return rest;
+    });
+    if (!changed) return;
+    slot.realtimeMessages = next;
+    recomputeMergedIfNeeded(slot);
+    notify(sessionId);
+  }, [getSlot, notify]);
+
+  /**
+   * ho(复审):ACK 说这条被合流进了正在跑的那一轮 —— 给本地回声补上 `interjection`(时间轴不把它当回合边界)。
+   */
+  const markInterjection = useCallback((sessionId: string, clientMessageId: string) => {
+    const slot = getSlot(sessionId);
+    let changed = false;
+    const next = slot.realtimeMessages.map((row) => {
+      if (row.clientMessageId !== clientMessageId || row.interjection) return row;
+      changed = true;
+      return { ...row, interjection: true };
+    });
+    if (!changed) return;
+    slot.realtimeMessages = next;
+    recomputeMergedIfNeeded(slot);
+    notify(sessionId);
+  }, [getSlot, notify]);
+
+  /**
    * Append multiple realtime messages at once (batch).
    */
   const appendRealtimeBatch = useCallback((sessionId: string, msgs: NormalizedMessage[]) => {
@@ -1179,9 +1227,11 @@ export function useSessionStore() {
     clearRealtime,
     getMessages,
     getSessionSlot,
+    markInterjection,
+    clearSentDuringTurn,
   }), [
     getSlot, has, getStreamingText, fetchFromServer, fetchMore,
-    appendRealtime, appendRealtimeBatch, refreshFromServer,
+    appendRealtime, appendRealtimeBatch, refreshFromServer, markInterjection, clearSentDuringTurn,
     setActiveSession, setStatus, isStale, updateStreaming, finalizeStreaming,
     clearRealtime, getMessages, getSessionSlot,
   ]);

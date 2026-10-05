@@ -5,6 +5,7 @@ import type { Terminal } from '@xterm/xterm';
 
 import type { Project, ProjectSession } from '../../../types/app';
 import { TERMINAL_INIT_DELAY_MS } from '../constants/constants';
+import { readChatPermissionMode } from '../utils/permissionMode';
 import { getShellWebSocketUrl, parseShellMessage, sendSocketMessage } from '../utils/socket';
 
 const ANSI_ESCAPE_REGEX =
@@ -205,6 +206,10 @@ export function useShellConnection({
               initialCommand: initialCommandRef.current,
               isPlainShell: isPlainShellRef.current,
               takeover: takeoverRef.current,
+              // hm(A3.3):接管时带上这段对话在 chat 里的权限档位(见 ShellInitMessage.permissionMode)。
+              ...(takeoverRef.current
+                ? { permissionMode: readChatPermissionMode(selectedSessionRef.current?.id) }
+                : {}),
               // F10:多标签时每个终端一个 id,服务端据此各给一个 PTY。
               terminalId: terminalIdRef?.current ?? undefined,
               forceRestart,

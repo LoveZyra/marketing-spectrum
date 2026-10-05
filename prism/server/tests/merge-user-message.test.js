@@ -125,8 +125,10 @@ describe('合流的接线', () => {
     const { fileURLToPath } = await import('node:url');
     const sdk = readFileSync(fileURLToPath(new URL('../claude-sdk.js', import.meta.url)), 'utf8');
     const fn = sdk.slice(sdk.indexOf('export async function mergeUserMessage'));
-    expect(fn.slice(0, 1400)).toMatch(/priority: 'now',/);
-    expect(fn.slice(0, 1400)).toMatch(/uuid,/);
+    // ho:插话用 'next'('now' 会打断这一轮,撤回后原任务无声停住 —— 见 mergeUserMessage 的说明)
+    expect(fn.slice(0, 2600)).toMatch(/priority: 'next',/);
+    expect(fn.slice(0, 2600)).not.toMatch(/priority: 'now',/);
+    expect(fn.slice(0, 2600)).toMatch(/uuid,/);
   });
 
   it('找 runtime 时**必须**用 appSessionId 复核 —— 找错一个就是把话推进别人的对话', async () => {
@@ -155,8 +157,9 @@ describe('合流的接线', () => {
     // 合流成功要落库 + 记一笔 + 回 ACK,而且**不进 pendingSends**
     const upToQueue = branch.slice(0, branch.indexOf('pendingSends.set(sessionId, pending);'));
     expect(upToQueue).toMatch(/sessionMessagesDb\.append\(sessionId, \{/);
-    expect(upToQueue).toMatch(/noteMergedSend\(sessionId\);/);
-    expect(upToQueue).toMatch(/sendSendAck\(ws, sessionId, clientMessageId, 'accepted'\);/);
+    // ho(ho-1):记下 uuid 与那一行(撤回要用),ACK 带上合流 uuid(hp-2 起不再记 TTL)
+    expect(upToQueue).toMatch(/rememberMergedRow\(merged\.uuid, \{ sessionId, rowId: persistDisplayLog \? mergedRowId : null, clientMessageId \}\);/);
+    expect(upToQueue).toMatch(/sendSendAck\(ws, sessionId, clientMessageId, 'accepted', merged\.uuid \?\? null\);/);
     // 合流那一支必须 return —— 掉下去就会既合流又排队,同一句话发两遍
     expect(upToQueue).toMatch(/return;\n\s*\}\n\s*log\.info/);
   });

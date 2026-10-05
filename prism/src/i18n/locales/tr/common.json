@@ -125,5 +125,11 @@
         }
       }
     }
+  },
+  "tasksPage": {
+    "form": {
+      "privateModel": "Özel",
+      "modelUnavailable": "Kullanılamıyor"
+    }
   }
 }

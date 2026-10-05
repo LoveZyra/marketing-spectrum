@@ -34,6 +34,8 @@ export type GatewayStatus = {
 export type ServerStatus = {
   now: string;
   appVersion: string | null;
+  /** v2.0.0:「v2.0.0 · 日期 · 提交号」;没有 RELEASE.json 时只有版本号。 */
+  appRelease: string | null;
   nodeVersion: string;
   processUptimeSec: number;
   osUptimeSec: number;
@@ -119,7 +121,7 @@ function probeGateway(baseUrl: string): Promise<GatewayStatus> {
   });
 }
 
-export async function collectServerStatus(options: { appVersion: string | null }): Promise<ServerStatus> {
+export async function collectServerStatus(options: { appVersion: string | null; appRelease?: string | null }): Promise<ServerStatus> {
   const baseUrl = await readGatewayBaseUrl();
   const [disk, gateway] = await Promise.all([
     readDisk(),
@@ -129,6 +131,7 @@ export async function collectServerStatus(options: { appVersion: string | null }
   return {
     now: new Date().toISOString(),
     appVersion: options.appVersion,
+    appRelease: options.appRelease ?? null,
     nodeVersion: process.version,
     processUptimeSec: Math.round(process.uptime()),
     osUptimeSec: Math.round(os.uptime()),

@@ -252,13 +252,16 @@
     "download": "下載此檔案",
     "collapse": "收合工作面板",
     "expand": "展開工作面板",
-    "doneFolded": "已完成 {{count}} 項 · 展開",
-    "doneUnfold": "收合已完成的 {{count}} 項",
     "historyTruncated": "工作階段較長,更早的紀錄未載入。",
     "earlierFolded": "更早的 {{count}} 個 · 展開",
     "earlierUnfold": "收合更早的 {{count}} 個",
     "progress": "進度",
-    "outputsShort": "產出"
+    "outputsShort": "產出",
+    "stepOf": "第 {{current}} 步 / 共 {{total}} 步",
+    "earlierSteps": "{{count}} 個更早的步驟",
+    "earlierStepsHide": "收合更早的步驟",
+    "progressCollapse": "收合進度",
+    "progressExpand": "展開進度"
   },
   "skills": {
     "invokedBadge": "技能"
@@ -310,5 +313,15 @@
     "footnote": "調過技能的回合按抽樣詢問;同一技能一小時內不再問;可在「我的賬號」關閉",
     "close": "就這樣",
     "submit": "提交"
+  },
+  "modelMenu": {
+    "privateBadge": "私有",
+    "fillKey": "去填 key",
+    "unavailable": "暫不可用"
+  },
+  "commandResult": {
+    "models": {
+      "privateModels": "我的私有模型"
+    }
   }
 }

@@ -4,9 +4,11 @@ import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../utils/api';
 import { NumberInput, useToast } from '../../../shared/view/ui';
+import { useModelCatalog } from '../../../hooks/useTaskLikeOptions';
 import { useNightlyResultLabel } from '../lib/nightly';
 import { unwrap, type ManagedSkill, type NightlyPlan, type NightlyResponse } from '../lib/types';
 
+import SkillWhetModelSelect from './SkillWhetModelSelect';
 import { Badge } from './StatusStrip';
 
 /**
@@ -79,7 +81,6 @@ export default function NightlyControl({ skill, plan, meta, isRoot, onSaved }: {
   };
 
   const field = 'h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground';
-  const models = ['haiku', 'sonnet', 'opus'];
 
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border bg-background px-2.5 py-2 text-xs" data-testid={`nightly-${skill.name}`}>
@@ -139,13 +140,8 @@ export default function NightlyControl({ skill, plan, meta, isRoot, onSaved }: {
                 <option value="pytest">pytest</option><option value="agent">agent</option>
               </select>
             </label>
-            {(['fast_model', 'slow_model', 'eval_model'] as const).map((key) => (
-              <label key={key} className="inline-flex items-center gap-1">{key.split('_')[0]}
-                <select value={draft[key]} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} className={field} aria-label={key}>
-                  {models.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </label>
-            ))}
+            {/* hn(B7):模型从目录选(夜训配置只 root 能改 → 不限,可手填);只在设置展开时才拉目录 */}
+            <NightlyModelFields draft={draft} onChange={(key, next) => setDraft((d) => (d ? { ...d, [key]: next } : d))} />
             <label className="inline-flex items-center gap-1 text-muted-foreground">
               <input type="checkbox" checked={draft.mock} onChange={(e) => setDraft({ ...draft, mock: e.target.checked })} aria-label="mock" />
               {t('nightly.mock', { defaultValue: 'mock 后端(零费用,试流程用)' })}
@@ -167,5 +163,21 @@ export default function NightlyControl({ skill, plan, meta, isRoot, onSaved }: {
         </div>
       )}
     </div>
+  );
+}
+
+function NightlyModelFields({ draft, onChange }: {
+  draft: Draft;
+  onChange: (key: 'fast_model' | 'slow_model' | 'eval_model', next: string) => void;
+}) {
+  const { models, aliasModels } = useModelCatalog();
+  return (
+    <>
+      {(['fast_model', 'slow_model', 'eval_model'] as const).map((key) => (
+        <div key={key} className="inline-flex items-center gap-1">{key.split('_')[0]}
+          <SkillWhetModelSelect value={draft[key]} onChange={(next) => onChange(key, next)} models={models} aliasModels={aliasModels} allowed={null} ariaLabel={key} variant="chip" className="w-44" />
+        </div>
+      ))}
+    </>
   );
 }

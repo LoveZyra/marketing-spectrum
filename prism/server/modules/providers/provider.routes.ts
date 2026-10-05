@@ -7,6 +7,23 @@ import {
 } from '@/modules/providers/list/claude/claude-model-probe.service.js';
 import { readAliasConfigMappings } from '@/modules/providers/list/claude/claude-settings-mapping.service.js';
 import {
+  CatalogValidationError,
+  ModelNotAllowedError,
+  claudeModelCatalog,
+  modelViewerFor,
+  type CatalogEntry,
+  type ModelViewer,
+} from '@/modules/providers/list/claude/claude-model-catalog.service.js';
+import {
+  GatewayError,
+  describeDefaultGateway,
+  modelsDefinitionFor,
+  resolveTurnGateway,
+} from '@/modules/providers/list/claude/claude-gateways.service.js';
+import { claudeGatewaysRouter } from '@/modules/providers/claude-gateways.routes.js';
+import { probeCatalogModel } from '@/modules/providers/list/claude/claude-model-catalog-probe.service.js';
+import { CLAUDE_FALLBACK_MODELS } from '@/modules/providers/list/claude/claude-model-aliases.js';
+import {
   MANAGED_ALIASES,
   readModelConfigView,
   writeModelConfig,
@@ -34,7 +51,7 @@ import type {
   ProviderSkillCreateInput,
   UpsertProviderMcpServerInput,
 } from '@/shared/types.js';
-import { auditLogDb, messageFeedbackDb, projectsDb, sessionMessagesDb, sessionsDb, uiSettingsDb } from '@/modules/database/index.js';
+import { auditLogDb, messageFeedbackDb, modelTurnStatsDb, projectsDb, sessionMessagesDb, sessionsDb, uiSettingsDb } from '@/modules/database/index.js';
 import { collectSkillSurveyCandidates, decideSkillSurveys, readSurveyConfig } from '@/modules/providers/services/skill-survey.service.js';
 import {
   renderSessionExport,
@@ -49,17 +66,25 @@ const log = createLogger('providers');
  * 自定义网关的主机名,给前端决定要不要提示"卡片描述仅供参考"。
  * 只暴露 host,不暴露完整 URL —— 路径里可能带租户 id 之类不该给所有登录用户看的东西。
  */
-const readGatewayHost = (): string | null => {
-  const raw = process.env.ANTHROPIC_BASE_URL;
-  if (!raw || !raw.trim()) return null;
+// hq:改读 settings.json 的 env(进程环境兜底)—— 原来只看进程环境,而生产的网关只写在 settings.json 里,
+// 于是 /models 面板上「经由网关 xxx」那一行从来不显示。
+const readGatewayHost = async (): Promise<string | null> => {
   try {
-    return new URL(raw.trim()).host || null;
+    return (await describeDefaultGateway()).host;
   } catch {
-    return raw.trim();
+    return null;
   }
 };
 
+/** hq:这次请求是谁 —— 模型表、闸口按人。 */
+const requestModelViewer = (req: Request): ModelViewer => {
+  const user = (req as Request & { user?: { id?: number; username?: string } }).user;
+  return modelViewerFor(typeof user?.id === 'number' ? user.id : null, user?.username ?? null);
+};
+
 const router = express.Router();
+// hq:模型网关与 key(root 管共享网关;每个人管自己的 key / 私有网关 / 私有模型)
+router.use(claudeGatewaysRouter);
 
 const readPathParam = (value: unknown, name: string): string => {
   if (typeof value === 'string') {
@@ -431,7 +456,12 @@ router.get(
     const provider = parseProvider(req.params.provider);
     const bypassCache = parseOptionalBooleanQuery(req.query.bypassCache, 'bypassCache') ?? false;
     const result = await providerModelsService.getProviderModels(provider, { bypassCache });
-    res.json(createApiSuccessResponse({ provider, models: result.models, cache: result.cache }));
+    /*
+     * hq:**按人**:目录条目只留他看得见的(「可用人员」),加上他的私有模型,每条标上能不能用(有没有 key)。
+     * 全量定义仍走 providerModelsService(缓存与并发去重不变),这里只在出口按人筛 / 标。
+     */
+    const models = provider === 'claude' ? modelsDefinitionFor(requestModelViewer(req)) : result.models;
+    res.json(createApiSuccessResponse({ provider, models, cache: result.cache }));
   }),
 );
 
@@ -445,6 +475,21 @@ router.get(
  * `gatewayHost` 让前端知道该不该提醒"描述仅供参考":官方 API 下卡片文案本来
  * 就是对的,不需要打扰。
  */
+/** hn:别名组的值(default / sonnet / opus … 含 [1m] 变体)。 */
+const aliasGroupValues = (): string[] => CLAUDE_FALLBACK_MODELS.OPTIONS.map((option) => option.value);
+
+/** hn(B2):入口处的模型前置检查 —— 不在目录里 / 下架了回 400 MODEL_NOT_ALLOWED。 */
+const assertModelAllowedForRequest = (model: string | null | undefined, viewer?: ModelViewer | null): void => {
+  try {
+    claudeModelCatalog.assertAllowed(model, viewer);
+  } catch (error) {
+    if (error instanceof ModelNotAllowedError) {
+      throw new AppError(error.message, { code: error.code, statusCode: 400 });
+    }
+    throw error;
+  }
+};
+
 /** root 才许读写模型映射配置 —— settings.json 是服务器全局文件。 */
 const assertRootForModelConfig = (req: Request): void => {
   const user = (req as Request & { user?: { isRoot?: boolean } }).user;
@@ -508,7 +553,204 @@ router.put(
       update.mappings = mappings;
     }
 
-    res.json(createApiSuccessResponse(await writeModelConfig(update)));
+    const written = await writeModelConfig(update);
+    // hn:此前一直没记审计 —— 改别名映射会改变所有人的子代理与 default 档实际用的模型。
+    const actor = readSkillActor(req);
+    auditLogDb.record({
+      userId: actor.id,
+      username: actor.username,
+      event: 'model_config_updated',
+      ip: clientIp(req) ?? null,
+      detail: JSON.stringify(update).slice(0, 1000),
+    });
+    res.json(createApiSuccessResponse(written));
+  }),
+);
+
+/* ----------------- hn(B2):模型目录(root) ----------------- */
+
+/** 目录错误 → AppError(带 code / 状态码)。 */
+const asCatalogError = (error: unknown): unknown => (
+  error instanceof CatalogValidationError
+    ? new AppError(error.message, { code: error.code, statusCode: error.status })
+    : error
+);
+
+const parseCatalogId = (raw: unknown): number => {
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new AppError('目录条目 id 不对', { code: 'INVALID_CATALOG_ID', statusCode: 400 });
+  }
+  return id;
+};
+
+const catalogAuditDetail = (entry: CatalogEntry, extra: Record<string, unknown> = {}): string => JSON.stringify({
+  modelId: entry.modelId,
+  label: entry.label,
+  enabled: entry.enabled,
+  isDefault: entry.isDefault,
+  contextWindow: entry.contextWindow,
+  gatewayId: entry.gatewayId,
+  allowedUsers: entry.allowedUsers === null ? 'all' : entry.allowedUsers.length,
+  ...extra,
+}).slice(0, 1000);
+
+/** 目录全量(含下架的)—— 设置页用。 */
+router.get(
+  '/:provider/model-catalog',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider);
+    assertRootForModelConfig(req);
+    res.json(createApiSuccessResponse({ entries: claudeModelCatalog.listAll() }));
+  }),
+);
+
+/**
+ * ho(hq-4):每模型回合健康度(最近 N 天,默认 7):回合数、失败率、失败原因、首字延迟 p50 / p90。
+ * 模型名是网关上的真实名字(别名会话记的是它解析到的那个)。root 才看。
+ */
+router.get(
+  '/:provider/model-catalog/stats',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider);
+    assertRootForModelConfig(req);
+    const days = Math.max(1, Math.min(30, Number(req.query.days) || 7));
+    res.json(createApiSuccessResponse({ days, models: modelTurnStatsDb.summarize(days) }));
+  }),
+);
+
+/** ho:子代理模型(全局一份;没设 = 跟随主模型)。 */
+router.get(
+  '/:provider/model-catalog/subagent',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider);
+    assertRootForModelConfig(req);
+    res.json(createApiSuccessResponse({ policy: claudeModelCatalog.subagentPolicy() }));
+  }),
+);
+
+router.put(
+  '/:provider/model-catalog/subagent',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider);
+    assertRootForModelConfig(req);
+    const actor = readSkillActor(req);
+    const before = claudeModelCatalog.subagentPolicy();
+    let policy;
+    try {
+      policy = claudeModelCatalog.setSubagentPolicy((req.body ?? {}) as { model?: unknown; force?: unknown });
+    } catch (error) {
+      throw asCatalogError(error);
+    }
+    auditLogDb.record({
+      userId: actor.id, username: actor.username, event: 'subagent_model_updated',
+      ip: clientIp(req) ?? null, detail: JSON.stringify({ before, after: policy }).slice(0, 1000),
+    });
+    res.json(createApiSuccessResponse({ policy }));
+  }),
+);
+
+router.post(
+  '/:provider/model-catalog',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider);
+    assertRootForModelConfig(req);
+    const actor = readSkillActor(req);
+    let entry: CatalogEntry;
+    try {
+      entry = claudeModelCatalog.create((req.body ?? {}) as Record<string, unknown>, actor.id);
+    } catch (error) {
+      throw asCatalogError(error);
+    }
+    auditLogDb.record({
+      userId: actor.id, username: actor.username, event: 'model_catalog_created',
+      ip: clientIp(req) ?? null, detail: catalogAuditDetail(entry),
+    });
+    res.status(201).json(createApiSuccessResponse({ entry }));
+  }),
+);
+
+router.patch(
+  '/:provider/model-catalog/:id',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider);
+    assertRootForModelConfig(req);
+    const id = parseCatalogId(req.params.id);
+    const actor = readSkillActor(req);
+    let result: { before: CatalogEntry; after: CatalogEntry };
+    try {
+      result = claudeModelCatalog.update(id, (req.body ?? {}) as Record<string, unknown>, actor.id);
+    } catch (error) {
+      throw asCatalogError(error);
+    }
+    const changed = Object.keys(req.body ?? {});
+    auditLogDb.record({
+      userId: actor.id, username: actor.username, event: 'model_catalog_updated',
+      ip: clientIp(req) ?? null, detail: catalogAuditDetail(result.after, { changed, before: result.before.modelId }),
+    });
+    res.json(createApiSuccessResponse({ entry: result.after }));
+  }),
+);
+
+router.delete(
+  '/:provider/model-catalog/:id',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider);
+    assertRootForModelConfig(req);
+    const id = parseCatalogId(req.params.id);
+    const removed = claudeModelCatalog.remove(id);
+    if (!removed) throw new AppError('这条目录条目不存在', { code: 'NOT_FOUND', statusCode: 404 });
+    const actor = readSkillActor(req);
+    auditLogDb.record({
+      userId: actor.id, username: actor.username, event: 'model_catalog_deleted',
+      ip: clientIp(req) ?? null, detail: catalogAuditDetail(removed),
+    });
+    res.json(createApiSuccessResponse({ removed: removed.id }));
+  }),
+);
+
+/**
+ * 单条「实测」:一次一致性检查(名字被接受 / 工具往返 / usage / 回复模型名),见
+ * claude-model-catalog-probe.service。按条目各自单飞;结果落到 `last_probe`。
+ */
+router.post(
+  '/:provider/model-catalog/:id/probe',
+  asyncHandler(async (req: Request, res: Response) => {
+    parseProvider(req.params.provider);
+    assertRootForModelConfig(req);
+    const id = parseCatalogId(req.params.id);
+    const entry = claudeModelCatalog.get(id);
+    if (!entry) throw new AppError('这条目录条目不存在', { code: 'NOT_FOUND', statusCode: 404 });
+    /*
+     * hq:按条目挂的网关测,key 按 root 自己会用的那把(个人 key > 网关默认 key > settings.json)。
+     * 没有可用的 key 时不起 CLI,把原因当成这次实测的结果记下来。
+     */
+    let gateway;
+    try {
+      gateway = await resolveTurnGateway({ model: entry.modelId, viewer: requestModelViewer(req) });
+    } catch (error) {
+      if (!(error instanceof GatewayError)) throw error;
+      const failed = {
+        at: new Date().toISOString(), ok: false, accepted: false, toolRoundTrip: false,
+        inputTokens: null, respondedModel: null, latencyMs: 0, error: error.message,
+      };
+      claudeModelCatalog.setProbe(id, failed);
+      res.json(createApiSuccessResponse({ entry: claudeModelCatalog.get(id), probe: failed }));
+      return;
+    }
+    // root 自己恰好有同名的私有模型时,按人解析会落到他的私有网关上 —— 那测的就不是这条目录条目了
+    if (gateway.gatewayId !== entry.gatewayId) {
+      const mismatch = {
+        at: new Date().toISOString(), ok: false, accepted: false, toolRoundTrip: false, inputTokens: null, respondedModel: null, latencyMs: 0,
+        error: `你自己有一个同名的私有模型「${entry.modelId}」,实测会走到你的私有网关上 —— 先把那个私有模型改名或删掉再测这条`,
+      };
+      claudeModelCatalog.setProbe(id, mismatch);
+      res.json(createApiSuccessResponse({ entry: claudeModelCatalog.get(id), probe: mismatch }));
+      return;
+    }
+    const probe = await probeCatalogModel(entry.modelId, entry.contextWindow, gateway);
+    claudeModelCatalog.setProbe(id, probe);
+    res.json(createApiSuccessResponse({ entry: claudeModelCatalog.get(id), probe }));
   }),
 );
 
@@ -518,10 +760,8 @@ router.get(
     parseProvider(req.params.provider); // 目前只有 claude,守卫同其它路由
     const meta = await readModelMappingsMeta();
     // 配置层映射:每次现读 settings.json —— 改完配置这里立即是新值,不依赖实测。
-    const definition = await providerModelsService.getProviderModels('claude');
-    const configMappings = await readAliasConfigMappings(
-      definition.models.OPTIONS.map((option) => option.value),
-    );
+    // hn:只给别名组 —— 目录条目的真名就是它自己,不需要映射;全量返回会把每条目录模型都查一遍。
+    const configMappings = await readAliasConfigMappings(aliasGroupValues());
     res.json(createApiSuccessResponse({
       mappings: meta.mappings,
       // settings.json 在上次实测后改过 → 实测值可能过期。前端据此提示重测,
@@ -529,7 +769,7 @@ router.get(
       stale: meta.stale,
       configMappings,
       probing: isProbeRunning(),
-      gatewayHost: readGatewayHost(),
+      gatewayHost: await readGatewayHost(),
     }));
   }),
 );
@@ -538,8 +778,12 @@ router.post(
   '/:provider/model-mappings/probe',
   asyncHandler(async (req: Request, res: Response) => {
     parseProvider(req.params.provider);
-    const definition = await providerModelsService.getProviderModels('claude');
-    const aliases = definition.models.OPTIONS.map((option) => option.value);
+    /*
+     * hn:收紧为 root,且只探别名组。此前任何登录用户都能触发,而它对每个 OPTIONS 值各起一次 CLI、
+     * 每次超时 60 秒 —— 目录变长之后就是 N 次串行 CLI 调用。目录条目各有自己的单条实测。
+     */
+    assertRootForModelConfig(req);
+    const aliases = aliasGroupValues();
     // 并发点击加入同一次探测(service 内单飞),不会拉起第二排 CLI 进程。
     await probeModelMappings(aliases);
     // 刚落盘的实测自带最新 settings 指纹,这里重读一次拿权威的 stale(通常 false)。
@@ -549,7 +793,7 @@ router.post(
       mappings: meta.mappings,
       stale: meta.stale,
       configMappings,
-      gatewayHost: readGatewayHost(),
+      gatewayHost: await readGatewayHost(),
     }));
   }),
 );
@@ -570,7 +814,7 @@ router.get(
     // 别人会话的当前模型,写能替别人的会话改下一轮用的模型。
     sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
     const active = await providerModelsService.getCurrentActiveModel(provider, sessionId);
-    res.json(createApiSuccessResponse({ provider, sessionId, model: active.model }));
+    res.json(createApiSuccessResponse({ provider, sessionId, model: active.model, source: active.source ?? null }));
   }),
 );
 
@@ -581,6 +825,9 @@ router.post(
     const sessionId = parseSessionId(req.params.sessionId);
     sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
     const payload = parseChangeActiveModelPayload(req.body);
+    // hn(B2):前置检查 —— 只许别名组 / 目录里上架的(真正的闸口在 claude-sdk 的四条路径上)。
+    // hq:按人(「可用人员」/ 私有模型)
+    assertModelAllowedForRequest(payload.model, requestModelViewer(req));
     const result = await providerModelsService.changeActiveModel(provider, {
       ...payload,
       sessionId,
@@ -1177,11 +1424,11 @@ router.get(
     // ej:多带一个 turnOutputs(助手回答 id → 这一轮写出的文件)。对话正文下面
     // 那张产出卡直接读它 —— 由服务端从全量日志算好、随会话一次到达,不再由前端
     // 从"当前加载到的窗口"现推(那会随历史补齐而变)。
-    const { frames, revertedPaths, truncated, turnOutputs } = await sessionsService.fetchWorkFrames(sessionId);
+    const { frames, revertedPaths, truncated, turnOutputs, userTurns } = await sessionsService.fetchWorkFrames(sessionId);
     // gy:调过 skill 的回合结束后的「效果如何」卡 —— 由服务端按显示日志算,不存"已弹出"状态;
     // 刷新、换设备结果一致。前端每回合结束都会重取这个接口,所以不需要单独的实时帧。
     const skillSurveys = await computeSkillSurveys(sessionId, req);
-    res.json(createApiSuccessResponse({ frames, revertedPaths, turnOutputs, truncated: truncated === true, skillSurveys }));
+    res.json(createApiSuccessResponse({ frames, revertedPaths, turnOutputs, truncated: truncated === true, skillSurveys, userTurns: userTurns ?? 0 }));
   }),
 );
 

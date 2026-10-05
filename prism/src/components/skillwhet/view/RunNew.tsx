@@ -4,8 +4,10 @@ import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../utils/api';
 import { NumberInput, useToast } from '../../../shared/view/ui';
+import { useModelCatalog } from '../../../hooks/useTaskLikeOptions';
 import { unwrap, type Budget, type ManagedSkill, type PyramidResult, type TaskSummary } from '../lib/types';
 
+import SkillWhetModelSelect from './SkillWhetModelSelect';
 import { Badge } from './StatusStrip';
 
 /**
@@ -22,7 +24,8 @@ type RunNewProps = {
   onCreated: (jobId: string) => void;
 };
 
-const MODELS = ['haiku', 'sonnet', 'opus'];
+/** 老 Prism / 拿不到预算时的兜底(hn 之前的写死列表)。 */
+const FALLBACK_MODELS = ['haiku', 'sonnet', 'opus'];
 
 export default function RunNew({ skills, taskSummary, isRoot, username, initialSkill, onCreated }: RunNewProps) {
   const { t } = useTranslation('skillwhet');
@@ -49,6 +52,8 @@ export default function RunNew({ skills, taskSummary, isRoot, username, initialS
   const [mock, setMock] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // hn(B7):模型从目录选(与对话同一份);非 root 只列允许的(服务端 /jobs/budget 的 allowedModels)
+  const { models: catalogModels, aliasModels, realModels } = useModelCatalog();
 
   useEffect(() => {
     // 只能选自己能训练的:预选的 skill 不在名单里(非 root 从技能库卡片跳过来)就换成第一个
@@ -106,7 +111,14 @@ export default function RunNew({ skills, taskSummary, isRoot, username, initialS
   const minutesAsked = Number(maxMinutes) > 0 ? Number(maxMinutes) : minutesCap;
   const effectiveCost = Math.min(costAsked, costHard);
   // hl(动态 P3):服务端(夜训与训练器 Roles.validate)要求评估模型既不同于慢环、也不同于快环;原来只拦慢环
-  const sameModel = (evalModel === slowModel || evalModel === fastModel) && !mock;
+  // hn(B7):**按真名比** —— `opus` 映射到 glm-5.2 时,与直接选 glm-5.2 是同一个模型(服务端同样按真名拦)
+  const realOf = (model: string) => realModels[model] ?? model;
+  const sameModel = (realOf(evalModel) === realOf(slowModel) || realOf(evalModel) === realOf(fastModel)) && !mock;
+  // 非 root:预算还没拿到 / 老 Prism 不回 allowedModels 时按三个别名收紧(不给手填),与服务端的默认一致
+  const allowedModels = isRoot ? null : (budget?.allowedModels ?? FALLBACK_MODELS);
+  const disallowed = Array.isArray(allowedModels)
+    ? [fastModel, slowModel, evalModel].filter((model) => !allowedModels.includes(model))
+    : [];
   const blockers: string[] = [];
   if (!selected) blockers.push(t('run.noSkill', { defaultValue: '先选一个自己能训练的 skill' }));
   else if (!selected.bootstrapped) blockers.push(t('run.notBootstrapped', { defaultValue: '这个副本还没 bootstrap(冻结 S₀)' }));
@@ -117,7 +129,8 @@ export default function RunNew({ skills, taskSummary, isRoot, username, initialS
     ? t('run.g1MissingTools', { defaultValue: 'G1 安全门没查成:服务器上缺 {{tools}},请管理员装好后重跑体检', tools: g1Missing.join(' / ') })
     : g1 ? t('run.g1Fail', { defaultValue: 'G1 安全门是 {{v}},非 root 不能起训练 —— 修好再体检', v: (g1.verdict ?? '').toUpperCase() }) : t('run.g1Unknown', { defaultValue: '还没体检过;先在技能资产页「重跑体检」' }));
   if (!isRoot && remaining !== null && effectiveCost > remaining) blockers.push(t('run.overBudget', { defaultValue: '今日剩余额度 ${{left}} 不够这次的费用上限 ${{cost}}', left: remaining.toFixed(2), cost: effectiveCost.toFixed(2) }));
-  if (sameModel) blockers.push(t('run.sameModel', { defaultValue: '评估模型必须不同于提议模型(快环与慢环都不能同名)' }));
+  if (sameModel) blockers.push(t('run.sameModel', { defaultValue: '评估模型必须不同于提议模型(快环与慢环都不能同名;别名按它映射到的真实模型比)' }));
+  if (disallowed.length > 0) blockers.push(t('run.modelNotAllowed', { defaultValue: '这些模型你不能用:{{list}}(管理员在模型目录里上架的、或 .env 白名单里的才行)', list: [...new Set(disallowed)].join('、') }));
   if (costAsked > costHard) {
     blockers.push(isRoot
       ? t('run.overHardCost', { defaultValue: '费用上限 ${{v}} 超过硬上限 ${{cap}}', v: costAsked, cap: costHard })
@@ -233,10 +246,21 @@ export default function RunNew({ skills, taskSummary, isRoot, username, initialS
       <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('run.models', { defaultValue: '模型 · 评估模型必须不同于提议模型' })}</div>
       <div className="grid grid-cols-3 gap-2 max-sm:grid-cols-1">
         {([['fast', fastModel, setFastModel], ['slow', slowModel, setSlowModel], ['eval', evalModel, setEvalModel]] as const).map(([role, value, set]) => (
-          <label key={role} className="flex flex-col gap-1"><span className={label}>{t(`run.role_${role}`, { defaultValue: role })}</span>
-            <input list="skillwhet-models" value={value} onChange={(e) => set(e.target.value.trim())} className={`${field} font-mono`} /></label>
+          <div key={role} className="flex min-w-0 flex-col gap-1"><span className={label}>{t(`run.role_${role}`, { defaultValue: role })}</span>
+            <SkillWhetModelSelect
+              value={value}
+              onChange={(next) => set(next.trim())}
+              models={catalogModels}
+              aliasModels={aliasModels}
+              allowed={allowedModels}
+              ariaLabel={`${role}_model`}
+            />
+            {/* 别名:写出它映射到的真实模型(评估 ≠ 提议按这个比) */}
+            {realModels[value] && realModels[value] !== value && (
+              <span className="truncate font-mono text-[10px] text-muted-foreground" title={realModels[value]}>{value} → {realModels[value]}</span>
+            )}
+          </div>
         ))}
-        <datalist id="skillwhet-models">{MODELS.map((m) => <option key={m} value={m} />)}</datalist>
       </div>
 
       <button type="button" onClick={() => setAdvanced((v) => !v)} className="self-start text-[11px] text-muted-foreground hover:text-foreground">

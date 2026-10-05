@@ -3,6 +3,7 @@ import { AppError } from '@/shared/utils.js';
 
 import { readBudget } from './budget.js';
 import { g1Problem, type GateCache } from './g1.js';
+import { disabledCatalogModelsIn } from './model-policy.js';
 import type { SkillWhetClient } from './skillwhet-client.js';
 
 /**
@@ -197,9 +198,9 @@ export class NightlyScheduler {
          * 时窗内下一分钟再试 —— 原来 `skipped_busy` 记整晚,手动作业跑完也不补;G1 当晚修好也不跑。
          * 每分钟重试会重复写同一条结果:只在结果或说明变了才落库、才打日志。
          */
-        const skip = (result: NightlyResult, detail: string, retry = false) => {
+        const skip = (result: NightlyResult, detail: string, retry = false, keepInterrupted = false) => {
           // 被打断、还没续上的:结果仍记"被打断",下一晚接着试续跑(说明里写这一晚为什么没跑)
-          const keep = plan.last_result === 'interrupted' && (result === 'deferred_budget' || result === 'skipped_busy');
+          const keep = plan.last_result === 'interrupted' && (keepInterrupted || result === 'deferred_budget' || result === 'skipped_busy');
           const finalResult = keep ? 'interrupted' : result;
           const finalDetail = keep ? `${detail}(被打断的那次待续跑)` : detail;
           out.skipped.push({ skill, result, detail });
@@ -230,6 +231,16 @@ export class NightlyScheduler {
             skip('error', `上传来源的副本:${problem}`, true);
             continue;
           }
+        }
+
+        /**
+         * hn(B7):配置里的模型在目录里被下架了 → 这一晚不跑(不自动换模型:训练结论与模型绑定;时窗内也不重试,
+         * 等 root 改配置或重新上架)。放在续跑判断之前,且保留"被打断":重新上架后接着续,不重跑已完成的轮次。
+         */
+        const retired = disabledCatalogModelsIn(parsePlanConfig(plan));
+        if (retired.length > 0) {
+          skip('error', `模型已在模型目录下架:${retired.join('、')};请 root 改夜训配置或重新上架`, false, true);
+          continue;
         }
 
         // 续跑?

@@ -148,11 +148,18 @@
     "download": "Скачать этот файл",
     "collapse": "Свернуть панель",
     "expand": "Развернуть панель",
-    "doneFolded": "Завершено {{count}} · показать",
-    "doneUnfold": "Скрыть завершённые ({{count}})",
     "historyTruncated": "Длинная сессия — ранние записи не загружены.",
     "earlierFolded": "Ранее: {{count}} · показать",
-    "earlierUnfold": "Скрыть ранние ({{count}})"
+    "earlierUnfold": "Скрыть ранние ({{count}})",
+    "progress": "Прогресс",
+    "outputsShort": "Результаты",
+    "stepOf": "Шаг {{current}} из {{total}}",
+    "earlierSteps": "{{count}} предыдущих шагов",
+    "earlierSteps_one": "{{count}} предыдущий шаг",
+    "earlierSteps_few": "{{count}} предыдущих шага",
+    "earlierStepsHide": "Скрыть предыдущие шаги",
+    "progressCollapse": "Свернуть прогресс",
+    "progressExpand": "Развернуть прогресс"
   },
   "skills": {
     "invokedBadge": "Навык"
@@ -162,5 +169,15 @@
     "completed": "Готово",
     "error": "Ошибка",
     "denied": "Отклонено"
+  },
+  "modelMenu": {
+    "privateBadge": "Личная",
+    "fillKey": "Указать ключ",
+    "unavailable": "Недоступна"
+  },
+  "commandResult": {
+    "models": {
+      "privateModels": "Мои личные модели"
+    }
   }
 }

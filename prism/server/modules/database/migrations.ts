@@ -993,6 +993,25 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
     'verdict', 'status', 'category', 'note', 'expected_output', 'skill_hint', 'task_id',
     'created_at', 'updated_at',
   ],
+  // hn:模型目录。整张表新建,列清单钉住。
+  model_catalog: [
+    'id', 'model_id', 'label', 'vendor', 'description', 'context_window', 'effort_levels', 'effort_default',
+    'recommended', 'sort_order', 'enabled', 'is_default', 'last_probe', 'created_at', 'updated_at', 'updated_by',
+    // hq:网关与可用人员(老库由迁移加列)
+    'gateway_id', 'allowed_users',
+  ],
+  // hq:网关 / 个人 key / 私有模型。整张表新建,列清单钉住。
+  model_gateways: [
+    'id', 'name', 'base_url', 'auth_type', 'default_key', 'default_key_last4', 'owner_user_id', 'enabled',
+    'created_at', 'updated_at', 'updated_by',
+  ],
+  gateway_user_keys: ['id', 'gateway_id', 'user_id', 'key_enc', 'key_last4', 'set_by', 'updated_at'],
+  user_models: [
+    'id', 'user_id', 'gateway_id', 'model_id', 'label', 'vendor', 'context_window', 'effort_levels', 'effort_default',
+    'enabled', 'sort_order', 'created_at', 'updated_at',
+  ],
+  // ho(hq-4):每模型回合健康度。整张表新建,列清单钉住。
+  model_turn_stats: ['id', 'model', 'source', 'is_error', 'terminal_reason', 'ttft_ms', 'duration_ms', 'created_at'],
   // he:夜训计划。同上,整张表新建,列清单钉住。
   skillwhet_nightly_plan: [
     'skill_name', 'enrolled', 'window_start', 'window_end', 'max_cost_usd', 'rounds', 'config_json',
@@ -1219,6 +1238,17 @@ export const runMigrations = (db: Database) => {
      * 逐个挪治不了这个病:只要建索引还允许写在建表旁边,下一个人还会那么写。
      * 现在 `INIT_SCHEMA_SQL` 里**不许出现 CREATE INDEX**,有测试钉着。
      */
+    /*
+     * hq:模型目录加两列(走哪个网关 / 可用人员)。新库建表时已带;老库(hn / ho)在这里补。
+     * 放在 INDEX_SCHEMA_SQL 之前 —— 将来若有索引引用这两列,那时列一定在。
+     * 网关 / 个人 key / 私有模型三张新表由 INIT_SCHEMA_SQL 的 CREATE TABLE IF NOT EXISTS 建。
+     */
+    if (tableExists(db, 'model_catalog')) {
+      const catalogColumns = getTableInfo(db, 'model_catalog').map((c) => c.name);
+      addColumnToTableIfNotExists(db, 'model_catalog', catalogColumns, 'gateway_id', 'INTEGER');
+      addColumnToTableIfNotExists(db, 'model_catalog', catalogColumns, 'allowed_users', 'TEXT');
+    }
+
     db.exec(INDEX_SCHEMA_SQL);
 
     db.exec(LAST_SCANNED_AT_SQL);

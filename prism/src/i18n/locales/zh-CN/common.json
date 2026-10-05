@@ -432,7 +432,9 @@
       "save": "保存任务",
       "saving": "保存中…",
       "targetSession": "目标会话",
-      "targetSessionAuto": "自动新建一个并固定(默认)"
+      "targetSessionAuto": "自动新建一个并固定(默认)",
+      "privateModel": "私有",
+      "modelUnavailable": "暂不可用"
     },
     "claudeStarted": "已把需求发给 AI,到对话页继续聊即可。",
     "needProject": "先在左侧选一个项目,再让 AI 帮你建任务。",
@@ -449,7 +451,8 @@
     "triggerManual": "手动",
     "triggerSchedule": "定时",
     "openRunSession": "看这次的会话",
-    "moreRuns": "看更早的({{count}} 条)"
+    "moreRuns": "看更早的({{count}} 条)",
+    "modelRetired": "已下架 · 运行时按默认模型"
   },
   "export": {
     "md": "Markdown",

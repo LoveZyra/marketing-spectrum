@@ -78,12 +78,12 @@ describe('SDK 选项的写入位置', () => {
       codeOnly.indexOf('function mapCliOptionsToSDK('),
       codeOnly.indexOf('function addSession('),
     );
-    assert.match(oneShot, /applyCompactSettings\(sdkOptions\)/, '一次性路径没有套自动压缩旋钮');
+    assert.match(oneShot, /applyCompactSettings\(sdkOptions[,)]/, '一次性路径没有套自动压缩旋钮');
     const persistent = codeOnly.slice(
       codeOnly.indexOf('function buildPersistentSdkOptions('),
       codeOnly.indexOf('async function readPersistentRuntime('),
     );
-    assert.match(persistent, /applyCompactSettings\(sdkOptions\)/, '常驻路径没有套自动压缩旋钮');
+    assert.match(persistent, /applyCompactSettings\(sdkOptions[,)]/, '常驻路径没有套自动压缩旋钮');
     assert.equal((codeOnly.match(/const compactSettings = \{\}/g) ?? []).length, 1, '旋钮逻辑只许有一份');
   });
 
@@ -91,5 +91,20 @@ describe('SDK 选项的写入位置', () => {
     const block = codeOnly.slice(codeOnly.indexOf('const compactSettings'));
     assert.match(block.slice(0, 900), /typeof sdkOptions\.settings === 'string'/);
     assert.match(block.slice(0, 900), /log\.warn/);
+  });
+});
+
+describe('hm(A3.1 ③):跨会话拒收写进 options.settings', () => {
+  test('SDK 的 .d.ts 里 crossSessionInbound 属于 Settings,取值含 refuse', () => {
+    assert.equal(ownerOf("crossSessionInbound?: 'accept' | 'hold' | 'refuse';"), 'Settings');
+  });
+
+  test('applyCompactSettings **无条件**带 crossSessionInbound(不再只在配了压缩旋钮时才写 settings)', () => {
+    const block = codeOnly.slice(
+      codeOnly.indexOf('function applyCompactSettings('),
+      codeOnly.indexOf('const MAX_RUNTIMES'),
+    );
+    assert.match(block, /compactSettings\.crossSessionInbound\s*=\s*CROSS_SESSION_INBOUND/);
+    assert.equal(/if \(Object\.keys\(compactSettings\)\.length > 0\)/.test(block), false, '还留着"有旋钮才写"的判断');
   });
 });

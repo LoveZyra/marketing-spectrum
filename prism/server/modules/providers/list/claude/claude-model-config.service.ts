@@ -16,7 +16,10 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { AppError } from '@/shared/utils.js';
+
 import { ALIAS_ENV_KEYS } from './claude-settings-mapping.service.js';
+import { describeSettingsParseError } from './claude-settings-selfcheck.js';
 
 export const MANAGED_ALIASES = ['sonnet', 'opus', 'haiku', 'fable'] as const;
 export type ManagedAlias = (typeof MANAGED_ALIASES)[number];
@@ -104,7 +107,13 @@ async function readRawSettings(): Promise<{ settings: RawSettings; exists: boole
       fs.readFile(settingsPath(), 'utf8'),
       fs.stat(settingsPath()),
     ]);
-    const parsed = JSON.parse(raw) as unknown;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch (parseError) {
+      // ho:原来直接冒成 500「Internal server error」—— 说清楚是哪份文件、为什么、怎么修;写回也照样拒(不覆盖运维的文件)
+      throw new AppError(describeSettingsParseError(raw, parseError), { code: 'CLAUDE_SETTINGS_INVALID_JSON', statusCode: 422 });
+    }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('settings.json 不是 JSON 对象');
     }

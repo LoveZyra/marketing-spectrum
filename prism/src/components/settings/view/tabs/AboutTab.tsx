@@ -1,4 +1,4 @@
-import { version as currentVersion } from '../../../../../package.json';
+import { BUILD_RELEASE } from '../../../../utils/releaseInfo';
 import PrismLogo from '../../../PrismLogo';
 import PrismWordmark from '../../../PrismWordmark';
 
@@ -14,13 +14,19 @@ export default function AboutTab() {
       <div className="flex items-center gap-3">
         <PrismLogo size={44} />
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <span className="inline-flex items-center text-foreground">
               <PrismWordmark height={18} />
             </span>
             <span className="rounded-sm border border-border px-1.5 py-px font-mono text-[11px] font-medium text-muted-foreground">
-              v{currentVersion}
+              v{BUILD_RELEASE.version}
             </span>
+            {/* v2.0.0:发布日期与提交号(包里的 RELEASE.json;从源码跑时没有) */}
+            {(BUILD_RELEASE.date || BUILD_RELEASE.commit) && (
+              <span className="whitespace-nowrap font-mono text-[11px] text-muted-foreground" data-release-meta>
+                {[BUILD_RELEASE.date, BUILD_RELEASE.commit].filter(Boolean).join(' · ')}
+              </span>
+            )}
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">
             公共算法与分析 Agent 工作台

@@ -96,5 +96,11 @@
       "providePath": "Bitte gib einen Arbeitsbereichspfad an",
       "failedToCreate": "Arbeitsbereich konnte nicht erstellt werden"
     }
+  },
+  "tasksPage": {
+    "form": {
+      "privateModel": "Privat",
+      "modelUnavailable": "Nicht verfügbar"
+    }
   }
 }

@@ -561,5 +561,8 @@
     "rounds": "輪次 / 停止",
     "stagingCount": "共 {{n}} 份",
     "noRunHint": "這個 skill 還沒跑過訓練;評測數字隨第一次訓練產生。"
+  },
+  "models": {
+    "defaultGatewayOnly": "SkillWhet 只能用預設閘道上、所有人可見的模型"
   }
 }

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterEach, describe, test } from 'vitest';
 
 import { auditLogDb, closeConnection, initializeDatabase, skillWhetNightlyDb } from '@/modules/database/index.js';
+import { claudeModelCatalog, invalidateCatalogCache } from '@/modules/providers/index.js';
 import { AppError } from '@/shared/utils.js';
 
 import { classifyJob, NightlyScheduler, nightWindow } from '../services/nightly-scheduler.service.js';
@@ -133,6 +134,38 @@ describe('classifyJob', () => {
 });
 
 describe('NightlyScheduler', () => {
+  test('hn(B7):配置里的模型在模型目录被下架 → 这一晚不跑、写明原因,不自动换模型;重新上架后下一晚照跑', async () => {
+    await freshDb();
+    invalidateCatalogCache();
+    const entry = claudeModelCatalog.create({ modelId: 'glm-5.2' }, 1);
+    enroll('a', { config: { runner: 'agent', fast_model: 'haiku', slow_model: 'glm-5.2', eval_model: 'opus' } });
+    const serve = new FakeServe();
+    serve.newTasks.a = 50;
+    const quiet = { log() {}, warn() {}, error() {} };
+    claudeModelCatalog.update(entry.id, { enabled: false }, 1);
+    const out = await new NightlyScheduler({ client: serve, now: at(3), logger: quiet }).tick();
+    assert.equal(out.started, null);
+    assert.equal(serve.posted.length, 0);
+    assert.deepEqual(out.skipped.map((x) => x.result), ['error']);
+    assert.match(out.skipped[0].detail, /slow_model=glm-5\.2/);
+    assert.match(String(skillWhetNightlyDb.get('a')?.last_detail), /下架/);
+
+    // 复审 P2-4:被打断、待续跑的计划遇上下架 → 仍记"被打断",重新上架后接着续跑
+    skillWhetNightlyDb.markFinished('a', 'interrupted', '服务重启打断', false);
+    const kept = await new NightlyScheduler({ client: serve, now: at(3, 0, 26), logger: quiet }).tick();
+    assert.equal(kept.started, null);
+    assert.equal(skillWhetNightlyDb.get('a')?.last_result, 'interrupted');
+    assert.match(String(skillWhetNightlyDb.get('a')?.last_detail), /下架.*被打断的那次待续跑/);
+
+    claudeModelCatalog.update(entry.id, { enabled: true }, 1);
+    serve.checkpoint.a = { exists: true, matches: true, round: 1 };
+    const next = await new NightlyScheduler({ client: serve, now: at(3, 0, 27), logger: quiet }).tick();
+    assert.equal(next.started?.resume, true, '重新上架后续跑');
+    assert.equal(next.started?.skill, 'a');
+    assert.equal((serve.posted[0].args as Record<string, unknown>).slow_model, 'glm-5.2', '原样用配置的模型');
+    invalidateCatalogCache();
+  });
+
   test('零纳入:整夜不起作业', async () => {
     await freshDb();
     skillWhetNightlyDb.upsert('a', { enrolled: false, windowStart: '02:00', windowEnd: '06:00', maxCostUsd: null, rounds: 2, config: {}, minNewTasks: 0 }, 1);

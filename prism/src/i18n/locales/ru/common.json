@@ -96,5 +96,11 @@
       "providePath": "Пожалуйста, укажите путь к рабочему пространству",
       "failedToCreate": "Не удалось создать рабочее пространство"
     }
+  },
+  "tasksPage": {
+    "form": {
+      "privateModel": "Личная",
+      "modelUnavailable": "Недоступна"
+    }
   }
 }

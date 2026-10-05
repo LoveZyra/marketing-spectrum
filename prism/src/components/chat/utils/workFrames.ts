@@ -15,6 +15,21 @@ export interface SessionWorkFrame {
   toolInput: unknown;
   resultContent: string | null;
   resultIsError: boolean;
+  /** hq:服务端数的用户回合(见 server sessions.service 的 SessionWorkFrame.turn)。 */
+  turn?: number;
+}
+
+/**
+ * hq(复审四轮):基线末尾的"回合号"标记 —— 服务端全量日志里的用户回合数。
+ *
+ * 刷新时窗口只有尾部 20 条,这一轮的用户消息常常不在里面;这一轮还没有任务帧的话,基线里的最大回合号
+ * 也还是上一轮的 —— 这一轮新建的任务就会和上一轮被停下的老任务落在同一个回合号上。接一条标记把计数推到
+ * 真实的回合数,窗口里的任务事件就落在正确的回合上。不是工具帧,别的折叠函数都不看它。
+ */
+export function turnMarkerMessage(userTurns: unknown): ChatMessage[] {
+  if (typeof userTurns !== 'number' || !Number.isFinite(userTurns) || userTurns <= 0) return [];
+  const marker: ChatMessage = { type: 'work_turn_marker', content: '', timestamp: 0, taskTurn: userTurns };
+  return [marker];
 }
 
 /**
@@ -64,5 +79,7 @@ export function workFramesToMessages(frames: readonly SessionWorkFrame[]): ChatM
       toolResult: frame.resultContent !== null || frame.resultIsError
         ? { content: frame.resultContent ?? '', isError: frame.resultIsError }
         : null,
+      // hq:回合号原样带过去,给任务清单分辨"这一轮"(见 taskChecklist 的 TodoItem.turn)
+      ...(typeof frame.turn === 'number' && frame.turn > 0 ? { taskTurn: frame.turn } : {}),
     }) as ChatMessage);
 }

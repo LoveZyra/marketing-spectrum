@@ -40,4 +40,12 @@ describe('设置页主标签清单', () => {
     const rootOnly = SETTINGS_MAIN_TABS.filter((tab) => tab.rootOnly).map((tab) => tab.id);
     assert.deepEqual(rootOnly, ['accounts', 'models', 'server']);
   });
+
+  test('hq:「模型网关」每个人都有(不是 root 专属),排在「模型」前面', () => {
+    const tab = SETTINGS_MAIN_TABS.find((item) => item.id === 'gateways');
+    assert.ok(tab, '缺 gateways 标签');
+    assert.equal(tab.rootOnly, undefined);
+    assert.equal(tab.labelKey, 'mainTabs.gateways');
+    assert.ok(SETTINGS_MAIN_TAB_IDS.indexOf('gateways') < SETTINGS_MAIN_TAB_IDS.indexOf('models'));
+  });
 });

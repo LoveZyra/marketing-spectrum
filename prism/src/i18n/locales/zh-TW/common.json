@@ -154,5 +154,11 @@
     "installHint": "在伺服器上安裝後重試:",
     "startFailed": "JupyterLab 啟動失敗",
     "retry": "重試"
+  },
+  "tasksPage": {
+    "form": {
+      "privateModel": "私有",
+      "modelUnavailable": "暫不可用"
+    }
   }
 }

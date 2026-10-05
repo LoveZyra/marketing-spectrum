@@ -72,7 +72,8 @@ describe('#11 CLI 自己那一轮的 result 不算用户回合的结束', () => 
 
   it('接线:turn 建立时读 runtime.orphanTurnOpen;读循环用这条判据 continue;非 result 帧置 sawFrame', () => {
     expect(sdk).toMatch(/expectForeignResult: Boolean\(runtime\.orphanTurnOpen\),/);
-    expect(sdk).toMatch(/if \(shouldIgnoreForeignResult\(turn\)\) \{[\s\S]{0,400}continue;/);
+    // hm(A3.6):先按 uuid 判归属,判不出来(unknown)才落到这条判据
+    expect(sdk).toMatch(/attribution === 'unknown' && shouldIgnoreForeignResult\(turn\)\)\) \{[\s\S]{0,600}continue;/);
     expect(sdk).toMatch(/\} else \{\s*\n\s*turn\.sawFrame = true;/);
     // 只有**顶层**有内容帧才把 orphanTurnOpen 置真(子代理帧不会带来顶层 result)
     expect(sdk).toMatch(/else if \(isContentfulFrame\(message\) && !message\?\.parent_tool_use_id\) runtime\.orphanTurnOpen = true;/);
@@ -83,7 +84,8 @@ describe('#11 CLI 自己那一轮的 result 不算用户回合的结束', () => 
 
 describe('#19 子代理帧不刷主上下文环', () => {
   it('常驻与一次性两条路都过滤 parent_tool_use_id', () => {
-    const sites = sdk.match(/message\?\.parent_tool_use_id \? null : extractTokenBudget\(message/g) || [];
+    // hn:一次性路径那一处折成了两行(`? null` 换行 `: extractTokenBudget(message, { contextWindow, currentModel })`)
+    const sites = sdk.match(/message\?\.parent_tool_use_id\s*\?\s*null\s*:\s*extractTokenBudget\(message/g) || [];
     expect(sites).toHaveLength(2);
   });
 });
@@ -112,7 +114,8 @@ describe('#3 「停止」要能停掉 CLI 自己发起的那一轮', () => {
   it('abortClaudeSDKRun 在 activeChatRuns 里找不到时按 app 会话 id 找 runtime 并 interrupt', () => {
     const fn = sdk.slice(sdk.indexOf('async function abortClaudeSDKRun(runId)'));
     expect(fn.slice(0, 1600)).toMatch(/const runtime = findRuntimeByAppSessionId\(runId\);/);
-    expect(fn.slice(0, 1600)).toMatch(/await interruptWithTimeout\(runtime\.query, `run \$\{runId\} \(observed\)`\);/);
+    // ho(ho-1):所有对常驻 runtime 的中断都走 interruptRuntime(带撤回合流 / 停掉被转后台的前台命令)
+    expect(fn.slice(0, 1600)).toMatch(/await interruptRuntime\(runtime, runtime\.query, `run \$\{runId\} \(observed\)`\);/);
     // 有活跃回合的 runtime 不走这条(那是正常回合,由 activeChatRuns 那条路管)
     expect(fn.slice(0, 1600)).toMatch(/if \(!runtime \|\| runtime\.turn\) return false;/);
   });

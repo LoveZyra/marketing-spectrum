@@ -102,6 +102,31 @@ export type ProviderModelOption = {
       description?: string;
     }[];
   };
+  /**
+   * hn(B2):`catalog` = 模型目录里的网关模型;`alias` = 内置别名组(子代理与 CLI 内部任务用,
+   * 选择器里默认收起)。老数据没有这个字段,当 alias 看。
+   */
+  group?: 'catalog' | 'alias';
+  /** 厂商(图标与分组);null = 认不出,画首字母徽标。 */
+  vendor?: string | null;
+  /** 推荐区 */
+  recommended?: boolean;
+  /** 目录里填的上下文窗口;null = 没填(CLI 默认)。 */
+  contextWindow?: number | null;
+  /** 真实的网关模型名 —— 目录条目就是 value 本身;别名组靠 configMappings 另查。 */
+  realModel?: string;
+  /** hq:走哪个网关(0 = settings.json 那一套)。 */
+  gatewayId?: number;
+  /** hq:网关名(只在不是默认网关时给,选择器里小字显示)。 */
+  gatewayName?: string;
+  /** hq:本人的私有模型。 */
+  private?: boolean;
+  /** hq:这个人现在能不能用(网关没有默认 key、他也没填自己的 key → false)。缺省 = 能用。 */
+  available?: boolean;
+  /** hq:不能用的原因(给人看的一句话)。 */
+  unavailableReason?: string;
+  /** hq:不能用的原因(给程序判):no_key → 前端给「去填 key」;gateway_disabled / gateway_missing → 只能找管理员。 */
+  unavailableCode?: 'no_key' | 'gateway_disabled' | 'gateway_missing';
 };
 
 /**
@@ -149,6 +174,12 @@ export type ProviderModelsResult = {
  */
 export type ProviderCurrentActiveModel = {
   model: string;
+  /**
+   * hn:这个值从哪来 —— `pending`(/models 刚切、下一轮生效)/ `transcript`(transcript 里最近一次回复的模型)/
+   * `default`(都没有,报的是服务端默认)。新会话刚建、transcript 还没落盘时是 `default`,
+   * 而那一轮实际用的是客户端带过去的模型 —— 前端据此不拿默认值盖掉自己的选择。
+   */
+  source?: 'pending' | 'transcript' | 'default';
 };
 
 /**
@@ -285,6 +316,12 @@ export type NormalizedMessage = {
    */
   senderUserId?: string | number;
   origin?: 'web' | 'scheduled' | 'api';
+  /** ho(ho-1):合流进 CLI 队列的用户消息没执行就被撤掉了(停止 / 用户撤回)—— 画成置灰的"已撤回"。 */
+  withdrawn?: boolean;
+  /** ho(复审):插话 —— 合流进正在跑的这一轮的用户消息。它不开新的一轮,时间轴 / 产出卡不把它当回合边界。 */
+  interjection?: boolean;
+  /** ho(hq-2):用户这一轮推进 CLI 时带的 uuid —— 非 git 目录「撤销这一轮的文件改动」按它找 CLI 的文件检查点。 */
+  turnUuid?: string;
   /**
    * 这一轮实际服务的模型(assistant 文本消息携带;取自响应元数据的 message.model)。
    * 前端在每条回答的时间戳旁显示 —— 模型的自我介绍会顺着上下文复述历史,不可信,

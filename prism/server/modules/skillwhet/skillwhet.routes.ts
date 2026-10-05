@@ -13,6 +13,7 @@ import { isRootUser } from '@/shared/root-users.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 
 import { readBudget } from './services/budget.js';
+import { SKILLWHET_MODEL_KEYS, allowedSkillWhetModels, isSkillWhetModelAllowed, proposerEvaluatorConflict } from './services/model-policy.js';
 import { g1Problem, type GateCache } from './services/g1.js';
 import { copyIdOf, isHhMm, parsePlanConfig } from './services/nightly-scheduler.service.js';
 import { redactSecrets } from './services/redact.js';
@@ -403,17 +404,26 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     for (const key of ['fast_backend', 'slow_backend', 'eval_backend']) {
       if (key in args && !root) delete args[key];
     }
-    // hl(静态 P1-10):非 root 的四个模型都走白名单(`PRISM_SKILLWHET_MODEL_ALLOWLIST`,默认 haiku / sonnet / opus);
-    // 原来 target_model 不受任何限制,配 runner=agent 就能让 rollout 走任意模型
-    if (!root) {
-      for (const key of ['fast_model', 'slow_model', 'eval_model', 'target_model']) {
-        if (!(key in args) || args[key] === undefined || args[key] === null || args[key] === '') continue;
-        const value = String(args[key]);
-        if (!budget.modelAllowlist.includes(value)) {
-          throw new AppError(`${key}=${value} 不在允许的模型里(${budget.modelAllowlist.join(' / ')});要用别的模型请找 root`,
-            { code: 'SKILLWHET_MODEL_NOT_ALLOWED', statusCode: 400 });
-        }
+    // hl(静态 P1-10):非 root 的四个模型都走白名单;原来 target_model 不受任何限制,配 runner=agent 就能让 rollout 走任意模型。
+    // hn(B7):白名单没配时 = 三个别名 + 模型目录里上架的条目(见 model-policy.ts);root 不受限,但名字要过字符集。
+    for (const key of SKILLWHET_MODEL_KEYS) {
+      if (!(key in args) || args[key] === undefined || args[key] === null || args[key] === '') continue;
+      const value = String(args[key]);
+      if (!isSkillWhetModelAllowed(value, budget, root)) {
+        const allowed = allowedSkillWhetModels(budget, root);
+        throw new AppError(
+          allowed
+            ? `${key}=${value} 不在允许的模型里(${allowed.join(' / ')});要用别的模型请找 root`
+            : `${key}=${value} 不是合法的模型名`,
+          { code: 'SKILLWHET_MODEL_NOT_ALLOWED', statusCode: 400 },
+        );
       }
+    }
+    // hn(B7):评估 ≠ 提议按真名比(别名换成它映射到的网关模型再比)。mock 后端不调模型,不查。
+    const usesMock = ['fast_backend', 'slow_backend', 'eval_backend'].some((key) => args[key] === 'mock');
+    if (!usesMock) {
+      const conflict = await proposerEvaluatorConflict(args);
+      if (conflict) throw new AppError(conflict, { code: 'SKILLWHET_BAD_MODELS', statusCode: 400 });
     }
     const clamped: string[] = [];
     const clampNum = (key: string, cap: number, fallback: number) => {
@@ -491,7 +501,8 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     const user = requireUser(req);
     const budget = readBudget(env);
     const spent = isRoot(user) ? 0 : await spentToday(user.id);
-    res.json(createApiSuccessResponse({ ...budget, spentToday: spent, isRoot: isRoot(user) }));
+    // hn(B7):非 root 能选的模型(root 为 null = 不限),训练 / 夜训表单的下拉按它过滤。
+    res.json(createApiSuccessResponse({ ...budget, spentToday: spent, isRoot: isRoot(user), allowedModels: allowedSkillWhetModels(budget, isRoot(user)) }));
   }));
 
   router.get('/jobs', asyncHandler(async (req, res) => {
@@ -646,6 +657,10 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
       if (!NIGHTLY_CONFIG_KEYS.has(key)) throw bad(`夜训参数不支持 ${key}`);
       if (value === null || value === '' || value === undefined) continue;
       if (!['string', 'number', 'boolean'].includes(typeof value)) throw bad(`${key} 的值类型不对`);
+      // hn(B7):夜训里的模型此前不校验(v2 记下的缺口)。夜训只有 root 能设,所以只查名字合不合法。
+      if ((SKILLWHET_MODEL_KEYS as readonly string[]).includes(key) && !isSkillWhetModelAllowed(String(value), budget, true)) {
+        throw bad(`${key}=${String(value)} 不是合法的模型名`);
+      }
       config[key] = value;
     }
     let copyId: string | null = null;
@@ -656,9 +671,10 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
       if (!status.bootstrapped) {
         throw new AppError('这个副本还没 bootstrap(冻结 S₀),夜训起不来 —— 先在技能资产里点 bootstrap', { code: 'SKILLWHET_NOT_BOOTSTRAPPED', statusCode: 409 });
       }
-      for (const [a, b] of [['fast_model', 'eval_model'], ['slow_model', 'eval_model']] as const) {
-        if (config[a] && config[b] && config[a] === config[b]) throw bad('评估模型要和提议模型不同');
-      }
+      // hn(B7):按真名比(别名换成它映射到的网关模型),没填的角色按 SkillWhet 默认补上
+      const usesMock = ['fast_backend', 'slow_backend', 'eval_backend'].some((key) => config[key] === 'mock');
+      const conflict = usesMock ? null : await proposerEvaluatorConflict(config);
+      if (conflict) throw bad(conflict);
     }
     const row = skillWhetNightlyDb.upsert(name, {
       enrolled, windowStart, windowEnd, maxCostUsd: maxCost, rounds, config, minNewTasks: minNew, copyId,
@@ -1022,7 +1038,13 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     };
     if (since) args.since = since.iso;
     if (body.backend === 'mock') args.backend = 'mock';
-    if (typeof body.model === 'string' && body.model) args.model = body.model;
+    if (typeof body.model === 'string' && body.model) {
+      // hn(B7):此前不校验(v2 记下的缺口)。harvest 只有 root 能起,只查名字合不合法。
+      if (!isSkillWhetModelAllowed(body.model, readBudget(env), true)) {
+        throw new AppError(`model=${body.model} 不是合法的模型名`, { code: 'SKILLWHET_MODEL_NOT_ALLOWED', statusCode: 400 });
+      }
+      args.model = body.model;
+    }
     const data = await client.request<{ job: JobRow; position: number }>('POST', '/jobs', {
       kind: 'harvest', skill, args, origin: 'manual',
       tags: [`user:${user.id}`, `uploader:${user.username}`, 'kind:harvest'],

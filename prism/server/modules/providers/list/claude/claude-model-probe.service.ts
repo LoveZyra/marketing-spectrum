@@ -4,7 +4,8 @@ import path from 'node:path';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
-import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
+import { sdkExecutableOption } from '@/shared/claude-cli-path.js';
+import { buildClaudeSdkEnv } from '@/shared/claude-runtime-env.js';
 import { getDataDir } from '@/utils/runtime-paths.js';
 
 /**
@@ -178,8 +179,10 @@ async function probeOneAlias(alias: string, probeCwd: string): Promise<ModelMapp
       // 只取 'user' 不取 'project'/'local':探测 cwd 是隔离目录(getDataDir()/probe),
       // 本就没有项目级 settings 可读,单 'user' 既拿到鉴权,又不受任何具体项目配置影响。
       settingSources: ['user'],
-      env: { ...process.env },
-      pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath(process.env.CLAUDE_CLI_PATH),
+      // hm(A3.2 / A2):与对话同一份 env(带 CLAUDE_CODE_ENABLE_TODO_TOOLS)与同一个 CLI ——
+      // `CLAUDE_CLI_PATH` 没配就不传,用 SDK 随包的那一份。
+      env: buildClaudeSdkEnv(process.env),
+      pathToClaudeCodeExecutable: sdkExecutableOption(),
       abortController: abort,
     };
     // 与真实对话同口径(见 claude-sdk.js 的 toSdkModel):'default' 档**省略 model**,
@@ -255,7 +258,7 @@ export function resolveProbeOutcome(params: {
  * 迟早有工具(会话列表、搜索、备份)把这些"1"对话当真会话展示出来。按
  * PROBE_DIR_MARKER 定位 —— 和 watcher 的忽略规则用同一个标记,两边不会漂移。
  */
-async function cleanupProbeTranscripts(): Promise<void> {
+export async function cleanupProbeTranscripts(): Promise<void> {
   const projectsRoot = path.join(os.homedir(), '.claude', 'projects');
   let entries: string[] = [];
   try {

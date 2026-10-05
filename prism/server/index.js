@@ -13,8 +13,8 @@ import cors from 'cors';
 
 import { AppError, generateMessageId } from '@/shared/utils.js';
 import { methodOverrideMiddleware } from '@/shared/method-override.js';
-import { closeSessionsWatcher, initializeSessionsWatcher, markInterruptedTurnsOnStartup, sessionsService, setSessionRuntimeReleaser, startArchiveRetentionSweeper, startTrashSweeper } from '@/modules/providers/index.js';
-import { broadcastRuntimeEvicted, createWebSocketServer, drainPendingSendForSession, observeOrphanFrames } from '@/modules/websocket/index.js';
+import { claudeModelCatalog, modelViewerFor, sweepStaleFlagSettingsFiles, closeSessionsWatcher, initializeSessionsWatcher, markInterruptedTurnsOnStartup, runClaudeSettingsSelfCheck, seedModelCatalogOnce, sessionsService, setSessionRuntimeReleaser, startArchiveRetentionSweeper, startTrashSweeper } from '@/modules/providers/index.js';
+import { backgroundApprovalWriter, broadcastBackgroundTasks, broadcastRuntimeEvicted, createWebSocketServer, drainPendingSendForSession, forgetObservedRun, handleMergedMessageEvent, observeOrphanFrames } from '@/modules/websocket/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { createTasksRouter, startTaskScheduler, stopTaskScheduler } from '@/modules/tasks/index.js';
 import { createFilesRouter, createFileDownloadRouter } from '@/modules/files/index.js';
@@ -26,6 +26,8 @@ import {
     removeLocalServerMarker,
 } from '@/modules/system/index.js';
 import { createLogger } from '@/shared/logger.js';
+import { readReleaseInfo } from '@/shared/release-info.js';
+import { scrubbedSessionMarkersAtStartup } from '@/shared/claude-runtime-env.js';
 import { NightlyScheduler, SkillWhetClient, createSkillWhetRouter } from '@/modules/skillwhet/index.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
@@ -37,6 +39,11 @@ import {
     prewarmClaudeSession,
     setRuntimeEvictionNotifier,
     setOrphanTurnHook,
+    setRuntimeDisposedHook,
+    setMergedMessageHook,
+    setBackgroundTasksHook,
+    setBackgroundApprovalWriterFactory,
+    cancelMergedMessage,
     mergeUserMessage,
     releaseClaudeSession,
     abortClaudeSDKSession,
@@ -49,8 +56,14 @@ import {
     getClaudeSlashCommands,
     describeClaudeRuntime,
     getRuntimePoolStats,
+    stopClaudeBackgroundTask,
+    backgroundClaudeForegroundTasks,
+    rewindClaudeFiles,
+    isClaudeSDKSessionActive,
+    applyServerToolPolicy,
+    describeBypassUnderRoot,
 } from './claude-sdk.js';
-import checkpointsRoutes from './routes/checkpoints.js';
+import checkpointsRoutes, { findActiveRunForCwd } from './routes/checkpoints.js';
 import documentsRoutes from './routes/documents.js';
 import {
     stripAnsiSequences,
@@ -105,8 +118,15 @@ const RUNNING_VERSION = (() => {
         return null;
     }
 })();
+// v2.0.0:同一时刻再取一次发布信息(包里 RELEASE.json 的日期与提交号;从源码跑时没有)。
+const RUNNING_RELEASE = readReleaseInfo(APP_ROOT);
 
 log.info('SERVER_PORT from env:', process.env.SERVER_PORT);
+// hm(A3.4):启动时删掉的会话标记(见 load-env.js)。
+const scrubbedSessionMarkers = scrubbedSessionMarkersAtStartup();
+if (scrubbedSessionMarkers.length > 0) {
+    log.info(`清掉了继承来的 Claude 会话标记:${scrubbedSessionMarkers.join(', ')}(否则 Prism 起的 CLI 会被当成子会话、不写 transcript)`);
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -140,6 +160,8 @@ const wss = createWebSocketServer(server, {
         // gc:真合流 —— 会话忙着时把用户这条话直接推进 CLI 的命令队列,
         // 而不是攒在 Prism 自己的排队里等这一轮跑完。不成立时自动退回排队。
         mergeFns: { claude: mergeUserMessage },
+        // ho(ho-1):撤回一条还在 CLI 队列里的合流消息
+        cancelMergedFns: { claude: cancelMergedMessage },
         getToolApprovalSessionId,
         resolveToolApproval,
         getPendingApprovalsForSession,
@@ -153,6 +175,19 @@ const wss = createWebSocketServer(server, {
         // 终端接管一段对话前,先把 chat 那边的常驻 runtime 放掉:一个持有者,
         // 而且 dispose 的收尾保证 transcript 完整落盘,终端 resume 才不会少一截。
         releaseConversation: (providerSessionId) => releaseClaudeSession(providerSessionId),
+        // hm(A3.3):接管命令的 `--permission-mode` 过与对话同一份策略(bypass 名单、root 下的 bypass)。
+        policeTakeoverPermissionMode: (requestedMode, actorUsername) => {
+            const policed = applyServerToolPolicy(requestedMode, [], actorUsername, []);
+            if (describeBypassUnderRoot(policed.permissionMode)) {
+                return { mode: 'default', notice: '服务以 root 运行,「跳过权限」档位会被 CLI 拒绝 —— 接管按默认档位进入。' };
+            }
+            return {
+                mode: policed.permissionMode,
+                notice: policed.permissionMode !== requestedMode
+                    ? `你不在 PRISM_ALLOW_BYPASS_USERS 名单里,接管按「${policed.permissionMode}」档位进入。`
+                    : null,
+            };
+        },
         resolveProviderSessionId: (sessionId, provider) => {
             const dbSession = sessionsDb.getSessionById(sessionId);
             return dbSession ? (dbSession.provider_session_id ?? null) : null;
@@ -186,6 +221,14 @@ setSessionRuntimeReleaser((providerSessionId) => releaseClaudeSession(providerSe
  * (只计数、丢弃),所以这一行是这个功能的总开关。
  */
 setOrphanTurnHook(observeOrphanFrames);
+// hn(B2):runtime 被丢弃(换窗口重建、淘汰、回收)时,它开着的观测回合就地收掉。
+setRuntimeDisposedHook(forgetObservedRun);
+// ho(ho-1):合流消息的去向(停止时被撤 / 用户撤回 / 已送达)—— 落库那一行标记、在线端气泡跟着变。
+setMergedMessageHook(handleMergedMessageEvent);
+// ho(hq-1):后台任务全量表变了 —— 推给正在看这段对话的人(输入框上方的后台任务条)。
+setBackgroundTasksHook(broadcastBackgroundTasks);
+// ho(ho-3):主回合结束后,后台子代理要的审批送给正在看这段对话的人(不接线 = 原来的直接拒)。
+setBackgroundApprovalWriterFactory(backgroundApprovalWriter);
 
 // Behind nginx/Caddy the socket address is the proxy's. Opt-in only: trusting
 // X-Forwarded-For unconditionally would let any direct client forge a fresh
@@ -363,6 +406,7 @@ let skillWhetJobsPruner = null;
 app.use(createSystemPublicRouter({
     installMode,
     runningVersion: RUNNING_VERSION,
+    runningRelease: RUNNING_RELEASE,
     isWatcherReady: () => sessionsWatcherReady,
 }));
 
@@ -449,6 +493,10 @@ app.post('/api/providers/:provider/sessions/:sessionId/prewarm', authenticateTok
         }
 
         const body = req.body || {};
+        // hn(B2):选择框里是不在目录里 / 已下架的模型 → 不预热(静默;真发消息时 chat.send 会明说)。
+        if (typeof body.model === 'string' && !(await claudeModelCatalog.isUsable(body.model, modelViewerFor(req.user?.id ?? null, req.user?.username ?? null)))) {
+            return res.json({ success: true, warmed: false, reason: 'model_not_allowed' });
+        }
         const result = await prewarmClaudeSession({
             sessionId: session.provider_session_id,
             resume: true,
@@ -458,6 +506,10 @@ app.post('/api/providers/:provider/sessions/:sessionId/prewarm', authenticateTok
             toolsSettings: body.toolsSettings,
             model: body.model,
             effort: body.effort,
+            // hq:按点开会话的这个人预热(网关 key、「可用人员」、私有模型)—— 否则预热出来的 runtime 用的是默认 key,
+            // 第一条真消息因为网关指纹不同又得重建一次;私有模型 / 限人模型干脆预热失败
+            actorUserId: req.user?.id ?? null,
+            actorUsername: req.user?.username ?? null,
         });
 
         res.json({ success: true, ...result });
@@ -531,6 +583,132 @@ app.post('/api/providers/:provider/sessions/:sessionId/runtime/release', authent
     }
 });
 
+/**
+ * ho(hq-1):后台任务条 —— 停掉一个后台任务 / 把正在跑的前台命令转到后台。
+ * 归属校验与上面 runtime 状态同一套:能看见这段会话才能动它的任务(与"谁都能按停止"同口径)。
+ */
+function resolveClaudeRuntimeSession(req, res) {
+    if (req.params.provider !== 'claude') {
+        res.status(400).json({ success: false, error: 'unsupported_provider' });
+        return null;
+    }
+    const appSessionId = String(req.params.sessionId || '');
+    const session = sessionsDb.getSessionById(appSessionId);
+    if (!session || !canViewerSeeSession(appSessionId, readRequestViewer(req))) {
+        res.status(404).json({ success: false, error: 'Session not found' });
+        return null;
+    }
+    if (!session.provider_session_id) {
+        res.json({ success: true, done: false, reason: 'not_resident' });
+        return null;
+    }
+    return session;
+}
+
+app.post('/api/providers/:provider/sessions/:sessionId/runtime/tasks/:taskId/stop', authenticateToken, async (req, res) => {
+    try {
+        const session = resolveClaudeRuntimeSession(req, res);
+        if (!session) return;
+        const result = await stopClaudeBackgroundTask(session.provider_session_id, String(req.params.taskId || ''));
+        return res.json({ success: true, ...result });
+    } catch (error) {
+        log.warn('[Runtime] stop task failed:', error?.message || error);
+        return res.json({ success: true, stopped: false, reason: 'error' });
+    }
+});
+
+app.post('/api/providers/:provider/sessions/:sessionId/runtime/background', authenticateToken, async (req, res) => {
+    try {
+        const session = resolveClaudeRuntimeSession(req, res);
+        if (!session) return;
+        const toolUseId = typeof req.body?.toolUseId === 'string' && req.body.toolUseId ? req.body.toolUseId : null;
+        const result = await backgroundClaudeForegroundTasks(session.provider_session_id, toolUseId);
+        return res.json({ success: true, ...result });
+    } catch (error) {
+        log.warn('[Runtime] background failed:', error?.message || error);
+        return res.json({ success: true, backgrounded: false, reason: 'error' });
+    }
+});
+
+/**
+ * ho(hq-2):非 git 目录「撤销这一轮之后的文件改动」。`dryRun: true`(默认)只列出会动哪些文件。
+ * 能看见这段会话就能退 —— 与 git 检查点的还原同口径;有回合在跑时 409。
+ */
+app.post('/api/providers/:provider/sessions/:sessionId/runtime/rewind-files', authenticateToken, async (req, res) => {
+    try {
+        const session = resolveClaudeRuntimeSession(req, res);
+        if (!session) return;
+        const turnUuid = typeof req.body?.turnUuid === 'string' ? req.body.turnUuid : '';
+        const dryRun = req.body?.dryRun !== false;
+        /*
+         * 复审修正:与预热、git 检查点还原同一套闸门。
+         * - 终端正接管着这段对话 → 不许(没有常驻 runtime 时下面会预热一个 CLI resume 同一段 transcript = 双写);
+         * - 这段对话在跑 → 409;
+         * - 真撤销时同一目录下别的会话 / 一次性回合 / 定时任务在跑 → 409(会和它同时改同一棵树)。
+         */
+        if (currentHolder(session.session_id)) {
+            return res.status(409).json({ success: false, ok: false, reason: 'held_by_shell', error: '这段对话正被终端接管 —— 先退出终端里的 claude 再撤销' });
+        }
+        if (isClaudeSDKSessionActive(session.provider_session_id)) {
+            return res.status(409).json({ success: false, ok: false, reason: 'busy', error: '这段对话正在跑,等这一轮结束再撤销' });
+        }
+        if (!dryRun) {
+            const activeRun = await findActiveRunForCwd(session.project_path).catch(() => null);
+            if (activeRun) {
+                return res.status(409).json({ success: false, ok: false, reason: 'cwd_busy', error: `同一目录下另一段对话(${activeRun.sessionId})正在跑,等它停下再撤销` });
+            }
+        }
+        // hq:actor —— 没有常驻进程时按点「撤销」的人拉起(网关 key 按人)
+        const rewindOptions = {
+            cwd: session.project_path ?? null,
+            runId: session.session_id,
+            actorUserId: req.user?.id ?? null,
+            actorUsername: req.user?.username ?? null,
+        };
+        // 真撤销的回包里 CLI 不列文件(实测 filesChanged 为空)—— 先预览一次拿到会动哪些文件,落 files_reverted 用
+        let previewFiles = null;
+        if (!dryRun) {
+            const preview = await rewindClaudeFiles(session.provider_session_id, turnUuid, { ...rewindOptions, dryRun: true })
+                .catch((error) => ({ ok: false, reason: 'error', error: error?.message || String(error) }));
+            // 预览都不成(没常驻 / 没开检查点 / 在跑 / 退不了)—— 真撤销也不会成,直接回,别再预热一次(复审三轮)
+            if (!preview?.ok) {
+                if (preview?.reason === 'busy') return res.status(409).json({ success: false, ...preview, error: '这段对话正在跑,等这一轮结束再撤销' });
+                return res.json({ success: true, ...preview, dryRun: false });
+            }
+            previewFiles = Array.isArray(preview.files) ? preview.files : [];
+        }
+        const result = await rewindClaudeFiles(session.provider_session_id, turnUuid, { ...rewindOptions, dryRun });
+        if (result.reason === 'busy') return res.status(409).json({ success: false, ...result, error: '这段对话正在跑,等这一轮结束再撤销' });
+        // 真撤销成功:落一条 files_reverted(与 git 检查点还原同一个反向帧),产出面板不再挂着已经撤掉的文件
+        const touched = [...new Set([...(previewFiles ?? []), ...(Array.isArray(result.files) ? result.files : [])])];
+        if (!dryRun && result.ok && touched.length > 0) {
+            try {
+                const base = session.project_path || '';
+                // 只收撤销后**已经不在了**的文件(这一轮之后新建的)—— 与 git 检查点只收"新增"同口径;
+                // 改过的老文件还在盘上,不能从更早几轮的产出里一起抹掉(复审二轮)
+                const removed = touched
+                    .map((file) => (path.isAbsolute(file) || !base ? file : path.join(base, file)))
+                    .filter((absolute) => !fs.existsSync(absolute));
+                if (removed.length > 0) sessionMessagesDb.append(session.session_id, {
+                    id: `files_reverted_rewind_${turnUuid}_${Date.now()}`,
+                    sessionId: session.session_id,
+                    timestamp: new Date().toISOString(),
+                    provider: 'claude',
+                    kind: 'files_reverted',
+                    cwd: null,
+                    paths: removed,
+                });
+            } catch (error) {
+                log.warn('[Runtime] rewind files_reverted frame append failed:', error?.message || error);
+            }
+        }
+        return res.json({ success: true, ...result });
+    } catch (error) {
+        log.warn('[Runtime] rewind failed:', error?.message || error);
+        return res.json({ success: true, ok: false, reason: 'error' });
+    }
+});
+
 // Preview ticket endpoint. Mounted before the projects router because both
 // answer under /api/projects and the projects router has a `/:projectId/...`
 // catch-all that would otherwise swallow these paths.
@@ -564,6 +742,7 @@ app.use('/api/admin', createAdminRouter({
   authenticateToken,
   requireRoot,
   runningVersion: RUNNING_VERSION,
+  runningRelease: RUNNING_RELEASE.label,
   // F6:常驻池快照注入(admin 模块不直接 import claude-sdk.js)。
   runtimePool: getRuntimePoolStats,
 }));
@@ -1007,6 +1186,8 @@ async function startServer() {
         const distIndexPath = path.join(APP_ROOT, 'dist', 'index.html');
         const isProduction = fs.existsSync(distIndexPath);
 
+        // v2.0.0:第一眼就知道跑的是哪个版本(部署后核对用)
+        log.info(`Prism ${RUNNING_RELEASE.label ?? '(版本号读不到)'}`);
         log.info(`Using Claude Agents SDK for Claude integration`);
         log.raw('');
 
@@ -1076,6 +1257,22 @@ async function startServer() {
             // 作业清理照样要起(见 utils/startup-step.js)。
             // 受管子进程先发起(不 await:它们要等 healthz,慢的时候几十秒,不该拖着启动流程;
             // 起不来也只是对应的 /api/ma/*、/api/skillwhet/* 不可用,Prism 其余功能不受影响)。
+            // hm:~/.claude/settings.json 自检(只 warn,不改文件;日志前缀「claude 设置自检」)。
+            await runStartupStep('claude settings self-check', () => runClaudeSettingsSelfCheck(log), log);
+            // hq(复审 P1):上一个进程留下的带 key 的 flag 设置文件(它的 CLI 子进程早已退出)
+            await runStartupStep('flag settings sweep', () => {
+                const removed = sweepStaleFlagSettingsFiles();
+                if (removed > 0) log.info(`[网关] 清掉上一个进程留下的 ${removed} 个 flag 设置文件`);
+            }, log);
+            // hn(B1):模型目录首次播种(按 settings.json 的别名映射;播过一次就不再播,见 seedModelCatalogOnce)。
+            await runStartupStep('model catalog seed', async () => {
+                const { seeded, added } = await seedModelCatalogOnce();
+                if (seeded) {
+                    log.info(`[模型目录] 首次播种:${added.length > 0 ? added.join(', ') : '(settings.json 里没有可播的网关模型名,请在设置页手动添加)'}`);
+                } else {
+                    log.info(`[模型目录] 共 ${claudeModelCatalog.listAll().length} 条,上架 ${claudeModelCatalog.listEnabled().length} 条,默认 ${claudeModelCatalog.defaultModel()}`);
+                }
+            }, log);
             void runStartupStep('ma service start', () => maService?.start(), log);
             // gy:技能优化的 serve 同样不 await、起不来只影响 /api/skillwhet/*。
             void runStartupStep('skillwhet service start', () => skillWhetService?.start(), log);

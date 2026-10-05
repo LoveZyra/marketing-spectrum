@@ -581,6 +581,25 @@ export const sessionMessagesDb = {
     invalidateParsedList(sessionId);
   },
 
+  /**
+   * ho(ho-1):合流消息没执行就被撤掉了 —— 那一行标 `withdrawn: true`,刷新后照样画成置灰的"已撤回"。
+   * 只改这一行的 payload,不动顺序与分叉锚点。永不抛。
+   */
+  markWithdrawn(sessionId: string, messageId: string): boolean {
+    if (!sessionId || !messageId) return false;
+    try {
+      const db = getConnection();
+      const result = db
+        .prepare("UPDATE session_display_messages SET payload = json_set(payload, '$.withdrawn', json('true')) WHERE session_id = ? AND message_id = ?")
+        .run(sessionId, messageId);
+      if (result.changes > 0) invalidateParsedList(sessionId);
+      return result.changes > 0;
+    } catch (error) {
+      log.warn('[display-log] markWithdrawn failed:', (error as Error)?.message || error);
+      return false;
+    }
+  },
+
   deleteForSession(sessionId: string): void {
     try {
       const db = getConnection();

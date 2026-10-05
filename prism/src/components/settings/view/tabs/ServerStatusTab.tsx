@@ -12,6 +12,8 @@ import UsageCostSection from './UsageCostSection';
 type ServerStatus = {
   now: string;
   appVersion: string | null;
+  /** v2.0.0:「v2.0.0 · 日期 · 提交号」;老服务端没有这个字段。 */
+  appRelease?: string | null;
   nodeVersion: string;
   processUptimeSec: number;
   osUptimeSec: number;
@@ -158,7 +160,7 @@ export default function ServerStatusTab() {
             <StatCard
               label={t('server.uptime', '运行时长')}
               value={formatUptime(status.processUptimeSec)}
-              hint={`${t('server.osUptime', '主机')} ${formatUptime(status.osUptimeSec)} · 棱镜 v${status.appVersion ?? '?'} · Node ${status.nodeVersion}`}
+              hint={`${t('server.osUptime', '主机')} ${formatUptime(status.osUptimeSec)} · 棱镜 ${status.appRelease || `v${status.appVersion ?? '?'}`} · Node ${status.nodeVersion}`}
             />
           </div>
 

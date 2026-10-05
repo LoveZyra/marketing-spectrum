@@ -72,3 +72,11 @@ describe('fl:产出归属不跨回合', () => {
     expect(out[2]).toEqual(['/w/a.ts']);
   });
 });
+
+describe('ho(复审):插话不是回合边界', () => {
+  it('合流进这一轮的用户消息(interjection)不切断回合;普通用户消息照旧是边界', () => {
+    const at = new Date('2026-10-01T00:00:00Z');
+    expect(endsTurnForOutputs({ type: 'user', content: '插话', timestamp: at, interjection: true } as ChatMessage)).toBe(false);
+    expect(endsTurnForOutputs({ type: 'user', content: '新一轮', timestamp: at } as ChatMessage)).toBe(true);
+  });
+});

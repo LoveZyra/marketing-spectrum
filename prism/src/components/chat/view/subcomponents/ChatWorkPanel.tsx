@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Download, Eye, FileText, ListChecks } from 'lucide-react';
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Download, Eye, FileText, ListChecks } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../../lib/utils';
@@ -7,7 +7,14 @@ import { api } from '../../../../utils/api';
 import { startBrowserDownload } from '../../../../utils/browserDownload';
 import { safeLocalStorage } from '../../utils/chatStorage';
 import { isInsideProject } from '../../utils/outputPaths';
-import { todoProgress, type TodoItem } from '../../utils/taskChecklist';
+import {
+  anchorScrollTop,
+  buildProgressTimeline,
+  DEFAULT_KEEP_RECENT,
+  edgeFadeMask,
+  edgeFadeState,
+} from '../../utils/progressTimeline';
+import type { TodoItem } from '../../utils/taskChecklist';
 import { applyManualToggle, applyPreviewChange } from '../../utils/workPanelAutoCollapse';
 import { foldEarlierOutputs, type SessionOutputFile } from '../../utils/sessionOutputs';
 
@@ -16,6 +23,8 @@ import FileTypeIcon from './FileTypeIcon';
 interface ChatWorkPanelProps {
   /** 最新一份 TodoWrite 清单(taskChecklist.ts),没有则为 null。 */
   todos: TodoItem[] | null;
+  /** hq:会话数到的最后一个用户回合(没动过清单的新回合不认锚点,见 findProgressAnchor);0 = 不知道。 */
+  checklistTurn?: number;
   /** 本会话 Write 出的可交付文件(sessionOutputs.ts),时间正序。 */
   outputs: SessionOutputFile[];
   /** dw:服务端帧数触顶 —— 更早的记录没载入,面板照实说,不装作这就是全部。 */
@@ -39,14 +48,19 @@ interface ChatWorkPanelProps {
 const COLLAPSE_KEY = 'chat_work_panel_collapsed';
 
 /**
- * dw:已完成条目超过这个数就折起来。
- *
- * 清单是会话级累计的:一个会话跑几十个回合,历史轮次的已完成任务全堆在这
- * 一列里,越用越长,新立的任务被顶到看不见的地方 —— 这是"无限叠加"最直接
- * 的观感来源。折叠只改**呈现**:一条也不丢,点开就在,而默认看到的是
- * "还没干完的事"。阈值取 6:短清单(一轮就几条)照旧全展开,观感不变。
+ * 「进度」区整块收成只剩标题行(对齐 Cowork 的 Progress ›)。与上面那个
+ * "整个面板收成窄边条"是两回事,各记各的。
  */
-const DONE_FOLD_THRESHOLD = 6;
+const PROGRESS_COLLAPSE_KEY = 'chat_work_panel_progress_collapsed';
+
+/*
+ * 进度时间轴(取代 dw 的"已完成超过 6 条整体折叠"):当前步是竖线上那颗点,
+ * 当前步之前的已完成只留最近 DEFAULT_KEEP_RECENT 条,更早的收进顶上一行
+ * 「N 个更早的步骤」;默认滚到当前步。判据全在 progressTimeline.ts。
+ *
+ * 清单是会话级累计的,长会话能攒几十条历史 —— 原来的阈值折叠是"全折或全不折",
+ * 一展开就又是一整列;现在新的永远露着,只有旧的收起来。
+ */
 
 /**
  * 对话右侧工作面板(do)—— 对齐 Cowork 的 Progress / Outputs 右栏。
@@ -60,6 +74,7 @@ const DONE_FOLD_THRESHOLD = 6;
  */
 function ChatWorkPanel({
   todos,
+  checklistTurn = 0,
   outputs,
   historyTruncated = false,
   previewOpen = false,
@@ -76,8 +91,20 @@ function ChatWorkPanel({
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const [showDone, setShowDone] = useState(false);
+  const [progressCollapsed, setProgressCollapsed] = useState<boolean>(
+    () => safeLocalStorage.getItem(PROGRESS_COLLAPSE_KEY) === '1',
+  );
+  /*
+   * 「更早的步骤」点开过的是哪个会话。面板不随会话重挂(ChatInterface 整个复用),
+   * 所以按会话记:换一个会话自然回到折起,不用 effect 去清。
+   */
+  const sessionKey = sessionId ?? '';
+  const [earlierOpenFor, setEarlierOpenFor] = useState<string | null>(null);
+  const showEarlier = earlierOpenFor === sessionKey;
   const [showEarlierOutputs, setShowEarlierOutputs] = useState(false);
+  const idBase = useId();
+  const progressRegionId = `${idBase}-progress`;
+  const stepListId = `${idBase}-steps`;
 
   // dy:预览开着就让位。规则(以及为什么这么定)在 workPanelAutoCollapse.ts。
   const autoRef = useRef(false);
@@ -90,16 +117,99 @@ function ChatWorkPanel({
   }, [previewOpen]);
 
   const todoList = useMemo(() => todos ?? [], [todos]);
-  const { done, total, allDone } = todoProgress(todoList);
+  const timeline = useMemo(
+    () => buildProgressTimeline(todoList, { showEarlier, keepRecent: DEFAULT_KEEP_RECENT, currentTurn: checklistTurn }),
+    [todoList, showEarlier, checklistTurn],
+  );
+  const { done, total, allDone, focusIndex } = timeline;
   const hasChecklist = total > 0;
   const hasOutputs = outputs.length > 0;
-  const foldable = done > DONE_FOLD_THRESHOLD;
-  const doneHidden = foldable && !showDone;
-  // 折起来时只留未完成的;顺序不动(建立顺序),展开即原样恢复。
-  const visibleTodos = useMemo(
-    () => (doneHidden ? todoList.filter((todo) => todo.status !== 'completed') : todoList),
-    [doneHidden, todoList],
-  );
+  const listVisible = hasChecklist && !collapsed && !progressCollapsed;
+
+  /*
+   * 锚点身份:换会话、换了一条当前步、整张清单被换掉 —— 都算"锚点变了",要重新
+   * 滚过去;追加任务、勾掉别的条目、展开历史都不算,不去抢用户的滚动条。
+   * 全部完成时锚点为空,身份仍然有一个(停到尾巴上,「全部完成」可见)。
+   */
+  // hq(复审五轮):按"停靠行"认(没有锚点时 = 第一条没完成的),锚点在老任务与"没有"之间切换时不来回滚
+  const anchorKey = hasChecklist
+    ? `${sessionKey}\u0000${focusIndex}\u0000${focusIndex >= 0 ? todoList[focusIndex].content : ''}`
+    : null;
+
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const anchorKeyRef = useRef<string | null>(anchorKey);
+  /** 已经替哪个容器元素、哪个锚点滚过。两样都没变就不再滚。 */
+  const scrolledRef = useRef<{ el: HTMLElement | null; key: string | null }>({ el: null, key: null });
+
+  /** 能往上滚 → 顶边渐隐;能往下滚 → 底边渐隐。直接写样式,不为滚动重渲染整块面板。 */
+  const updateEdgeFade = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const mask = edgeFadeMask(edgeFadeState(el));
+    for (const property of ['mask-image', '-webkit-mask-image']) {
+      if (mask) el.style.setProperty(property, mask);
+      else el.style.removeProperty(property);
+    }
+  }, []);
+
+  /**
+   * 滚到当前步:锚点贴近顶部,上方露出最近完成的两行(放得下的话)。
+   * 用容器的 scrollTo,不用 scrollIntoView —— 后者会连带滚动整页/外层容器。
+   */
+  const scrollToAnchor = useCallback(() => {
+    const el = listRef.current;
+    const key = anchorKeyRef.current;
+    if (!el || key === null) return;
+    const last = scrolledRef.current;
+    if (last.el === el && last.key === key) return;
+    // 还没排版(<lg 时整块 display:none)量不出东西:先不记账,等 ResizeObserver 再叫。
+    if (el.clientHeight === 0) return;
+    scrolledRef.current = { el, key };
+
+    const anchorRow = el.querySelector<HTMLElement>('[data-progress-focus]');
+    let top = el.scrollHeight;
+    if (anchorRow) {
+      const box = el.getBoundingClientRect();
+      const contentTop = (node: Element) => node.getBoundingClientRect().top - box.top + el.scrollTop;
+      const aboveHeights: number[] = [];
+      for (
+        let sibling = anchorRow.previousElementSibling;
+        sibling && aboveHeights.length < DEFAULT_KEEP_RECENT;
+        sibling = sibling.previousElementSibling
+      ) {
+        aboveHeights.push(sibling.getBoundingClientRect().height);
+      }
+      top = anchorScrollTop({
+        anchorTop: contentTop(anchorRow),
+        aboveHeights,
+        keepAbove: DEFAULT_KEEP_RECENT,
+        snapToTopBelow: anchorRow.parentElement ? contentTop(anchorRow.parentElement) : 0,
+      });
+    }
+    el.scrollTo({ top });
+    updateEdgeFade();
+  }, [updateEdgeFade]);
+
+  useLayoutEffect(() => {
+    anchorKeyRef.current = anchorKey;
+    if (!listVisible) return;
+    scrollToAnchor();
+    updateEdgeFade();
+  }, [anchorKey, listVisible, scrollToAnchor, updateEdgeFade]);
+
+  // 容器高度变了(窗口缩放、产出区挤压)或内容变了(新任务、展开历史)→ 重算渐隐;
+  // 先前因为没排版而没滚成的,这时补上。
+  useEffect(() => {
+    const el = listRef.current;
+    if (!listVisible || !el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      scrollToAnchor();
+      updateEdgeFade();
+    });
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, [listVisible, scrollToAnchor, updateEdgeFade]);
 
   // dx:产出表同样默认只露最近的,更早的收进一行摘要(见 sessionOutputs.ts)。
   const { visible: visibleOutputs, hidden: hiddenOutputs } = foldEarlierOutputs(
@@ -108,6 +218,12 @@ function ChatWorkPanel({
   );
 
   if (!hasChecklist && !hasOutputs) return null;
+
+  const toggleProgressCollapsed = () => {
+    const next = !progressCollapsed;
+    setProgressCollapsed(next);
+    safeLocalStorage.setItem(PROGRESS_COLLAPSE_KEY, next ? '1' : '0');
+  };
 
   const toggleCollapsed = () => {
     setCollapsed((current) => {
@@ -193,79 +309,125 @@ function ChatWorkPanel({
           列表内部自滚;产出区吃剩余高度、同样内部自滚 —— 此前是 aside 整条
           滚,20 条任务直接把产出区顶出屏幕外。标题行各自常驻不滚。 */}
       <div className="flex max-h-[50%] flex-none flex-col">
-        {/* 顶行:标题 + 收起 */}
-        <div className="flex flex-none items-center justify-between px-3.5 pb-1 pt-2.5">
-          <span className="text-xs font-semibold text-card-foreground">
-            {t('workPanel.progress', { defaultValue: '进度' })}
-            {hasChecklist && (
-              <span className="ml-1.5 font-mono text-[11px] font-normal tabular-nums text-muted-foreground">
+        {/* 顶行:「进度 ⌄」(收起本区)+ 第几步 …… 收起整个面板 */}
+        <div className="flex flex-none items-center justify-between gap-2 px-3.5 pb-1 pt-2.5">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={toggleProgressCollapsed}
+              aria-expanded={!progressCollapsed}
+              aria-controls={progressCollapsed ? undefined : progressRegionId}
+              title={progressCollapsed
+                ? t('workPanel.progressExpand', { defaultValue: '展开进度' })
+                : t('workPanel.progressCollapse', { defaultValue: '收起进度' })}
+              className="-ml-1 flex flex-none items-center gap-0.5 rounded-md px-1 py-0.5 text-xs font-semibold text-card-foreground transition-colors hover:bg-accent"
+            >
+              {t('workPanel.progress', { defaultValue: '进度' })}
+              {progressCollapsed
+                ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={2} aria-hidden />
+                : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={2} aria-hidden />}
+            </button>
+            {hasChecklist && (timeline.stepNumber !== null ? (
+              <span className="min-w-0 truncate text-[11px] tabular-nums text-muted-foreground">
+                {t('workPanel.stepOf', {
+                  current: timeline.stepNumber,
+                  total,
+                  defaultValue: '第 {{current}} 步 / 共 {{total}} 步',
+                })}
+              </span>
+            ) : (
+              <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
                 {done}/{total}
               </span>
-            )}
-          </span>
+            ))}
+          </div>
           <button
             type="button"
             onClick={toggleCollapsed}
             aria-label={t('workPanel.collapse', { defaultValue: '收起工作面板' })}
             title={t('workPanel.collapse', { defaultValue: '收起工作面板' })}
-            className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="grid h-6 w-6 flex-none place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <ChevronsRight className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
           </button>
         </div>
 
-        {/* 任务清单 —— Cowork 的 Progress:完成划线,进行中亮点 */}
-        {hasChecklist ? (
-          <ul className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-2" data-work-scroll="checklist">
-            {foldable && (
-              <li className="py-1">
+        {/* 任务清单 —— Cowork 的 Progress:一条竖线,当前步是线上那颗点;
+            走过的灰字在上(更早的收进一行),没到的在下。列表内部自滚,两头渐隐。 */}
+        {progressCollapsed ? null : hasChecklist ? (
+          <div
+            ref={listRef}
+            id={progressRegionId}
+            className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-2"
+            data-work-scroll="checklist"
+            onScroll={updateEdgeFade}
+          >
+            <div>
+              {timeline.foldableCount > 0 && (
                 <button
                   type="button"
-                  onClick={() => setShowDone((current) => !current)}
-                  className="flex w-full items-center gap-1 rounded-md py-0.5 text-left text-[11.5px] text-muted-foreground transition-colors hover:text-foreground"
+                  onClick={() => setEarlierOpenFor(showEarlier ? null : sessionKey)}
+                  aria-expanded={showEarlier}
+                  aria-controls={stepListId}
+                  className={cn(
+                    'block w-full border-l-2 border-border py-1 pl-3 text-left text-[11.5px] leading-5 text-muted-foreground transition-colors hover:text-foreground',
+                    // 收着的那几步在线上画成虚线 —— "这里还有,只是折起来了"。
+                    !showEarlier && 'border-dashed',
+                  )}
                 >
-                  {doneHidden
-                    ? <ChevronRight className="h-3 w-3 flex-none" strokeWidth={2} aria-hidden />
-                    : <ChevronDown className="h-3 w-3 flex-none" strokeWidth={2} aria-hidden />}
-                  <span className="min-w-0 truncate">
-                    {doneHidden
-                      ? t('workPanel.doneFolded', { count: done, defaultValue: '已完成 {{count}} 项 · 展开' })
-                      : t('workPanel.doneUnfold', { count: done, defaultValue: '收起已完成的 {{count}} 项' })}
-                  </span>
+                  {showEarlier
+                    ? t('workPanel.earlierStepsHide', { defaultValue: '收起更早的步骤' })
+                    : t('workPanel.earlierSteps', {
+                      count: timeline.foldableCount,
+                      defaultValue: '{{count}} 个更早的步骤',
+                    })}
                 </button>
-              </li>
-            )}
-            {visibleTodos.map((todo, index) => (
-            <li key={`${index}-${todo.content}`} className="flex items-start gap-2 py-1">
-              <span className="flex h-5 w-4 flex-none items-center justify-center" aria-hidden>
-                {todo.status === 'completed' ? (
-                  <Check className="h-3.5 w-3.5 text-primary" strokeWidth={2.5} />
-                ) : todo.status === 'in_progress' ? (
-                  <span className={cn('h-2 w-2 rounded-full bg-primary', isProcessing && 'animate-pulse')} />
-                ) : (
-                  <span className="h-2 w-2 rounded-full border border-border-strong" />
-                )}
-              </span>
-              <span
-                className={cn(
-                  'min-w-0 flex-1 text-[12.5px] leading-5',
-                  todo.status === 'completed' && 'text-muted-foreground line-through decoration-border-strong',
-                  todo.status === 'in_progress' && 'text-foreground',
-                  todo.status === 'pending' && 'text-body',
-                )}
-              >
-                {todo.status === 'in_progress' ? (todo.activeForm ?? todo.content) : todo.content}
-              </span>
-            </li>
-          ))}
-            {allDone && !doneHidden && (
-              <li className="py-1 text-[11px] text-muted-foreground">
-                {t('workPanel.allDone', { defaultValue: '全部完成' })}
-              </li>
-            )}
-          </ul>
+              )}
+              <ol id={stepListId} className="border-l-2 border-border pl-3">
+                {timeline.rows.map(({ item, index, state, isAnchor, isFocus }) => (
+                  <li
+                    key={`${index}-${item.content}`}
+                    aria-current={isAnchor ? 'step' : undefined}
+                    data-progress-focus={isFocus ? '' : undefined}
+                    className="relative py-1"
+                  >
+                    {/* 线上的点:进行中实心(跑着的时候呼吸),还没开工的当前步空心。
+                        -17px = 竖线中心(2px 线的 1px 处)− 点半径 4 − 线宽 2 − 内边距 12。 */}
+                    {(state === 'active' || isAnchor) && (
+                      <span
+                        aria-hidden
+                        className={cn(
+                          'absolute -left-[17px] top-2.5 h-2 w-2 rounded-full',
+                          state === 'active'
+                            ? 'bg-primary'
+                            : 'border-[1.5px] border-primary bg-background',
+                          // 只有当前步呼吸 —— 更早回合被停下、没人关掉的 in_progress 不跟着闪
+                          state === 'active' && isAnchor && isProcessing && 'animate-pulse',
+                        )}
+                      />
+                    )}
+                    <span
+                      className={cn(
+                        'block break-words text-[12.5px] leading-5',
+                        state === 'done' && 'text-muted-foreground',
+                        (state === 'active' || isAnchor) && 'text-foreground',
+                        state === 'pending' && !isAnchor && 'text-body',
+                      )}
+                    >
+                      {state === 'active' ? (item.activeForm ?? item.content) : item.content}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              {allDone && (
+                <p className="py-1 pl-3.5 text-[11px] text-muted-foreground">
+                  {t('workPanel.allDone', { defaultValue: '全部完成' })}
+                </p>
+              )}
+            </div>
+          </div>
         ) : (
-          <p className="px-3.5 pb-2 text-[11.5px] text-muted-foreground">
+          <p id={progressRegionId} className="px-3.5 pb-2 text-[11.5px] text-muted-foreground">
             {t('workPanel.noChecklist', { defaultValue: '本会话还没有任务清单。' })}
           </p>
         )}

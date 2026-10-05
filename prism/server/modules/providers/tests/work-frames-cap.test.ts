@@ -71,8 +71,10 @@ describe('work-frames 路由透传 truncated / turnOutputs', () => {
     const source = readFileSync(fileURLToPath(new URL('../provider.routes.ts', import.meta.url)), 'utf8');
     const at = source.indexOf("'/sessions/:sessionId/work-frames'");
     expect(at).toBeGreaterThan(-1);
-    const handler = source.slice(at, at + 900);
+    const handler = source.slice(at, at + 1400);
     expect(handler).toMatch(/createApiSuccessResponse\(\{\s*frames,\s*revertedPaths,\s*turnOutputs,\s*truncated/);
-    expect(handler).toMatch(/const \{ frames, revertedPaths, truncated, turnOutputs \}/);
+    expect(handler).toMatch(/const \{ frames, revertedPaths, truncated, turnOutputs, userTurns \}/);
+    // hq(复审四轮):userTurns 也得下发 —— 前端拿它补一条回合基线,进度锚点才认得出"这一轮"。
+    expect(handler).toMatch(/userTurns: userTurns \?\? 0/);
   });
 });

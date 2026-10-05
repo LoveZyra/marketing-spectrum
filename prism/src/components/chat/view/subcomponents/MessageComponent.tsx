@@ -1,5 +1,5 @@
 import { memo, useMemo, useRef, useState } from 'react';
-import { Archive, ChevronRight, PencilLine, RotateCcw, Wrench, Zap } from 'lucide-react';
+import { Archive, ChevronRight, PencilLine, RotateCcw, Undo2, Wrench, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type {
@@ -16,6 +16,7 @@ import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../share
 import type { TurnOutputFile } from '../../utils/turnOutputs';
 import type { FeedbackPayload, MessageFeedbackRow } from '../../hooks/useMessageFeedback';
 import { uiLocale } from '../../../../utils/uiLocale';
+import { useMergedMessages } from '../../../../contexts/MergedMessagesContext';
 
 import ChatMessageImages from './ChatMessageImages';
 import { Markdown, StreamingMarkdown } from './Markdown';
@@ -114,6 +115,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
     message.isToolUse && COPY_HIDDEN_TOOL_NAMES.has(String(message.toolName || ''))
   );
   const shouldShowUserCopyControl = message.type === 'user' && userCopyContent.trim().length > 0;
+  // ho(ho-1):插话的状态(只对用户气泡有意义)
+  const mergedMessages = useMergedMessages();
+  const mergedState = message.type === 'user' ? mergedMessages?.stateFor(message.clientMessageId) : undefined;
+  const userWithdrawn = message.type === 'user' && (message.withdrawn === true || mergedState === 'withdrawn');
   const shouldShowAssistantCopyControl = message.type === 'assistant' &&
     assistantCopyContent.trim().length > 0 &&
     !isCommandOrFileEditToolResponse &&
@@ -224,9 +229,27 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                     </span>
                   </div>
                 )}
-                <div className="prism-panel max-w-full rounded-bubble bg-card px-4 py-2.5 text-sm leading-6 text-foreground">
+                <div className={`prism-panel max-w-full rounded-bubble bg-card px-4 py-2.5 text-sm leading-6 text-foreground ${userWithdrawn ? 'opacity-55' : ''}`}>
                   <UserMessageBody content={userCopyContent} />
                 </div>
+                {/* ho(ho-1):插话 —— 模型读到前可撤回;撤掉了就标"已撤回,没有执行" */}
+                {userWithdrawn ? (
+                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground" data-merged-state="withdrawn">
+                    <Undo2 className="h-3 w-3" aria-hidden />
+                    {t('merged.withdrawn')}
+                  </div>
+                ) : mergedState === 'pending' && message.clientMessageId ? (
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground" data-merged-state="pending">
+                    <span>{t('merged.pending')}</span>
+                    <button
+                      type="button"
+                      onClick={() => mergedMessages?.withdraw(message.clientMessageId!)}
+                      className="rounded px-1 font-medium text-foreground underline-offset-2 hover:underline"
+                    >
+                      {t('merged.withdraw')}
+                    </button>
+                  </div>
+                ) : null}
                 <div className="flex items-center gap-1.5 font-mono text-[10.5px] text-muted-foreground transition-opacity sm:opacity-0 sm:focus-within:opacity-100 sm:group-hover/msg:opacity-100">
                   {onEditRerun && Boolean(message.id) && userCopyContent.trim().length > 0 && (
                     <button

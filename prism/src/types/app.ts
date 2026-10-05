@@ -20,6 +20,31 @@ export type ProviderModelOption = {
       description?: string;
     }[];
   };
+  /**
+   * hn(B2):`catalog` = 模型目录里的网关模型;`alias` = 内置别名组(子代理与 CLI 内部任务用,
+   * 选择器里默认收起)。老数据没有这个字段,当 alias 看。
+   */
+  group?: 'catalog' | 'alias';
+  /** 厂商(图标与分组);null = 认不出,画首字母徽标。 */
+  vendor?: string | null;
+  /** 推荐区 */
+  recommended?: boolean;
+  /** 目录里填的上下文窗口;null = 没填(CLI 默认)。 */
+  contextWindow?: number | null;
+  /** 真实的网关模型名 —— 目录条目就是 value 本身;别名组靠 configMappings 另查。 */
+  realModel?: string;
+  /** hq:走哪个网关(0 = settings.json 那一套)。 */
+  gatewayId?: number;
+  /** hq:网关名(只在不是默认网关时给,选择器里小字显示)。 */
+  gatewayName?: string;
+  /** hq:本人的私有模型(服务端排在最前)。 */
+  private?: boolean;
+  /** hq:这个人现在能不能用(网关没有默认 key、他也没填自己的 key / 网关停用 → false)。缺省 = 能用。 */
+  available?: boolean;
+  /** hq:不能用的原因(服务端给的中文,原样显示)。 */
+  unavailableReason?: string;
+  /** hq:不能用的原因码 —— no_key 才给「去填 key」;网关停用 / 不见了只能找管理员。 */
+  unavailableCode?: 'no_key' | 'gateway_disabled' | 'gateway_missing';
 };
 
 export type ProviderModelsDefinition = {

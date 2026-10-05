@@ -11,7 +11,7 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { SquareSlash as SquareSlashIcon, XIcon, ChevronDown, Check, SendHorizonalIcon, FileTextIcon, LinkIcon, History, Paperclip, SquareIcon, Zap } from 'lucide-react';
+import { SquareSlash as SquareSlashIcon, XIcon, ChevronDown, Check, SendHorizonalIcon, FileTextIcon, LinkIcon, History, Paperclip, SquareIcon, Zap, ArrowDownToLine, AlertTriangle } from 'lucide-react';
 
 import type { AttachedDoc, DocUploadProgress, QueuedDraft } from '../../hooks/useChatComposerState';
 import { useComposerDensity } from '../../hooks/useComposerDensity';
@@ -19,6 +19,8 @@ import type { PendingPermissionRequest, PermissionMode } from '../../types/types
 import { executionModeMeta, orderedExecutionModes } from '../../utils/executionModes';
 import { clampMenuLeft } from '../../utils/menuPlacement';
 import type { ProviderModelOption } from '../../../../types/app';
+import { detectModelVendor, getModelVendor } from '../../../../../shared/modelVendors';
+import ModelVendorIcon from '../../../llm-logo-provider/ModelVendorIcon';
 import {
   PromptInput,
   PromptInputHeader,
@@ -28,13 +30,17 @@ import {
   PromptInputTools,
   PromptInputSubmit,
 } from '../../../../shared/view/ui';
+import { EFFORT_LABEL_KEYS, effectiveEffort } from '../../utils/modelEffortMenu';
+import { isModelAvailable } from '../../utils/modelAvailability';
 
 import CommandMenu from './CommandMenu';
 import ComposerPlusMenu, { type ComposerPlusMenuItem } from './ComposerPlusMenu';
 import ImageAttachment from './ImageAttachment';
 import ModelMark from './ModelMark';
+import ModelEffortMenu from './ModelEffortMenu';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
 import QueuedMessageCard from './QueuedMessageCard';
+import BackgroundTasksBar, { type BackgroundTaskItem } from './BackgroundTasksBar';
 
 interface MentionableFile {
   name: string;
@@ -69,6 +75,9 @@ interface ChatComposerProps {
    * 实测过时有值;为空则 chip 只显示别名。
    */
   activeModelReal?: string | null;
+  /** hn:当前模型是目录条目时的显示名与厂商(别名时为空,走 activeModelReal)。 */
+  activeModelLabel?: string | null;
+  activeModelVendor?: string | null;
   permissionMode: PermissionMode | string;
   /** Jump straight to a gear. Tab still cycles, handled in useChatComposerState. */
   onSelectMode: (mode: PermissionMode) => void;
@@ -77,8 +86,19 @@ interface ChatComposerProps {
   effort: string;
   availableEffortOptions: NonNullable<ProviderModelOption['effort']>['values'];
   onSelectEffort: (effort: string) => void;
-  /** 打开 /models 弹窗。模型徽标的点击入口 —— 和敲 /models 同一条路径。 */
+  /** 打开 /models 详情框(下拉列表右上角的滑杆图标;没有目录数据时芯片也走它)。 */
   onShowModelPicker: () => void;
+  /**
+   * ho:点芯片弹出的**下拉列表**用的数据。给了(且非空)芯片就开下拉,不再弹大框。
+   * `onSelectModel` 抛错 = 切换失败,下拉留着并在底部报错。
+   */
+  modelOptions?: ProviderModelOption[];
+  onSelectModel?: (model: string) => Promise<unknown>;
+  /** hq:下拉里不能用的模型旁「去填 key」—— 开 设置 → 模型网关。 */
+  onOpenGatewaySettings?: () => void;
+  contextUsedTokens?: number | null;
+  /** 别名 → 配到的真实模型(下拉里别名行的「→ 真实模型」)。 */
+  modelAliasTargets?: Record<string, string | null>;
   onToggleCommandMenu: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement> | MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>) => void;
   isDragActive: boolean;
@@ -90,8 +110,14 @@ interface ChatComposerProps {
    */
   serverQueued?: { preview: string; enqueuedAt: string; redacted?: boolean } | null;
   onCancelServerQueued?: () => void;
+  /** ho(hq-1):这段对话在后台跑的任务(全量)与它们的「停止」;「转到后台」把正在跑的前台命令挪到后台。 */
+  backgroundTasks?: BackgroundTaskItem[] | null;
+  onStopBackgroundTask?: (taskId: string) => Promise<void> | void;
+  onBackgroundForeground?: () => Promise<void> | void;
   onEditQueuedDraft: () => void;
   onDeleteQueuedDraft: () => void;
+  /** ho:排队的那条现在就插进这一轮(send now);带图片的不给(服务端不合流带图片的消息) */
+  onSendQueuedNow?: () => void;
   attachedImages: File[];
   onRemoveImage: (index: number) => void;
   uploadingImages: Map<string, number>;
@@ -161,6 +187,8 @@ function ChatComposer({
   abortDiscardsPending,
   activeModel,
   activeModelReal,
+  activeModelLabel,
+  activeModelVendor,
   permissionMode,
   onSelectMode,
   availablePermissionModes,
@@ -168,14 +196,23 @@ function ChatComposer({
   availableEffortOptions,
   onSelectEffort,
   onShowModelPicker,
+  modelOptions,
+  onSelectModel,
+  onOpenGatewaySettings,
+  contextUsedTokens = null,
+  modelAliasTargets,
   onToggleCommandMenu,
   onSubmit,
   isDragActive,
   queuedDraft,
   serverQueued,
   onCancelServerQueued,
+  backgroundTasks = null,
+  onStopBackgroundTask,
+  onBackgroundForeground,
   onEditQueuedDraft,
   onDeleteQueuedDraft,
+  onSendQueuedNow,
   attachedImages,
   onRemoveImage,
   uploadingImages,
@@ -224,6 +261,38 @@ function ChatComposer({
   // 模型切换后给 chip 一个短暂高亮 —— 弹窗关掉后,这是"确实切了"最直接的反馈。
   // 只在"已知模型 → 另一个已知模型"时闪,首屏加载(null→X)不算切换,不打扰。
   const [modelJustChanged, setModelJustChanged] = useState(false);
+  const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+  const modelChipRef = useRef<HTMLButtonElement | null>(null);
+  const hasModelDropdown = Boolean(onSelectModel && modelOptions && modelOptions.length > 0);
+  const closeModelPicker = useCallback(() => setIsModelPickerOpen(false), []);
+  const handleModelChipClick = useCallback(() => {
+    if (!hasModelDropdown) {
+      onShowModelPicker();
+      return;
+    }
+    setIsModelPickerOpen((current) => !current);
+  }, [hasModelDropdown, onShowModelPicker]);
+  const handlePickModel = useCallback(async (model: string) => {
+    if (onSelectModel) await onSelectModel(model);
+  }, [onSelectModel]);
+  const activeModelOption = useMemo(
+    () => (hasModelDropdown ? modelOptions?.find((entry) => entry.value === activeModel) ?? null : null),
+    [hasModelDropdown, modelOptions, activeModel],
+  );
+  // ho:芯片上「模型名 档位」的档位 —— 当前模型实际跑的那一档(与服务端同一口径),没有档位就不显示
+  const chipEffortLabel = useMemo(() => {
+    if (!hasModelDropdown) return null;
+    const level = effectiveEffort(activeModelOption, effort);
+    return level ? (EFFORT_LABEL_KEYS[level] ? t(EFFORT_LABEL_KEYS[level]) : level) : null;
+  }, [hasModelDropdown, activeModelOption, effort, t]);
+  /**
+   * hq:当前模型此刻对这个人不可用(网关没 key / 停用)。芯片照常显示它的名字(**不悄悄换模型**),
+   * 加一个小警示,原因进 title —— 发出去服务端会回一句清楚的错误(GATEWAY_KEY_MISSING 之类)。
+   * 当前模型干脆不在列表里(下架 / 不再对他可见)时没有可说的原因,芯片照旧只显示名字。
+   */
+  const activeModelUnavailableReason = activeModelOption && !isModelAvailable(activeModelOption)
+    ? (activeModelOption.unavailableReason || t('modelMenu.unavailable'))
+    : null;
   const previousActiveModelRef = useRef<string | null>(activeModel);
   useEffect(() => {
     const previous = previousActiveModelRef.current;
@@ -239,6 +308,12 @@ function ChatComposer({
   // 或没实测时别名本身就是答案,不必重复。
   const activeModelRealName =
     activeModelReal && activeModelReal !== activeModel ? activeModelReal : null;
+  /**
+   * hn(B4):chip 上画厂商图标 —— 目录条目按它的厂商;别名按实际模型名识别;都认不出就留原来的 ModelMark。
+   * 目录条目显示 label(网关原名进 title)。
+   */
+  const chipModelName = activeModelLabel || activeModelRealName || activeModel;
+  const chipVendorKnown = Boolean(getModelVendor(activeModelVendor) ?? detectModelVendor(activeModelRealName || activeModel));
   const commandMenuPosition = useMemo(() => {
     if (!isCommandMenuOpen) {
       return { top: 0, left: 16, bottom: 90 };
@@ -486,12 +561,18 @@ function ChatComposer({
         </div>
       )}
 
+      {backgroundTasks && backgroundTasks.length > 0 && onStopBackgroundTask && (
+        <BackgroundTasksBar tasks={backgroundTasks} onStop={onStopBackgroundTask} />
+      )}
+
       {queuedDraft && (
         <QueuedMessageCard
           content={queuedDraft.content}
           imageCount={queuedDraft.images.length}
           onEdit={onEditQueuedDraft}
           onDelete={onDeleteQueuedDraft}
+          // 服务端已经收下一条排队时不给(再投会撞 QUEUE_FULL,这条就卡在"发送中")
+          onSendNow={isLoading && queuedDraft.images.length === 0 && !serverQueued ? onSendQueuedNow : undefined}
         />
       )}
 
@@ -764,7 +845,7 @@ function ChatComposer({
                 a labelled picker now, with one line each on what the gear
                 actually permits. Tab still cycles, for anyone with the old
                 muscle memory. */}
-            <div ref={modeDropdownRef} className="relative">
+            <div ref={modeDropdownRef} className="relative flex">
               <button
                 ref={modeDropdownButtonRef}
                 type="button"
@@ -847,36 +928,89 @@ function ChatComposer({
                 entrances feed the modal identical data. */}
             {activeModel && (
               <button
+                ref={modelChipRef}
                 type="button"
-                onClick={onShowModelPicker}
+                onClick={handleModelChipClick}
+                aria-haspopup={hasModelDropdown ? 'menu' : 'dialog'}
+                aria-expanded={hasModelDropdown ? isModelPickerOpen : undefined}
                 data-composer-chip="model"
-                className={`inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  density === 'minimal' ? 'px-1.5' : 'px-2.5'
-                } ${
-                  modelJustChanged
-                    ? 'bg-primary/8 border-primary/30 text-foreground ring-2 ring-primary/30 dark:text-primary'
-                    : 'border-border text-card-foreground hover:border-border-strong'
-                }`}
-                title={
-                  activeModelRealName
-                    ? `别名 ${activeModel} · 实际模型 ${activeModelRealName}，点击切换`
-                    : t('input.modelHint', { model: activeModel, defaultValue: `当前模型：${activeModel}，点击切换` })
-                }
-                aria-label={
-                  activeModelRealName
-                    ? `别名 ${activeModel} · 实际模型 ${activeModelRealName}，点击切换`
-                    : t('input.modelHint', { model: activeModel, defaultValue: `当前模型：${activeModel}，点击切换` })
-                }
+                className={hasModelDropdown
+                  /* ho:「图标 模型名 档位 ⌄」,外框与「默认模式」芯片同款(圆角细边框、同高同字号);
+                     档位合进来,单独的档位芯片不再出 */
+                  ? `inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    density === 'minimal' ? 'px-1.5' : 'px-2.5'
+                  } ${
+                    modelJustChanged
+                      ? 'bg-primary/8 border-primary/30 text-foreground ring-2 ring-primary/30 dark:text-primary'
+                      : isModelPickerOpen
+                        ? 'border-border-strong text-card-foreground'
+                        : 'border-border text-card-foreground hover:border-border-strong'
+                  }`
+                  : `inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    density === 'minimal' ? 'px-1.5' : 'px-2.5'
+                  } ${
+                    modelJustChanged
+                      ? 'bg-primary/8 border-primary/30 text-foreground ring-2 ring-primary/30 dark:text-primary'
+                      : 'border-border text-card-foreground hover:border-border-strong'
+                  }`}
+                title={[
+                  activeModelLabel && activeModelLabel !== activeModel
+                    ? t('input.modelHint', { model: `${activeModelLabel}（${activeModel}）`, defaultValue: `当前模型：${activeModelLabel}（${activeModel}），点击切换` })
+                    : activeModelRealName
+                      ? `别名 ${activeModel} · 实际模型 ${activeModelRealName}，点击切换`
+                      : t('input.modelHint', { model: activeModel, defaultValue: `当前模型：${activeModel}，点击切换` }),
+                  activeModelUnavailableReason,
+                ].filter(Boolean).join('\n')}
+                aria-label={[
+                  activeModelLabel && activeModelLabel !== activeModel
+                    ? t('input.modelHint', { model: `${activeModelLabel}（${activeModel}）`, defaultValue: `当前模型：${activeModelLabel}（${activeModel}），点击切换` })
+                    : activeModelRealName
+                      ? `别名 ${activeModel} · 实际模型 ${activeModelRealName}，点击切换`
+                      : t('input.modelHint', { model: activeModel, defaultValue: `当前模型：${activeModel}，点击切换` }),
+                  activeModelUnavailableReason,
+                ].filter(Boolean).join('. ')}
               >
-                {/* ee:模型芯片的图标换成参考用户给的六边形拼块重画的线图标(见 ModelMark) */}
-                <ModelMark />
+                {hasModelDropdown ? (
+                  <>
+                    {/* ho:「图标 模型名 档位」—— 厂商图标保留(认不出厂商时用 ModelMark) */}
+                    <span className="flex shrink-0 items-center">
+                      {chipVendorKnown ? (
+                        <ModelVendorIcon vendor={activeModelVendor} modelId={activeModelRealName || activeModel} size={14} />
+                      ) : (
+                        <ModelMark />
+                      )}
+                    </span>
+                    {/* minimal 档跟「默认模式」一样只留图标,名字和档位进 title */}
+                    {density !== 'minimal' && (
+                      <span className={`truncate whitespace-nowrap font-medium text-foreground ${density === 'compact' ? 'max-w-24' : 'max-w-48'}`}>{chipModelName}</span>
+                    )}
+                    {/* hq:当前模型此刻用不了 —— 名字照旧,加个小警示(原因在 title 里) */}
+                    {activeModelUnavailableReason && (
+                      <AlertTriangle className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+                    )}
+                    {chipEffortLabel && density !== 'minimal' && (
+                      <span className="shrink-0 whitespace-nowrap text-muted-foreground">{chipEffortLabel}</span>
+                    )}
+                    {density !== 'minimal' && (
+                      <ChevronDown className={`h-3 w-3 shrink-0 text-muted-foreground transition-transform ${isModelPickerOpen ? 'rotate-180' : ''}`} />
+                    )}
+                  </>
+                ) : (
+                  /* ee:模型芯片的图标换成参考用户给的六边形拼块重画的线图标(见 ModelMark);
+                     hn:认得出厂商时换成厂商图标 */
+                  chipVendorKnown ? (
+                    <ModelVendorIcon vendor={activeModelVendor} modelId={activeModelRealName || activeModel} size={14} />
+                  ) : (
+                    <ModelMark />
+                  )
+                )}
                 {/* 名字的宽度随密度档走:full 192px / compact 64px / minimal 不显示(只留图标,悬停可查)。
                     以前用 `hidden sm:inline` 看视口 —— 1400px 的窗口里正文栏可以只有 280px,视口断点管不到。 */}
-                {density !== 'minimal' && (
-                  activeModelRealName ? (
-                    // 只显示实际生效的模型名 —— 别名(default/sonnet…)是内部转发细节,
-                    // 用户关心"现在到底是谁在答"。别名仍在 hover 提示里可查。
-                    <span className={`truncate font-semibold ${density === 'compact' ? 'max-w-16' : 'max-w-48'}`}>{activeModelRealName}</span>
+                {!hasModelDropdown && density !== 'minimal' && (
+                  activeModelLabel || activeModelRealName ? (
+                    // 只显示实际生效的模型 —— 目录条目显示它的名字;别名(default/sonnet…)是内部转发细节,
+                    // 用户关心"现在到底是谁在答"。别名 / 网关原名仍在 hover 提示里可查。
+                    <span className={`truncate font-semibold ${density === 'compact' ? 'max-w-16' : 'max-w-48'}`}>{chipModelName}</span>
                   ) : (
                     <span className={`truncate ${density === 'compact' ? 'max-w-16' : 'max-w-28'}`}>{activeModel}</span>
                   )
@@ -884,7 +1018,26 @@ function ChatComposer({
               </button>
             )}
 
-            {availableEffortOptions.length > 0 && (
+            {hasModelDropdown && (
+              <ModelEffortMenu
+                open={isModelPickerOpen}
+                anchorRef={modelChipRef}
+                options={modelOptions ?? []}
+                currentValue={activeModel ?? null}
+                effort={effort}
+                contextUsedTokens={contextUsedTokens}
+                aliasTargets={modelAliasTargets}
+                onSelectModel={handlePickModel}
+                onSelectEffort={onSelectEffort}
+                onOpenDetails={onShowModelPicker}
+                onOpenKeySettings={onOpenGatewaySettings}
+                onClose={closeModelPicker}
+              />
+            )}
+
+            {/* ho:有模型菜单时档位在菜单的「档位 ›」里,这里不再单独出芯片 */}
+            {/* 当前模型不在选项里(下架 / 老会话原始 id)时也不出:服务端只对目录里的模型解析档位,选了也不生效(复审二轮) */}
+            {!hasModelDropdown && availableEffortOptions.length > 0 && (
               <div ref={effortDropdownRef} className="relative">
                 <button
                   ref={effortDropdownButtonRef}
@@ -963,6 +1116,19 @@ function ChatComposer({
             {/* 中止:跑起来才出现,描边方块。它和发送并排 ——
                 这样"有草稿时点发送=排队、想停就点方块"两件事各有各的按钮,
                 不用再让同一个按钮身兼二职。 */}
+            {/* ho(hq-1):转到后台 —— 正在跑的长命令 / 子代理挪到后台,这一轮接着往下走(等于终端里的 Ctrl+B) */}
+            {isLoading && onBackgroundForeground && (
+              <button
+                type="button"
+                onClick={() => void onBackgroundForeground()}
+                aria-label={t('backgroundTasks.toBackground')}
+                title={t('backgroundTasks.toBackgroundHint')}
+                className="grid h-8 w-8 flex-none place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:translate-y-px"
+                data-composer-action="to-background"
+              >
+                <ArrowDownToLine className="h-3.5 w-3.5" strokeWidth={2} />
+              </button>
+            )}
             {isLoading && (
               <button
                 type="button"

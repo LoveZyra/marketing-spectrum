@@ -13,6 +13,7 @@ import CredentialsSettingsTab from '../view/tabs/api-settings/CredentialsSetting
 import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
 import AccountSettingsTab from '../view/tabs/AccountSettingsTab';
 import ModelMappingSettingsTab from '../view/tabs/ModelMappingSettingsTab';
+import ModelGatewaysSettingsTab from '../view/tabs/ModelGatewaysSettingsTab';
 import ServerStatusTab from '../view/tabs/ServerStatusTab';
 import AboutTab from '../view/tabs/AboutTab';
 import { useSettingsController } from '../hooks/useSettingsController';
@@ -138,6 +139,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
               {activeTab === 'accounts' && <AccountsSettingsTab />}
               {activeTab === 'account' && <AccountSettingsTab />}
+              {activeTab === 'gateways' && <ModelGatewaysSettingsTab />}
               {activeTab === 'models' && <ModelMappingSettingsTab />}
               {activeTab === 'server' && <ServerStatusTab />}
 

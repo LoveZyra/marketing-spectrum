@@ -27,3 +27,16 @@ export type { ApprovalStatus, UserAdminRow } from '@/modules/database/repositori
 export { attachmentsDb, type AttachmentKind, type AttachmentRecord } from '@/modules/database/repositories/attachments.db.js';
 export { usageRecordsDb, deriveCostDelta } from '@/modules/database/repositories/usage-records.db.js';
 export type { UsageRecordInput, UsageRecordRow, UsageSummaryRow, UsageSource } from '@/modules/database/repositories/usage-records.db.js';
+// hn:模型目录(选择器里的网关模型、各自的窗口与档位)
+export { modelCatalogDb, type ModelCatalogRow, type ModelCatalogWrite } from '@/modules/database/repositories/model-catalog.db.js';
+export { modelTurnStatsDb, type ModelTurnSummary } from '@/modules/database/repositories/model-turn-stats.db.js';
+export {
+  gatewayUserKeysDb,
+  modelGatewaysDb,
+  userModelsDb,
+  type GatewayUserKeyRow,
+  type ModelGatewayRow,
+  type ModelGatewayWrite,
+  type UserModelRow,
+  type UserModelWrite,
+} from '@/modules/database/repositories/model-gateways.db.js';

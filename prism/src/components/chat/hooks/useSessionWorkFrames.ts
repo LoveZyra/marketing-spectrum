@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { authenticatedFetch } from '../../../utils/api';
-import { workFramesToMessages, type SessionWorkFrame } from '../utils/workFrames';
+import { turnMarkerMessage, workFramesToMessages, type SessionWorkFrame } from '../utils/workFrames';
 import type { ServerTurnOutputFile } from '../utils/turnOutputs';
 import { readCachedTurnOutputs, writeCachedTurnOutputs } from '../utils/turnOutputsCache';
 import type { ChatMessage } from '../types/types';
@@ -75,13 +75,15 @@ export function useSessionWorkFrames(sessionId: string | null, isProcessing: boo
           turnOutputs?: unknown;
           truncated?: unknown;
           skillSurveys?: unknown;
+          userTurns?: unknown;
         };
       } | null;
       const frames = body?.data?.frames;
       // 会话在途中被切走(或有更新的请求在飞)→ 丢弃,别把旧快照安上去。
       if (Array.isArray(frames) && sessionRef.current === targetSessionId
         && ticket === requestSeqRef.current) {
-        setBaseMessages(workFramesToMessages(frames));
+        // hq:基线末尾接一条回合号标记(见 turnMarkerMessage)
+        setBaseMessages([...workFramesToMessages(frames), ...turnMarkerMessage(body?.data?.userTurns)]);
         const raw = body?.data?.revertedPaths;
         setRevertedPaths(Array.isArray(raw)
           ? new Set(raw.filter((entry): entry is string => typeof entry === 'string'))

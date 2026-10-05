@@ -148,11 +148,17 @@
     "download": "Scarica questo file",
     "collapse": "Comprimi il pannello",
     "expand": "Espandi il pannello",
-    "doneFolded": "{{count}} completate · mostra",
-    "doneUnfold": "Nascondi {{count}} completate",
     "historyTruncated": "Sessione lunga — voci precedenti non caricate.",
     "earlierFolded": "{{count}} precedenti · mostra",
-    "earlierUnfold": "Nascondi {{count}} precedenti"
+    "earlierUnfold": "Nascondi {{count}} precedenti",
+    "progress": "Avanzamento",
+    "outputsShort": "Risultati",
+    "stepOf": "Passaggio {{current}} di {{total}}",
+    "earlierSteps": "{{count}} passaggi precedenti",
+    "earlierSteps_one": "{{count}} passaggio precedente",
+    "earlierStepsHide": "Nascondi i passaggi precedenti",
+    "progressCollapse": "Comprimi l'avanzamento",
+    "progressExpand": "Espandi l'avanzamento"
   },
   "skills": {
     "invokedBadge": "Competenza"
@@ -162,5 +168,15 @@
     "completed": "Completato",
     "error": "Errore",
     "denied": "Rifiutato"
+  },
+  "modelMenu": {
+    "privateBadge": "Privato",
+    "fillKey": "Aggiungi chiave",
+    "unavailable": "Non disponibile"
+  },
+  "commandResult": {
+    "models": {
+      "privateModels": "I miei modelli privati"
+    }
   }
 }

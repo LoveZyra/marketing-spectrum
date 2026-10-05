@@ -133,6 +133,12 @@ export type SessionWorkFrame = {
   toolInput: unknown;
   resultContent: string | null;
   resultIsError: boolean;
+  /**
+   * hq:这一帧落在第几个用户回合(全量日志里从 1 数,插话不算新回合)。前端的进度时间轴靠它分辨
+   * "这一轮的当前步"与之前被停下的回合留下的 in_progress / pending —— 首屏只加载尾部 20 条,
+   * 窗口里常常看不到这一轮的那条用户消息,只靠前端数会丢掉回合信息。
+   */
+  turn?: number;
 };
 
 const WORK_TOOL_NAMES: ReadonlySet<string> = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'Write']);
@@ -169,6 +175,8 @@ export type CollectedWorkFrames = {
    * 载荷里的帧,不该让历史回合的产出卡跟着一起丢。
    */
   turnOutputs: Record<string, TurnOutputFile[]>;
+  /** hq:全量日志里的用户回合数(插话不算)。前端把它接在基线末尾,窗口里看不到这一轮的用户消息时也能对上回合号。 */
+  userTurns?: number;
   /**
    * dt:至今仍处于"已回滚"状态的**绝对路径** —— files_reverted 落库后,
    * 之前的产出帧已在本函数内删除,但前端窗口里的旧 Write 工具帧还会把
@@ -241,6 +249,8 @@ export function collectWorkFrames(messages: readonly NormalizedMessage[]): Colle
   /** 本轮至今最后一条**有内容的助手正文**的消息 id —— 结算时挂它。 */
   let pendingAnchorId = '';
   let turnCount = 0;
+  /** hq:用户回合计数(见 SessionWorkFrame.turn)。 */
+  let userTurn = 0;
   /**
    * fj:上限改成保留**最新**的若干轮,与 `frames` 的尾部截断同向。
    *
@@ -323,6 +333,7 @@ export function collectWorkFrames(messages: readonly NormalizedMessage[]): Colle
           toolInput: { file_path: absolute },
           resultContent: 'checkpoint',
           resultIsError: false,
+          ...(userTurn > 0 ? { turn: userTurn } : {}),
         });
       }
       continue;
@@ -338,6 +349,7 @@ export function collectWorkFrames(messages: readonly NormalizedMessage[]): Colle
         if (messageId) pendingAnchorId = messageId;
       } else if (message.role === 'user') {
         flushTurn();
+        if (!(message as { interjection?: boolean }).interjection) userTurn += 1;
       }
       continue;
     }
@@ -354,6 +366,7 @@ export function collectWorkFrames(messages: readonly NormalizedMessage[]): Colle
       toolInput: message.toolInput ?? null,
       resultContent: typeof paired?.content === 'string' ? paired.content : null,
       resultIsError: Boolean(paired?.isError),
+      ...(userTurn > 0 ? { turn: userTurn } : {}),
     };
     if (toolName === 'Write' && frame.resultContent !== null && !frame.resultIsError) {
       const written = frameFilePath(frame);
@@ -367,9 +380,9 @@ export function collectWorkFrames(messages: readonly NormalizedMessage[]): Colle
   flushTurn();
 
   if (frames.length > MAX_WORK_FRAMES) {
-    return { frames: frames.slice(-MAX_WORK_FRAMES), revertedPaths: [...reverted], turnOutputs, truncated: true };
+    return { frames: frames.slice(-MAX_WORK_FRAMES), revertedPaths: [...reverted], turnOutputs, truncated: true, userTurns: userTurn };
   }
-  return { frames, revertedPaths: [...reverted], turnOutputs };
+  return { frames, revertedPaths: [...reverted], turnOutputs, userTurns: userTurn };
 }
 
 type CreateAppSessionResult = {
@@ -1033,6 +1046,13 @@ export const sessionsService = {
       if (!release.released && release.reason === 'turn_in_flight') {
         throw new AppError(
           `会话 "${sessionId}" 的常驻进程正在跑一个回合 —— 先停止它再删除。`,
+          { code: 'SESSION_RUN_IN_PROGRESS', statusCode: 409 },
+        );
+      }
+      if (!release.released && release.reason === 'background_tasks') {
+        // ho(复审):没有回合、只是后台任务在跑 —— 按停止停不掉它们,要在后台任务条上逐个停
+        throw new AppError(
+          `会话 "${sessionId}" 还有后台任务在跑 —— 先在对话里的后台任务条上停掉它们(或等它们跑完)再删除。`,
           { code: 'SESSION_RUN_IN_PROGRESS', statusCode: 409 },
         );
       }

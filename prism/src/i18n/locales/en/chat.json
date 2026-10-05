@@ -57,7 +57,9 @@
       "serverLabel": "Queued on server",
       "othersPreview": "(a message queued by another member)",
       "imageOnly": "(image only)",
-      "serverHint": "Sends when this turn ends · survives closing the tab"
+      "serverHint": "Sends when this turn ends · survives closing the tab",
+      "sendNow": "Send now",
+      "sendNowHint": "Slip it into this turn now: the model sees it at its next step and keeps working with it, without stopping what it is doing"
     },
     "attachmentPath": "path",
     "modelHint": "Current model: {{model}} · click to switch",
@@ -213,7 +215,8 @@
     "deny": "Deny",
     "allowRemember": "Allow & remember",
     "allowSaved": "Remembered",
-    "allowOnce": "Allow once"
+    "allowOnce": "Allow once",
+    "backgroundTitle": "A background task needs permission"
   },
   "activity": {
     "read": "Read {{target}}",
@@ -284,6 +287,33 @@
     "editRerun": "Edit & rerun",
     "editRerunTitle": "Fork here: edit this message and rerun"
   },
+  "modelMenu": {
+    "title": "Model & effort",
+    "effortRow": "Effort",
+    "moreModels": "More models",
+    "back": "Back",
+    "aliases": "Model aliases",
+    "aliasHint": "Alias",
+    "details": "Model details & probes…",
+    "current": "Current",
+    "recommended": "Recommended",
+    "maxWarning": "Slower, uses more quota",
+    "effortHint": "Higher effort means more thorough responses, but takes longer and uses more quota.",
+    "window": "{{window}} window",
+    "failed": "Failed to switch model",
+    "tooLargeShort": "Current context is past its compaction line",
+    "tooLarge": "Current context is about {{used}} tokens, past its compaction line {{line}}: after switching, send /compact first (it compacts with the current model, then switches)",
+    "effort": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "xhigh": "Extra",
+      "max": "Max"
+    },
+    "privateBadge": "Private",
+    "fillKey": "Add key",
+    "unavailable": "Unavailable"
+  },
   "commandResult": {
     "builtins": {
       "models": "Browse available models for the active provider.",
@@ -326,12 +356,32 @@
       "subtitle": "Pick the model this provider should use.",
       "searchPlaceholder": "Search {{provider}} models…",
       "current": "Current selection",
-      "appliesNext": "Applies next response"
+      "appliesNext": "Applies next response",
+      "otherVendor": "Other",
+      "switchedNext": "Switched · the next message will use {{model}}",
+      "setDefault": "Set as default model: {{model}}",
+      "windowTitle": "Context window {{tokens}} tokens",
+      "effortLevels": "Effort levels: {{count}}",
+      "tooLarge": "Current context is about {{used}} tokens, past its compaction line {{line}}: after switching, send /compact first (it compacts with the current model, then switches)",
+      "emptyCatalog": "The model catalog is empty — an admin can add gateway models under Settings → Models. The aliases below still work.",
+      "recommended": "Recommended",
+      "more": "More models",
+      "allModels": "All models",
+      "probing": "Probing…",
+      "probeAliases": "Probe aliases",
+      "aliasGroup": "Model aliases",
+      "aliasRouting": "Alias routing · read-only",
+      "aliasRoutingHint": "Not selectable: the main chat and subagents use the model you pick. Aliases only route calls where Claude names sonnet / opus / haiku / fable for a subagent, plus small internal CLI tasks (e.g. web-page summaries) — change the mapping in Settings → Models; the first line is the configured model",
+      "aliasHint": "Aliases map to real models in settings.json; the first line is the configured model",
+      "gatewayVia": "via gateway",
+      "noMatch": "No models match that search.",
+      "privateModels": "My private models"
     },
     "cost": {
       "eyebrow": "Session telemetry",
       "title": "Token Usage",
-      "subtitle": "Input, output, and total token counts for this session."
+      "subtitle": "Input, output, and total token counts for this session.",
+      "estimateNote": "The current model is {{vendor}}: Claude Code prices non-Claude models at Claude rates, so the amounts above are estimates."
     },
     "status": {
       "eyebrow": "Runtime health",
@@ -391,13 +441,17 @@
     "download": "Download this file",
     "collapse": "Collapse work panel",
     "expand": "Expand work panel",
-    "doneFolded": "{{count}} completed · show",
-    "doneUnfold": "Hide {{count}} completed",
     "historyTruncated": "Long session — earlier records not loaded.",
     "earlierFolded": "{{count}} earlier · show",
     "earlierUnfold": "Hide {{count}} earlier",
     "progress": "Progress",
-    "outputsShort": "Outputs"
+    "outputsShort": "Outputs",
+    "stepOf": "Step {{current}} of {{total}}",
+    "earlierSteps": "{{count}} earlier steps",
+    "earlierSteps_one": "{{count}} earlier step",
+    "earlierStepsHide": "Hide earlier steps",
+    "progressCollapse": "Collapse progress",
+    "progressExpand": "Expand progress"
   },
   "skills": {
     "invokedBadge": "Skill"
@@ -549,5 +603,43 @@
       "retryBlockedByDraft": "The composer has unsent text — send or clear it before retrying.",
       "sendFailed": "Send failed"
     }
+  },
+  "merged": {
+    "pending": "Interjected · can be withdrawn until the model reads it",
+    "withdraw": "Withdraw",
+    "withdrawn": "Withdrawn — the model never ran it",
+    "withdrawnOnStop": "Stopped — the interjection was withdrawn too and never ran",
+    "withdrawnToast": "Interjection withdrawn; the model never ran it",
+    "tooLate": "The model already read this message; it can no longer be withdrawn"
+  },
+  "backgroundTasks": {
+    "title": "{{count}} background task(s) running",
+    "types": {
+      "shell": "Shell",
+      "agent": "Agent",
+      "workflow": "Workflow",
+      "task": "Task"
+    },
+    "stop": "Stop",
+    "stopping": "Stopping…",
+    "stopFailed": "Stop failed: {{reason}}",
+    "toBackground": "Move to background",
+    "toBackgroundHint": "Move the running subagent to the background so this turn keeps going (you will be notified when it finishes)",
+    "nothingToBackground": "Nothing is running that can be moved to the background",
+    "backgroundFailed": "Could not move to background: {{reason}}"
+  },
+  "fileRewind": {
+    "intro": "This folder is not a git repository, so turns are rewound with Claude's file checkpoints: files Claude touched with its write/edit tools are restored and files it created are removed; files changed only by shell commands are not covered. Preview first, then rewind.",
+    "preview": "Preview",
+    "previewFirst": "Preview first to see which files will change",
+    "rewind": "Rewind to before this turn",
+    "nothing": "No file changes to restore after this turn",
+    "summary": "{{count}} file(s) will be restored (+{{insertions}} / -{{deletions}} lines)",
+    "confirm": "Restore files to how they were before this turn? Files Claude changed in this and later turns go back, and files it created are deleted.",
+    "done": "✅ Restored to before this turn",
+    "notEnabled": "File checkpoints are not enabled for this conversation's process (git repository, or it started before the upgrade) — try again after the next turn",
+    "busy": "This conversation is running; rewind after the turn ends",
+    "notResident": "Could not start this conversation's process; try again later",
+    "failed": "Rewind failed"
   }
 }

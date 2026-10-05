@@ -141,11 +141,16 @@
     "download": "このファイルをダウンロード",
     "collapse": "作業パネルを閉じる",
     "expand": "作業パネルを開く",
-    "doneFolded": "完了 {{count}} 件 · 表示",
-    "doneUnfold": "完了した {{count}} 件を隠す",
     "historyTruncated": "セッションが長いため、以前の記録は読み込まれていません。",
     "earlierFolded": "以前の {{count}} 件 · 表示",
-    "earlierUnfold": "以前の {{count}} 件を隠す"
+    "earlierUnfold": "以前の {{count}} 件を隠す",
+    "progress": "進捗",
+    "outputsShort": "成果物",
+    "stepOf": "ステップ {{current}} / {{total}}",
+    "earlierSteps": "以前の {{count}} ステップ",
+    "earlierStepsHide": "以前のステップを隠す",
+    "progressCollapse": "進捗を閉じる",
+    "progressExpand": "進捗を開く"
   },
   "skills": {
     "invokedBadge": "スキル"
@@ -155,5 +160,15 @@
     "completed": "完了",
     "error": "エラー",
     "denied": "拒否"
+  },
+  "modelMenu": {
+    "privateBadge": "プライベート",
+    "fillKey": "キーを設定",
+    "unavailable": "利用不可"
+  },
+  "commandResult": {
+    "models": {
+      "privateModels": "自分のプライベートモデル"
+    }
   }
 }

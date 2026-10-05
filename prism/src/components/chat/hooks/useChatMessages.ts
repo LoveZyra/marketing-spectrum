@@ -382,6 +382,11 @@ function convertMessage(
             content: unescapeWithMathProtection(decodeHtmlEntities(content)),
             timestamp: msg.timestamp,
             images,
+            // ho(ho-1):合流消息的撤回 / 置灰
+            ...(msg.clientMessageId ? { clientMessageId: msg.clientMessageId } : {}),
+            ...(msg.withdrawn === true ? { withdrawn: true } : {}),
+            ...(msg.interjection === true ? { interjection: true } : {}),
+            ...(msg.sentDuringTurn === true ? { sentDuringTurn: true } : {}),
             ...sharedMetadata,
           });
         }

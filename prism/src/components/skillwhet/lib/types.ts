@@ -215,6 +215,8 @@ export type Budget = {
   userDailyMaxCostUsd: number;
   spentToday: number;
   isRoot: boolean;
+  /** hn(B7):非 root 能选的模型(别名 + 目录上架条目,或 .env 白名单);root 为 null = 不限。老 Prism 不回。 */
+  allowedModels?: string[] | null;
 };
 
 export type StagingSummary = {

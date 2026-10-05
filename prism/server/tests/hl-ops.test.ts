@@ -857,13 +857,14 @@ describe('hl 测试空白:调度器主循环与 claimRun 并发', () => {
 /* ── P2-26 / P2-27 / P3:依赖与构建卫生(源码钉住) ────────────────── */
 
 describe('hl 静态 P2-26 / P2-27 / P3:依赖与构建卫生', () => {
-  test('无人引用的开发依赖已删;sharp ≥ 0.35;claude-agent-sdk 不在这一轮升级', () => {
+  test('无人引用的开发依赖已删;sharp ≥ 0.35;claude-agent-sdk 由 hm 锁到精确版本', () => {
     const pkg = JSON.parse(read('package.json')) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
     for (const name of ['release-it', '@release-it/conventional-changelog', 'auto-changelog', 'node-gyp']) {
       assert.equal(pkg.devDependencies[name], undefined, `${name} 应当删掉`);
     }
     assert.match(pkg.dependencies.sharp, /^\^0\.3[5-9]\./);
-    assert.equal(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], '^0.3.165');
+    // hm(A1):写死精确版本(去掉 ^),0.x 的 ^ 会让重装时 0.3.x 漂移 —— 随包 CLI 跟着漂。
+    assert.equal(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.285');
   });
 
   test('tailwind blocklist 挡住 JS 取反被当成 important 变体', async () => {

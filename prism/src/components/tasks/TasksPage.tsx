@@ -150,12 +150,14 @@ type FormState = {
 };
 
 function TaskFormModal({
-  initial, editingId, projects, models, defaultModelReal, serverTime, onClose, onSaved,
+  initial, editingId, projects, models, aliasModels, defaultModelReal, serverTime, onClose, onSaved,
 }: {
   initial: FormState;
   editingId: string | null;
   projects: Array<{ path: string; name: string }>;
   models: FancyOption[];
+  /** ho:收起来的别名行(存量任务的模型恰好是别名时拿来显示)。 */
+  aliasModels: FancyOption[];
   /** 「默认模型」实际指向谁(能查到就写在主行,别名退到副行)。 */
   defaultModelReal: string | null;
   /** hl:服务器时区(表单里的时刻按它理解)。 */
@@ -176,7 +178,7 @@ function TaskFormModal({
 
   // 三个下拉的选项全部走共享 hook,不许各写一份。
   const projectOptions = useProjectOptions(projects, form.projectPath);
-  const modelOptions = useModelOptions(models, form.model, defaultModelReal);
+  const modelOptions = useModelOptions(models, form.model, defaultModelReal, aliasModels);
   const sessions = useSessionRows(form.projectPath);
   const sessionOptions = useSessionOptions(
     sessions,
@@ -453,7 +455,7 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
   const [modal, setModal] = useState<{ editingId: string | null; initial: FormState } | null>(null);
   // 项目目录与模型目录都走共享 hook。
   const projects = useProjectRows();
-  const { models, defaultModelReal } = useModelCatalog();
+  const { models, aliasModels, defaultModelReal } = useModelCatalog();
 
   const refresh = useCallback(async () => {
     try {
@@ -872,13 +874,20 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
                     {/* 与下拉同一份文案(实际模型名,已知网关模型则括在后面) */}
                     {t('tasksPage.modelIs', {
                       model: detail.model
-                        ? models.find((model) => model.value === detail.model)?.label ?? detail.model
+                        ? [...models, ...aliasModels].find((model) => model.value === detail.model)?.label ?? detail.model
                         : (defaultModelReal
                           ? `${t('tasksPage.defaultModel', { defaultValue: '默认模型' })}(${defaultModelReal})`
                           : t('tasksPage.defaultModel', { defaultValue: '默认模型' })),
                       defaultValue: '模型 {{model}}',
                     })}
                     <span className="ml-2 text-muted-foreground">{detail.permissionMode}</span>
+                    {/* hn(B4):任务存的模型已不在目录里(下架 / 删了)—— 运行时按默认模型跑,运行记录里写明 */}
+                    {/* ho:别名不再当选项,但存的是别名不算下架 */}
+                    {detail.model && detail.model !== 'default' && models.length > 0 && ![...models, ...aliasModels].some((model) => model.value === detail.model) && (
+                      <span className="ml-2 rounded border border-amber-500/40 px-1 py-px text-[11px] text-amber-700 dark:text-amber-400">
+                        {t('tasksPage.modelRetired', { defaultValue: '已下架 · 运行时按默认模型' })}
+                      </span>
+                    )}
                   </p>
                 </div>
               )}
@@ -892,6 +901,7 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
             editingId={modal.editingId}
             projects={projects}
             models={models}
+            aliasModels={aliasModels}
             defaultModelReal={defaultModelReal}
             serverTime={serverTime}
             onClose={() => setModal(null)}
@@ -1025,6 +1035,7 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
           editingId={modal.editingId}
           projects={projects}
           models={models}
+          aliasModels={aliasModels}
           defaultModelReal={defaultModelReal}
           serverTime={serverTime}
           onClose={() => setModal(null)}

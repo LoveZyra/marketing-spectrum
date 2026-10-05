@@ -171,3 +171,10 @@ electron/*.tar.gz
 # (tsc 那边是安全的:server/tsconfig.json 的 include 相对 server/,
 #  根目录下的 _to_delete 本来就不在编译范围内。这条是给打包和 git 用的。)
 /_to_delete/
+
+# SQLite WAL 旁路文件(本地跑起来会生成)
+*.db-shm
+*.db-wal
+
+# v2.0.0:打包时生成的发布信息(scripts/release.mjs),不进 git
+/RELEASE.json

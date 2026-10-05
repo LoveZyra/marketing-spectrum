@@ -1,11 +1,11 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 
 import type { WebSocket } from 'ws';
 
 import { attachmentsDb, canViewerSeeSession, sessionMessagesDb, sessionsDb, userDb } from '@/modules/database/index.js';
 import { chatRunRegistry, setRunStartedHook} from '@/modules/websocket/services/chat-run-registry.service.js';
-import { noteMergedSend } from '@/modules/websocket/services/observed-run.service.js';
-import { seedDisplayLogFromTranscript } from '@/modules/providers/index.js';
+import { claudeModelCatalog, modelViewerFor, seedDisplayLogFromTranscript } from '@/modules/providers/index.js';
 import { connectedClients, WS_OPEN_STATE } from '@/shared/websocket-state.js';
 import { currentHolder } from '@/modules/websocket/services/conversation-ownership.service.js';
 import { ATTACHMENT_DIR_NAME } from '@/shared/attachment-storage.js';
@@ -204,6 +204,11 @@ type ChatWebSocketDependencies = {
    * 可选注入:没接线、或者这一次不成立(没有常驻 runtime、正在自动压缩、
    * 带了图片……)时**照旧走排队** —— 合流是增强,不是替换,退回去就是今天的行为。
    */
+  /** ho(ho-1):撤回一条合流进 CLI 队列的消息(还在队列里才撤得到)。 */
+  cancelMergedFns?: Partial<Record<
+    LLMProvider,
+    (appSessionId: string, uuid: string) => Promise<{ cancelled: boolean; reason?: string }>
+  >>;
   mergeFns?: Partial<Record<
     LLMProvider,
     (
@@ -299,6 +304,8 @@ function sendSendAck(
   sessionId: string,
   clientMessageId: string | null,
   status: 'accepted' | 'duplicate',
+  /** ho(ho-1):这条是合流进 CLI 队列的 —— 前端据此给气泡挂「撤回」(带着 uuid 发 chat.cancel-queued)。 */
+  mergedUuid: string | null = null,
 ): void {
   if (!clientMessageId) return;
   sendJson(ws, {
@@ -306,8 +313,62 @@ function sendSendAck(
     sessionId,
     clientMessageId,
     status,
+    ...(mergedUuid ? { merged: true, mergedUuid } : {}),
     timestamp: new Date().toISOString(),
   });
+}
+
+/**
+ * ho(ho-1):合流消息 uuid → 落库的那一行 / 乐观气泡。只在"还撤得回"的那段时间里有用:
+ * 送达(`delivered`)或撤回(`withdrawn`)后就删;进程没了 claude-sdk 也会按撤回报来(releaseRuntimeSideState)。
+ *
+ * 复审修正:原来另有 30 分钟过期 —— 插话用 'next' 后要等到下一个主线程工具间隙才送达,前台子代理一跑就可能超过
+ * 30 分钟;过期后「撤回」直接答"已送达"、停止时也标不上"已撤回"。现在只按条数封顶(插入顺序,先删最老的)。
+ */
+type MergedRow = { sessionId: string; rowId: string | null; clientMessageId: string | null; at: number };
+const mergedRows = new Map<string, MergedRow>();
+const MERGED_ROWS_MAX = 500;
+
+function rememberMergedRow(uuid: string, row: Omit<MergedRow, 'at'>): void {
+  mergedRows.set(uuid, { ...row, at: Date.now() });
+  for (const key of mergedRows.keys()) {
+    if (mergedRows.size <= MERGED_ROWS_MAX) break;
+    mergedRows.delete(key);
+  }
+}
+
+/**
+ * ho(ho-1):claude-sdk 报来的合流消息去向(组合根接线 setMergedMessageHook)。
+ *
+ * - `withdrawn`:没执行就撤掉了(停止时 CLI 撤的、或用户点了撤回)。落库那一行标 `withdrawn`(刷新后仍是置灰的),
+ *   广播 `chat_merged_withdrawn` 让在线端把气泡置灰、收起撤回;
+ * - `delivered`:已经被模型读进某一轮,撤不回了 —— 广播 `chat_merged_delivered`,前端收起「撤回」。
+ */
+export function handleMergedMessageEvent(event: { type: 'withdrawn' | 'delivered'; appSessionId: string; uuids: string[]; reason?: string | null }): void {
+  if (!event || !Array.isArray(event.uuids) || event.uuids.length === 0) return;
+  const rows = event.uuids
+    .map((uuid) => ({ uuid, row: mergedRows.get(uuid) ?? null }))
+    .filter((entry) => entry.row && entry.row.sessionId === event.appSessionId);
+  for (const { uuid } of rows) mergedRows.delete(uuid);
+  if (event.type === 'withdrawn') {
+    for (const { row } of rows) {
+      if (row?.rowId) sessionMessagesDb.markWithdrawn(event.appSessionId, row.rowId);
+    }
+  }
+  broadcastToSessionViewers(event.appSessionId, {
+    kind: event.type === 'withdrawn' ? 'chat_merged_withdrawn' : 'chat_merged_delivered',
+    sessionId: event.appSessionId,
+    mergedUuids: event.uuids,
+    clientMessageIds: rows.map(({ row }) => row?.clientMessageId).filter(Boolean),
+    messageIds: rows.map(({ row }) => row?.rowId).filter(Boolean),
+    ...(event.reason ? { reason: event.reason } : {}),
+    timestamp: new Date().toISOString(),
+  });
+}
+
+/** 测试用。 */
+export function resetMergedRowsForTest(): void {
+  mergedRows.clear();
 }
 
 function sendProtocolError(
@@ -321,6 +382,8 @@ function sendProtocolError(
    * 客户端只对 `chat.send` 那一种切「会话已被删除」态。
    */
   request?: 'chat.send' | 'chat.abort' | 'chat.subscribe' | 'permission-response' | 'chat.cancel-queued',
+  /** ho(复审):附带字段(撤回插话失败时带上 mergedUuid,前端据此收起那一条的「撤回」)。 */
+  extra?: Record<string, unknown>,
 ): void {
   sendJson(ws, {
     kind: 'protocol_error',
@@ -328,6 +391,7 @@ function sendProtocolError(
     error,
     sessionId: sessionId ?? null,
     ...(request ? { request } : {}),
+    ...(extra ?? {}),
     timestamp: new Date().toISOString(),
   });
 }
@@ -563,6 +627,54 @@ function isPendingOwner(pending: { userId: string | number | null | undefined },
  * 能给一句可解释的提示。用 `status` 类型是因为它就是状态,不是错误 ——
  * 什么都没坏,也没有任何东西需要用户处理。
  */
+/**
+ * ho(ho-3):**后台子代理要审批、而此刻没有用户回合** —— 审批卡送到哪。
+ * 开着观测回合(CLI 自己那一轮)就用它的 writer(与那一轮的帧同一条流);否则广播给能看这段对话的人。
+ * 没人在线也照样登记(claude-sdk 那边挂着等),刷新 / 重连时由 `chat.subscribe` 的 pendingPermissions 补上。
+ */
+export function backgroundApprovalWriter(appSessionId: string): { send: (message: unknown) => void; sendAndCountDelivered: (message: unknown) => number } {
+  const deliver = (message: unknown): number => {
+    const run = chatRunRegistry.getRun(appSessionId);
+    if (run && run.status === 'running' && typeof (run.writer as { sendAndCountDelivered?: unknown }).sendAndCountDelivered === 'function') {
+      return (run.writer as unknown as { sendAndCountDelivered: (m: unknown) => number }).sendAndCountDelivered(message);
+    }
+    let delivered = 0;
+    const frame = JSON.stringify(message);
+    for (const client of connectedClients) {
+      try {
+        const socket = client as unknown as WebSocket;
+        if (socket.readyState !== WS_OPEN_STATE) continue;
+        if (!canViewerSeeSession(appSessionId, readSocketViewer(socket))) continue;
+        socket.send(frame);
+        delivered += 1;
+      } catch {
+        // 单个 socket 出错不影响其余
+      }
+    }
+    return delivered;
+  };
+  return { send: (message) => { deliver(message); }, sendAndCountDelivered: deliver };
+}
+
+/**
+ * ho(hq-1):**后台任务条。** claude-sdk 每收到一次 `background_tasks_changed`(全量表)就报过来,
+ * 这里记下最新一份并推给正在看这段对话的人;`chat.subscribe`(刷新 / 重连)时补发一次。
+ */
+type BackgroundTaskEntry = { taskId: string; taskType: string; description: string };
+const latestBackgroundTasks = new Map<string, BackgroundTaskEntry[]>();
+
+export function broadcastBackgroundTasks(payload: { appSessionId: string; tasks: BackgroundTaskEntry[]; reason?: string }): void {
+  if (!payload?.appSessionId) return;
+  const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+  if (tasks.length > 0) latestBackgroundTasks.set(payload.appSessionId, tasks);
+  else latestBackgroundTasks.delete(payload.appSessionId);
+  broadcastToSessionViewers(payload.appSessionId, backgroundTasksFrame(payload.appSessionId, tasks));
+}
+
+function backgroundTasksFrame(sessionId: string, tasks: BackgroundTaskEntry[]) {
+  return { kind: 'background_tasks', sessionId, tasks, timestamp: new Date().toISOString() };
+}
+
 export function broadcastRuntimeEvicted(payload: { sessionId: string; reason: string }): void {
   if (!payload?.sessionId) return;
   broadcastToSessionViewers(payload.sessionId, {
@@ -878,6 +990,23 @@ async function handleChatSend(
   }
 
   /**
+   * hn(B2):**模型前置检查** —— 客户端带来的模型不在目录里 / 已下架就当场回一条协议错误,
+   * 而不是起一轮再在运行时里失败。真正的闸口在 claude-sdk 的四条 SDK 路径上
+   * (`active-model` 覆盖会绕过这里,那边再判一次)。放在抄显示日志之前:老会话抄一次能到秒级,拒了就不必抄。
+   */
+  const requestedModel = (data.options as AnyRecord | undefined)?.model;
+  if (typeof requestedModel === 'string' && !claudeModelCatalog.isAllowed(requestedModel, modelViewerFor(authUserId, authUsername))) {
+    sendProtocolError(
+      ws,
+      'MODEL_NOT_ALLOWED',
+      `模型「${requestedModel}」不在模型目录里(或已下架,或你不在它的可用人员里)—— 这一条没有发出去。请在 /models 里另选一个。`,
+      sessionId,
+    );
+    releaseSendKey();
+    return;
+  }
+
+  /**
    * 回合开始之前,先确保这个会话的显示日志是**完整的**。
    *
    * 老会话(这一轮之前建的)日志里一行都没有,而这次回合会往里写。写完之后
@@ -1051,7 +1180,7 @@ async function handleChatSend(
       ? mergeClientOptions.hiddenContext.slice(0, 16_384).trim()
       : '';
     if (mergeFn && !carriesImages && !pendingSends.has(sessionId) && rawContent.trim()) {
-      let merged: { merged: boolean; reason?: string } = { merged: false, reason: 'not-attempted' };
+      let merged: { merged: boolean; reason?: string; uuid?: string } = { merged: false, reason: 'not-attempted' };
       try {
         merged = await mergeFn(sessionId, {
           command: mergeHiddenContext ? `${rawContent}\n\n${mergeHiddenContext}` : rawContent,
@@ -1074,10 +1203,15 @@ async function handleChatSend(
          * 这一笔比排队那条路**早得多**:排队期间刷新,那条乐观气泡就没了,
          * 只剩一张卡片(今天的行为)。合流之后它一开始就在日志里。
          */
+        const mergedRowId = generateMessageId('user');
         if (persistDisplayLog) {
           sessionMessagesDb.append(sessionId, {
-            id: generateMessageId('user'),
+            id: mergedRowId,
             sessionId,
+            // ho(hq-2):合流消息的 uuid 也是 CLI 认的轮次锚点
+            ...(merged.uuid ? { turnUuid: merged.uuid } : {}),
+            // ho(复审):插话不开新的一轮 —— 前端的时间轴 / 产出卡据此不把它当回合边界
+            interjection: true,
             timestamp: new Date().toISOString(),
             provider,
             kind: 'text',
@@ -1089,15 +1223,15 @@ async function handleChatSend(
           } as Parameters<typeof sessionMessagesDb.append>[1]);
         }
         /**
-         * 告诉观测回合:**下一轮无主帧是用户自己发的**,不是后台任务触发的 ——
-         * 别给它盖「📬 这一轮由 Claude Code 自己发起」的标记。
-         *
-         * (合流的消息可能被 CLI 当场并进这一轮 —— 那时根本不会有无主帧,
-         * 这个标记会自己过期,见 noteMergedSend。)
+         * ho(ho-1):记下 uuid ↔ 这一行 / 这条乐观气泡 —— 停止时 CLI 撤掉它、或用户点「撤回」时,
+         * 要能把落了库的那一行标成"已撤回",并让在线端把气泡置灰(见 handleMergedMessageEvent)。
+         * (hp-2:观测回合的归属改由 claude-sdk 按 uuid 判,这里不再记那一笔 TTL。)
          */
-        noteMergedSend(sessionId);
+        if (merged.uuid) {
+          rememberMergedRow(merged.uuid, { sessionId, rowId: persistDisplayLog ? mergedRowId : null, clientMessageId });
+        }
         drainToken?.onAccepted?.();
-        sendSendAck(ws, sessionId, clientMessageId, 'accepted');
+        sendSendAck(ws, sessionId, clientMessageId, 'accepted', merged.uuid ?? null);
         return;
       }
       log.info(`[chat] ${sessionId} 这一条不合流(${merged.reason ?? 'unknown'}),走排队`);
@@ -1193,6 +1327,11 @@ async function handleChatSend(
    */
   const hasUserContent = Boolean(command.trim())
     || (Array.isArray(sanitizedImages) && sanitizedImages.length > 0);
+  /**
+   * ho(hq-2):**这一轮用户消息的 uuid 由这里定**,同时写进显示日志那一行(`turnUuid`)并交给运行时推进 CLI。
+   * 非 git 目录的「撤销这一轮的文件改动」就是拿它调 `rewindFiles` —— CLI 的文件检查点按这个 uuid 认轮次。
+   */
+  const turnUuid = crypto.randomUUID();
   if (persistDisplayLog && hasUserContent) {
     sessionMessagesDb.append(sessionId, {
       id: generateMessageId('user'),
@@ -1202,6 +1341,7 @@ async function handleChatSend(
       kind: 'text',
       role: 'user',
       content: command,
+      turnUuid,
       ...(Array.isArray(sanitizedImages) && sanitizedImages.length > 0 ? { images: sanitizedImages } : {}),
       // gy:同上 —— 发起人与来源,调查卡的两道闸靠它。
       senderUserId: authUserId ?? undefined,
@@ -1229,6 +1369,8 @@ async function handleChatSend(
   const runtimeOptions: AnyRecord = {
     ...pickClientRuntimeOptions(clientOptions),
     actorUsername,
+    // hq:网关 key、「可用人员」、私有模型都按发这条消息的人(见 claude-sdk 的 turnViewer)
+    actorUserId: authUserId,
     // Image attachments are re-validated server-side: only files inside the
     // global upload store may reach the provider runtimes' file reads.
     images: sanitizedImages,
@@ -1271,6 +1413,8 @@ async function handleChatSend(
     forkFrom: !session.provider_session_id
       ? resolveAuthorizedFork(clientOptions.forkFrom, authViewer, ws)
       : undefined,
+    // ho(hq-2):见上 turnUuid
+    userMessageUuid: turnUuid,
   };
 
   try {
@@ -1636,6 +1780,10 @@ function handleChatSubscribe(
         sendJson(ws, event);
       }
     }
+    // ho(hq-1):后台任务条也要补一份(刷新 / 换设备后,"还有 2 个后台任务在跑"不能只活在原来那个标签页)
+    // 复审修正:空表也发 —— 断线 / 重启期间任务跑完了,前端那份还挂着,得靠这一帧清掉
+    const backgroundTasks = latestBackgroundTasks.get(sessionId) ?? [];
+    sendJson(ws, backgroundTasksFrame(sessionId, backgroundTasks));
   }
 }
 
@@ -1719,13 +1867,48 @@ function maybePrewarm(sessionId: string, dependencies: ChatWebSocketDependencies
  * 能看到这条会话的人都能撤 —— 与"谁都能中止这条会话的回合"同一口径。排队消息
  * 本来就是公开可见的(subscribe 里报了),对它的操作也没理由更严。
  */
-function handleCancelQueued(ws: WebSocket, data: AnyRecord): void {
+async function handleCancelQueued(ws: WebSocket, data: AnyRecord, dependencies: ChatWebSocketDependencies): Promise<void> {
   const sessionId = readRequiredSessionId(data);
   if (!sessionId) {
     sendProtocolError(ws, 'SESSION_ID_REQUIRED', 'chat.cancel-queued requires a sessionId.');
     return;
   }
   if (!assertSocketMaySeeSession(ws, sessionId)) {
+    return;
+  }
+  /**
+   * ho(ho-1):**撤回合流进 CLI 队列的那一条**(带 `mergedUuid`)。
+   * 还在 CLI 队列里 → 撤掉,结果由 handleMergedMessageEvent 广播;已经被模型读到 → 撤不回,照实回一句。
+   */
+  const mergedUuid = typeof data.mergedUuid === 'string' ? data.mergedUuid.trim() : '';
+  if (mergedUuid) {
+    const row = mergedRows.get(mergedUuid);
+    if (row && row.sessionId !== sessionId) {
+      // 别的会话的 uuid —— 不碰
+      sendProtocolError(ws, 'MERGED_NOT_CANCELLABLE', '这条消息已经送到模型面前了,撤不回了。', sessionId, 'chat.cancel-queued', { mergedUuid });
+      return;
+    }
+    const cancelFn = dependencies.cancelMergedFns?.claude;
+    const result = cancelFn ? await cancelFn(sessionId, mergedUuid) : { cancelled: false, reason: 'unsupported' };
+    if (!result.cancelled && result.reason !== 'unsupported' && result.reason !== 'error') {
+      // 撤不回 = 已经被模型读到了:按"已送达"收起所有在线端的「撤回」
+      handleMergedMessageEvent({ type: 'delivered', appSessionId: sessionId, uuids: [mergedUuid] });
+    }
+    if (!result.cancelled) {
+      sendProtocolError(
+        ws,
+        'MERGED_NOT_CANCELLABLE',
+        result.reason === 'unsupported'
+          ? '当前 CLI 不支持撤回已送进队列的消息。'
+          : result.reason === 'error'
+            ? '撤回没有及时得到回应 —— 稍后再点一次。'
+            : '这条消息已经送到模型面前了,撤不回了。',
+        sessionId,
+        'chat.cancel-queued',
+        // 'error'(比如撤回超时)时它可能还排着 —— 不带 uuid,前端别把「撤回」收起来
+        result.reason === 'error' ? undefined : { mergedUuid },
+      );
+    }
     return;
   }
   if (dropPendingSend(sessionId, 'cancelled')) return;
@@ -1888,7 +2071,7 @@ export function handleChatConnection(
           handleChatSubscribe(ws, data, dependencies);
           return;
         case 'chat.cancel-queued':
-          handleCancelQueued(ws, data);
+          await handleCancelQueued(ws, data, dependencies);
           return;
         case 'chat.permission-response':
           handlePermissionResponse(ws, data, dependencies);

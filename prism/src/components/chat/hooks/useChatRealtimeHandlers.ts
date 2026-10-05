@@ -4,6 +4,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { clearQueuedMessage, readQueuedMessage } from '../utils/chatStorage';
 import type { ServerEvent } from '../../../contexts/WebSocketContext';
 import { emitToast } from '../../../shared/view/ui/toastBus';
+import i18n from '../../../i18n/config.js';
 import { showCompletionTitleIndicator } from '../../../utils/pageTitleNotification';
 import { playChatCompletionSound, playNotificationSound } from '../../../utils/notificationSound';
 import type { MarkSessionIdle, MarkSessionProcessing } from '../../../hooks/useSessionProtection';
@@ -142,7 +143,11 @@ interface UseChatRealtimeHandlersArgs {
    * 没抛异常。收到它之前,那条命令一直留在 outbox 里,重连后会带着同一个 id
    * 重投(服务端按 id 去重,所以重投不会产生第二条消息)。
    */
-  onSendAcked?: (sessionId: string, clientMessageId: string) => void;
+  onSendAcked?: (sessionId: string, clientMessageId: string, mergedUuid?: string | null) => void;
+  /** ho(ho-1):插话(合流消息)的去向 —— 撤回了 / 已被模型读到。 */
+  onMergedOutcome?: (sessionId: string, outcome: { type: 'withdrawn' | 'delivered'; mergedUuids: string[]; clientMessageIds: string[]; reason?: string }) => void;
+  /** ho(hq-1):后台任务条(全量替换)。 */
+  onBackgroundTasks?: (sessionId: string, tasks: Array<{ taskId: string; taskType: string; description: string }>) => void;
   /**
    * gk:这条会话已被永久删除(服务端推的 `session_removed`),或者发送时发现它已经不在了
    * (`chat.send` 的 `SESSION_NOT_FOUND`)。界面据此切「会话已被删除」态。
@@ -186,6 +191,8 @@ export function useChatRealtimeHandlers({
   onServerQueueChange,
   onServerQueueReturned,
   onSendAcked,
+  onMergedOutcome,
+  onBackgroundTasks,
   onSessionRemoved,
   onSessionRestored,
 }: UseChatRealtimeHandlersArgs) {
@@ -355,6 +362,14 @@ export function useChatRealtimeHandlers({
           // 直接回话类帧:没带会话 id 时归到正在看的会话**展示**是合理的 ——
           // 它就是对这个客户端刚发出的动作的回应。只用于展示,不进游标。
           const errorSid = sid || activeViewSessionId;
+          // ho(ho-1):撤回插话没撤到(已经被模型读到了)—— 只是一句提示,回合照常在跑,不能停转圈
+          if (msg.code === 'MERGED_NOT_CANCELLABLE') {
+            emitToast({ message: String(msg.error || '') || i18n.t('chat:merged.tooLate') });
+            if (errorSid && typeof msg.mergedUuid === 'string') {
+              onMergedOutcome?.(errorSid, { type: 'delivered', mergedUuids: [msg.mergedUuid], clientMessageIds: [] });
+            }
+            return;
+          }
           /**
            * gk:`chat.send` 撞到"会话不存在" → 这条会话已经被删了(或你已无权访问)。
            *
@@ -418,7 +433,37 @@ export function useChatRealtimeHandlers({
           } catch {
             // 存储不可用不该把这一帧带崩。
           }
-          onSendAcked?.(ackSid, ackId);
+          // ho(ho-1):这一条是合流进 CLI 队列的 —— 气泡上挂「模型读到前可撤回」
+          onSendAcked?.(ackSid, ackId, msg.merged === true && typeof msg.mergedUuid === 'string' ? msg.mergedUuid : null);
+          return;
+        }
+
+        // ho(ho-1):插话撤回了(停止时 CLI 撤掉 / 用户点了撤回)或已被模型读到(撤不回了)
+        case 'chat_merged_withdrawn':
+        case 'chat_merged_delivered': {
+          if (!sid) return;
+          const asStrings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []);
+          onMergedOutcome?.(sid, {
+            type: msg.kind === 'chat_merged_withdrawn' ? 'withdrawn' : 'delivered',
+            mergedUuids: asStrings(msg.mergedUuids),
+            clientMessageIds: asStrings(msg.clientMessageIds),
+            reason: typeof msg.reason === 'string' ? msg.reason : undefined,
+          });
+          if (msg.kind === 'chat_merged_withdrawn' && sid === activeViewSessionId) {
+            emitToast({ message: msg.reason === 'aborted' ? i18n.t('chat:merged.withdrawnOnStop') : i18n.t('chat:merged.withdrawnToast') });
+          }
+          return;
+        }
+
+        // ho(hq-1):后台任务全量表(输入框上方那一条)
+        case 'background_tasks': {
+          if (!sid) return;
+          const tasks = Array.isArray(msg.tasks)
+            ? (msg.tasks as Array<Record<string, unknown>>)
+              .filter((task) => task && typeof task.taskId === 'string')
+              .map((task) => ({ taskId: String(task.taskId), taskType: String(task.taskType ?? 'task'), description: String(task.description ?? '') }))
+            : [];
+          onBackgroundTasks?.(sid, tasks);
           return;
         }
 
@@ -614,6 +659,9 @@ export function useChatRealtimeHandlers({
             setPendingPermissionRequests([]);
           }
 
+          // hq(复审五轮):这一轮完了 —— 回合在跑时发出、被排到后面的回声从现在起算下一轮(进度区数回合用)
+          if (sid) sessionStore.clearSentDuringTurn(sid);
+
           if (msg.aborted) {
             // Abort was requested — the complete event confirms it. No
             // further UI action is needed beyond clearing the entry above.
@@ -656,13 +704,16 @@ export function useChatRealtimeHandlers({
                 context: msg.context,
                 sessionId: sid || null,
                 receivedAt: new Date(),
+                ...(msg.background === true ? { background: true } : {}),
+                ...(msg.suppressAlwaysAllow === true ? { suppressAlwaysAllow: true } : {}),
               }];
 
               pendingPermissionRequestsRef.current = nextPendingPermissionRequests;
               setPendingPermissionRequests(nextPendingPermissionRequests);
             }
           }
-          if (sid) {
+          // ho(ho-3):后台子代理要的审批不对应任何回合 —— 不点亮转圈(没有 complete 会来把它关掉)
+          if (sid && msg.background !== true) {
             onSessionProcessing?.(sid);
           }
           break;
@@ -689,6 +740,18 @@ export function useChatRealtimeHandlers({
             if (sid && sid === activeViewSessionId && typeof msg.content === 'string' && msg.content) {
               emitToast({ message: msg.content });
             }
+            break;
+          }
+          // ho(hq-3 / hq-4):CLI 的提醒(warning / suggestion 级)与失败原因的人话 —— 弹一句,不进历史
+          if (msg.status === 'cli_notice') {
+            if (sid && sid === activeViewSessionId && typeof msg.content === 'string' && msg.content) {
+              emitToast({ message: msg.content });
+            }
+            break;
+          }
+          // ho(hq-3):网关重试结束,活动指示器上那句"网关繁忙,第 n 次重试"清掉
+          if (msg.statusClear === true) {
+            if (sid) onSessionProcessing?.(sid, { statusText: null, statusKind: null, compaction: null, canInterrupt: true });
             break;
           }
           // dk:只有**正在看的这条会话**的用量帧才写进顶栏 —— 之前不看 sid,
@@ -752,6 +815,8 @@ export function useChatRealtimeHandlers({
     onServerQueueChange,
     onServerQueueReturned,
     onSendAcked,
+    onMergedOutcome,
+    onBackgroundTasks,
     onSessionRemoved,
     onSessionRestored,
   ]);

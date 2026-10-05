@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -29,6 +30,25 @@ function katexWoff2Only() {
   }
 }
 
+/**
+ * v2.0.0:构建时把版本号与发布信息写进前端(设置 → 关于)。版本号来自 package.json;
+ * 日期与提交号来自包里的 RELEASE.json(scripts/release.mjs 打包时生成,不进 git),
+ * 它的版本号对不上 package.json 时不用(前端 releaseInfo.ts 再按同一规则校验一次)。
+ */
+function readBuildRelease() {
+  const read = (file) => {
+    try {
+      return JSON.parse(readFileSync(new URL(file, import.meta.url), 'utf8'))
+    } catch {
+      return null
+    }
+  }
+  const version = read('./package.json')?.version ?? null
+  const release = read('./RELEASE.json')
+  const matches = Boolean(release) && release.version === version
+  return { version, date: matches ? release.date ?? null : null, commit: matches ? release.commit ?? null : null }
+}
+
 export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
   const env = loadEnv(mode, process.cwd(), '')
@@ -46,6 +66,9 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), katexWoff2Only()],
+    define: {
+      __PRISM_RELEASE__: JSON.stringify(readBuildRelease()),
+    },
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url))

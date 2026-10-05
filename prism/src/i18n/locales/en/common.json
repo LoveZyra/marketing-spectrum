@@ -432,7 +432,9 @@
       "save": "Save task",
       "saving": "Saving…",
       "targetSession": "Target session",
-      "targetSessionAuto": "Auto-create one and pin it (default)"
+      "targetSessionAuto": "Auto-create one and pin it (default)",
+      "privateModel": "Private",
+      "modelUnavailable": "Unavailable"
     },
     "claudeStarted": "Request sent to AI — continue the conversation in the chat tab.",
     "needProject": "Pick a project in the sidebar first, then let AI create the task.",
@@ -449,7 +451,8 @@
     "triggerManual": "Manual",
     "triggerSchedule": "Scheduled",
     "openRunSession": "Open this run's session",
-    "moreRuns": "Show earlier ({{count}})"
+    "moreRuns": "Show earlier ({{count}})",
+    "modelRetired": "Retired · runs with the default model"
   },
   "export": {
     "md": "Markdown",

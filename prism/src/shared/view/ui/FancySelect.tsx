@@ -17,10 +17,19 @@ export type FancyOption = {
   sublabel?: string;
   /** 主行用等宽字体(模型名、路径这类"机器串"),对齐 /models 卡片的排版。 */
   mono?: boolean;
+  /** hn:行首图标(模型的厂商图标);触发器上也画。 */
+  icon?: ReactNode;
+  /**
+   * hq:置灰、点不了(模型下拉里这个人此刻用不了的模型:网关没 key / 停用)。仍然列出来,
+   * 副行写原因(悬停看全文);当前值恰好是它时触发器照常显示。
+   */
+  disabled?: boolean;
+  /** hq:主行后面的小标(模型下拉的「私有」)。 */
+  badge?: string;
 };
 
 export function FancySelect({
-  value, options, onChange, placeholder, searchable, searchPlaceholder, variant, className, footer,
+  value, options, onChange, placeholder, searchable, searchPlaceholder, variant, className, footer, customOption, ariaLabel,
 }: {
   value: string;
   options: FancyOption[];
@@ -33,6 +42,12 @@ export function FancySelect({
   className?: string;
   /** 面板底部动作区(项目下拉的「新建项目 / 其他目录…」)。 */
   footer?: (close: () => void) => ReactNode;
+  /**
+   * hn:搜索词不等于任何选项时,在列表顶上给一行「用这个值」(root 手填任意模型名)。
+   * 返回这一行的文案;返回 null = 这个词不能用(比如字符集不对),不给这一行。
+   */
+  customOption?: (query: string) => string | null;
+  ariaLabel?: string;
 }) {
   const { t } = useTranslation('common');
   const [open, setOpen] = useState(false);
@@ -44,8 +59,10 @@ export function FancySelect({
   const current = options.find((option) => option.value === value);
   const needle = query.trim().toLowerCase();
   const shown = needle
-    ? options.filter((option) => `${option.label}\n${option.sublabel ?? ''}`.toLowerCase().includes(needle))
+    ? options.filter((option) => `${option.label}\n${option.sublabel ?? ''}\n${option.value}`.toLowerCase().includes(needle))
     : options;
+  const typed = query.trim();
+  const customLabel = customOption && typed && !options.some((option) => option.value === typed) ? customOption(typed) : null;
   const triggerClass = variant === 'chip'
     ? 'inline-flex h-7 w-full items-center justify-between gap-1 rounded-md border border-border bg-card px-2 text-xs text-foreground transition-colors hover:border-border-strong focus:border-primary focus:outline-none'
     : 'flex w-full items-center justify-between gap-1 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground transition-colors hover:border-border-strong focus:border-primary focus:outline-none';
@@ -97,9 +114,13 @@ export function FancySelect({
         type="button"
         onClick={() => (open ? close() : setOpen(true))}
         className={triggerClass}
+        aria-label={ariaLabel}
         title={current?.sublabel || current?.label || placeholder}
       >
-        <span className={`truncate ${current ? '' : 'text-muted-foreground'}`}>{current ? current.label : (placeholder ?? '—')}</span>
+        <span className={`flex min-w-0 items-center gap-1.5 ${current ? '' : 'text-muted-foreground'}`}>
+          {current?.icon && <span className="flex flex-none items-center">{current.icon}</span>}
+          <span className="truncate">{current ? current.label : (placeholder ?? '—')}</span>
+        </span>
         <ChevronDown className="h-3.5 w-3.5 flex-none text-muted-foreground" />
       </button>
       {/*
@@ -132,19 +153,37 @@ export function FancySelect({
               </div>
             )}
             <div className="min-h-0 flex-1 overflow-y-auto py-1">
-              {shown.length === 0 && (
+              {customLabel && (
+                <button
+                  type="button"
+                  onClick={() => { onChange(typed); close(); }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-muted"
+                >
+                  <span className="min-w-0 flex-1 truncate">{customLabel}</span>
+                </button>
+              )}
+              {shown.length === 0 && !customLabel && (
                 <p className="px-3 py-2 text-xs text-muted-foreground">{t('tasksPage.select.noMatch', { defaultValue: '没有匹配项' })}</p>
               )}
               {shown.map((option) => (
                 <button
                   key={option.value || '__empty__'}
                   type="button"
-                  onClick={() => { onChange(option.value); close(); }}
-                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted ${option.value === value ? 'bg-muted/60' : ''}`}
+                  disabled={option.disabled}
+                  aria-disabled={option.disabled || undefined}
+                  title={option.disabled ? option.sublabel : undefined}
+                  onClick={() => { if (option.disabled) return; onChange(option.value); close(); }}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${option.disabled ? 'cursor-not-allowed' : 'hover:bg-muted'} ${option.value === value ? 'bg-muted/60' : ''}`}
                 >
+                  {option.icon && <span className={`flex flex-none items-center ${option.disabled ? 'opacity-50 grayscale' : ''}`}>{option.icon}</span>}
                   <span className="min-w-0 flex-1">
-                    <span className={`block truncate leading-5 text-foreground ${option.mono ? 'font-mono text-[12.5px] font-semibold' : 'text-[13px]'}`}>
-                      {option.label}
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className={`block truncate leading-5 ${option.disabled ? 'text-muted-foreground' : 'text-foreground'} ${option.mono ? 'font-mono text-[12.5px] font-semibold' : 'text-[13px]'}`}>
+                        {option.label}
+                      </span>
+                      {option.badge && (
+                        <span className="flex-none rounded bg-muted px-1.5 py-px text-[10.5px] leading-4 text-muted-foreground">{option.badge}</span>
+                      )}
                     </span>
                     {option.sublabel && (
                       <span className={`block truncate leading-4 text-muted-foreground ${option.mono ? 'font-mono text-[11px]' : 'text-[11px]'}`}>

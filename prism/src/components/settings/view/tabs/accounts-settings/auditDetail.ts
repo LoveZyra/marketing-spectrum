@@ -125,9 +125,61 @@ const EVENT_FALLBACKS: Record<DeletionAuditEvent, string> = {
   session_trash_purged: '清除了最近删除里的会话',
 };
 
+/**
+ * hq:模型网关与 key 的审计事件(与服务端 `AuditEvent` 对得上)。事件列给一个短标签;
+ * detail 仍是服务端写的 JSON(网关 id / 名字 / 给谁设的),**从来不含 key 本身**。
+ */
+export const MODEL_GATEWAY_AUDIT_EVENTS = [
+  'model_gateway_created',
+  'model_gateway_updated',
+  'model_gateway_deleted',
+  'gateway_default_key_set',
+  'gateway_default_key_cleared',
+  'gateway_key_set_by_root',
+  'gateway_key_cleared_by_root',
+  'private_gateways_toggled',
+  'gateway_key_set',
+  'gateway_key_cleared',
+  'private_gateway_created',
+  'private_gateway_updated',
+  'private_gateway_deleted',
+  'private_gateway_key_set',
+  'user_model_created',
+  'user_model_updated',
+  'user_model_deleted',
+] as const;
+
+export type ModelGatewayAuditEvent = (typeof MODEL_GATEWAY_AUDIT_EVENTS)[number];
+
+export function isModelGatewayAuditEvent(event: string): event is ModelGatewayAuditEvent {
+  return (MODEL_GATEWAY_AUDIT_EVENTS as readonly string[]).includes(event);
+}
+
+const MODEL_GATEWAY_EVENT_FALLBACKS: Record<ModelGatewayAuditEvent, string> = {
+  model_gateway_created: '添加了共享网关',
+  model_gateway_updated: '修改了共享网关',
+  model_gateway_deleted: '删除了共享网关',
+  gateway_default_key_set: '设置了网关默认 key',
+  gateway_default_key_cleared: '清除了网关默认 key',
+  gateway_key_set_by_root: '替成员填了 key',
+  gateway_key_cleared_by_root: '清除了成员的 key',
+  private_gateways_toggled: '切换了私有网关开关',
+  gateway_key_set: '填了自己的 key',
+  gateway_key_cleared: '清除了自己的 key',
+  private_gateway_created: '添加了私有网关',
+  private_gateway_updated: '修改了私有网关',
+  private_gateway_deleted: '删除了私有网关',
+  private_gateway_key_set: '设置了私有网关的 key',
+  user_model_created: '添加了私有模型',
+  user_model_updated: '修改了私有模型',
+  user_model_deleted: '删除了私有模型',
+};
+
 /** 事件本身的短标签(表格「事件」列用)。不认识的事件原样给 —— 它就是个稳定标识。 */
 export function auditEventLabel(event: string, t: AuditTranslator = identityAuditTranslator): string {
-  return isDeletionAuditEvent(event) ? t(`audit.event.${event}`, EVENT_FALLBACKS[event]) : event;
+  if (isDeletionAuditEvent(event)) return t(`audit.event.${event}`, EVENT_FALLBACKS[event]);
+  if (isModelGatewayAuditEvent(event)) return t(`audit.event.${event}`, MODEL_GATEWAY_EVENT_FALLBACKS[event]);
+  return event;
 }
 
 const formatWhen = (value: string): string => {

@@ -118,6 +118,19 @@ const call = async (baseUrl: string, asUser: string, method: string, url: string
   return { status: response.status, body: parsed, text };
 };
 
+/**
+ * 每日触发的钟点离"现在"至少 2 小时(本地、UTC 两种口径都离开)—— 写死 9 点的话,08:55~09:00 跑测试时
+ * 下一次正常触发比"5 分钟后重试"还近,重试就不排了,用例按钟点随机失败。
+ */
+const FAR_HOUR = (() => {
+  const now = new Date();
+  const gap = (a: number, b: number) => Math.min((a - b + 24) % 24, (b - a + 24) % 24);
+  for (let hour = 0; hour < 24; hour += 1) {
+    if (gap(hour, now.getHours()) >= 2 && gap(hour, now.getUTCHours()) >= 2) return hour;
+  }
+  return (now.getUTCHours() + 12) % 24;
+})();
+
 function insertTask(id: string, ownerId: number, projectPath: string, extra: Partial<Parameters<typeof scheduledTasksDb.insert>[0]> = {}) {
   scheduledTasksDb.insert({
     id,
@@ -127,7 +140,7 @@ function insertTask(id: string, ownerId: number, projectPath: string, extra: Par
     session_mode: 'fixed',
     fixed_session_id: null,
     frequency: 'daily',
-    run_at_hour: 9, run_at_minute: 0, run_at_weekday: null, run_at_day: null,
+    run_at_hour: FAR_HOUR, run_at_minute: 0, run_at_weekday: null, run_at_day: null,
     model: 'no-such-model-hl-test', permission_mode: 'bypassPermissions',
     enabled: 1, owner_user_id: ownerId,
     next_run_at: '2020-01-01 00:00:00',
@@ -143,9 +156,12 @@ describe('hl 动态 P1-1:一次性路径的成败要传到任务记账', () => {
     assert.deepEqual(readOneShotOutcome(undefined), { ok: true });
     assert.deepEqual(readOneShotOutcome({ ok: true, exitCode: 0 }), { ok: true });
     assert.deepEqual(readOneShotOutcome({ ok: false, exitCode: 1, aborted: false, error: 'model not found' }),
-      { ok: false, aborted: false, error: 'model not found' });
+      { ok: false, aborted: false, rejected: false, error: 'model not found' });
     assert.deepEqual(readOneShotOutcome({ ok: false, exitCode: 1, aborted: true, error: null }),
-      { ok: false, aborted: true, error: '回合被中止' });
+      { ok: false, aborted: true, rejected: false, error: '回合被中止' });
+    // hq:闸口 / 网关拒绝(没有 key、网关停用、模型不许用)—— 带 rejected,调度器据此不重试
+    assert.deepEqual(readOneShotOutcome({ ok: false, exitCode: 1, aborted: false, rejected: true, error: '没有 key' }),
+      { ok: false, aborted: false, rejected: true, error: '没有 key' });
   });
 
   test('SDK 报失败 → 运行记录 failed + 原因 + 5 分钟重试 + 失败通知', async () => {
@@ -209,7 +225,8 @@ describe('hl 动态 P1-1:一次性路径的成败要传到任务记账', () => {
       await executeTask(scheduledTasksDb.getById('t-abort')!, 'manual');
       after = scheduledTasksDb.getById('t-abort')!;
       assert.equal(after.last_run_status, 'completed');
-      assert.match(String(after.last_run_detail ?? ''), /^$|耗时/);
+      // hn:夹具的模型名(no-such-model-hl-test)不在模型目录里 → 按默认模型跑,运行记录写明回落
+      assert.match(String(after.last_run_detail ?? ''), /^$|耗时|已不在模型目录里/);
     });
   });
 });

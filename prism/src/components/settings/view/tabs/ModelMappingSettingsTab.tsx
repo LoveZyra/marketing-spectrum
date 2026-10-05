@@ -4,6 +4,10 @@ import { useTranslation } from 'react-i18next';
 
 import { authenticatedFetch } from '../../../../utils/api';
 
+import ModelCatalogSection from './model-catalog/ModelCatalogSection';
+import SubagentModelCard from './model-catalog/SubagentModelCard';
+import GatewaysAdminSection from './model-gateways/GatewaysAdminSection';
+
 type ManagedAlias = 'sonnet' | 'opus' | 'haiku' | 'fable';
 
 const ALIASES: ManagedAlias[] = ['sonnet', 'opus', 'haiku', 'fable'];
@@ -28,9 +32,14 @@ type ConfigView = {
 type ConfigResponse = { data?: ConfigView; error?: string; details?: string };
 
 /**
- * 模型映射管理(root):可视化编辑 settings.json 的别名映射与 default 档。
- * 保存 = 原子写回文件;已有的热感知让下一条消息直接用新映射,无需重启;
- * 实测缓存同时被置 stale,模型切换页会提示重测。
+ * 模型页(root)。hn 起分两块(hq 起最上面再加一块):
+ * 0. **网关**(`GatewaysAdminSection`,hq)—— 默认网关(settings.json)+ 共享网关 + 成员 key + 私有网关开关;
+ *    放在目录前面:目录条目要挂到这里的网关上;
+ * 1. **模型目录**(`ModelCatalogSection`)—— 用户在 /models 里能选的网关模型,带窗口、档位、图标、实测;
+ * 2. **子代理模型**(`SubagentModelCard`,ho)—— 子代理跟随主模型 / 默认用某个目录模型 / 强制;
+ *    放在目录与别名之间:选项来自上面的目录,"跟随主模型"时又要靠下面的别名映射解析;
+ * 3. **子代理用的别名**(本组件原来的内容)—— 可视化编辑 settings.json 的别名映射与 default 档。
+ *    保存 = 原子写回文件;已有的热感知让下一条消息直接用新映射,无需重启;实测缓存同时被置 stale。
  */
 export default function ModelMappingSettingsTab() {
   const { t } = useTranslation('settings');
@@ -115,12 +124,21 @@ export default function ModelMappingSettingsTab() {
     就是三种不同的右边留白(2026-09-15 用户逐个截图报过来)。
   */
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      <GatewaysAdminSection />
+
+      <div className="border-t border-border pt-5">
+        <ModelCatalogSection />
+      </div>
+
+      <SubagentModelCard />
+
+      <section className="space-y-4 border-t border-border pt-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="flex items-center gap-2 text-base font-semibold">
             <Shuffle className="h-4 w-4 text-muted-foreground" />
-            {t('models.title', '模型映射')}
+            {t('models.aliasTitle', '子代理用的别名')}
           </h3>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
             {t(
@@ -242,6 +260,7 @@ export default function ModelMappingSettingsTab() {
           '本页只读写映射字段;settings.json 里的网关地址与鉴权 token 原样保留,也不会传到浏览器。',
         )}
       </p>
+      </section>
     </div>
   );
 }

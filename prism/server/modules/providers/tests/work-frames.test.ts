@@ -123,3 +123,20 @@ describe('collectWorkFrames', () => {
     expect(unknownPath.revertedPaths).toEqual(['/p/never_seen.md']);
   });
 });
+
+describe('hq:工作帧带用户回合号(进度时间轴分辨当前轮)', () => {
+  it('每帧记下自己落在第几个用户回合;插话不算新回合;第一条用户消息之前的帧不带', () => {
+    const user = (content: string, extra: Record<string, unknown> = {}) =>
+      ({ kind: 'text', role: 'user', provider: 'claude', content, timestamp: 't', ...extra }) as NormalizedMessage;
+    const { frames } = collectWorkFrames([
+      toolUse('TaskCreate', { subject: '早' }, { toolId: 'x0' }),
+      user('第一轮'),
+      toolUse('TaskCreate', { subject: '甲' }, { toolId: 'a1' }),
+      user('插话', { interjection: true }),
+      toolUse('TaskUpdate', { taskId: '1', status: 'in_progress' }, { toolId: 'a2' }),
+      user('第二轮'),
+      toolUse('TaskCreate', { subject: '乙' }, { toolId: 'b1' }),
+    ]);
+    expect(frames.map((frame) => frame.turn)).toEqual([undefined, 1, 1, 2]);
+  });
+});

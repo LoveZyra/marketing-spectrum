@@ -12,6 +12,8 @@ type SystemPublicRouterDependencies = {
   installMode: string;
   /** Version of the running code, captured at process start (may be null). */
   runningVersion: string | null;
+  /** v2.0.0:同一时刻读到的发布日期与提交号(包里 RELEASE.json;从源码跑时为 null)。 */
+  runningRelease?: { date: string | null; commit: string | null } | null;
   /**
    * Reports whether the sessions watcher finished initializing. Optional:
    * the watcher module exports no state accessor, so the composition root
@@ -31,7 +33,7 @@ type SystemPublicRouterDependencies = {
  * so probes keep working without credentials.
  */
 export function createSystemPublicRouter(dependencies: SystemPublicRouterDependencies): Router {
-  const { installMode, runningVersion, isWatcherReady } = dependencies;
+  const { installMode, runningVersion, runningRelease, isWatcherReady } = dependencies;
   const router = express.Router();
 
   // Public health check endpoint (no authentication required)
@@ -40,7 +42,10 @@ export function createSystemPublicRouter(dependencies: SystemPublicRouterDepende
       status: 'ok',
       timestamp: new Date().toISOString(),
       installMode,
-      version: runningVersion
+      version: runningVersion,
+      // v2.0.0:部署后 curl 一下就能核对是哪个包(日期 / 提交号来自 RELEASE.json)
+      releaseDate: runningRelease?.date ?? null,
+      commit: runningRelease?.commit ?? null,
     });
   });
 

@@ -89,7 +89,7 @@ function canViewerUseCheckpoint(req, meta) {
  * the registry accessor. This complements — not replaces — the same-session
  * `isClaudeSDKSessionActive` check below.
  */
-async function findActiveRunForCwd(cwd) {
+export async function findActiveRunForCwd(cwd) {
   if (!cwd) return null;
   let activeRuns = [];
   try {

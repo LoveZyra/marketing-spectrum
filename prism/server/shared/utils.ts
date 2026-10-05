@@ -519,6 +519,7 @@ export function buildDefaultProviderCurrentActiveModel(
 ): ProviderCurrentActiveModel {
   return {
     model: models.DEFAULT,
+    source: 'default',
   };
 }
 

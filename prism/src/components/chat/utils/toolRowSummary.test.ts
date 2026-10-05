@@ -201,3 +201,20 @@ describe('会话闲下来后的工具行', () => {
     expect(summarizeToolRow(done, false).status).toBe('done');
   });
 });
+
+describe('ho:TaskCreate / TaskUpdate 行', () => {
+  it('归到任务清单:TaskCreate 用任务标题,TaskUpdate 不再退回原始 JSON', () => {
+    expect(activityIconKey('TaskCreate')).toBe('todo');
+    expect(activityIconKey('TaskUpdate')).toBe('todo');
+    expect(toolRowLabel('TaskCreate', { subject: '撰写报告', description: '写出 report.md' }))
+      .toEqual({ description: '撰写报告', verb: 'todo', target: '', toolLabel: 'TaskCreate' });
+    // TaskUpdate 的 description 是改任务正文,不是行标题
+    expect(toolRowLabel('TaskUpdate', { taskId: '2', status: 'completed', description: '新的任务正文' }))
+      .toEqual({ verb: 'todo', target: '', toolLabel: 'TaskUpdate' });
+    expect(summarizeActivityRun([
+      { isToolUse: true, toolName: 'TaskCreate' },
+      { isToolUse: true, toolName: 'TaskUpdate' },
+      { isToolUse: true, toolName: 'Bash' },
+    ])).toEqual(expect.arrayContaining([{ key: 'todo', count: 2 }, { key: 'bash', count: 1 }]));
+  });
+});

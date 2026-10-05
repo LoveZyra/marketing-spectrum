@@ -125,5 +125,11 @@
         }
       }
     }
+  },
+  "tasksPage": {
+    "form": {
+      "privateModel": "비공개",
+      "modelUnavailable": "사용 불가"
+    }
   }
 }

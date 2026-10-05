@@ -21,6 +21,8 @@ type AdminRouterDependencies = {
   requireRoot: RequestHandler;
   /** 运行中代码的版本号(index.js 启动时取一次),状态面板展示。 */
   runningVersion?: string | null;
+  /** v2.0.0:「v2.0.0 · 2026-10-01 · 3c84d6c」(含发布日期与提交号),状态面板展示。 */
+  runningRelease?: string | null;
   /**
    * 常驻 Claude 池的只读快照来源(F6)。由组合根注入 —— admin 模块不直接
    * import claude-sdk.js,与 shell 模块注入 `releaseConversation` 同一套约定。
@@ -165,7 +167,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): Router
 
   /** 服务器状态面板:负载/内存/磁盘/版本 + Jupyter + 网关连通(不带 token 的探测)。 */
   router.get('/server-status', (req, res) => {
-    void collectServerStatus({ appVersion: dependencies.runningVersion ?? null })
+    void collectServerStatus({ appVersion: dependencies.runningVersion ?? null, appRelease: dependencies.runningRelease ?? null })
       .then((status) => res.json({ success: true, status }))
       .catch(() => {
         if (!res.headersSent) res.status(500).json({ error: 'Failed to collect server status' });

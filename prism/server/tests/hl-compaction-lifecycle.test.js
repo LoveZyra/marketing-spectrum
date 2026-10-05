@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -45,7 +45,24 @@ const { queryClaudeSDK, disposeAllRuntimes, readCompactionIdleTimeout } = sdk;
 
 const cwd = mkdtempSync(path.join(tmpdir(), 'hl-compact-'));
 
-afterAll(async () => { await disposeAllRuntimes(); });
+/*
+ * hq:每一轮都要解析网关与 key(resolveTurnGateway 读 gateway_user_keys)。不给库的话会落到
+ * 仓库里那份没跑过迁移的 legacy auth.db 上(no such table),一轮直接失败 —— 给一份迁移过的临时库。
+ */
+const { closeConnection, initializeDatabase } = await import('@/modules/database/index.js');
+const previousDatabasePath = process.env.DATABASE_PATH;
+const dbDir = mkdtempSync(path.join(tmpdir(), 'hl-compact-db-'));
+closeConnection();
+process.env.DATABASE_PATH = path.join(dbDir, 'auth.db');
+await initializeDatabase();
+
+afterAll(async () => {
+  await disposeAllRuntimes();
+  closeConnection();
+  if (previousDatabasePath === undefined) delete process.env.DATABASE_PATH;
+  else process.env.DATABASE_PATH = previousDatabasePath;
+  rmSync(dbDir, { recursive: true, force: true });
+});
 
 function writer() {
   const frames = [];

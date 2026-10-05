@@ -1,4 +1,5 @@
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
+import type { SettingsMainTab } from '../../settings/types/types';
 import type {
   MarkSessionIdle,
   MarkSessionProcessing,
@@ -78,6 +79,13 @@ export interface ChatMessage {
    * 「已中断」。带上这个标记的行不参与回合边界判定。
    */
   isLocalNotice?: boolean;
+  /** ho(ho-1):用户气泡的幂等键(本地回声)与"已撤回"标记 —— 合流消息的撤回 / 置灰靠它们。 */
+  clientMessageId?: string;
+  withdrawn?: boolean;
+  /** ho(复审):插话 —— 合流进正在跑的这一轮,不是回合边界(见 turnBoundary.endsTurnForOutputs)。 */
+  interjection?: boolean;
+  /** hq(复审五轮):本地回声 —— 发出时回合还在跑。进度区数回合时不算新回合(见 taskChecklist)。 */
+  sentDuringTurn?: boolean;
   /** 这一轮实际服务的模型(响应元数据),显示在回答的时间戳旁。 */
   model?: string;
   /**
@@ -151,6 +159,10 @@ export interface PendingPermissionRequest {
   context?: unknown;
   sessionId?: string | null;
   receivedAt?: Date;
+  /** ho(ho-3):主回合结束后,后台子代理要的审批。 */
+  background?: boolean;
+  /** ho(ho-3):CLI 说这一次不该给"总是允许"(suppressAlwaysAllowRule)。 */
+  suppressAlwaysAllow?: boolean;
 }
 
 export interface QuestionOption {
@@ -195,7 +207,8 @@ export interface ChatInterfaceProps {
   processingSessions?: SessionActivityMap;
   onNavigateToSession?: (targetSessionId: string, options?: SessionNavigationOptions) => void;
   onSessionEstablished?: (sessionId: string, context: SessionEstablishedContext) => void;
-  onShowSettings?: () => void;
+  /** 开设置页;`tab` = 直接落到哪个标签(hq:模型菜单的「去填 key」开 `gateways`)。 */
+  onShowSettings?: (tab?: SettingsMainTab) => void;
   showRawParameters?: boolean;
   showThinking?: boolean;
   sendByCtrlEnter?: boolean;

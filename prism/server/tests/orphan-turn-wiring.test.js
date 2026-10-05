@@ -23,7 +23,8 @@ describe('无主帧路由的接线', () => {
     const at = sdk.indexOf('const turn = runtime.turn;\n      if (!turn) {');
     expect(at).toBeGreaterThan(0);
     const branch = sdk.slice(at, at + 1800);
-    expect(branch).toMatch(/routeOrphanMessage\(runtime, message\);/);
+    // ho(hp-2):多带一个「这一帧回答的是不是合流消息」
+    expect(branch).toMatch(/routeOrphanMessage\(runtime, message, \{ answersMerged \}\);/);
     // 旧代码那一行必须已经不在**代码**里(注释里引用它是为了记住这条教训)
     expect(sdk).not.toMatch(/^\s*continue; \/\/ stray events between turns/m);
   });

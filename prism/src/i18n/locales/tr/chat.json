@@ -148,11 +148,16 @@
     "download": "Bu dosyayı indir",
     "collapse": "Paneli daralt",
     "expand": "Paneli genişlet",
-    "doneFolded": "{{count}} tamamlandı · göster",
-    "doneUnfold": "Tamamlanan {{count}} öğeyi gizle",
     "historyTruncated": "Uzun oturum — daha eski kayıtlar yüklenmedi.",
     "earlierFolded": "{{count}} daha eski · göster",
-    "earlierUnfold": "{{count}} daha eskiyi gizle"
+    "earlierUnfold": "{{count}} daha eskiyi gizle",
+    "progress": "İlerleme",
+    "outputsShort": "Çıktılar",
+    "stepOf": "Adım {{current}} / {{total}}",
+    "earlierSteps": "{{count}} önceki adım",
+    "earlierStepsHide": "Önceki adımları gizle",
+    "progressCollapse": "İlerlemeyi daralt",
+    "progressExpand": "İlerlemeyi genişlet"
   },
   "skills": {
     "invokedBadge": "Beceri"
@@ -162,5 +167,15 @@
     "completed": "Tamamlandı",
     "error": "Hata",
     "denied": "Reddedildi"
+  },
+  "modelMenu": {
+    "privateBadge": "Özel",
+    "fillKey": "Anahtar ekle",
+    "unavailable": "Kullanılamıyor"
+  },
+  "commandResult": {
+    "models": {
+      "privateModels": "Özel modellerim"
+    }
   }
 }

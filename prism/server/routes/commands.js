@@ -5,12 +5,15 @@ import path from "path";
 import express from "express";
 
 import { providerModelsService } from "../modules/providers/services/provider-models.service.js";
+import { claudeModelCatalog, modelViewerFor } from "../modules/providers/list/claude/claude-model-catalog.service.js";
+import { modelsDefinitionFor } from "../modules/providers/list/claude/claude-gateways.service.js";
 import { parseFrontMatter } from "../shared/frontmatter.js";
 import { canViewerSeeSession, usageRecordsDb } from "../modules/database/index.js";
 import { readRequestViewer } from "../shared/project-visibility.js";
 import { assertViewerMayCreateSessionAt } from "../modules/providers/services/session-project-path-guard.service.js";
 import { findAppRoot, getModuleDir } from "../utils/runtime-paths.js";
 import { createLogger } from "../shared/logger.js";
+import { readReleaseInfo } from "../shared/release-info.js";
 const log = createLogger("commands");
 
 const __dirname = getModuleDir(import.meta.url);
@@ -41,32 +44,62 @@ const readModelProvider = (value) => {
 const hasConcreteSessionId = (value) =>
   typeof value === "string" && value.trim().length > 0;
 
-const resolveCommandModel = async (provider, catalog, sessionId) => {
+/**
+ * 这一刻"当前模型"是谁。hn:服务端只知道默认值时(没有会话 id / 新会话 transcript 还没落盘,
+ * `source === 'default'`),用客户端带来的 —— 下一轮真正发出去的就是它(复审:否则 /models 与 /cost
+ * 会把目录默认模型当成当前模型,别名的"→ 真实模型"箭头也跟着指错)。
+ */
+const resolveCommandModel = async (provider, catalog, sessionId, requestedModel) => {
+  const requested = typeof requestedModel === "string" && requestedModel.trim() ? requestedModel.trim() : null;
   if (!hasConcreteSessionId(sessionId)) {
-    return catalog.DEFAULT;
+    return requested || catalog.DEFAULT;
   }
 
   const currentActiveModel = await providerModelsService.getCurrentActiveModel(
     provider,
     sessionId,
   );
-  return currentActiveModel?.model || catalog.DEFAULT;
+  if (currentActiveModel?.source === "default" && requested) return requested;
+  return currentActiveModel?.model || requested || catalog.DEFAULT;
+};
+
+/**
+ * hq:模型表**按人**(「可用人员」/ 私有模型 / 有没有 key)。`context.viewer` 由 /execute 按登录身份注入,
+ * 请求体里带来的同名字段会被覆盖。没有 viewer(老调用方 / 测试)就是全量。
+ */
+const modelsFor = async (provider, context) => {
+  const result = await providerModelsService.getProviderModels(provider);
+  if (provider !== "claude" || !context?.viewer) return result;
+  return { ...result, models: modelsDefinitionFor(context.viewer) };
 };
 
 export const executeModelsCommand = async (args, context) => {
   const currentProvider = readModelProvider(context?.provider);
-  const result = await providerModelsService.getProviderModels(currentProvider);
+  const result = await modelsFor(currentProvider, context);
   const catalog = result.models;
   const currentModel = await resolveCommandModel(
     currentProvider,
     catalog,
     context?.sessionId,
+    context?.model,
   );
   const availableModels = catalog.OPTIONS.map((option) => option.value);
+  // hn(B4):选择器要按厂商分组、画图标、标窗口与推荐 —— 这几个字段一并带上(见 ProviderModelOption)。
   const availableOptions = catalog.OPTIONS.map((option) => ({
     value: option.value,
     label: option.label,
     description: option.description,
+    ...(option.effort ? { effort: option.effort } : {}),
+    group: option.group ?? 'alias',
+    vendor: option.vendor ?? null,
+    recommended: Boolean(option.recommended),
+    contextWindow: option.contextWindow ?? null,
+    ...(option.realModel ? { realModel: option.realModel } : {}),
+    // hq:网关 / 私有 / 能不能用
+    ...(option.gatewayId !== undefined ? { gatewayId: option.gatewayId } : {}),
+    ...(option.gatewayName ? { gatewayName: option.gatewayName } : {}),
+    ...(option.private ? { private: true } : {}),
+    ...(option.available === false ? { available: false, unavailableReason: option.unavailableReason, unavailableCode: option.unavailableCode } : {}),
   }));
 
   return {
@@ -282,8 +315,10 @@ Custom commands can be created in:
   "/cost": async (args, context) => {
     const tokenUsage = context?.tokenUsage || {};
     const provider = readModelProvider(context?.provider);
-    const catalog = (await providerModelsService.getProviderModels(provider)).models;
-    const model = await resolveCommandModel(provider, catalog, context?.sessionId);
+    const catalog = (await modelsFor(provider, context)).models;
+    const model = await resolveCommandModel(provider, catalog, context?.sessionId, context?.model);
+    // hn(Q12):真名与厂商 —— 非 Claude 模型的费用是 CLI 按 Claude 价估算的,前端据此加一句说明(别名先换真名)
+    const resolvedEntry = await claudeModelCatalog.resolveEntry(model, context?.viewer).catch(() => ({ realModel: null, entry: null }));
 
     const reportedUsed =
       Number(
@@ -387,6 +422,8 @@ Custom commands can be created in:
           : {}),
         provider,
         model,
+        realModel: resolvedEntry.realModel ?? null,
+        vendor: resolvedEntry.entry?.vendor ?? null,
       },
     };
   },
@@ -406,6 +443,8 @@ Custom commands can be created in:
     } catch (err) {
       log.error("Error reading package.json:", err);
     }
+    // v2.0.0:带上发布日期与提交号(包里的 RELEASE.json;从源码跑时只有版本号)
+    const release = readReleaseInfo(APP_ROOT).label;
 
     const uptime = process.uptime();
     const uptimeMinutes = Math.floor(uptime / 60);
@@ -416,8 +455,8 @@ Custom commands can be created in:
         : `${uptimeMinutes}m`;
 
     const statusProvider = readModelProvider(context?.provider);
-    const statusCatalog = (await providerModelsService.getProviderModels(statusProvider)).models;
-    const model = await resolveCommandModel(statusProvider, statusCatalog, context?.sessionId);
+    const statusCatalog = (await modelsFor(statusProvider, context)).models;
+    const model = await resolveCommandModel(statusProvider, statusCatalog, context?.sessionId, context?.model);
     const memoryUsage = process.memoryUsage();
 
     return {
@@ -425,6 +464,7 @@ Custom commands can be created in:
       action: "status",
       data: {
         version,
+        release,
         packageName,
         uptime: uptimeFormatted,
         uptimeSeconds: Math.floor(uptime),
@@ -563,7 +603,12 @@ router.post("/list", async (req, res) => {
  */
 router.post("/execute", async (req, res) => {
   try {
-    const { commandName, commandPath, args = [], context = {} } = req.body;
+    const { commandName, commandPath, args = [] } = req.body;
+    // hq:模型表按登录身份(见 modelsFor);请求体里的 viewer 一律不认
+    const context = {
+      ...(req.body?.context && typeof req.body.context === "object" ? req.body.context : {}),
+      viewer: modelViewerFor(req.user?.id ?? null, req.user?.username ?? null),
+    };
 
     if (!commandName) {
       return res.status(400).json({

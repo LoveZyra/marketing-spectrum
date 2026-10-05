@@ -188,6 +188,7 @@ export default tseslint.config(
             "server/shared/utils.{js,ts}",
             "server/shared/frontmatter.ts",
             "server/shared/claude-cli-path.ts",
+            "server/shared/claude-runtime-env.ts", // hm:Prism 起 claude 子进程的 env 与跨会话约定:SDK / 终端 / SkillWhet 共用,零依赖
             "server/shared/image-attachments.ts",
             "server/shared/crypto-box.js", // AES-256-GCM envelope helpers; storage hooks are injected, so it stays dependency-free
             "server/shared/ip-guard.js", // SSRF address checks used by document fetching

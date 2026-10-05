@@ -13,7 +13,7 @@ import {
   type TaskSessionMode,
 } from '@/modules/database/index.js';
 import { isRootUser } from '@/shared/root-users.js';
-import { assertViewerMayCreateSessionAt } from '@/modules/providers/index.js';
+import { assertViewerMayCreateSessionAt, claudeModelCatalog, modelViewerFor, type ModelViewer } from '@/modules/providers/index.js';
 import { computeNextRunAt, runTaskNow, serverTimeInfo, toDbUtc } from '@/modules/tasks/services/scheduled-tasks.service.js';
 
 /**
@@ -113,7 +113,8 @@ const readInt = (value: unknown): number | null => {
   return Number.isInteger(parsed) ? parsed : null;
 };
 
-function validateBody(body: TaskBody, partial: boolean): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
+/** hq:`viewer` = 任务的主人 —— 模型按他的「可用人员」与私有模型判。 */
+function validateBody(body: TaskBody, partial: boolean, viewer?: ModelViewer | null): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
   const out: Record<string, unknown> = {};
   const name = typeof body.name === 'string' ? body.name.trim() : undefined;
   const instructions = typeof body.instructions === 'string' ? body.instructions.trim() : undefined;
@@ -171,6 +172,13 @@ function validateBody(body: TaskBody, partial: boolean): { ok: true; value: Reco
     ?? rangeCheck('runAtDay', 'run_at_day', 1, 28, 'runAtDay(每月几号)');
   if (rangeError) return { ok: false, error: rangeError };
   if (body.model !== undefined) out.model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null;
+  /*
+   * hn(B2):模型要在目录里(上架的)或是别名组 —— POST / PATCH / via-ticket(Claude 在对话里建任务)
+   * 三处共用这里。已存着的下架模型不影响旧任务的读取;运行时由调度器按默认模型回落并写进运行记录。
+   */
+  if (typeof out.model === 'string' && !claudeModelCatalog.isAllowed(out.model, viewer)) {
+    return { ok: false, error: `模型「${out.model}」不在模型目录里(或已下架,或你不在它的可用人员里)` };
+  }
   if (body.permissionMode !== undefined) {
     const mode = typeof body.permissionMode === 'string' && body.permissionMode.trim()
       ? body.permissionMode.trim() : 'bypassPermissions';
@@ -332,7 +340,7 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
       body.fixedSessionId = entry.originSessionId;
     }
 
-    const parsed = validateBody(body, false);
+    const parsed = validateBody(body, false, modelViewerFor(entry.userId));
     if (!parsed.ok) return res.status(400).json({ error: parsed.error });
     // 票据的权限面等同签发人 —— 项目路径走和登录路由完全一样的两道门。
     // 这条通道是给会话里的 Claude 用的,更不能比人工建任务松。
@@ -391,7 +399,7 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
   router.post('/', async (req, res) => {
     const user = readUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    const parsed = validateBody((req.body ?? {}) as TaskBody, false);
+    const parsed = validateBody((req.body ?? {}) as TaskBody, false, modelViewerFor(user.id, user.username));
     if (!parsed.ok) return res.status(400).json({ error: parsed.error });
     const pathError = await checkProjectPath(parsed.value.project_path as string, user);
     if (pathError) return res.status(400).json({ error: pathError });
@@ -468,7 +476,8 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
     const user = readUser(req);
     const task = scheduledTasksDb.getById(req.params.id);
     if (!task || !canTouch(task, user)) return res.status(404).json({ error: 'Task not found' });
-    const parsed = validateBody((req.body ?? {}) as TaskBody, true);
+    // hq:模型按任务的**主人**判(root 改别人的任务时也一样 —— 跑的时候用的是主人的身份与 key)
+    const parsed = validateBody((req.body ?? {}) as TaskBody, true, modelViewerFor(task.owner_user_id ?? null));
     if (!parsed.ok) return res.status(400).json({ error: parsed.error });
     // 改 projectPath 等于把任务搬到另一个项目 —— 必须重新过一次同样的两道门,
     // 否则"先建在可见项目、再改到别处"就是一条绕过。

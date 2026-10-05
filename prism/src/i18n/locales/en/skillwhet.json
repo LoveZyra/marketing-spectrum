@@ -440,7 +440,7 @@
     "g1Fail": "G1 security gate is {{v}}; non-root cannot start training — fix it and re-check",
     "g1Unknown": "Not checked yet; run \"Re-check\" on the Assets page first",
     "overBudget": "Remaining daily budget ${{left}} is below this run's cost cap ${{cost}}",
-    "sameModel": "The eval model must differ from the proposal models (both fast and slow loop)",
+    "sameModel": "The evaluator must differ from the proposer models (both fast and slow; aliases are compared by the real model they map to)",
     "overHardCost": "Cost cap ${{v}} is above the hard ceiling ${{cap}}",
     "overCostCap": "Cost cap ${{v}} is above the per-run cap ${{cap}} set by the admin — lower it, or ask the admin to change PRISM_SKILLWHET_MAX_COST_USD in .env",
     "overMinutesCap": "Time cap {{v}} min is above the allowed {{cap}} min",
@@ -471,7 +471,8 @@
     "models": "Models · eval model must differ from the proposal model",
     "advanced": "Advanced (k {{k}} per defect · edit budget {{p2}} · refine {{r}}× · workers {{w}} · judge samples {{j}} · stop after {{n}} rounds without acceptance)",
     "notice": "Training really executes the bundle's code and tests/ on the server (sandbox: rlimits, plus network isolation where unshare is available); results only go to staging and never touch the skill library.",
-    "submit": "Start training"
+    "submit": "Start training",
+    "modelNotAllowed": "You cannot use these models: {{list}} (only models enabled in the model catalog, or on the .env allowlist)"
   },
   "overview": {
     "costChart": "Training cost per day, last 14 days",
@@ -589,5 +590,12 @@
     "rounds": "Rounds / stop",
     "stagingCount": "{{n}} in total",
     "noRunHint": "This skill has not been trained yet; evaluation numbers appear after the first run."
+  },
+  "models": {
+    "notInCatalog": "Not in the model catalog",
+    "searchOrType": "Search, or type a gateway model name",
+    "search": "Search models",
+    "useCustom": "Use “{{name}}”",
+    "defaultGatewayOnly": "SkillWhet can only use shared models on the default gateway"
   }
 }

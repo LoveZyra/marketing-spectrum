@@ -15,8 +15,16 @@ if (!process.env.UV_THREADPOOL_SIZE) {
   process.env.UV_THREADPOOL_SIZE = '16';
 }
 
+// hm(复审):`process.report.getReport()` 默认会对每个 TCP 句柄做反向 DNS(同步、卡事件循环)。
+// Prism 自己判 glibc / musl 要调它(claude-cli-path.ts),SDK 在没给可执行文件路径时也调;
+// 只要 header 里的 glibc 版本,不要网络段。
+if (process.report && 'excludeNetwork' in process.report) {
+  process.report.excludeNetwork = true;
+}
+
 import { parseDotEnv } from './utils/dotenv-parse.js';
 import { findAppRoot, getModuleDir, getDataDir, migrateLegacyDataDir } from './utils/runtime-paths.js';
+import { scrubInheritedSessionMarkers } from './shared/claude-runtime-env.js';
 
 const __dirname = getModuleDir(import.meta.url);
 // Resolve the repo/app root via the nearest /server folder so this file keeps finding the
@@ -37,6 +45,18 @@ try {
   // 部署方把档位设在 .env 里时这条永远按默认档位判定,行为反而不可预期。
   console.error('No .env file found or error reading it:', e.message);
 }
+
+/**
+ * hm(A3.4):**删掉从 claude 的 Bash 里继承来的会话标记。**
+ *
+ * agent 在对话里跑 `bash prism.sh restart` 时,Prism 就是在 CLI 的 shell 里起的 ——
+ * 带着 `CLAUDECODE` / `CLAUDE_CODE_CHILD_SESSION` / `CLAUDE_CODE_SESSION_ID` 等。
+ * 它起的每个 claude 都会继承,而 `CLAUDE_CODE_CHILD_SESSION` 让 CLI 不写 transcript
+ * (2.1.170 / 2.1.217 起)。在这里对 process.env 删一次,之后所有子进程(SDK、终端、
+ * SkillWhet、营销诊断、Jupyter)都从干净的 env 起。删了什么由 index.js 打一行 info
+ * (这里刻意不走 logger,理由同上面 .env 那段)。
+ */
+scrubInheritedSessionMarkers(process.env, { recordAsStartup: true });
 
 // Migrate the legacy ~/.cloudcli data folder to the new location BEFORE any
 // default path below is computed and before any module opens files inside the

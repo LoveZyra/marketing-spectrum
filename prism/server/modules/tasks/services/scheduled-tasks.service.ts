@@ -10,7 +10,7 @@ import {
   type ScheduledTaskRow,
   type TaskFrequency,
 } from '@/modules/database/index.js';
-import { assertViewerMayCreateSessionAt, seedDisplayLogFromTranscript } from '@/modules/providers/index.js';
+import { assertViewerMayCreateSessionAt, claudeModelCatalog, modelViewerFor, modelsDefinitionFor, providerModelsService, seedDisplayLogFromTranscript } from '@/modules/providers/index.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import { generateMessageId } from '@/shared/utils.js';
 import { createLogger } from '@/shared/logger.js';
@@ -40,6 +40,11 @@ const TICK_MS = 30_000;
  * 给正在看的浏览器补一个终止帧;后台那个悬死的回合交给它自己的看门狗收尸。
  * PRISM_TASK_RUN_TIMEOUT_MS 覆盖,0 关闭,默认 2 小时。
  */
+/** ho(ho-4):定时任务遇到要审批的工具调用 —— `deny`(默认,立刻拒)/ `wait`(等人在网页上批,最长 1 小时)。 */
+export function readTaskApprovalPolicy(env: NodeJS.ProcessEnv = process.env): 'deny' | 'wait' {
+  return String(env.PRISM_TASK_APPROVAL ?? '').trim().toLowerCase() === 'wait' ? 'wait' : 'deny';
+}
+
 const TASK_RUN_TIMEOUT_MS = (() => {
   const parsed = parseInt(process.env.PRISM_TASK_RUN_TIMEOUT_MS ?? '', 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 2 * 3600_000;
@@ -102,13 +107,15 @@ export type OneShotOutcome = {
 type QueryClaudeSDK = (message: string, options: Record<string, unknown>, writer: unknown) => Promise<OneShotOutcome | undefined | unknown>;
 
 /** 把 queryClaudeSDK 的返回值读成明确的三态:成功 / 失败(原因)/ 被中止。 */
-export function readOneShotOutcome(value: unknown): { ok: true } | { ok: false; aborted: boolean; error: string } {
+export function readOneShotOutcome(value: unknown): { ok: true } | { ok: false; aborted: boolean; rejected: boolean; error: string } {
   if (!value || typeof value !== 'object') return { ok: true };
-  const outcome = value as Partial<OneShotOutcome>;
+  const outcome = value as Partial<OneShotOutcome> & { rejected?: boolean };
   if (outcome.ok === true || (outcome.ok === undefined && outcome.exitCode !== 1)) return { ok: true };
   return {
     ok: false,
     aborted: Boolean(outcome.aborted),
+    // hq:闸口 / 网关拒绝(模型不许用、没有 key、网关停用)—— 重试也是同一个结果
+    rejected: Boolean(outcome.rejected),
     error: outcome.error || (outcome.aborted ? '回合被中止' : '回合失败'),
   };
 }
@@ -329,12 +336,52 @@ export async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 
   let sessionId: string | null = null;
   /** 跳过类失败(项目不在 / 被中止)不进入重试;真失败才重试。 */
   let retryable = true;
+  /**
+   * hn(B2):任务里存的模型已经不在目录里 / 下架了 → 这一次按默认模型跑,运行记录里写明。
+   * 不直接失败:定时任务是无人值守的,因为管理员下架了一个模型就让它连续失败、停手,代价不对。
+   */
+  // hq:按任务的主人判(「可用人员」/ 私有模型,别名也算);回落也在他看得见、有 key 的里面挑。
+  // 复审(二轮 P2-5):这几步要读库 —— 出错不能让任务卡在"运行中"(还在 claimRun 之后、try 之外),兜住按原模型跑
+  const ownerViewer = modelViewerFor(task.owner_user_id ?? null);
+  let modelFallbackNote: string | null = null;
+  /** 复审(四轮):连回落都用不了时的原因 —— 在 try 里按 TaskSkippedError 跳过(不重试)。 */
+  let unusableModelReason: string | null = null;
+  let effectiveModel: string | undefined = task.model || undefined;
+  try {
+    // 复审(三轮 P2-4):没写模型的任务跑 default 别名 —— 它映射到的模型也可能限了人,同样要判、同样回落
+    if (!(await claudeModelCatalog.isUsable(task.model || null, ownerViewer))) {
+      // "默认模型" = 新会话默认用的那个(目录 is_default → 推荐 → 别名 default),与对话里一致;
+      // hq(复审 P2-7):按主人挑,而且要挑他**有 key** 的(modelsDefinitionFor 的 DEFAULT 已经避开不可用的)
+      const fallback = modelsDefinitionFor(ownerViewer).DEFAULT;
+      // 复审(四轮 P3-4):回落到的仍是这个用不了的模型(主人一个目录模型都看不见、default 别名又限了人)
+      // —— 不写"按默认模型运行",直接跳过并说清楚(否则记录说按默认跑、实际被闸口拒)
+      if (fallback === (task.model || 'default') || !(await claudeModelCatalog.isUsable(fallback, ownerViewer))) {
+        unusableModelReason = `模型「${task.model || 'default'}」主人用不了(不在模型目录里、已下架,或不在它的可用人员里),也没有他能用的默认模型 —— 到任务里另选一个模型`;
+      } else {
+        // 先算出回落、再记说明 —— 算的时候出错就不记"按默认模型运行"(那样记录与实际不符)
+        effectiveModel = fallback;
+        modelFallbackNote = `模型「${task.model || 'default'}」已不在模型目录里(或已下架,或主人不在它的可用人员里),这一次按默认模型「${fallback}」运行`;
+      }
+    }
+  } catch (error) {
+    log.warn(`[Tasks] 「${task.name}」:查模型能不能用时出错,按任务里的模型跑(回合本身还会再判一次):`, error);
+  }
+  if (modelFallbackNote) log.warn(`[Tasks] 「${task.name}」:${modelFallbackNote}`);
 
   try {
     const unavailable = await explainProjectUnavailable(task);
     if (unavailable) throw new TaskSkippedError(unavailable);
+    if (unusableModelReason) throw new TaskSkippedError(unusableModelReason);
 
     sessionId = resolveTargetSessionId(task);
+    /*
+     * hn(复审 P2-3):固定会话上 /models 留下的覆盖**优先于**任务自己的模型(resolveResumeModel)。
+     * 那个模型被下架了 → 闸口拒绝,原来会每 5 分钟重试一次、一直失败。改为不重试的跳过,并说清楚去哪改。
+     */
+    const sessionOverride = await providerModelsService.getChangedActiveModel('claude', sessionId).catch(() => null);
+    if (sessionOverride?.changed && sessionOverride.model && !(await claudeModelCatalog.isUsable(sessionOverride.model, ownerViewer))) {
+      throw new TaskSkippedError(`这条会话在 /models 里切到的模型「${sessionOverride.model}」任务主人用不了(已下架,或不在它的可用人员里)—— 到会话里另选一个模型后再跑`);
+    }
     const session = sessionsDb.getSessionById(sessionId);
     const providerSessionId = session?.provider_session_id ?? null;
 
@@ -394,17 +441,24 @@ export async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 
       resume: Boolean(providerSessionId),
       newSessionId: providerSessionId ? undefined : sessionId,
       runId: sessionId,
-      model: task.model || undefined,
+      model: effectiveModel,
       permissionMode: task.permission_mode || 'bypassPermissions',
       // 任务是"以主人的身份"跑的,bypass 白名单要认的就是这个人。
       // 定时任务默认档位正好是 bypassPermissions,所以这条尤其要带上。
       actorUsername: task.owner_user_id != null
         ? usersDb.getUserById(task.owner_user_id)?.username ?? null
         : null,
+      // hq:网关 key、「可用人员」、私有模型都按任务的主人
+      actorUserId: task.owner_user_id ?? null,
       // fg:这笔账记在「定时任务」名下。无人值守跑出来的钱和人点出来的钱,
       // 在"这个月花哪了"里是完全不同的两件事 —— 前者能靠改调度频率降,
       // 后者只能靠改用法。混在一起就两个都看不出来。
       usageSource: 'task',
+      /**
+       * ho(ho-4):定时任务是无人值守的 —— 要问人的工具调用默认**立刻拒**(模型据此换路、运行记录里看得到),
+       * 不再挂到 1 小时审批上限。真要有人守着批:`PRISM_TASK_APPROVAL=wait` 回到原来的"等人批"。
+       */
+      unattended: readTaskApprovalPolicy() === 'deny',
       oneShot: true,
     }, run.writer);
     const settledRun = runPromise.then(
@@ -436,7 +490,8 @@ export async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 
        * 被用户按停止中止的那次也记 failed,但不重试(人正看着,重跑由他决定)。
        */
       if (!outcome.ok) {
-        if (outcome.aborted) throw new TaskSkippedError(outcome.error);
+        // hq(复审 P2-7):没有 key / 网关停用 / 模型不许用 —— 5 分钟后再跑也一样,不重试(运行记录里写着原因)
+        if (outcome.aborted || outcome.rejected) throw new TaskSkippedError(outcome.error);
         throw new Error(outcome.error);
       }
     } catch (error) {
@@ -496,9 +551,15 @@ export async function executeTask(task: ScheduledTaskRow, trigger: 'schedule' | 
   }
 
   const durationMs = Date.now() - startedAt;
+  if (modelFallbackNote) {
+    detail = detail ? `${modelFallbackNote};${detail}` : modelFallbackNote;
+  }
   if (sessionId) {
     const seconds = Math.round(durationMs / 1000);
-    appendReceipt(sessionId, status, task, status === 'completed' ? `耗时 ${seconds}s` : detail ?? undefined);
+    appendReceipt(
+      sessionId, status, task,
+      status === 'completed' ? `耗时 ${seconds}s${modelFallbackNote ? ` · ${modelFallbackNote}` : ''}` : detail ?? undefined,
+    );
   }
 
   /**

@@ -1,8 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import {
-  DELETION_AUDIT_EVENTS, type AuditTranslator, auditEventLabel, describeAuditDetail,
-  isDeletionAuditEvent, looksTruncatedJson, parseAuditDetail,
+  DELETION_AUDIT_EVENTS, MODEL_GATEWAY_AUDIT_EVENTS, type AuditTranslator, auditEventLabel, describeAuditDetail,
+  isDeletionAuditEvent, isModelGatewayAuditEvent, looksTruncatedJson, parseAuditDetail,
 } from './auditDetail';
 
 /**
@@ -122,5 +125,36 @@ describe('describeAuditDetail', () => {
       ));
       expect(text).toContain('audit.detail.projectHead(verb,name,count,names)');
     });
+  });
+});
+
+/**
+ * hq:模型网关与 key 的审计事件 —— 筛选分组里的字符串要与服务端 `AuditEvent` 对得上,
+ * 对不上的话筛出来是空、不会报错(见 AuditLogList 的 EVENT_GROUPS 注释)。
+ */
+describe('hq:网关与 key 的审计事件', () => {
+  const read = (relative: string) => readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
+
+  it('每个事件都在服务端的 AuditEvent 里', () => {
+    const server = read('../../../../../../server/modules/database/repositories/audit-log.ts');
+    for (const event of MODEL_GATEWAY_AUDIT_EVENTS) {
+      expect(server, `服务端没有 ${event}`).toContain(`'${event}'`);
+    }
+    expect(MODEL_GATEWAY_AUDIT_EVENTS).toHaveLength(17);
+  });
+
+  it('筛选的「模型」分组把它们都带上了', () => {
+    const list = read('./AuditLogList.tsx');
+    const group = list.slice(list.indexOf("key: 'models'"), list.indexOf("key: 'credentials'"));
+    expect(group).toContain('...MODEL_GATEWAY_AUDIT_EVENTS');
+  });
+
+  it('事件列有短标签(走 audit.event.<事件>),不认识的仍原样', () => {
+    expect(auditEventLabel('gateway_key_set')).toBe('填了自己的 key');
+    expect(auditEventLabel('gateway_key_set_by_root')).toBe('替成员填了 key');
+    expect(auditEventLabel('user_model_deleted', (key) => `[${key}]`)).toBe('[audit.event.user_model_deleted]');
+    expect(isModelGatewayAuditEvent('private_gateways_toggled')).toBe(true);
+    expect(isModelGatewayAuditEvent('login')).toBe(false);
+    expect(isDeletionAuditEvent('gateway_key_set')).toBe(false);
   });
 });

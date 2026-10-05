@@ -194,7 +194,8 @@ const ICON_BY_TOOL: Record<string, ActivityIconKey> = {
   Glob: 'glob', LS: 'glob',
   WebFetch: 'fetch',
   Task: 'agent', Agent: 'agent',
-  TodoWrite: 'todo',
+  // TaskList / TaskGet 只是读清单,不算「更新任务清单」(复审)
+  TodoWrite: 'todo', TaskCreate: 'todo', TaskUpdate: 'todo',
 };
 
 const VERB_BY_TOOL: Record<string, ActivityVerb> = {
@@ -206,8 +207,16 @@ const VERB_BY_TOOL: Record<string, ActivityVerb> = {
   Glob: 'glob', LS: 'glob',
   WebFetch: 'fetch',
   Task: 'agent', Agent: 'agent',
-  TodoWrite: 'todo',
+  // TaskList / TaskGet 只是读清单,不算「更新任务清单」(复审)
+  TodoWrite: 'todo', TaskCreate: 'todo', TaskUpdate: 'todo',
 };
+
+/**
+ * ho:SDK 0.3.x 管清单用的是 TaskCreate / TaskUpdate(没有 TodoWrite)。它们的 `description` 是**任务的说明**,
+ * 不是"这一步在干嘛"的人话 —— 当行标题会把任务正文搬进时间轴;TaskUpdate 没有可读字段时还会退回原始 JSON。
+ * 这里:TaskCreate 用任务标题(subject),其余几个不取 description,行上就是「更新任务清单」。
+ */
+const TASK_LIST_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']);
 
 /** `mcp__jira__create_issue` → `create_issue`;其余原样。 */
 export function shortToolName(toolName: string): string {
@@ -259,7 +268,9 @@ export function compactCommand(command: string): string {
 
 export function toolRowLabel(toolName: string, toolInput: unknown): ActivityLabel {
   const input = asRecord(toolInput);
-  const description = str(input.description).trim();
+  const description = TASK_LIST_TOOLS.has(toolName)
+    ? (toolName === 'TaskCreate' ? str(input.subject).trim() : '')
+    : str(input.description).trim();
   const verb = VERB_BY_TOOL[toolName] ?? 'generic';
   const rawTarget = toolTarget(toolName, toolInput);
   const target = verb === 'todo'

@@ -48,6 +48,8 @@ const OS_PROVIDED = new Set(['HOME', 'USERPROFILE', 'PATH', 'NODE_ENV', 'TMPDIR'
  */
 const DOCUMENTED_BUT_NOT_READ = new Map([
   // ['SOME_VAR', '为什么它写在文档里却读不到'],
+  // ho:Prism 不读它,原样透传给 CLI 子进程(buildClaudeSdkEnv 拷整个 process.env);读它的是 CLI 2.1.273+。
+  ['CLAUDE_CODE_GATEWAY_HINT_HEADERS', 'CLI 读;Prism 透传'],
 ]);
 
 const readEnvExample = () => fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8');

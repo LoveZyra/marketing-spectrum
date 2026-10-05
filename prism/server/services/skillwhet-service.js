@@ -22,6 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { parseUpstream } from '../routes/proxy-kit.js';
+import { withBundledClaudeOnPath } from '../shared/claude-cli-path.js';
 
 import { HEALTH_WAIT_MS, createChildSupervisor } from './child-supervisor.js';
 
@@ -144,7 +145,13 @@ export function createSkillWhetSupervisor(config, {
       // TMPDIR 指进工作根:serve 自己也会设,这里再给一遍是为了 python 启动阶段就生效。
       // 只给 serve(以及它拉起的训练子进程、claude CLI)用得着的环境:PATH / HOME / 语言 / 代理 /
       // Anthropic 与 Claude CLI 的配置 / Python 相关;Prism 自己的 DB 路径、JWT 密钥等不带过去(gz 审计 #15)
-      const childEnv = { ...pickChildEnv(env), SKILLWHET_TOKEN: config.token, TMPDIR: tmp, TEMP: tmp, TMP: tmp };
+      // hm(A2 / Q11):SDK 随包 claude 所在目录放 PATH 最前 —— SkillWhet 的 `claude -p` 与对话同一个版本
+      // (`CLAUDE_CLI_PATH` 显式配了就不动,见 withBundledClaudeOnPath);不让它自己去装新版本。
+      const childEnv = {
+        ...withBundledClaudeOnPath(pickChildEnv(env), { configuredPath: env.CLAUDE_CLI_PATH }),
+        DISABLE_AUTOUPDATER: '1',
+        SKILLWHET_TOKEN: config.token, TMPDIR: tmp, TEMP: tmp, TMP: tmp,
+      };
       const args = ['-m', 'skillwhet', 'serve', '--host', config.host, '--port', String(config.port), '--home', config.home];
       // cwd 不存在时 spawn 只报 'error' 不一定报 'exit',重启逻辑接不到 —— 先把工作根建出来。
       try { fs.mkdirSync(tmp, { recursive: true }); } catch (err) { warn(`建不了工作根 ${config.home}:${err?.message || err}`); }

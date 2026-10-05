@@ -2,9 +2,48 @@
 
 所有优化迭代按轮次记录在此,**新条目加在最上面**。
 
-约定:每轮产出全量快照包 `prism-YYYYMMDD<字母>.tar.gz`(直接部最新包即含此前全部);
-每轮过验证门槛(typecheck / eslint 0 错误 / vitest 全量 / 双端构建)后才发包;
-详细部署命令与验证步骤见项目文档 `claude/部署命令_*`。
+约定(**v2.0.0 起**):
+
+- **版本号只用「主.次.修」三个数字**,不再用两个字母的代号(aa … hq 是 v2.0.0 之前的历史)。
+  按**部署方要付出的代价**跳号 —— 主:要人工介入(换 Node / 换随包 CLI / 必须改 settings.json 或 .env /
+  不可回滚的迁移 / 删功能或改默认行为);次:可回滚的迁移、依赖变了要 `npm install`、新增可选配置、
+  用户看得见的新功能;修:只改代码。详见项目文档 `claude/规范_版本号_20261001.md`。
+- 唯一来源是 `package.json` 的 `version`;`node scripts/release.mjs pack` 从 HEAD 打包,生成
+  `prism-YYYYMMDD-v主.次.修.tar.gz`、`v主.次.修-manifest.txt` 和包里的 `RELEASE.json`(日期 / 提交号 / 指纹 / 组件),
+  并校验跳号(依赖 / schema / migrations 变了却只跳修订号 → 拒绝打包)。发布后打 git 标签 `v主.次.修`。
+- 每个包都是全量快照(直接部最新包即含此前全部);过验证门槛(typecheck / eslint 0 错误 / vitest 全量 /
+  双端构建)后才发包;详细部署命令与验证步骤见项目文档 `claude/部署命令_*`。
+- 标题格式:`## v主.次.修 · YYYY-MM-DD — 一句话`。
+
+---
+
+## v2.0.0 · 2026-10-05 — 新一代:SDK 0.3.285 + 模型目录与多模型 + 模型网关与个人 key + 进度时间轴
+
+**第一个按数字编号的版本**,内容 = 之前的 hm / hn / ho / hq 四包(它们只发过测试环境,没进过这份日志)+ 版本号改造。
+从生产 gu 升上来是一次「主」升级:**要 `npm install`**(SDK 0.3.285,随包 CLI 2.1.285,约 230MB 平台包)、
+**要改 `~/.claude/settings.json`**(合法 JSON + 四项)、**有迁移**(`model_catalog` / `model_turn_stats` /
+`model_gateways` / `gateway_user_keys` / `user_models`,`model_catalog` 加列,都是纯加;首启自动留 `-pre-migration` 备份)。
+部署见 `部署命令_生产环境_gu升级到v2.0.0_20261005.md`。
+
+### 版本号(这一版新加)
+- 版本号改成「主.次.修」;`RELEASE.json` 随包(不进 git);设置 → 关于、服务器状态、`/status`、`prism status`、
+  启动日志第一行、`GET /health` 都显示 `v2.0.0 · 日期 · 提交号`;`scripts/release.mjs`(`fingerprint` / `check` / `pack`)。
+- `package-lock.json` 根上的版本号每次发版都会变 → 「要不要装依赖」改看**依赖指纹**(lock 去掉根版本号后的 md5)。
+### SDK 与 CLI(原 hm)
+- `@anthropic-ai/claude-agent-sdk` 0.3.165 → 0.3.285(精确锁定),Prism 起的所有 claude 统一用随包 CLI 2.1.285;
+  跨会话工具禁用 + 拒收;任务清单工具;终端接管带权限档位;result 按 `user_message_uuid` 归属;settings.json 启动自检。
+### 模型目录与多模型(原 hn)
+- 新表 `model_catalog`(首启按 settings.json 播种);选择器带厂商图标、窗口、推荐;每模型上下文窗口;
+  切到小窗口模型超线拦截、`/compact` 用当前模型;定时任务 / SkillWhet 从目录选模型。
+### 用好 285(原 ho)
+- 停止真停;插话 send now(`'next'`,模型读到前可撤回);后台任务条(逐个停止,在跑不算闲);「转到后台」(子代理);
+  无人值守入口审批立刻拒(`PRISM_TASK_APPROVAL`,默认 `deny`);档位就地改;网关重试可见;失败原因人话 + 每模型健康度;
+  非 git 目录「撤销这一轮的文件改动」;子代理模型策略;模型 + 档位两级菜单。
+### 模型网关与个人 key、进度时间轴(原 hq)
+- 默认仍走 settings.json;root 可加共享网关(可选默认 key),成员填个人 key(root 可代填),只给本人的对话 / 定时任务 / API 用;
+  目录模型可限给指定成员;私有网关 / 私有模型(root 可一键关);key 加密入库、不进 CLI 命令行。
+- 后台任务在跑时需要重启 CLI 的那条消息改为拒绝并说明(`RUNTIME_REBUILD_BLOCKED`,原来会悄悄停掉后台任务)。
+- 进度栏改成时间轴:一次列全、定位当前步、较早的折叠、整块可收起;当前步按回合认。
 
 ---
 

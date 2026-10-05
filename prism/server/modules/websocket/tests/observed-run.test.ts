@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeConnection, initializeDatabase, sessionMessagesDb, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import {
-  noteMergedSend,
   observeOrphanFrames,
   observedRunStats,
   OBSERVED_IDLE_MS,
@@ -245,22 +244,31 @@ describe('观测回合', () => {
  * 「📬 这一轮由 Claude Code 自己发起」就是睁眼说瞎话,用户的气泡就在上面几行。
  */
 describe('合流之后的那一轮', () => {
+  // ho(hp-2):归属改由上游按 user_message_uuid 判,这里只收到 trigger: 'merged' —— 照常接住、原样落库,不记账
+  const observeMerged = (sessionId: string, messages: ReturnType<typeof textRow>[], turnEnded = false) =>
+    observeOrphanFrames({
+      appSessionId: sessionId,
+      providerSessionId: 'provider-sid',
+      userId: 1,
+      provider: 'claude',
+      messages,
+      trigger: 'merged',
+      turnEnded,
+    });
+
   it('合流之后的那一轮照常接住,内容原样落库', () => {
     sessionsDb.createAppSession('s-merged', 'claude', path.join(tempDirectory, 'proj'), 1);
-    noteMergedSend('s-merged');
-
-    observe('s-merged', [textRow('好的,配置也改完了')]);
-
+    observeMerged('s-merged', [textRow('好的,配置也改完了')]);
     const rows = logRows('s-merged');
     expect(rows).toHaveLength(1);
     expect(rows[0].kind).toBe('text');
   });
 
-  it('那一笔记账只用一次,不会挂到下一轮头上', () => {
+  it('合流那一轮之后的后台通知一轮照常接住', () => {
     sessionsDb.createAppSession('s-once', 'claude', path.join(tempDirectory, 'proj'), 1);
-    noteMergedSend('s-once');
-    observe('s-once', [textRow('第一轮:用户合流进来的')], true);
+    observeMerged('s-once', [textRow('第一轮:用户合流进来的')], true);
     observe('s-once', [textRow('第二轮:后台任务触发的')], true);
     expect(logRows('s-once').map((row) => row.kind)).toEqual(['text', 'text']);
   });
 });
+

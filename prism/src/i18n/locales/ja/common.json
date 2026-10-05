@@ -125,5 +125,11 @@
         }
       }
     }
+  },
+  "tasksPage": {
+    "form": {
+      "privateModel": "プライベート",
+      "modelUnavailable": "利用不可"
+    }
   }
 }

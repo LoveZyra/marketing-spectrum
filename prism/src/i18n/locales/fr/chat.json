@@ -148,11 +148,17 @@
     "download": "Télécharger ce fichier",
     "collapse": "Replier le panneau",
     "expand": "Déplier le panneau",
-    "doneFolded": "{{count}} terminées · afficher",
-    "doneUnfold": "Masquer {{count}} terminées",
     "historyTruncated": "Session longue — entrées antérieures non chargées.",
     "earlierFolded": "{{count}} plus anciens · afficher",
-    "earlierUnfold": "Masquer {{count}} plus anciens"
+    "earlierUnfold": "Masquer {{count}} plus anciens",
+    "progress": "Progression",
+    "outputsShort": "Résultats",
+    "stepOf": "Étape {{current}} sur {{total}}",
+    "earlierSteps": "{{count}} étapes précédentes",
+    "earlierSteps_one": "{{count}} étape précédente",
+    "earlierStepsHide": "Masquer les étapes précédentes",
+    "progressCollapse": "Replier la progression",
+    "progressExpand": "Déplier la progression"
   },
   "skills": {
     "invokedBadge": "Compétence"
@@ -162,5 +168,15 @@
     "completed": "Terminé",
     "error": "Erreur",
     "denied": "Refusé"
+  },
+  "modelMenu": {
+    "privateBadge": "Privé",
+    "fillKey": "Ajouter une clé",
+    "unavailable": "Indisponible"
+  },
+  "commandResult": {
+    "models": {
+      "privateModels": "Mes modèles privés"
+    }
   }
 }

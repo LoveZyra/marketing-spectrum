@@ -14,103 +14,10 @@ import {
   writeProviderSessionActiveModelChange,
 } from '@/shared/utils.js';
 
-export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
-  OPTIONS: [
-    {
-      value: 'default',
-      label: 'Default (recommended)',
-      description: 'Use the Claude Code default model (currently Sonnet 4.6)',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'max' },
-        ],
-      },
-    },
-    {
-      value: 'fable',
-      label: 'Fable',
-      description: 'Fable 5 · Most capable for your hardest and longest-running tasks · Uses your limits ~2× faster than Opus',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'xhigh' },
-          { value: 'max' },
-        ],
-      },
-    },
-    {
-      value: "sonnet",
-      label: "Sonnet",
-      description: "Sonnet 4.6 · Best for everyday tasks · $3/$15 per Mtok",
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'max' },
-        ],
-      },
-    },
-    {
-      value: 'sonnet[1m]',
-      label: 'Sonnet (1M context)',
-      description: 'Sonnet 4.6 for long sessions · $3/$15 per Mtok',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'max' },
-        ],
-      },
-    },
-    {
-      value: 'opus',
-      label: 'Opus',
-      description: 'Opus 4.8 · Best for everyday, complex tasks · ~2× usage vs Sonnet',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'xhigh' },
-          { value: 'max' },
-        ],
-      },
-    },
-    {
-      value: 'opus[1m]',
-      label: 'Opus 4.8 (1M context)',
-      description: 'Opus 4.8 with 1M context · Most capable for complex work · $5/$25 per Mtok',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'xhigh' },
-          { value: 'max' },
-        ],
-      },
-    },
-    {
-      value: 'haiku',
-      label: 'Haiku',
-      description: 'Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok',
-    },
-  ],
-  DEFAULT: 'default',
-};
+import { claudeModelCatalog } from './claude-model-catalog.service.js';
+
+// hn:别名表挪到 claude-model-aliases.ts(模型目录服务也要它,放这里会成环);这里照旧导出。
+export { CLAUDE_FALLBACK_MODELS } from './claude-model-aliases.js';
 
 type ClaudeInitEvent = {
   sessionId?: string;
@@ -254,19 +161,15 @@ const readClaudeSessionModelFromJsonl = async (
 };
 
 export class ClaudeProviderModels implements IProviderModels {
+  /**
+   * hn(B2):**全量** —— 上架的目录条目 + 别名组(`group: 'alias'`)。
+   *
+   * 不在这里按用户过滤:claude 在 `UNCACHED_PROVIDERS` 里,同一时刻的并发请求共用一个在途 promise
+   * (按 provider 去重),接口本身也不带用户。(v3 起目录本来就不按人分,见 claude-model-catalog.service。)
+   * CLI 的 `supportedModels()` 仍然不用:它只认 claude-*,而且每次会留一个幽灵会话。
+   */
   async getSupportedModels(): Promise<ProviderModelsDefinition> {
-    // claude creates a new jsonl file as a separate session for this request.
-    // As a result, it lists the workspace where this is invoked when it shouldn't.
-    //
-    // Disabled for now:
-    // const queryInstance = query({
-    //   prompt: 'Get supported models',
-    //   options: buildClaudeQueryOptions(),
-    // });
-    // const supportedModels = await queryInstance.supportedModels();
-    // queryInstance.close();
-    // return buildClaudeModelsDefinition(supportedModels);
-    return CLAUDE_FALLBACK_MODELS;
+    return claudeModelCatalog.buildModelsDefinition();
   }
 
   async getCurrentActiveModel(sessionId?: string): Promise<ProviderCurrentActiveModel> {
@@ -280,7 +183,7 @@ export class ClaudeProviderModels implements IProviderModels {
     try {
       const pending = await readProviderSessionActiveModelChange('claude', sessionId);
       if (pending.changed && pending.model?.trim()) {
-        return { model: pending.model.trim() };
+        return { model: pending.model.trim(), source: 'pending' };
       }
     } catch {
       // Fall through to reading the transcript below.
@@ -302,7 +205,7 @@ export class ClaudeProviderModels implements IProviderModels {
         ? await readClaudeSessionModelFromJsonl(transcriptSessionId, jsonlPath)
         : null;
       if (activeModel?.model) {
-        return activeModel;
+        return { ...activeModel, source: 'transcript' };
       }
     } catch {
       // Fall through to the provider default when the session-backed lookup fails.

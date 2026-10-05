@@ -57,7 +57,9 @@
       "serverLabel": "服务端已收下",
       "othersPreview": "(另一位成员排队的消息)",
       "imageOnly": "(仅图片)",
-      "serverHint": "本轮结束后自动发送 · 关掉页面也有效"
+      "serverHint": "本轮结束后自动发送 · 关掉页面也有效",
+      "sendNow": "立即发送",
+      "sendNowHint": "现在就插进这一轮:模型在下一步看到它,带着它接着做,不打断正在做的事"
     },
     "attachmentPath": "路径",
     "modelHint": "当前模型：{{model}} · 点击切换",
@@ -213,7 +215,8 @@
     "deny": "拒绝",
     "allowRemember": "允许并记住",
     "allowSaved": "已记住",
-    "allowOnce": "允许一次"
+    "allowOnce": "允许一次",
+    "backgroundTitle": "后台任务请求授权"
   },
   "activity": {
     "read": "读取 {{target}}",
@@ -284,6 +287,33 @@
     "editRerun": "编辑重跑",
     "editRerunTitle": "从这里分叉：编辑此消息并重新运行"
   },
+  "modelMenu": {
+    "title": "模型与档位",
+    "effortRow": "档位",
+    "moreModels": "更多模型",
+    "back": "返回",
+    "aliases": "模型别名",
+    "aliasHint": "别名",
+    "details": "模型详情与实测…",
+    "current": "当前",
+    "recommended": "推荐",
+    "maxWarning": "更慢、更费额度",
+    "effortHint": "档位越高回答越周全,但更慢、更费额度。",
+    "window": "{{window}} 窗口",
+    "failed": "切换模型失败",
+    "tooLargeShort": "当前上下文已超过它的压缩线",
+    "tooLarge": "当前上下文约 {{used}} tokens,已过它的压缩线 {{line}}:切过去后先发 /compact(用当前模型压,压完自动换过去)",
+    "effort": {
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "xhigh": "超高",
+      "max": "最高"
+    },
+    "privateBadge": "私有",
+    "fillKey": "去填 key",
+    "unavailable": "暂不可用"
+  },
   "commandResult": {
     "builtins": {
       "models": "浏览当前提供方的可用模型。",
@@ -326,12 +356,32 @@
       "subtitle": "为当前提供方挑选要使用的模型。",
       "searchPlaceholder": "搜索 {{provider}} 模型…",
       "current": "当前选择",
-      "appliesNext": "下一次回复起生效"
+      "appliesNext": "下一次回复起生效",
+      "otherVendor": "其他",
+      "switchedNext": "已切换 · 下一条消息将用 {{model}}",
+      "setDefault": "已设为默认模型:{{model}}",
+      "windowTitle": "上下文窗口 {{tokens}} tokens",
+      "effortLevels": "{{count}} 档",
+      "tooLarge": "当前上下文约 {{used}} tokens,已过它的压缩线 {{line}}:切过去后先发 /compact(会用当前模型压缩,压完自动换过去)",
+      "emptyCatalog": "模型目录还是空的 —— 管理员可在「设置 → 模型」里添加网关模型。下面的别名照常可用。",
+      "recommended": "推荐",
+      "more": "更多模型",
+      "allModels": "全部模型",
+      "probing": "实测中…",
+      "probeAliases": "实测别名",
+      "aliasGroup": "模型别名",
+      "aliasRouting": "别名路由 · 只读",
+      "aliasRoutingHint": "不作选项:主对话与子代理默认都用你选的模型。只有 Claude 派子代理时点名 sonnet / opus / haiku / fable、以及 CLI 内部的小活(如网页摘要)才按别名走 —— 映射在 设置 → 模型 里改;第一行是配到的真实模型",
+      "aliasHint": "别名由 settings.json 映射到真实模型;第一行是配到的真实模型",
+      "gatewayVia": "经由网关",
+      "noMatch": "没有匹配的模型。",
+      "privateModels": "我的私有模型"
     },
     "cost": {
       "eyebrow": "会话统计",
       "title": "Token 用量",
-      "subtitle": "本会话的输入、输出与总 token 数。"
+      "subtitle": "本会话的输入、输出与总 token 数。",
+      "estimateNote": "当前模型是 {{vendor}}:Claude Code 对非 Claude 模型按 Claude 的价格计算费用,上面的金额只是估算。"
     },
     "status": {
       "eyebrow": "运行状态",
@@ -391,13 +441,16 @@
     "download": "下载此文件",
     "collapse": "收起工作面板",
     "expand": "展开工作面板",
-    "doneFolded": "已完成 {{count}} 项 · 展开",
-    "doneUnfold": "收起已完成的 {{count}} 项",
     "historyTruncated": "会话较长,更早的记录未载入。",
     "earlierFolded": "更早的 {{count}} 个 · 展开",
     "earlierUnfold": "收起更早的 {{count}} 个",
     "progress": "进度",
-    "outputsShort": "产出"
+    "outputsShort": "产出",
+    "stepOf": "第 {{current}} 步 / 共 {{total}} 步",
+    "earlierSteps": "{{count}} 个更早的步骤",
+    "earlierStepsHide": "收起更早的步骤",
+    "progressCollapse": "收起进度",
+    "progressExpand": "展开进度"
   },
   "skills": {
     "invokedBadge": "技能"
@@ -549,5 +602,43 @@
       "retryBlockedByDraft": "输入框里有未发送的内容 —— 先发送或清空它,再点重试。",
       "sendFailed": "发送失败"
     }
+  },
+  "merged": {
+    "pending": "插话 · 模型读到前可撤回",
+    "withdraw": "撤回",
+    "withdrawn": "已撤回,模型没有执行",
+    "withdrawnOnStop": "已停止 —— 插话那条也一并撤回了,模型没有执行",
+    "withdrawnToast": "已撤回这条插话,模型没有执行",
+    "tooLate": "这条已经送到模型面前了,撤不回了"
+  },
+  "backgroundTasks": {
+    "title": "后台任务 {{count}} 个在跑",
+    "types": {
+      "shell": "命令",
+      "agent": "子代理",
+      "workflow": "工作流",
+      "task": "任务"
+    },
+    "stop": "停止",
+    "stopping": "停止中…",
+    "stopFailed": "停止失败:{{reason}}",
+    "toBackground": "转到后台",
+    "toBackgroundHint": "把正在跑的子代理转到后台,这一轮接着往下走(跑完会通知)",
+    "nothingToBackground": "现在没有可以转到后台的命令",
+    "backgroundFailed": "转到后台失败:{{reason}}"
+  },
+  "fileRewind": {
+    "intro": "这个目录不是 git 仓库,用 Claude 的文件检查点按轮撤销:能还原 Claude 用写入 / 编辑工具碰过的文件、删掉它新建的文件;只被命令行改过的文件不在内。先预览,再撤销。",
+    "preview": "预览",
+    "previewFirst": "先预览,看清会动哪些文件",
+    "rewind": "撤销到这一轮之前",
+    "nothing": "这一轮之后没有可还原的文件改动",
+    "summary": "会还原 {{count}} 个文件(+{{insertions}} / -{{deletions}} 行)",
+    "confirm": "把文件还原到这一轮开始之前?这一轮及之后 Claude 改过的文件都会回到当时的样子,新建的会被删掉。",
+    "done": "✅ 已还原到这一轮之前",
+    "notEnabled": "这段对话的进程没有开文件检查点(git 仓库,或在升级前就起了)—— 新开一轮对话后再试",
+    "busy": "这段对话正在跑,等这一轮结束再撤销",
+    "notResident": "没能拉起这段对话的进程,稍后再试",
+    "failed": "撤销失败"
   }
 }

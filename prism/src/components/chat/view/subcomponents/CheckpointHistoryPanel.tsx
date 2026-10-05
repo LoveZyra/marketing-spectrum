@@ -6,8 +6,10 @@ import { authenticatedFetch } from '../../../../utils/api';
 import { Shimmer } from '../../../../shared/view/ui';
 import { useModalKeyboard } from '../../../../shared/view/hooks/useModalKeyboard';
 import { uiLocale } from '../../../../utils/uiLocale';
+import type { FileRewindTurn } from '../../utils/fileRewind';
 
 import { RestoreForceDialog } from './ChangedFilesCard';
+import FileRewindList from './FileRewindList';
 import type { RestoreBlockerPayload } from './ChangedFilesCard';
 
 interface CheckpointMeta {
@@ -26,6 +28,8 @@ interface CheckpointHistoryPanelProps {
   isProcessing: boolean;
   onClose: () => void;
   onReverted?: () => void;
+  /** ho(hq-2):非 git 目录 —— 这段对话里推进过 CLI 的用户轮次(新的在前),按轮撤销文件改动。 */
+  fileTurns?: FileRewindTurn[];
 }
 
 /**
@@ -38,6 +42,7 @@ export default function CheckpointHistoryPanel({
   isProcessing,
   onClose,
   onReverted,
+  fileTurns = [],
 }: CheckpointHistoryPanelProps) {
   const { t } = useTranslation('chat');
   const [checkpoints, setCheckpoints] = useState<CheckpointMeta[]>([]);
@@ -163,9 +168,14 @@ export default function CheckpointHistoryPanel({
               <Shimmer>{t('checkpoint.loading', { defaultValue: '加载中…' })}</Shimmer>
             </div>
           ) : checkpoints.length === 0 ? (
-            <div className="px-2 py-10 text-center text-sm text-muted-foreground">
-              {t('checkpoint.empty', { defaultValue: '本会话还没有检查点。每一轮改动会自动存档到这里。' })}
-            </div>
+            /* ho(hq-2):没有 git 检查点(多半是非 git 目录)—— 改用 CLI 的文件检查点按轮撤销 */
+            fileTurns.length > 0 && sessionId ? (
+              <FileRewindList sessionId={sessionId} turns={fileTurns} isProcessing={isProcessing} onReverted={onReverted} />
+            ) : (
+              <div className="px-2 py-10 text-center text-sm text-muted-foreground">
+                {t('checkpoint.empty', { defaultValue: '本会话还没有检查点。每一轮改动会自动存档到这里。' })}
+              </div>
+            )
           ) : (
             <ol className="space-y-2">
               {checkpoints.map((checkpoint, index) => (
