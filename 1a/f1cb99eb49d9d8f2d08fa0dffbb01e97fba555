@@ -1,0 +1,450 @@
+prism/.env.example
+  h_ec7ab01d5ec1f9 159-166,173-175,206-210,557-579,678-680
+prism/.gitignore
+  h_ec7ab01d5ec1f9 174-180
+prism/CHANGELOG.md
+  h_ec7ab01d5ec1f9 5-46
+prism/NOTICE
+  h_ec7ab01d5ec1f9 14-42
+prism/eslint.config.js
+  h_ec7ab01d5ec1f9 191
+prism/package-lock.json
+  h_ec7ab01d5ec1f9 3,9,13,144-146,152-159,168-170,181-183,194-196,207-209,220-222,233-235,246-248,259-261
+prism/package.json
+  h_ec7ab01d5ec1f9 3,59
+prism/public/model-icons/claude-color.svg
+  h_ec7ab01d5ec1f9 1
+prism/public/model-icons/deepseek-color.svg
+  h_ec7ab01d5ec1f9 1
+prism/public/model-icons/doubao-color.svg
+  h_ec7ab01d5ec1f9 1
+prism/public/model-icons/gemini-color.svg
+  h_ec7ab01d5ec1f9 1
+prism/public/model-icons/grok.svg
+  h_ec7ab01d5ec1f9 1
+prism/public/model-icons/kimi.svg
+  h_ec7ab01d5ec1f9 1
+prism/public/model-icons/openai.svg
+  h_ec7ab01d5ec1f9 1
+prism/public/model-icons/qwen-color.svg
+  h_ec7ab01d5ec1f9 1
+prism/public/model-icons/zai.svg
+  h_ec7ab01d5ec1f9 1
+prism/scripts/release-lib.mjs
+  h_ec7ab01d5ec1f9 1-141
+prism/scripts/release.mjs
+  h_ec7ab01d5ec1f9 1-243
+prism/scripts/sdk-probe/fake-gateway.mjs
+  h_ec7ab01d5ec1f9 1-94
+prism/scripts/sdk-probe/run.mjs
+  h_ec7ab01d5ec1f9 1-230
+prism/server/claude-sdk.js
+  h_ec7ab01d5ec1f9 24-25,41-45,53,568-710,742-746,753-755,852-853,857-859,923-935,1007-1011,1014-1020,1028-1030,1032-1037,1361-1370,1378-1473,1479-1484,1497-1498,1531-1538,1540,1542-1544,1566-1571,1577-1579,1581-1582,1708-1711,1713,1731-1743,1805-1806,1810,1861-1864,1882-1883,1980,1982-1984,2033-2038,2050-2075,2077-2078,2081,2095-2290,2318-2322,2502,2505-2521,2662-2663,2794-2802,2806-2837,2964-3053,3259-3270,3354-3355,3459-3468,3530,3533-3536,3558-3580,3591-3595,3617-3625,3644-3647,3752-3767,3773-3779,3783-3784,3790,3797-3802,3804-3806,3817,3833,3876-3877,3899-3907,3925,3947-3951,3954-3957,3989-4009,4040,4161-4163,4165-4183,4185-4187,4315-4343,4347,4349-4355,4359-4369,4378-4380,4419,4458,4587-4599,4625-4638,4660-4664,4666-4670,4678-4767,4777-4778,4794-4805,4844-4882,4903-4917,4922-4966,4971-4987,4999,5002,5005-5008,5011,5017,5019-5033,5036,5042-5067,5070,5080-5082,5120-5124,5146-5150,5154,5203-5210,5214-5220,5223,5242-5244,5260-5261,5284-5287,5309-5310,5336-5338,5341-5342,5345-5349,5401-5402,5408-5416,5418-5419,5459-5460,5463-5464,5466,5591,5835-5838,5949-6079,6193-6202,6204,6210-6214,6247,6316-6318,6321-6324,6327-6336,6340,6356-6357,6362-6364,6366,6407-6409,6440-6448
+prism/server/cli.js
+  h_ec7ab01d5ec1f9 20,98-99,123,179
+prism/server/index.js
+  h_ec7ab01d5ec1f9 16-17,29-30,42-46,59-64,66,121-122,125-129,163-164,178-190,224-231,409,496-499,509-512,586-711,745,1189-1190,1260-1275
+prism/server/load-env.js
+  h_ec7ab01d5ec1f9 18-24,27,49-60
+prism/server/modules/admin/admin.routes.ts
+  h_ec7ab01d5ec1f9 24-25,170
+prism/server/modules/admin/services/server-status.service.ts
+  h_ec7ab01d5ec1f9 37-38,124,134
+prism/server/modules/database/index.ts
+  h_ec7ab01d5ec1f9 30-42
+prism/server/modules/database/migrations.ts
+  h_ec7ab01d5ec1f9 996-1014,1241-1251
+prism/server/modules/database/repositories/audit-log.ts
+  h_ec7ab01d5ec1f9 94-120,156-171
+prism/server/modules/database/repositories/model-catalog.db.ts
+  h_ec7ab01d5ec1f9 1-136
+prism/server/modules/database/repositories/model-gateways.db.ts
+  h_ec7ab01d5ec1f9 1-279
+prism/server/modules/database/repositories/model-turn-stats.db.ts
+  h_ec7ab01d5ec1f9 1-136
+prism/server/modules/database/repositories/session-messages.db.ts
+  h_ec7ab01d5ec1f9 584-602
+prism/server/modules/database/schema.ts
+  h_ec7ab01d5ec1f9 499-621,681-690,760-772
+prism/server/modules/database/tests/model-gateways-migration.test.ts
+  h_ec7ab01d5ec1f9 1-134
+prism/server/modules/providers/claude-gateways.routes.ts
+  h_ec7ab01d5ec1f9 1-478
+prism/server/modules/providers/index.ts
+  h_ec7ab01d5ec1f9 24-42
+prism/server/modules/providers/list/claude/claude-auth.provider.ts
+  h_ec7ab01d5ec1f9 7,28-33
+prism/server/modules/providers/list/claude/claude-flag-settings-file.ts
+  h_ec7ab01d5ec1f9 1-82
+prism/server/modules/providers/list/claude/claude-gateways.service.ts
+  h_ec7ab01d5ec1f9 1-822
+prism/server/modules/providers/list/claude/claude-model-aliases.ts
+  h_ec7ab01d5ec1f9 1-106
+prism/server/modules/providers/list/claude/claude-model-catalog-probe.service.ts
+  h_ec7ab01d5ec1f9 1-205
+prism/server/modules/providers/list/claude/claude-model-catalog.service.ts
+  h_ec7ab01d5ec1f9 1-809
+prism/server/modules/providers/list/claude/claude-model-config.service.ts
+  h_ec7ab01d5ec1f9 19-20,22,110-116
+prism/server/modules/providers/list/claude/claude-model-probe.service.ts
+  h_ec7ab01d5ec1f9 7-8,182-185,261
+prism/server/modules/providers/list/claude/claude-models.provider.ts
+  h_ec7ab01d5ec1f9 17-20,164-170,172,186,208
+prism/server/modules/providers/list/claude/claude-settings-selfcheck.ts
+  h_ec7ab01d5ec1f9 1-183
+prism/server/modules/providers/provider.routes.ts
+  h_ec7ab01d5ec1f9 9-25,54,69-71,73,75,79-84,86-87,459-464,478-492,556-753,763-764,772,781-786,796,817,828-830,1427,1431
+prism/server/modules/providers/services/sessions.service.ts
+  h_ec7ab01d5ec1f9 136-141,178-179,252-253,336,352,369,383,385,1049-1055
+prism/server/modules/providers/tests/claude-gateways-routes.test.ts
+  h_ec7ab01d5ec1f9 1-482
+prism/server/modules/providers/tests/work-frames-cap.test.ts
+  h_ec7ab01d5ec1f9 74,76-78
+prism/server/modules/providers/tests/work-frames.test.ts
+  h_ec7ab01d5ec1f9 126-142
+prism/server/modules/skillwhet/services/budget.ts
+  h_ec7ab01d5ec1f9 31-32,36
+prism/server/modules/skillwhet/services/model-policy.ts
+  h_ec7ab01d5ec1f9 1-86
+prism/server/modules/skillwhet/services/nightly-scheduler.service.ts
+  h_ec7ab01d5ec1f9 6,201,203,236-245
+prism/server/modules/skillwhet/skillwhet.routes.ts
+  h_ec7ab01d5ec1f9 16,407-419,422-427,504-505,660-663,674-677,1041-1047
+prism/server/modules/skillwhet/tests/nightly-scheduler.test.ts
+  h_ec7ab01d5ec1f9 9,137-168
+prism/server/modules/system/system.routes.ts
+  h_ec7ab01d5ec1f9 15-16,36,45-48
+prism/server/modules/system/usage.routes.ts
+  h_ec7ab01d5ec1f9 8,13-14,349-362,364-365,374-377
+prism/server/modules/tasks/services/scheduled-tasks.service.ts
+  h_ec7ab01d5ec1f9 13,43-47,110,112,117-118,339-369,374,377-384,444,451-452,457-461,493-494,554-556,559-562
+prism/server/modules/tasks/tasks.routes.ts
+  h_ec7ab01d5ec1f9 16,116-117,175-181,343,402,479-480
+prism/server/modules/websocket/index.ts
+  h_ec7ab01d5ec1f9 4,7-8
+prism/server/modules/websocket/services/chat-websocket.service.ts
+  h_ec7ab01d5ec1f9 1,8,207-211,307-308,316-364,369-373,385-386,394,630-677,992-1008,1183,1206,1209,1211-1214,1226-1228,1230-1232,1234,1330-1334,1344,1372-1373,1416-1417,1783-1786,1870,1879-1913,2074
+prism/server/modules/websocket/services/observed-run.service.ts
+  h_ec7ab01d5ec1f9 75-80,247,267-273,279-283
+prism/server/modules/websocket/services/shell-websocket.service.ts
+  h_ec7ab01d5ec1f9 14,36-37,82-90,195-207,209-210,214,217-224,228-230,591-593,607-625,633-643,651-654
+prism/server/modules/websocket/tests/chat-send-dedupe.test.ts
+  h_ec7ab01d5ec1f9 160-161
+prism/server/modules/websocket/tests/observed-run.test.ts
+  h_ec7ab01d5ec1f9 247-258,261,267,269,274
+prism/server/routes/agent.js
+  h_ec7ab01d5ec1f9 15,1065-1067,1327-1336,1598,1600-1601,1738,1740-1741
+prism/server/routes/checkpoints.js
+  h_ec7ab01d5ec1f9 92
+prism/server/routes/commands.js
+  h_ec7ab01d5ec1f9 8-9,16,47-53,55,62-73,78,84,87,92-102,318-321,425-426,446-447,458-459,467,606-611
+prism/server/services/skillwhet-service.js
+  h_ec7ab01d5ec1f9 25,148-154
+prism/server/shared/claude-cli-path.ts
+  h_ec7ab01d5ec1f9 3,6-8,144-364
+prism/server/shared/claude-runtime-env.ts
+  h_ec7ab01d5ec1f9 1-120
+prism/server/shared/release-info.ts
+  h_ec7ab01d5ec1f9 1-31
+prism/server/shared/tests/claude-cli-path.test.ts
+  h_ec7ab01d5ec1f9 2-4,9-12,14-17,74-153
+prism/server/shared/types.ts
+  h_ec7ab01d5ec1f9 105-129,177-182,319-324
+prism/server/shared/utils.ts
+  h_ec7ab01d5ec1f9 522
+prism/server/tests/compaction-owned-by-cli.test.js
+  h_ec7ab01d5ec1f9 66-68
+prism/server/tests/env-example-reconciliation.test.js
+  h_ec7ab01d5ec1f9 51-52
+prism/server/tests/gh-sdk-fixes.test.js
+  h_ec7ab01d5ec1f9 75-76,87-88,117-118
+prism/server/tests/hl-compaction-lifecycle.test.js
+  h_ec7ab01d5ec1f9 2,48-65
+prism/server/tests/hl-oneshot-outcome.test.js
+  h_ec7ab01d5ec1f9 2,6,24-40
+prism/server/tests/hl-ops.test.ts
+  h_ec7ab01d5ec1f9 860,866-867
+prism/server/tests/hl-tasks.test.ts
+  h_ec7ab01d5ec1f9 121-133,143,159,161-164,228-229
+prism/server/tests/hm-sdk-upgrade.test.js
+  h_ec7ab01d5ec1f9 1-335
+prism/server/tests/hn-model-catalog.test.ts
+  h_ec7ab01d5ec1f9 1-332
+prism/server/tests/ho-285-capabilities.test.ts
+  h_ec7ab01d5ec1f9 1-394
+prism/server/tests/hq-gateway-keys.test.ts
+  h_ec7ab01d5ec1f9 1-755
+prism/server/tests/hq-gateway-sdk.test.ts
+  h_ec7ab01d5ec1f9 1-630
+prism/server/tests/hq-model-visibility.test.ts
+  h_ec7ab01d5ec1f9 1-475
+prism/server/tests/merge-user-message.test.js
+  h_ec7ab01d5ec1f9 128-131,160-162
+prism/server/tests/orphan-turn-wiring.test.js
+  h_ec7ab01d5ec1f9 26-27
+prism/server/tests/release-version.test.js
+  h_ec7ab01d5ec1f9 1-182
+prism/server/tests/settings-shape.test.js
+  h_ec7ab01d5ec1f9 81,86,96-110
+prism/server/tests/tool-policy.test.js
+  h_ec7ab01d5ec1f9 66,72
+prism/shared/modelVendors.ts
+  h_ec7ab01d5ec1f9 1-114
+prism/shared/releaseInfo.ts
+  h_ec7ab01d5ec1f9 1-56
+prism/src/components/chat/hooks/useChatComposerState.ts
+  h_ec7ab01d5ec1f9 55,266-270,299-302,307-308,534-536,1666-1673,1682-1683,2032-2047,2105-2107,2116,2240,2954
+prism/src/components/chat/hooks/useChatMessages.ts
+  h_ec7ab01d5ec1f9 385-389
+prism/src/components/chat/hooks/useChatProviderState.ts
+  h_ec7ab01d5ec1f9 18,183,185-187,290-296,349-353,358,416-420,422-423,438-442,602,604-605
+prism/src/components/chat/hooks/useChatRealtimeHandlers.ts
+  h_ec7ab01d5ec1f9 7,146-150,194-195,365-372,436-466,662-664,707-708,715-716,745-756,818-819
+prism/src/components/chat/hooks/useChatSessionState.ts
+  h_ec7ab01d5ec1f9 134-137
+prism/src/components/chat/hooks/useSessionWorkFrames.ts
+  h_ec7ab01d5ec1f9 4,78,85-86
+prism/src/components/chat/types/types.ts
+  h_ec7ab01d5ec1f9 2,82-88,162-165,210-211
+prism/src/components/chat/utils/fileRewind.test.ts
+  h_ec7ab01d5ec1f9 1-23
+prism/src/components/chat/utils/fileRewind.ts
+  h_ec7ab01d5ec1f9 1-20
+prism/src/components/chat/utils/modelAvailability.test.ts
+  h_ec7ab01d5ec1f9 1-73
+prism/src/components/chat/utils/modelAvailability.ts
+  h_ec7ab01d5ec1f9 1-58
+prism/src/components/chat/utils/modelEffortMenu.test.ts
+  h_ec7ab01d5ec1f9 1-118
+prism/src/components/chat/utils/modelEffortMenu.ts
+  h_ec7ab01d5ec1f9 1-102
+prism/src/components/chat/utils/progressTimeline.test.ts
+  h_ec7ab01d5ec1f9 1-429
+prism/src/components/chat/utils/progressTimeline.ts
+  h_ec7ab01d5ec1f9 1-223
+prism/src/components/chat/utils/taskChecklist.test.ts
+  h_ec7ab01d5ec1f9 185-207
+prism/src/components/chat/utils/taskChecklist.ts
+  h_ec7ab01d5ec1f9 19-23,108-110,118,121,137,140,161-170,172-175,177-183,186-197,203,213,220,222-223
+prism/src/components/chat/utils/toolRowSummary.test.ts
+  h_ec7ab01d5ec1f9 204-220
+prism/src/components/chat/utils/toolRowSummary.ts
+  h_ec7ab01d5ec1f9 197-198,210-211,214-220,271-273
+prism/src/components/chat/utils/turnBoundary.ts
+  h_ec7ab01d5ec1f9 23-28
+prism/src/components/chat/utils/turnOutputBoundary.test.ts
+  h_ec7ab01d5ec1f9 75-82
+prism/src/components/chat/utils/workFrames.ts
+  h_ec7ab01d5ec1f9 18-32,82-83
+prism/src/components/chat/view/ChatInterface.tsx
+  h_ec7ab01d5ec1f9 7-9,11,18,32,49-51,273,486-591,610-612,733-747,756-780,825-826,870-872,881-882,890-894,902,949,1059,1075,1105,1107,1111
+prism/src/components/chat/view/subcomponents/BackgroundTasksBar.tsx
+  h_ec7ab01d5ec1f9 1-87
+prism/src/components/chat/view/subcomponents/ChatComposer.tsx
+  h_ec7ab01d5ec1f9 14,22-23,33-34,40,43,78-80,89,91-101,113-116,119-120,190-191,199-203,210-212,215,264-295,311-316,564-567,574-575,848,931,933-935,937-971,973-1006,1009-1013,1021-1040,1119-1131
+prism/src/components/chat/view/subcomponents/ChatWorkPanel.tsx
+  h_ec7ab01d5ec1f9 1-2,10-17,26-27,51-59,61-62,77,94-103,105-107,120-124,127-212,222-227,312-339,342-343,349,355-366,369-376,378-383,385-428,430
+prism/src/components/chat/view/subcomponents/CheckpointHistoryPanel.tsx
+  h_ec7ab01d5ec1f9 9,12,31-32,45,171-178
+prism/src/components/chat/view/subcomponents/CommandResultModal.tsx
+  h_ec7ab01d5ec1f9 1,29-31,47-48,58-59,251-253,331-337,360,402,404,487,494,496
+prism/src/components/chat/view/subcomponents/FileRewindList.tsx
+  h_ec7ab01d5ec1f9 1-163
+prism/src/components/chat/view/subcomponents/MessageComponent.tsx
+  h_ec7ab01d5ec1f9 2,19,118-121,232,235-252
+prism/src/components/chat/view/subcomponents/ModelEffortMenu.tsx
+  h_ec7ab01d5ec1f9 1-560
+prism/src/components/chat/view/subcomponents/ModelPickerContent.tsx
+  h_ec7ab01d5ec1f9 1-670
+prism/src/components/chat/view/subcomponents/PermissionRequestsBanner.tsx
+  h_ec7ab01d5ec1f9 81-83,114-128
+prism/src/components/chat/view/subcomponents/QueuedMessageCard.tsx
+  h_ec7ab01d5ec1f9 2,10-14,20,44-55
+prism/src/components/llm-logo-provider/ModelVendorIcon.tsx
+  h_ec7ab01d5ec1f9 1-60
+prism/src/components/llm-logo-provider/modelCatalogWiring.test.ts
+  h_ec7ab01d5ec1f9 1-122
+prism/src/components/settings/constants/constants.ts
+  h_ec7ab01d5ec1f9 2,38-40
+prism/src/components/settings/constants/settings-tabs.test.ts
+  h_ec7ab01d5ec1f9 43-50
+prism/src/components/settings/types/types.ts
+  h_ec7ab01d5ec1f9 6
+prism/src/components/settings/view/Settings.tsx
+  h_ec7ab01d5ec1f9 16,142
+prism/src/components/settings/view/tabs/AboutTab.tsx
+  h_ec7ab01d5ec1f9 1,17,22,24-29
+prism/src/components/settings/view/tabs/ModelGatewaysSettingsTab.tsx
+  h_ec7ab01d5ec1f9 1-105
+prism/src/components/settings/view/tabs/ModelMappingSettingsTab.tsx
+  h_ec7ab01d5ec1f9 7-10,35-42,127-136,141,263
+prism/src/components/settings/view/tabs/ServerStatusTab.tsx
+  h_ec7ab01d5ec1f9 15-16,163
+prism/src/components/settings/view/tabs/accounts-settings/AuditLogList.tsx
+  h_ec7ab01d5ec1f9 9-10,71-78,293
+prism/src/components/settings/view/tabs/accounts-settings/auditDetail.test.ts
+  h_ec7ab01d5ec1f9 1-3,7-8,130-160
+prism/src/components/settings/view/tabs/accounts-settings/auditDetail.ts
+  h_ec7ab01d5ec1f9 128-177,180-182
+prism/src/components/settings/view/tabs/model-catalog/ModelCatalogEditor.tsx
+  h_ec7ab01d5ec1f9 1-411
+prism/src/components/settings/view/tabs/model-catalog/ModelCatalogSection.tsx
+  h_ec7ab01d5ec1f9 1-372
+prism/src/components/settings/view/tabs/model-catalog/ModelStatsLine.tsx
+  h_ec7ab01d5ec1f9 1-63
+prism/src/components/settings/view/tabs/model-catalog/SubagentModelCard.tsx
+  h_ec7ab01d5ec1f9 1-252
+prism/src/components/settings/view/tabs/model-catalog/catalogHints.test.ts
+  h_ec7ab01d5ec1f9 1-187
+prism/src/components/settings/view/tabs/model-catalog/catalogHints.ts
+  h_ec7ab01d5ec1f9 1-105
+prism/src/components/settings/view/tabs/model-catalog/modelCatalogApi.ts
+  h_ec7ab01d5ec1f9 1-155
+prism/src/components/settings/view/tabs/model-gateways/GatewayForm.tsx
+  h_ec7ab01d5ec1f9 1-217
+prism/src/components/settings/view/tabs/model-gateways/GatewayTestResultLine.tsx
+  h_ec7ab01d5ec1f9 1-33
+prism/src/components/settings/view/tabs/model-gateways/GatewaysAdminSection.tsx
+  h_ec7ab01d5ec1f9 1-288
+prism/src/components/settings/view/tabs/model-gateways/KeyEntryForm.tsx
+  h_ec7ab01d5ec1f9 1-113
+prism/src/components/settings/view/tabs/model-gateways/MemberKeysPanel.tsx
+  h_ec7ab01d5ec1f9 1-188
+prism/src/components/settings/view/tabs/model-gateways/MyGatewayKeyCard.tsx
+  h_ec7ab01d5ec1f9 1-184
+prism/src/components/settings/view/tabs/model-gateways/MyPrivateGatewaysSection.tsx
+  h_ec7ab01d5ec1f9 1-299
+prism/src/components/settings/view/tabs/model-gateways/MyPrivateModelsSection.tsx
+  h_ec7ab01d5ec1f9 1-243
+prism/src/components/settings/view/tabs/model-gateways/SecretKeyInput.tsx
+  h_ec7ab01d5ec1f9 1-63
+prism/src/components/settings/view/tabs/model-gateways/SharedGatewayRow.tsx
+  h_ec7ab01d5ec1f9 1-218
+prism/src/components/settings/view/tabs/model-gateways/gatewayLogic.test.ts
+  h_ec7ab01d5ec1f9 1-225
+prism/src/components/settings/view/tabs/model-gateways/gatewayLogic.ts
+  h_ec7ab01d5ec1f9 1-281
+prism/src/components/settings/view/tabs/model-gateways/gatewaysApi.ts
+  h_ec7ab01d5ec1f9 1-276
+prism/src/components/settings/view/tabs/model-gateways/gatewaysRender.test.tsx
+  h_ec7ab01d5ec1f9 1-163
+prism/src/components/shell/hooks/useShellConnection.ts
+  h_ec7ab01d5ec1f9 8,209-212
+prism/src/components/shell/types/types.ts
+  h_ec7ab01d5ec1f9 23-28
+prism/src/components/shell/utils/permissionMode.test.ts
+  h_ec7ab01d5ec1f9 1-29
+prism/src/components/shell/utils/permissionMode.ts
+  h_ec7ab01d5ec1f9 1-18
+prism/src/components/skillwhet/lib/modelRows.test.ts
+  h_ec7ab01d5ec1f9 1-58
+prism/src/components/skillwhet/lib/modelRows.ts
+  h_ec7ab01d5ec1f9 1-39
+prism/src/components/skillwhet/lib/types.ts
+  h_ec7ab01d5ec1f9 218-219
+prism/src/components/skillwhet/view/NightlyControl.tsx
+  h_ec7ab01d5ec1f9 7,11,143-144,168-183
+prism/src/components/skillwhet/view/RunNew.tsx
+  h_ec7ab01d5ec1f9 7,10,27-28,55-56,114-121,132-133,249-262
+prism/src/components/skillwhet/view/SkillWhetModelSelect.tsx
+  h_ec7ab01d5ec1f9 1-73
+prism/src/components/tasks/TasksPage.tsx
+  h_ec7ab01d5ec1f9 153,159-160,181,458,877,884-890,904,1038
+prism/src/contexts/MergedMessagesContext.ts
+  h_ec7ab01d5ec1f9 1-24
+prism/src/hooks/splitSelectableModels.test.ts
+  h_ec7ab01d5ec1f9 1-65
+prism/src/hooks/useTaskLikeOptions.ts
+  h_ec7ab01d5ec1f9 1,4,6,8,108-202,210-212,214-224,240-245,248-271,273-274,282-283,295,298
+prism/src/i18n/locales/de/chat.json
+  h_ec7ab01d5ec1f9 153-161,171-180
+prism/src/i18n/locales/de/common.json
+  h_ec7ab01d5ec1f9 99-104
+prism/src/i18n/locales/de/settings.json
+  h_ec7ab01d5ec1f9 41-42,273-467
+prism/src/i18n/locales/en/chat.json
+  h_ec7ab01d5ec1f9 60-62,218-219,290-316,359-378,383-384,448-454,606-643
+prism/src/i18n/locales/en/common.json
+  h_ec7ab01d5ec1f9 435-437,454-455
+prism/src/i18n/locales/en/settings.json
+  h_ec7ab01d5ec1f9 85-87,390-391,405-422,455,466-560,675-849
+prism/src/i18n/locales/en/skillwhet.json
+  h_ec7ab01d5ec1f9 443,474-475,593-599
+prism/src/i18n/locales/fr/chat.json
+  h_ec7ab01d5ec1f9 153-161,171-180
+prism/src/i18n/locales/fr/common.json
+  h_ec7ab01d5ec1f9 128-133
+prism/src/i18n/locales/fr/settings.json
+  h_ec7ab01d5ec1f9 41-42,273-467
+prism/src/i18n/locales/it/chat.json
+  h_ec7ab01d5ec1f9 153-161,171-180
+prism/src/i18n/locales/it/common.json
+  h_ec7ab01d5ec1f9 128-133
+prism/src/i18n/locales/it/settings.json
+  h_ec7ab01d5ec1f9 41-42,273-467
+prism/src/i18n/locales/ja/chat.json
+  h_ec7ab01d5ec1f9 146-153,163-172
+prism/src/i18n/locales/ja/common.json
+  h_ec7ab01d5ec1f9 128-133
+prism/src/i18n/locales/ja/settings.json
+  h_ec7ab01d5ec1f9 41-42,273-467
+prism/src/i18n/locales/ko/chat.json
+  h_ec7ab01d5ec1f9 153-160,170-179
+prism/src/i18n/locales/ko/common.json
+  h_ec7ab01d5ec1f9 128-133
+prism/src/i18n/locales/ko/settings.json
+  h_ec7ab01d5ec1f9 41-42,273-467
+prism/src/i18n/locales/ru/chat.json
+  h_ec7ab01d5ec1f9 153-162,172-181
+prism/src/i18n/locales/ru/common.json
+  h_ec7ab01d5ec1f9 99-104
+prism/src/i18n/locales/ru/settings.json
+  h_ec7ab01d5ec1f9 41-42,273-467
+prism/src/i18n/locales/tr/chat.json
+  h_ec7ab01d5ec1f9 153-160,170-179
+prism/src/i18n/locales/tr/common.json
+  h_ec7ab01d5ec1f9 128-133
+prism/src/i18n/locales/tr/settings.json
+  h_ec7ab01d5ec1f9 42-43,274-468
+prism/src/i18n/locales/zh-CN/chat.json
+  h_ec7ab01d5ec1f9 60-62,218-219,290-316,359-378,383-384,448-453,605-642
+prism/src/i18n/locales/zh-CN/common.json
+  h_ec7ab01d5ec1f9 435-437,454-455
+prism/src/i18n/locales/zh-CN/settings.json
+  h_ec7ab01d5ec1f9 85-87,390-391,405-422,455,466-560,675-849
+prism/src/i18n/locales/zh-CN/skillwhet.json
+  h_ec7ab01d5ec1f9 443,474-475,593-599
+prism/src/i18n/locales/zh-TW/chat.json
+  h_ec7ab01d5ec1f9 259-264,316-325
+prism/src/i18n/locales/zh-TW/common.json
+  h_ec7ab01d5ec1f9 157-162
+prism/src/i18n/locales/zh-TW/settings.json
+  h_ec7ab01d5ec1f9 72-73,348-367,401-574
+prism/src/i18n/locales/zh-TW/skillwhet.json
+  h_ec7ab01d5ec1f9 564-566
+prism/src/shared/view/ui/FancySelect.tsx
+  h_ec7ab01d5ec1f9 20-28,32,45-50,62,64-65,117,120-123,156-165,172-176,178,180-186
+prism/src/stores/useSessionStore.ts
+  h_ec7ab01d5ec1f9 79-88,992-1029,1230-1231,1234
+prism/src/types/app.ts
+  h_ec7ab01d5ec1f9 23-47
+prism/src/utils/releaseInfo.test.ts
+  h_ec7ab01d5ec1f9 1-20
+prism/src/utils/releaseInfo.ts
+  h_ec7ab01d5ec1f9 1-16
+prism/src/vite-env.d.ts
+  h_ec7ab01d5ec1f9 2-4
+prism/vite.config.js
+  h_ec7ab01d5ec1f9 1,33-51,69-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1af1cb99eb49d9d8f2d08fa0dffbb01e97fba555",
+  "prompts": {},
+  "humans": {
+    "h_ec7ab01d5ec1f9": {
+      "author": "Scorpion <1361096829@qq.com>"
+    }
+  }
+}
