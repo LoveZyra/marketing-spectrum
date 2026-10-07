@@ -3,7 +3,7 @@ import type { NormalizedMessage } from '@/shared/types.js';
 export type CachedHistory = {
   /** Full normalized history, oldest first. Never a page. */
   messages: NormalizedMessage[];
-  /** Message count excluding `tool_result` records, matching FetchHistoryResult.total. */
+  /** Length of `messages` (tool_result records included), matching FetchHistoryResult.total. */
   total: number;
 };
 
@@ -24,9 +24,9 @@ const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
  * for a 50-message page, because `total` has to count frontend-normalized
  * messages rather than raw JSONL records. Normalizing means a line-by-line read
  * of the session file plus a readdir and a full parse of every referenced
- * subagent transcript. Paging backwards through a long conversation therefore
- * redid all of that work on every request, scaling with transcript length
- * exactly where the user is most likely to have a long one.
+ * subagent transcript. Without a cache, paging backwards through a long
+ * conversation would redo all of that work on every request, scaling with
+ * transcript length exactly where the user is most likely to have a long one.
  *
  * Two properties keep this from becoming the memory leak it looks like:
  *
@@ -37,9 +37,10 @@ const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
  *    the real ceiling is a multiple of DEFAULT_MAX_BYTES, which is why the
  *    default is set well below what the process can afford.
  *
- * 2. A transcript larger than the whole budget is never cached at all, rather
- *    than being cached after evicting everything else. One 40 MB session must
- *    not flush the working set of every other open conversation.
+ * 2. A transcript larger than the per-entry cap (the whole budget unless the
+ *    constructor sets a lower one) is never cached at all, rather than being
+ *    cached after evicting everything else. One huge session must not flush
+ *    the working set of every other open conversation.
  *
  * Entries are keyed by transcript identity (mtime + size), so an append by a
  * running session invalidates on the next read instead of serving a truncated
@@ -48,7 +49,7 @@ const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
  *
  * Cached messages are handed out by reference and must be treated as read-only;
  * sessions.service.ts shallow-copies each message before remapping sessionId,
- * which is what makes that safe today.
+ * which is what makes that safe.
  */
 export class FetchHistoryCache {
   private readonly maxBytes: number;
@@ -57,12 +58,8 @@ export class FetchHistoryCache {
   private totalBytes = 0;
 
   /**
-   * 单个条目的上限,默认是总预算的 1/4。
-   *
-   * 原来只有总预算这一道闸:一个 24 MB 的会话能独占 3/4 的额度,把其他所有人的
-   * 条目挤出去。单人使用时无所谓,多用户下这是缓存抖动 —— 一个人打开长会话,
-   * 其余人的历史全部变冷。超过这个尺寸的会话干脆不缓存,让它每次都冷读,
-   * 好过让它把别人的都赶走。
+   * 单个条目的上限(构造时不给就等于总预算)。超过的会话不缓存、每次冷读:
+   * 只有总预算一道闸时,多用户下一个人打开长会话就能把其余人的历史全部挤出去。
    */
   private readonly maxEntryBytes: number;
 

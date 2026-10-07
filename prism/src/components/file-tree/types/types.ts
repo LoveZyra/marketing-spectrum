@@ -16,7 +16,7 @@ export interface FileTreeNode {
   isSymlink?: boolean;
   symlinkTarget?: 'directory' | 'file';
   /**
-   * hl(动态 P2-10):服务端没把这个目录列全(条目预算用尽 / 到了深度上限 / 软链目录不递归)。
+   * 服务端没把这个目录列全(条目预算用尽 / 到了深度上限 / 软链目录不递归)。
    * 展开时显示「…还有更多」,点击按 `?path=` 单独加载它。
    */
   truncated?: boolean;

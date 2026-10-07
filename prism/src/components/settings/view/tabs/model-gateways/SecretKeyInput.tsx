@@ -3,10 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff } from 'lucide-react';
 
 /**
- * hq:填 key 的输入框。
+ * 填 key 的输入框。
  *
- * - `type="password"`、`autoComplete="new-password"`(复审:Chrome 对密码框无视 off,会把 Prism 的登录密码填进来 / 提示"保存密码"),再挂上常见密码管理器的忽略标记 —— 这里填的是网关 key,
- *   不是 Prism 的登录密码,不能让浏览器把登录密码自动填进来(那样会把登录密码当 key 存进库);
+ * - `type="password"` + `autoComplete="new-password"`,再挂上常见密码管理器的忽略标记:这里填的是网关 key,
+ *   不能让浏览器把 Prism 的登录密码自动填进来(那样会把登录密码当 key 存进库)。不用 `off`,
+ *   因为 Chrome 对密码框无视 off,照样自动填充 / 提示"保存密码";
  * - 不预填:组件只认父级传进来的值,父级保存成功后把它清空;
  * - 显示 / 隐藏只影响本地显示,切回隐藏不会清掉已经填的值。
  */

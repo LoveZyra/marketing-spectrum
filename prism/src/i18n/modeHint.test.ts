@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, test } from 'vitest';
 
 /**
- * hl(09-24 静态 P3 / 复核 P3-9):输入框只认 Shift+Tab 切执行模式(普通 Tab 交还焦点移动),
- * 所有语种里提到这个快捷键的文案都得跟着改 —— 复核时 clickToChangeMode 就漏了一整排。
+ * 输入框只认 Shift+Tab 切执行模式(普通 Tab 留给焦点移动),所有语种里提到这个快捷键的文案
+ * (hintText / clickToChangeMode)都只能写 Shift+Tab。
  */
 const LOCALES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'locales');
 

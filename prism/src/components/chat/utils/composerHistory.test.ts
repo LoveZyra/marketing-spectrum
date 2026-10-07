@@ -3,7 +3,7 @@ import { describe, test, expect } from 'vitest';
 import { stepHistoryWalk, type HistoryWalkState } from './composerHistory';
 
 /**
- * F2 回归:↑/↓ 历史回填(readline 风格)。
+ * ↑/↓ 历史回填(readline 风格)。
  */
 describe('stepHistoryWalk', () => {
   const history = () => ['第一条', '第二条', '第三条'];

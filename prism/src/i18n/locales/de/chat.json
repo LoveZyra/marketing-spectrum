@@ -33,7 +33,6 @@
   },
   "input": {
     "placeholder": "/ für Befehle, @ für Dateien eingeben oder {{provider}} etwas fragen...",
-    "attachImages": "Bilder anhängen",
     "send": "Senden",
     "stop": "Stoppen",
     "hintText": {

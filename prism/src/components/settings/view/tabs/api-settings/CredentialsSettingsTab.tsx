@@ -11,6 +11,9 @@ export default function CredentialsSettingsTab() {
   const {
     apiKeys,
     githubCredentials,
+    apiKeysLoadFailed,
+    githubCredentialsLoadFailed,
+    reload,
     loading,
     showNewKeyForm,
     setShowNewKeyForm,
@@ -61,6 +64,8 @@ export default function CredentialsSettingsTab() {
 
       <ApiKeysSection
         apiKeys={apiKeys}
+        loadFailed={apiKeysLoadFailed}
+        onRetryLoad={() => void reload()}
         showNewKeyForm={showNewKeyForm}
         newKeyName={newKeyName}
         onShowNewKeyFormChange={setShowNewKeyForm}
@@ -77,6 +82,8 @@ export default function CredentialsSettingsTab() {
           pull requests on the caller's behalf. */}
       <GithubCredentialsSection
         githubCredentials={githubCredentials}
+        loadFailed={githubCredentialsLoadFailed}
+        onRetryLoad={() => void reload()}
         showNewGithubForm={showNewGithubForm}
         showNewTokenPlainText={Boolean(showToken.new)}
         newGithubName={newGithubName}

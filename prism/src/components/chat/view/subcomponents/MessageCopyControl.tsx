@@ -161,10 +161,8 @@ const MessageCopyControl = ({
     setIsDropdownOpen(false);
   };
 
-  // du:用户档原来是 `text-primary-foreground` —— 那是「主色底上的字」,浅色
-  // 主题下是白色。而这个控件早就搬到气泡**外面**、坐在页面底色上了:白字白底、
-  // 深色主题近黑字近黑底,整行 hover 出来也看不见,得把鼠标精确压到按钮上
-  // 才显形。两档统一用次要色。
+  // 控件在气泡外面、坐在页面底色上,两档都用次要色;不能用 text-primary-foreground
+  // (主色底上的字),那在页面底色上看不见。
   const toneClass = messageType === 'user'
     ? 'text-muted-foreground hover:text-foreground'
     : 'text-muted-foreground hover:text-body';
@@ -180,7 +178,7 @@ const MessageCopyControl = ({
         onClick={handleCopyClick}
         title={copyTitle}
         aria-label={copyTitle}
-        // ef:设计稿的悬停操作是一排 24×24 的图标钮(不是带内边距的文字钮)。
+        // 悬停操作统一是 24×24 的图标钮(与赞 / 踩、重跑同款)。
         className={`grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-accent ${toneClass}`}
       >
         {copied ? (

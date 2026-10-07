@@ -14,7 +14,7 @@ import QuickSettingsPanelHeader from './QuickSettingsPanelHeader';
 export default function QuickSettingsPanelView() {
   const [isOpen, setIsOpen] = useState(false);
 
-  // 图标轨上的扳手入口通过 window 事件开关面板(原有拖拽手柄不受影响)。
+  // 图标轨上的扳手入口通过 window 事件开关面板,与拖拽手柄互不影响。
   useEffect(() => {
     const onToggle = () => setIsOpen((previous) => !previous);
     window.addEventListener(QUICK_SETTINGS_TOGGLE_EVENT, onToggle);

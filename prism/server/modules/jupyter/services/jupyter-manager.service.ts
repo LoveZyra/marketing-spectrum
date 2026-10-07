@@ -327,11 +327,11 @@ const entryTickets = createTicketStore({ ttlMs: ENTRY_TICKET_TTL_MS });
 const sessions = new Map<string, { expiresAt: number; userId: string | number | null; tokenVersion: number | null }>();
 
 /**
- * hj(审计 P1-2):会话 cookie **绑到签票的人**,每次校验都问一句「这个人现在还能用吗」。
+ * 会话 cookie 绑到签票的人,每次校验都问一句「这个人现在还能用吗」。
  *
- * 原来 cookie 不记是谁:账号被停用 / 驳回 / 退出所有设备之后,这个 cookie 仍按 12 小时滑动
- * 续期一直有效 —— JupyterLab 自带终端,等于这个人还握着一个 shell。判定函数由路由层注入
- * (那一层才碰得到用户表),这个文件保持不依赖数据库;没注入时(单测)不做这一步。
+ * cookie 按 12 小时滑动续期,而 JupyterLab 自带终端:不复查的话,账号被停用 / 驳回 / 退出所有设备
+ * 之后,这个人仍握着一个 shell。判定函数由路由层注入(那一层才碰得到用户表),这个文件保持
+ * 不依赖数据库;没注入时(单测)不做这一步。
  */
 let accountStillUsable: ((userId: string | number | null, tokenVersion: number | null) => boolean) | null = null;
 

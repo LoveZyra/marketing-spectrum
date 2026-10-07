@@ -70,7 +70,7 @@ export default function CommandPalette({
   const isRoot = Boolean(useAuth().user?.isRoot);
   const ops = usePaletteOps();
 
-  // 鼠标入口:侧栏搜索框右侧那个 ⌘K 键帽点一下就开(键盘仍走下面的全局监听)。
+  // 鼠标入口:点侧栏搜索框右侧的 ⌘K 键帽即可打开(键盘走下面的全局监听)。
   const openPalette = React.useCallback(() => setOpen(true), []);
   usePaletteOpsRegister({ openPalette });
 
@@ -290,7 +290,6 @@ export default function CommandPalette({
 
           {/* 底部提示条(设计稿 2a/2b):等宽 10.5px,沉降底 */}
           <div className="flex items-center gap-3 border-t border-border bg-card px-4 py-2.5 font-mono text-[10.5px] text-muted-foreground">
-            {/* hl(P3 中英混排):en 界面下原来是中文。 */}
             <span>{t('palette.footer.navigate', { defaultValue: '↑↓ 选择' })}</span>
             <span>{t('palette.footer.open', { defaultValue: '↵ 打开' })}</span>
             <span>{t('palette.footer.close', { defaultValue: 'esc 关闭' })}</span>

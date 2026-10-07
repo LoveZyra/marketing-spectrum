@@ -7,10 +7,10 @@ import { chooseEditorDownload } from './editorDownload';
 const base = { loadError: false, isDiffView: false, hasUnsavedChanges: false, canIssueTicket: true };
 
 describe('编辑器下载的来源', () => {
-  test('hl 动态 P2-11:读失败不下载', () => {
+  test('读失败不下载', () => {
     assert.equal(chooseEditorDownload({ ...base, loadError: true, hasUnsavedChanges: true }), 'blocked');
   });
-  test('hl 复核 P3-10:有未保存改动下缓冲区,而不是磁盘上的旧版本', () => {
+  test('有未保存改动下缓冲区,而不是磁盘上的旧版本', () => {
     assert.equal(chooseEditorDownload({ ...base, hasUnsavedChanges: true }), 'buffer');
   });
   test('没改动:签票下原件;diff 视图 / 签不了票:缓冲区', () => {

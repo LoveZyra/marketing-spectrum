@@ -6,11 +6,10 @@ import { userDb } from '@/modules/database/index.js';
 /**
  * 把当前「待审批账号数」推给所有在线的 root(设置入口的红色计数)。
  *
- * 触发时机:有人注册(register_pending)、root 批准/驳回。原来这个数字只靠
- * 前端 60 秒轮询 + 窗口聚焦刷新 —— 新注册要等最多一分钟才冒红点,审批完红点
- * 还赖着不走。推送后两端立即同步;轮询保留作兜底(掉线期间发生的注册靠它补)。
+ * 触发时机:有人注册(register_pending)、root 批准 / 驳回。推送让红点立即同步;
+ * 前端的 60 秒轮询 + 窗口聚焦刷新只作兜底(补上掉线期间发生的注册)。
  *
- * 只发给 root:非 root 连上的 socket 直接跳过,不发也不显示。
+ * 只发给 root:非 root 的 socket 直接跳过。
  */
 export function broadcastPendingApprovalCount(): void {
   let count = 0;

@@ -1,8 +1,7 @@
 /**
- * 模型映射管理(root):读/写 ~/.claude/settings.json 里的别名映射。
+ * 模型映射管理(root):读/写 ~/.claude/settings.json 里的别名映射,改映射不必 SSH 上服务器。
  *
- * 这一页消灭的是"改映射还得 SSH 上服务器"的最后一步:写回后 mtime 变化,
- * 已有的热感知(claude-sdk 的 runtimeForSend + 实测缓存 stale 标)自动让
+ * 写回后 mtime 变化,claude-sdk 的 runtimeForSend 与实测缓存的 stale 标记会让
  * 下一条消息用新映射,不需要重启任何东西。
  *
  * 安全红线:settings.json 里有网关 AUTH TOKEN。
@@ -97,7 +96,7 @@ export function applyModelConfigUpdate(settings: RawSettings, update: ModelConfi
     }
   }
 
-  // env 被清空时不留空对象包袱?留着 —— 保持文件形态稳定,diff 最小。
+  // env 被清空时也保留空对象:文件形态稳定,diff 最小。
   return next;
 }
 
@@ -111,7 +110,7 @@ async function readRawSettings(): Promise<{ settings: RawSettings; exists: boole
     try {
       parsed = JSON.parse(raw) as unknown;
     } catch (parseError) {
-      // ho:原来直接冒成 500「Internal server error」—— 说清楚是哪份文件、为什么、怎么修;写回也照样拒(不覆盖运维的文件)
+      // 不是合法 JSON 时回 422,说清楚是哪份文件、为什么、怎么修;写回同样拒绝,不覆盖运维手写的文件
       throw new AppError(describeSettingsParseError(raw, parseError), { code: 'CLAUDE_SETTINGS_INVALID_JSON', statusCode: 422 });
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {

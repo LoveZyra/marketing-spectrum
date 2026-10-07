@@ -76,7 +76,7 @@ EXPOSE 8080
 #
 # Runs the request through node's global fetch rather than curl or wget: the
 # slim base image carries neither, and node is the one binary guaranteed here.
-# start-period covers first-boot schema setup and the legacy data-dir migration.
+# start-period covers first-boot schema setup and database migrations.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:'+(process.env.SERVER_PORT||8080)+'/api/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 

@@ -13,7 +13,7 @@ type SidebarFooterProps = {
  * 红只留给不可逆的销毁确认)。
  *
  * 挂在设置入口上,因为审批队列就在设置 → 账号里。它反映的是真实待办,所以
- * **不会因为"看过了"而清零** —— 批完或拒完自然归零。非 root 恒为 0。
+ * 不会因为"看过了"而清零 —— 批完或拒完自然归零。非 root 恒为 0。
  */
 function NotificationBadge({ count }: { count: number }) {
   if (count <= 0) return null;

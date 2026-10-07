@@ -5,15 +5,12 @@ import { describe, test } from 'vitest';
 import { resolveResumeProjectPath } from '../routes/agent.js';
 
 /**
- * F05:**续会话时,工作目录只能是这条会话登记的那个。**
+ * 续会话时,工作目录只能是这条会话登记的那个。
  *
- * 外部 API 这条路上,`finalProjectPath` 完全来自请求(`projectPath` / 克隆目标),
- * 而会话行里有它自己的 `project_path` —— 两者可以不一样,而且这个端点是以
- * bypassPermissions 起 Claude 的。
- *
- * 不校验的后果是"续 A 会话的对话,却在 B 目录里执行":transcript 记的是 A 的
- * 历史,改的却是 B 的文件,侧栏、检查点、附件归属全都按 A 记账。
- * 网页那条路早就收口了(`cwd` 只从会话行取),外部 API 一直没有。
+ * 外部 API 的 `finalProjectPath` 完全来自请求(`projectPath` / 克隆目标),会话行里另有自己的
+ * `project_path`,两者可能不同,而这个端点以 bypassPermissions 起 Claude。
+ * 不校验就会"续 A 会话的对话,却在 B 目录里执行":transcript 记的是 A 的历史,改的却是 B 的文件,
+ * 侧栏、检查点、附件归属全都按 A 记账。网页那条路的 `cwd` 只从会话行取,不受影响。
  */
 describe('resolveResumeProjectPath', () => {
   test('不给路径 → 用会话自己的(这才是"续会话"的本意)', () => {
@@ -26,7 +23,7 @@ describe('resolveResumeProjectPath', () => {
     assert.deepEqual(out, { ok: true, projectPath: '/work/proj-a' });
   });
 
-  test('给的路径**不一样** → 拒绝,而不是静默改写', () => {
+  test('给的路径不一样 → 拒绝,而不是静默改写', () => {
     // 悄悄换掉一个调用方明明白白传进来的目录,比报错更难查。
     const out = resolveResumeProjectPath('/work/proj-a', '/work/proj-b', true);
     assert.equal(out.ok, false);

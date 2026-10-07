@@ -1,10 +1,10 @@
 /**
  * Database connection management.
  *
- * Owns the single SQLite connection used across all repositories.
- * Handles path resolution, directory creation, legacy database migration,
- * and eager app_config bootstrap so the auth middleware can read the
- * JWT secret before the full schema is applied.
+ * Owns the single SQLite connection used across all repositories: path
+ * resolution, directory creation, connection pragmas, eager app_config
+ * bootstrap (so the auth middleware can read the JWT secret before the full
+ * schema is applied), and database backups.
  *
  * Consumers should never create their own Database instance — they use
  * `getConnection()` to obtain the shared singleton.
@@ -28,29 +28,29 @@ const __dirname = path.dirname(__filename);
 // ---------------------------------------------------------------------------
 
 /**
- * Resolves the database file path from environment or falls back
- * to the legacy location inside the server/database/ folder.
+ * Resolves the database file path.
  *
  * Priority:
- *   1. DATABASE_PATH environment variable (set by server/load-env.js: the .env value, or ~/.prism/auth.db)
- *   2. Legacy path: server/database/auth.db
+ *   1. DATABASE_PATH environment variable (set by server/load-env.js: the .env value, or
+ *      auth.db in the data dir — PRISM_DATA_DIR, default ~/.prism)
+ *   2. In-tree fallback: database/auth.db, with database/ a sibling of server/
  */
 function resolveDatabasePath(): string {
-    // load-env.js 总会设 DATABASE_PATH(.env 的值或 ~/.prism/auth.db);走到 legacy 只剩直接 import 本模块的测试。
-    return process.env.DATABASE_PATH || resolveLegacyDatabasePath();
+    // load-env.js 总会设 DATABASE_PATH;落到兜底路径的只有直接 import 本模块、又没设 DATABASE_PATH 的测试。
+    return process.env.DATABASE_PATH || resolveInTreeDatabasePath();
 }
 
 /**
- * Resolves the legacy database path (always inside server/database/).
- * Used for the one-time migration to the new external location.
+ * DATABASE_PATH 没设时的落点:源码布局下是仓库根的 database/auth.db,编译布局下是
+ * dist-server/database/auth.db(每次构建都会随 dist-server 一起清掉)。只给测试用,不能当真库。
  */
-function resolveLegacyDatabasePath(): string {
-  const serverDir = path.resolve(__dirname, '..', '..', '..');
-  return path.join(serverDir, 'database', 'auth.db');
+function resolveInTreeDatabasePath(): string {
+  const serverParentDir = path.resolve(__dirname, '..', '..', '..');
+  return path.join(serverParentDir, 'database', 'auth.db');
 }
 
 // ---------------------------------------------------------------------------
-// Directory & migration helpers
+// Directory helpers
 // ---------------------------------------------------------------------------
 
 function ensureDatabaseDirectory(dbPath: string): void {
@@ -60,36 +60,6 @@ function ensureDatabaseDirectory(dbPath: string): void {
     log.info('Created database directory:', dir);
   }
 }
-
-/**
- * If the database was moved to an external location (e.g. ~/.prism/)
- * but the user still has a legacy auth.db inside the install directory,
- * copy it to the new location as a one-time migration.
- */
-function migrateLegacyDatabase(targetPath: string): void {
-  const legacyPath = resolveLegacyDatabasePath();
-
-  if (targetPath === legacyPath) return;
-  if (fs.existsSync(targetPath)) return;
-  if (!fs.existsSync(legacyPath)) return;
-
-  try {
-    fs.copyFileSync(legacyPath, targetPath);
-    log.info('Migrated legacy database', { from: legacyPath, to: targetPath });
-
-
-    // copy the write-ahead log and shared memory files (auth.db-wal, auth.db-shm) if they exist, to preserve any uncommitted transactions
-    for (const suffix of ['-wal', '-shm']) {
-      const src = legacyPath + suffix;
-      if (fs.existsSync(src)) {
-        fs.copyFileSync(src, targetPath + suffix);
-      }
-    }
-  } catch (err: any) {
-    log.error('Could not migrate legacy database', { error: err.message });
-  }
-}
-
 
 // ---------------------------------------------------------------------------
 // Singleton connection
@@ -103,10 +73,8 @@ let instance: Database.Database | null = null;
  * The first invocation:
  *   1. Resolves the target database path
  *   2. Ensures the parent directory exists
- *   3. Migrates from the legacy install-directory path if needed
- *   4. Opens the SQLite connection
- *   5. Eagerly creates the app_config table (auth reads JWT secret at import time)
- *   6. Logs the database location
+ *   3. Opens the SQLite connection and applies the pragmas
+ *   4. Eagerly creates the app_config table (auth reads JWT secret at import time)
  */
 export function getConnection(): Database.Database {
   if (instance) return instance;
@@ -114,7 +82,6 @@ export function getConnection(): Database.Database {
   const dbPath = resolveDatabasePath();
 
   ensureDatabaseDirectory(dbPath);
-  migrateLegacyDatabase(dbPath);
 
   instance = new Database(dbPath);
   applyPragmas(instance);
@@ -136,8 +103,8 @@ export function getConnection(): Database.Database {
  * WAL matters here specifically: the sessions watcher, the chat WebSocket
  * handlers, and HTTP request handlers all write through this one connection
  * while long reads (session history scans) are in flight. Under the default
- * rollback journal those readers block writers and vice versa, which showed
- * up as intermittent SQLITE_BUSY during large project scans.
+ * rollback journal those readers block writers and vice versa, which surfaces
+ * as intermittent SQLITE_BUSY during large project scans.
  *
  * `busy_timeout` covers the remaining contention window instead of failing
  * the query immediately. `foreign_keys` is off by default in SQLite and must
@@ -187,19 +154,18 @@ export type BackupOptions = {
  * 迁移前备份保留最近几份。
  *
  * 它们不参与按日期裁剪(迁移事故可能几周后才被发现),但也不能无限留:指纹对 schema.ts 的
- * 任何改动都敏感,每次带 schema 改动的发版都会多一份整库副本。5 份覆盖最近五次升级,
- * 足够回到任何一次迁移之前;写死而不做成配置 —— 要更多的人手工 cp 到别的名字即可(不会被删)。
+ * 任何改动都敏感,每次带 schema 改动的发版都会多一份整库副本。5 份覆盖最近五次这样的升级;
+ * 写死而不做成配置,要更多的人手工 cp 到别的名字即可(不会被删)。
  */
 export const PRE_MIGRATION_KEEP = 5;
 
 /**
  * 从环境变量读例行备份的保留天数。
- * `PRISM_DB_BACKUP_KEEP_DAYS` 优先;老名字 `PRISM_DB_BACKUP_KEEP`(hl 之前是"份数")
- * 仍然认,按天数解释 —— 一天一份的情况下两者本来就相等,老 .env 不用改。
+ * `PRISM_DB_BACKUP_KEEP_DAYS` 优先;也认旧名 `PRISM_DB_BACKUP_KEEP`(原义是份数,
+ * 一天一份时与天数相等),按天数解释,已有的 .env 不用改。
  *
- * hl 复核:**0、负数、认不出的值都按默认**,与旧实现 `parseInt(…) || 7` 同语义 —— 老配置
- * `PRISM_DB_BACKUP_KEEP=0` 以前等于"默认份数",不能悄悄变成"永不裁剪"把盘写满。
- * 想关掉备份用 `PRISM_DB_BACKUP=0`。
+ * 0、负数、认不出的值都按默认:旧名下 `PRISM_DB_BACKUP_KEEP=0` 的含义是"用默认值",
+ * 不能变成"永不裁剪"把盘写满。想关掉备份用 `PRISM_DB_BACKUP=0`。
  */
 export function backupKeepDaysFromEnv(env: NodeJS.ProcessEnv = process.env): number {
   for (const key of ['PRISM_DB_BACKUP_KEEP_DAYS', 'PRISM_DB_BACKUP_KEEP']) {
@@ -222,26 +188,26 @@ export function resolveBackupDir(dbPath: string = resolveDatabasePath()): string
  * 用 `db.backup()` 而不是 `VACUUM INTO`,也不是直接拷文件:
  *
  * - 直接 cp 一个 WAL 模式的库,没带上 -wal 那份就是旧的。
- * - `VACUUM INTO` 是 better-sqlite3 的同步 API,整份库拷完之前**事件循环一步都走不了**。
- *   108MB 的库实测停 611ms;按现在的增长,1GB 就是每天卡 6 秒 —— 期间所有人的
- *   WebSocket 帧、所有 HTTP 请求、所有定时任务一起停摆,而这只是一次例行备份。
- * - `db.backup()` 是**增量**的:每次 `progress` 回调返回下一批要拷的页数,
+ * - `VACUUM INTO` 是 better-sqlite3 的同步 API,整份库拷完之前事件循环一步都走不了:
+ *   百 MB 级的库就要停顿数百毫秒,1GB 是秒级 —— 期间所有人的 WebSocket 帧、
+ *   HTTP 请求、定时任务一起停摆,而这只是一次例行备份。
+ * - `db.backup()` 是增量的:每次 `progress` 回调返回下一批要拷的页数,
  *   两批之间事件循环能喘气。100 页一批,在 4KB 页大小下约 400KB —— 单批远小于
  *   一帧的预算,拷 1GB 也不会让任何一次请求明显变慢。
  *
- * 代价是 `backup()` **不做碎片整理**(VACUUM 会),所以备份文件可能比源库略大。
+ * 代价是 `backup()` 不做碎片整理(VACUUM 会),所以备份文件可能比源库略大。
  * 对一份备份来说这不重要 —— 它是拿来恢复的,不是拿来省空间的。
  *
- * hl(静态 P1-14)加的三条:
- *   1. **先写 `.tmp` 再 rename**:半截文件不会顶着 `.db` 的名字混进备份里(此前失败的
- *      半截文件也占裁剪名额,还可能被当成一份好备份拿去恢复);
- *   2. `label: 'pre-migration'` 的备份带后缀、不按日期裁剪(留最近 5 份)—— 由 init-db 在跑迁移前同步调;
- *   3. 裁剪按**日期**(见 pruneBackups),不再按份数。
+ * 另外:
+ *   1. 先写 `.tmp` 再 rename:半截文件不会顶着 `.db` 的名字混进备份,既不占裁剪名额,
+ *      也不会被当成一份好备份拿去恢复;
+ *   2. `label: 'pre-migration'` 的备份带后缀、不按日期裁剪(只留最近 PRE_MIGRATION_KEEP 份);
+ *   3. 例行备份按日期裁剪(见 pruneBackups)。
  *
- * 调用方:init-db 的两个定时器(例行)与 initializeDatabase(迁移前)。
+ * 调用方:init-db 的例行备份定时器。迁移前那份要求同步,走 backupDatabaseSync。
  */
 export async function backupDatabase(options: BackupOptions | number = {}): Promise<string | null> {
-  // 兼容旧签名 backupDatabase(keep: number):按天数解释。
+  // 也接受一个数字,按 keepDays 解释。
   const opts: BackupOptions = typeof options === 'number' ? { keepDays: options } : options;
   const keepDays = opts.keepDays ?? DEFAULT_BACKUP_KEEP_DAYS;
   const now = opts.now ?? (() => new Date());
@@ -282,14 +248,14 @@ export async function backupDatabase(options: BackupOptions | number = {}): Prom
 }
 
 /**
- * **同步**备份(hl,静态 P1-14 —— 只给"迁移前"那一份用)。
+ * 同步备份,只给"迁移前"那一份用(裁剪也只按迁移前备份的规则做)。
  *
- * 为什么不复用上面的增量 `db.backup()`:它是异步的,而 `initializeDatabase` 从头到迁移跑完
- * 一直是同步的 —— 十几处测试与启动路径依赖"调用返回时表已经是新形状"。在迁移前插一个 await,
- * 这些调用方就会在迁移跑完之前读表(fork-anchor-migration 测试就是这么红的)。
+ * 不复用上面的增量 `db.backup()`:它是异步的,而 `initializeDatabase` 从开头到迁移跑完
+ * 都是同步的 —— 不少测试与启动路径依赖"调用返回时表已经是新形状"。在迁移前插一个 await,
+ * 这些调用方就会在迁移跑完之前读表。
  *
  * 用 `VACUUM INTO`:同步、自带一致性(读事务里拷),产出的是整理过的完整副本。它会阻塞
- * 事件循环 —— 但此刻服务还没开始监听,没有任何请求在等,阻塞正是我们想要的:迁移必须等它写完。
+ * 事件循环 —— 但此刻服务还没开始监听,没有请求在等,而迁移本来就必须等它写完。
  * 同样先写 `.tmp` 再 rename。
  */
 export function backupDatabaseSync(options: Pick<BackupOptions, 'label' | 'now'> = {}): string | null {
@@ -353,13 +319,11 @@ export function prunePreMigrationBackups(backupDir: string, baseName: string, ke
 }
 
 /**
- * 裁剪例行备份 —— **按日期**,不按份数(hl,静态 P1-14)。
- *
- * 此前是"只留最新 7 份":每次重启都备份,今天一天部署 8 次,前几天的快照全被挤掉,
- * 而迁移事故恰恰要的是"迁移前那份"。现在:
- *   · 带 `-pre-migration` 后缀的不按日期删,另由 prunePreMigrationBackups 只留最近 PRE_MIGRATION_KEEP 份;
+ * 裁剪例行备份 —— 按日期,不按份数:每次重启都会备份,按份数留的话,
+ * 一天部署几次就会把前几天的快照全挤掉。规则:
+ *   · 带 `-pre-migration` 后缀的不在这里删,由 prunePreMigrationBackups 只留最近 PRE_MIGRATION_KEEP 份;
  *   · 其余按文件名里的日期分组,每天只留最新一份;
- *   · 日期早于 `keepDays` 天前的整天删掉。`keepDays <= 0` 表示不裁剪。
+ *   · 日期早于 `keepDays` 天前的整天删掉。`keepDays <= 0` 表示不裁剪(下面的 .tmp 清理照做);
  *   · 顺带清掉超过 1 小时的 `.tmp` 半截文件(上一个进程写到一半被杀)。
  *
  * 只认自己的命名(`<base>-<ISO 时间戳>[-pre-migration].db`),别的文件一概不碰 ——

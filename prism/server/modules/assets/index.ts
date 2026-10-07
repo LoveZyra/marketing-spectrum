@@ -1,4 +1,4 @@
-// Express router mounted at /api/assets by server/index.js (upload + serving
-// of chat image attachments stored in the global ~/.prism/assets folder).
+// Routers mounted by server/index.js: /api/assets (chat image upload, and serving
+// from the global ~/.prism/assets folder) and /api/attachments (per-user usage).
 export { default as assetsRoutes } from './assets.routes.js';
 export { default as attachmentUsageRoutes } from '@/modules/assets/attachment-usage.routes.js';

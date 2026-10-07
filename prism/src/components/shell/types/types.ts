@@ -21,12 +21,12 @@ export type ShellInitMessage = {
    */
   takeover?: boolean;
   /**
-   * hm(A3.3):接管时这段对话在 chat 里用的权限档位(chat 只记在浏览器 localStorage,服务端没有)。
-   * CLI 2.1.283/2.1.284 起交互式会话不指定档位就进 auto,而网关给不了 auto 的分类器 ——
-   * 接管必须显式带上。服务端按白名单与 PRISM_ALLOW_BYPASS_USERS 再过一遍。
+   * 接管时这段对话在 chat 里用的权限档位(chat 只记在浏览器 localStorage,服务端没有)。
+   * CLI 交互式会话不指定档位就进 auto,而网关给不了 auto 的分类器,所以接管必须显式带上。
+   * 服务端按白名单与 PRISM_ALLOW_BYPASS_USERS 再过一遍。
    */
   permissionMode?: string;
-  /** F10:多标签时每个终端一个 id;服务端据此各给一个 PTY。 */
+  /** 多标签时每个终端一个 id;服务端据此各给一个 PTY。 */
   terminalId?: string;
   forceRestart?: boolean;
 };
@@ -60,7 +60,7 @@ export type UseShellRuntimeOptions = {
   isRestarting: boolean;
   onProcessComplete?: ((exitCode: number) => void) | null;
   onOutputRef?: MutableRefObject<(() => void) | null>;
-  /** F10:多标签时每个终端一个 id;不传 = 与改动前行为逐字一致(单终端)。 */
+  /** 多标签时每个终端一个 id;不传 = 单终端。 */
   terminalId?: string | null;
 };
 

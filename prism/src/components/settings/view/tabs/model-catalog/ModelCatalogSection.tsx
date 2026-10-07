@@ -13,19 +13,18 @@ import { STATS_DAYS, needsContextWindowWarning, probeAgo } from './catalogHints'
 import { fetchModelStats, modelCatalogApi, type CatalogEntry, type CatalogInput, type ModelTurnStats } from './modelCatalogApi';
 
 /**
- * hn(B4):设置页「模型目录」(root)。
+ * 设置页「模型目录」(root)。
  *
  * 表格:图标 / 显示名 + 网关名 / 窗口 / 档位 / 标记(推荐、默认、已下架)/ 最近一次实测 / 操作(上下架、实测、编辑、删除)。
  * 编辑在表格上方内联展开(设置本身就是弹窗,不再叠一层弹窗)。
- * 「从网关导入」等 P1 确认网关有 `/v1/models` 再做(方案 Q8)。
  *
- * ho:每行再挂两样 ——
- * - 近 7 天健康度(回合数 / 失败率 / 首字延迟,见 ModelStatsLine);统计接口挂了只是不画,不连累目录;
- * - 新 Claude 模型没填窗口的琥珀色提醒(CLI 会按 1M 算,判定见 catalogHints)。
+ * 每行另有:
+ * - 近 7 天健康度(回合数 / 失败率 / 首字延迟,见 ModelStatsLine);统计接口失败只是不画,不影响目录;
+ * - 新 Claude 模型没填窗口时的琥珀色提醒(CLI 会按 1M 算,判定见 catalogHints);
+ * - 挂在非默认网关上的标网关名,限定了人员的标「限 N 人」。
  *
- * hq:条目可以挂到共享网关上、限定「可用人员」—— 网关与成员名单从 `GET /gateways` 拉(和目录各回各的,
- * 拉不到只是下拉里只剩默认网关);上面「网关」那块一改就广播 MODEL_GATEWAYS_CHANGED_EVENT,这里跟着重拉。
- * 行上:挂在非默认网关上的标网关名,限定了人员的标「限 N 人」。
+ * 网关与成员名单从 `GET /gateways` 单独拉,拉不到只是下拉里只剩默认网关;
+ * 上面「网关」那块一改就广播 MODEL_GATEWAYS_CHANGED_EVENT,这里跟着重拉。
  */
 
 type GatewayInfo = { choices: GatewayChoice[]; users: BasicUser[]; names: Map<number, string> };
@@ -46,7 +45,7 @@ export default function ModelCatalogSection() {
   const [stats, setStats] = useState<StatsView | null>(null);
   // 只认最后一次加载的健康度(重新加载后,早先那次慢回来的不覆盖)
   const statsSeqRef = useRef(0);
-  /** hq:共享网关 + 成员名单;null = 没拉到 */
+  /** 共享网关 + 成员名单;null = 没拉到 */
   const [gatewayInfo, setGatewayInfo] = useState<GatewayInfo | null>(null);
   const gatewaySeqRef = useRef(0);
 
@@ -75,7 +74,7 @@ export default function ModelCatalogSection() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    // 目录与健康度并行拉,但**各回各的**:健康度慢 / 失败只影响那一行 —— 统计是锦上添花,不能把目录一起拖住(复审)
+    // 目录与健康度并行拉、各自落地:健康度慢或失败只影响那一行,不能把目录一起拖住
     const seq = ++statsSeqRef.current;
     void fetchModelStats(STATS_DAYS)
       .then((value) => {

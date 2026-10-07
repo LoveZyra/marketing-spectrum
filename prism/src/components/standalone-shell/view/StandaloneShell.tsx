@@ -29,15 +29,15 @@ type StandaloneShellProps = {
 const MAX_SHELL_TABS = 6;
 
 /**
- * hl(动态 P2-2):**每个浏览器标签页一个随机前缀,终端 id 不再全站固定 `t1`。**
+ * 每个浏览器标签页一个随机前缀,拼进终端 id。
  *
- * 服务端 PTY 的复用键是 `用户 + 项目 + 会话 + terminalId`。两个浏览器标签页在同一
- * 项目开终端,都叫 `t1` → 命中同一个 PTY,服务端把输出重定向到后来的那条连接
- * (`existingSession.ws = ws`),第一个标签页无声失明,A 敲的命令回显在 B。
+ * 服务端 PTY 的复用键是 `用户 + 项目 + 会话 + terminalId`。两个标签页的终端 id 相同就会
+ * 命中同一个 PTY,服务端把输出转给后来的那条连接(`existingSession.ws = ws`),
+ * 第一个标签页无声失明,A 敲的命令回显在 B。
  *
- * 前缀存 sessionStorage:同一标签页刷新不变(还能连回自己的 PTY),新标签页
- * 各不相同。拿不到 sessionStorage(隐私模式 / 被禁)就每次随机 —— 代价只是
- * 刷新后接不回旧 PTY,比两个标签页串线好。
+ * 前缀存 sessionStorage:同一标签页刷新不变(还能连回自己的 PTY),新标签页各不相同。
+ * 拿不到 sessionStorage(隐私模式 / 被禁)就每次随机,代价只是刷新后接不回旧 PTY,
+ * 比两个标签页串线好。
  */
 const SHELL_TAB_PREFIX_KEY = 'prism.shell.tabPrefix';
 /** 本次页面加载的前缀 —— 同一次加载里只算一次(之后每次调用都返回它)。 */
@@ -51,7 +51,7 @@ function browserTabPrefix(): string {
   } catch {
     /* 拿不到 sessionStorage:下面照样生成 */
   }
-  // hl 复核 P2-3:只有刷新本页才沿用;「复制标签页」连 sessionStorage 一起复制,不能沿用。
+  // 只有刷新本页才沿用;「复制标签页」连 sessionStorage 一起复制,不能沿用。
   const { prefix } = decideShellTabPrefix(currentNavigationType(), stored, make);
   try {
     window.sessionStorage.setItem(SHELL_TAB_PREFIX_KEY, prefix);
@@ -80,10 +80,8 @@ export default function StandaloneShell({
   const { t } = useTranslation('common');
   const [isCompleted, setIsCompleted] = useState(false);
   /**
-   * F10:终端多标签。
-   *
-   * 一个终端跑着构建、另一个想看日志 —— 之前只能等。服务端的 PTY 池本来就按键
-   * 分,给每个标签一个 id 就各自一个 shell(见 shell-websocket 的 terminalId)。
+   * 终端多标签:一个终端跑着构建,另一个看日志。服务端的 PTY 池按键分,
+   * 给每个标签一个 id 就各自一个 shell(见 shell-websocket 的 terminalId)。
    *
    * 只在"项目终端"这个形态下开标签:带 `command` 的那些是一次性任务终端
    * (登录、setup-token),给它们加标签条既没意义又会把布局挤乱。
@@ -98,7 +96,7 @@ export default function StandaloneShell({
   const nextTabIdRef = useRef(2);
 
   /**
-   * 注意:**不要**在 setTabs 的 updater 里改别的 state 或 ref。
+   * 注意:不要在 setTabs 的 updater 里改别的 state 或 ref。
    *
    * updater 必须是纯函数 —— React 会在开发模式(StrictMode)里跑两遍来暴露副作用,
    * 那样 id 计数器会跳号、活动标签会被设两次。所以这里先算好下一份 tabs,再一次性
@@ -161,7 +159,7 @@ export default function StandaloneShell({
 
       <div className="min-h-0 w-full flex-1">
         {supportsTabs ? (
-          // 非活动标签**用 CSS 藏起来而不是拆掉**:卸载会断开 websocket,回来时
+          // 非活动标签用 CSS 藏起来而不是拆掉:卸载会断开 websocket,回来时
           // 只能靠回放缓冲捞一小段,正在跑的命令就看不到了。
           tabs.map((tab) => (
             <div key={tab.id} className={`h-full w-full ${tab.id === activeTabId ? 'block' : 'hidden'}`}>

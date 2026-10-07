@@ -11,7 +11,7 @@ type CodeEditorSurfaceProps = {
   onChange: (value: string) => void;
   markdownPreview: boolean;
   isMarkdownFile: boolean;
-  /** hl(P3 文件组):markdown 里相对图片的解析基准(这份文件在项目里的位置)。 */
+  /** markdown 里相对图片的解析基准(这份文件在项目里的位置)。 */
   markdownBase?: MarkdownImageBase;
   htmlPreview?: {
     active: boolean;
@@ -27,7 +27,7 @@ type CodeEditorSurfaceProps = {
   fontSize: number;
   showLineNumbers: boolean;
   extensions: Extension[];
-  /** hk:服务端判为只读(非 UTF-8 / 不能按文本存)时不让编辑 —— 改了也存不了,别让人白改。 */
+  /** 服务端判为只读(非 UTF-8 / 不能按文本存)时不让编辑:改了也存不了。 */
   readOnly?: boolean;
 };
 

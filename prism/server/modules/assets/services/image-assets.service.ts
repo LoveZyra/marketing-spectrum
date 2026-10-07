@@ -6,12 +6,9 @@ import { recoverUploadFilename } from '@/shared/upload-filename.js';
 /**
  * 聊天图片附件接受的 mime。
  *
- * fj:**SVG 移出白名单。**
- *
- * 原来的理由是"允许存储/预览,尽管有的 provider 发送时会跳过" —— 但用户视角
- * 不是这样:他附了一张图、界面上也显示出来了,然后模型说"我没看到图片"。
+ * 不收 SVG:发送给模型时 SVG 会被跳过,用户看到图已附上、模型却说没看到。
  * 上传即拒、当场给出理由,比传上去再静默丢掉诚实得多。
- * (SVG 还带着一层存储型 XSS 的老账,资源路由为此专门强制 `attachment` 下发。)
+ * SVG 还有存储型 XSS 风险,资源路由对它强制 `attachment` 下发。
  */
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/jpeg',
@@ -24,7 +21,7 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
 type StoredImageAsset = {
   /** Original upload filename, for display. */
   name: string;
-  /** Absolute posix-normalized path inside the global assets folder. */
+  /** Absolute posix-normalized path: the project's `attachments/` folder or the global fallback. */
   path: string;
   size: number;
   mimeType: string;
@@ -46,12 +43,10 @@ export function isAllowedImageMimeType(mimeType: string): boolean {
 }
 
 /**
- * 每种放行 MIME 对应的规范扩展名。
+ * MIME → 规范扩展名。
  *
- * 落盘文件名的扩展名必须由这张表决定,**不能沿用上传方给的文件名**。原先的清洗
- * 规则是 `originalname.replace(/[^a-zA-Z0-9.-]/g, '_')` —— 点号被保留,于是扩展名
- * 完全由上传方决定;而取文件的路由用 `mime.lookup(扩展名)` 定 Content-Type。
- * 两件事合起来:带一个 `Content-Type: image/png` 的分片、文件名写成 `x.html`,
+ * 落盘文件名的扩展名必须由这张表决定,不能沿用上传方给的文件名:若扩展名由上传方决定、
+ * 取文件时又按扩展名定 Content-Type,声明 `image/png` 的分片配上 `x.html` 的文件名,
  * 就能在应用同源下拿到一个 inline 的 HTML 文档,而 JWT 就存在 localStorage 里。
  * `nosniff` 挡不住这个 —— 声明出去的类型本身就是 text/html。
  */
@@ -70,8 +65,8 @@ export function canonicalExtensionForMimeType(mimeType: string): string {
 
 /**
  * 允许 inline 呈现的扩展名 → Content-Type。取文件的路由据此定类型,而不是让
- * `mime.lookup` 从任意扩展名里猜 —— 早于本次加固上传的历史文件可能仍带着
- * 攻击者选定的扩展名,那些必须走附件下载而不是 inline 渲染。
+ * `mime.lookup` 从任意扩展名里猜 —— 早期上传的文件可能仍带着上传方选定的
+ * 扩展名,那些必须走附件下载而不是 inline 渲染。
  */
 export function inlineContentTypeForFile(fileName: string): string | null {
   const ext = path.extname(fileName).toLowerCase();
@@ -85,21 +80,16 @@ export function inlineContentTypeForFile(fileName: string): string | null {
 }
 
 /**
- * 落盘文件名。
+ * 落盘文件名:原名主干(最多 60 字符)+ 随机后缀 + 规范扩展名。
  *
- * 附件目录现在是**明放在项目文件树里**的,所以名字得让人认得出来 ——
- * 原先的 `1787648734803-93142742.png` 在文件树里就是一串噪音。但可读不能
- * 以放松约束为代价,下面三条一条都不能松:
- *
- *   1. **扩展名只由已校验的 MIME 决定**。让上传方决定扩展名,配合按扩展名
- *      定 Content-Type 的取文件路由,就能在应用同源下拿到一个 inline 的
- *      HTML 文档 —— 而 JWT 就在 localStorage 里。
- *   2. **不留任何路径分隔符**,`basename` 之后再洗一遍。
- *   3. **必带随机后缀**,否则同名文件会互相覆盖(两个人各传一张 `截图.png`)。
+ * 附件目录明放在项目文件树里,名字得让人认得出来;但可读不能以放松约束为代价:
+ *   1. 扩展名只由已校验的 MIME 决定(理由见 CANONICAL_EXTENSION_BY_MIME_TYPE)。
+ *   2. 不留任何路径分隔符,`basename` 之后再洗一遍。
+ *   3. 必带随机后缀,否则同名文件会互相覆盖(两个人各传一张 `截图.png`)。
  */
 export function buildAttachmentFilename(originalName: string, mimeType: string): string {
   // 先恢复编码,再洗:multer 把 multipart 的 filename 按 latin1 读,`附件.png`
-  // 到这里是 `é™„ä»¶.png`,直接洗就是**以乱码落盘** —— 而附件目录明放在项目文件树里。
+  // 到这里是 `é™„ä»¶.png`,直接洗就会以乱码落盘 —— 而附件目录明放在项目文件树里。
   const raw = recoverUploadFilename(typeof originalName === 'string' ? originalName : '');
   // 先取 basename 去掉目录部分,再把控制字符、分隔符、以及各系统的保留字符洗掉。
   const base = path.basename(raw.replace(/\\/g, '/'))
@@ -122,7 +112,7 @@ export function buildStoredImageRecords(files: UploadedImageFile[]): StoredImage
     // 中文、附件卡片上是乱码 —— 两个名字漂开比两个都乱码更难查。
     name: recoverUploadFilename(file.originalname),
     // 目录由 multer 的 destination 决定(项目 attachments/ 或全局回落),
-    // 不能再假定就是全局目录 —— 假定错了,历史里存的路径会指向不存在的文件。
+    // 不能假定就是全局目录 —— 假定错了,历史里存的路径会指向不存在的文件。
     path: toPosixPath(path.join(file.destination || getGlobalImageAssetsDir(), file.filename)),
     size: file.size,
     mimeType: file.mimetype,

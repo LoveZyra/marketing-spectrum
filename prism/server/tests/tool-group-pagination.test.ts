@@ -4,18 +4,15 @@ import { lookbackForToolGroups } from '@/modules/providers/services/sessions.ser
 import type { NormalizedMessage } from '@/shared/types.js';
 
 /**
- * F37:页边界不许把一次工具调用和它的结果拆开。
+ * 页边界不许把一次工具调用和它的结果拆开。
  *
  * 分页按原始事件切,而工具调用与结果是两条独立事件。边界落在中间时,这一页
  * 第一条就是找不到 `tool_use` 的结果 —— 前端会跳过渲染,上一页里对应的调用
  * 显示成"没有结果"。
  *
- * fj 的处理是**把那几条丢掉**,而注释写的是"往前挪把 tool_use 带进来" ——
- * 代码和注释做的是相反的事。丢掉还有个不明显的代价:调用方按**服务端返回的
- * 条数**推进 offset,少返回几条就少走几格,下一页窗口与这一页重叠,去重后
- * 净增可能是 0 —— 上翻卡在同一个位置。
- *
- * 所以往**更早**的方向扩:游标自洽,内容也不丢。
+ * 不能把这几条孤儿 result 丢掉:调用方按服务端返回的条数推进 offset,少返回几条就少走几格,
+ * 下一页窗口与这一页重叠,去重后净增可能是 0,上翻会卡在同一个位置。
+ * 所以往更早的方向扩、把对应的 tool_use 带进来:游标自洽,内容也不丢。
  */
 const msg = (kind: string, toolId?: string, id = `${kind}_${toolId ?? Math.random()}`): NormalizedMessage => ({
   id,
@@ -51,7 +48,7 @@ describe('lookbackForToolGroups', () => {
     expect(lookbackForToolGroups([msg('text')], page)).toBe(0);
   });
 
-  it('**只看页首连续那一段** —— 页中间的 result 自然有它的 use 在同页', () => {
+  it('只看页首连续那一段 —— 页中间的 result 自然有它的 use 在同页', () => {
     const page = [msg('text'), msg('tool_result', 't9')];
     expect(lookbackForToolGroups([msg('tool_use', 't9')], page)).toBe(0);
   });

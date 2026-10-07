@@ -10,7 +10,7 @@ import MarkdownImage, { type MarkdownImageBase } from './MarkdownImage';
 
 type MarkdownPreviewProps = {
   content: string;
-  /** hl(P3 文件组):相对图片按这份文件所在目录解析,见 MarkdownImage。 */
+  /** 相对图片按这份文件所在目录解析,见 MarkdownImage。 */
   base?: MarkdownImageBase;
 };
 
@@ -44,10 +44,8 @@ const markdownPreviewComponents: Components = {
 };
 
 /**
- * hl 复核 P3-5:相对图片的解析基准走 context,`img` 渲染器是**模块级常量**。
- *
- * 原来 img 组件在 useMemo 里按 `base` 现造 —— 而调用方每次渲染都传一个新的 base 对象,
- * 于是每敲一个字(预览与编辑同屏时)所有图片组件换了类型、整体重挂载、重新下载。
+ * 相对图片的解析基准走 context,`img` 渲染器是模块级常量:若按 base 现造组件,
+ * base 一变所有图片组件就换了类型、整体重挂载、重新下载(预览与编辑同屏时每敲一个字都会触发)。
  */
 const EMPTY_BASE: MarkdownImageBase = {};
 const MarkdownImageBaseContext = createContext<MarkdownImageBase>(EMPTY_BASE);

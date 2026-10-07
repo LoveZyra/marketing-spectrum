@@ -4,7 +4,7 @@ import { CheckCircle2, XCircle } from 'lucide-react';
 import type { GatewayTestResult } from './gatewaysApi';
 
 /**
- * hq:「测试连接」的结果一行。测的是 `GET /v1/models`:通了只说明"地址通、key 被接受",
+ * 「测试连接」的结果一行。测的是 `GET /v1/models`:通了只说明"地址通、key 被接受",
  * 某个模型能不能干活看那个模型的「实测」。失败原因是服务端的中文,原样显示。
  */
 export default function GatewayTestResultLine({ result }: { result: GatewayTestResult }) {

@@ -1,5 +1,5 @@
 /**
- * 排队消息的**跨标签页互斥**。
+ * 排队消息的跨标签页互斥。
  *
  * 排队的消息写在 localStorage 的 `queued_message_<sessionId>` 里,所以它能跨页面
  * 存活 —— 这本身是想要的。代价是有两个认领方:
@@ -12,9 +12,9 @@
  * 独立的 `chat.send`。
  *
  * 两层防护:
- *   - **Web Locks**(`navigator.locks`)可用时,整个「读 → 认领 → 发 → 清」在锁里
- *     跑,浏览器级互斥,窗口彻底关掉;
- *   - 没有 Web Locks 时退回**盖戳 + 回读**:写入自己的 tabId 后再读一次,只有读回
+ *   - Web Locks(`navigator.locks`)可用时,整个「读 → 认领 → 发 → 清」在锁里
+ *     跑,浏览器级互斥,竞态窗口彻底关掉;
+ *   - 没有 Web Locks 时退回盖戳 + 回读:写入自己的 tabId 后再读一次,只有读回
  *     来还是自己的戳才算认领成功(两边同 tick 都写过戳时,只有最后写进去的那个
  *     赢)。戳带过期时间,认领方崩了以后别人还能接手。
  */
@@ -58,7 +58,7 @@ export function claimHeldBy(entry: QueueClaimFields | null | undefined, tabId: s
   return !!entry && entry.claimedBy === tabId;
 }
 
-/** 摘掉 `tabId` 自己的戳(别人的不动),让下一个认领方能接手。 */
+/** 去掉认领字段(claimedBy / claimedAt),其余原样保留,让下一个认领方能接手;调用方先用 claimHeldBy 确认是自己的戳再摘。 */
 export function withoutClaim<T extends QueueClaimFields>(entry: T): Omit<T, keyof QueueClaimFields> {
   const { claimedBy: _claimedBy, claimedAt: _claimedAt, ...rest } = entry;
   return rest;

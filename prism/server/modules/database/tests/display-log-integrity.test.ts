@@ -6,15 +6,14 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
- * fj:显示日志的**完整性**不变式。
+ * 显示日志的完整性不变式。
  *
- * 两条规则叠在一起会让长会话的历史永久消失:
- *   ① `fetchHistory` 见日志有行就完全改读日志、不再看 transcript;
+ * 两条规则叠在一起会让长会话的早期历史从界面消失(磁盘上的 jsonl 还在):
+ *   ① `fetchHistory` 见日志有行就只读日志、不再看 transcript;
  *   ② `trimSession` 把超出上限的最早那批物理删掉。
- * 于是超过约 2048 条的会话,早期几百上千条从界面消失,而磁盘上的 jsonl 还在。
  *
- * 这一组钉的是修法的三条支柱:裁剪要盖戳、seed 不许自裁、有 transcript 的空日志
- * 不许被别的入口写第一行。
+ * 这一组钉三条约束:裁剪要盖戳、seed 不许自裁、有 transcript 的空日志不许被别的入口
+ * 写第一行。
  */
 
 let sessionMessagesDb: typeof import('@/modules/database/index.js')['sessionMessagesDb'];
@@ -51,7 +50,7 @@ const row = (sessionId: string, n: number) => ({
   provider: 'claude',
 }) as never;
 
-describe('fj:裁剪必须留下痕迹', () => {
+describe('裁剪必须留下痕迹', () => {
   it('没超上限时不裁、不盖戳', () => {
     const sid = 'trim-none';
     for (let i = 0; i < 64; i += 1) sessionMessagesDb.append(sid, row(sid, i));
@@ -59,11 +58,11 @@ describe('fj:裁剪必须留下痕迹', () => {
     expect(sessionMessagesDb.isTrimmed(sid)).toBe(false);
   });
 
-  it('fl:裁完正好留 limit 条,不是 limit-1', () => {
+  it('裁完正好留 limit 条,不是 limit-1', () => {
     const sid = 'trim-exact';
     // 上限 128、步长 64:写到 256 条时会在 192 与 256 各裁一次
     for (let i = 0; i < 256; i += 1) sessionMessagesDb.append(sid, row(sid, i));
-    // 最后一次裁剪发生在 total=256 时,裁完应当正好是 128(此前是 127)
+    // 最后一次裁剪发生在 total=256 时,裁完应当正好是 128,不能少一条
     expect(sessionMessagesDb.countForSession(sid)).toBe(128);
   });
 
@@ -76,14 +75,14 @@ describe('fj:裁剪必须留下痕迹', () => {
   });
 });
 
-describe('fj:seed 不许在抄写过程中把自己裁掉', () => {
+describe('seed 不许在抄写过程中把自己裁掉', () => {
   it('appendMany 抄 400 条(上限 128)之后一条都不少 —— 逐条裁剪会让它只剩 128', () => {
     const sid = 'seed-notrim';
     const many = Array.from({ length: 400 }, (_, i) => row(sid, i));
     const seeded = sessionMessagesDb.appendMany(sid, many);
     expect(seeded).toBe(400);
     // appendMany 结束后只裁一次,所以会落在 [128, 128+63] 区间;
-    // 关键是**不能**是"抄写途中反复裁"导致的更小值,也不能因此报成功。
+    // 关键是不能是"抄写途中反复裁"导致的更小值,也不能因此报成功。
     expect(sessionMessagesDb.countForSession(sid)).toBeGreaterThanOrEqual(128);
   });
 
@@ -94,7 +93,7 @@ describe('fj:seed 不许在抄写过程中把自己裁掉', () => {
   });
 });
 
-describe('fj:有 transcript 的空日志,不许被别的入口写第一行', () => {
+describe('有 transcript 的空日志,不许被别的入口写第一行', () => {
   it('定时任务/外部 API/检查点那类裸 append 会被拒 —— 否则该会话历史当场从界面消失', () => {
     const sid = 'guard-old';
     // createSession 按 provider-native id 建行,app id 与它相等即可(磁盘发现的会话就是这样)

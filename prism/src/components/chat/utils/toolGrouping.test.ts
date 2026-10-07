@@ -21,7 +21,7 @@ const text = (content: string): ChatMessage => ({
 });
 
 /**
- * C9 回归:组身份保持 —— 成员没变的活动段沿用上一轮的同一个组对象,
+ * 组身份保持:成员没变的活动段沿用上一轮的同一个组对象,
  * 让 memo(ActivityTimeline) 在流式 tick 间真正生效。
  */
 describe('stabilizeGroupIdentity', () => {
@@ -77,7 +77,7 @@ describe('stabilizeGroupIdentity', () => {
 });
 
 /**
- * cd 回归:回合中间的过渡性正文收进活动时间轴,收尾最终回答留在段外。
+ * 回合中间的过渡性正文收进活动时间轴,收尾最终回答留在段外。
  */
 describe('groupConsecutiveTools · 过渡正文吸收', () => {
   test('工具-正文-工具:一段三条,不再被正文切断', () => {
@@ -161,7 +161,7 @@ describe('groupConsecutiveTools · 过渡正文吸收', () => {
 });
 
 /**
- * ci 回归:子代理容器聚合成卡片组,不进普通活动段。
+ * 子代理容器聚合成卡片组,不进普通活动段。
  */
 describe('groupConsecutiveTools · 子代理卡片组', () => {
   const agent = (desc: string): ChatMessage => ({
@@ -210,9 +210,9 @@ describe('groupConsecutiveTools · 子代理卡片组', () => {
 });
 
 /**
- * key 的稳定性。**这是最要命的一条**:key 一变,React 卸载旧的 ActivityTimeline
- * 再挂一个新的 —— 用户展开过的步骤自己收回去,几百上千像素的高度当场突变。
- * 以前 key 取段首消息,窗口从头部长大(补页 / 看更早 / 全部展开)必然换段首。
+ * key 的稳定性,这是最要命的一条:key 一变,React 卸载旧的 ActivityTimeline 再挂一个新的,
+ * 用户展开过的步骤自己收回去,几百上千像素的高度当场突变。
+ * key 不能取段首消息:窗口从头部长大(补页 / 看更早 / 全部展开)必然换段首。
  */
 describe('stabilizeGroupIdentity 的 _key', () => {
   test('段内追加新步骤:key 不变(段首没动)', () => {
@@ -272,16 +272,16 @@ describe('stabilizeGroupIdentity 的 _key', () => {
 });
 
 /**
- * fj:一个旧组被中间插入的消息劈成两段时,两段不能共用同一个 `_key`。
+ * 一个旧组被中间插入的消息劈成两段时,两段不能共用同一个 `_key`。
  *
  * 共用的后果是同层两个相同的 React key:控制台报重复 key,至少一段时间轴每次
- * 渲染被卸载重建 —— 用户展开过的步骤自己收回去、整段高度突变。
+ * 渲染被卸载重建,用户展开过的步骤自己收回去、整段高度突变。
  *
  * 中间插入不是罕见情形:`computeMerged` 把 `[...server, ...extra]` 按时间重排,
  * 服务端刷新只要带回一条时间戳夹在两个工具调用之间的行(压缩摘要、error 行、
  * 任务通知、ExitPlanMode)就会造成。
  */
-describe('fj:分组身份不许撞 key', () => {
+describe('分组身份不许撞 key', () => {
   it('一段工具流被中间插入的消息劈成两段 → 两段拿到不同的 _key', () => {
     const a = tool('Read');
     const b = tool('Bash');
@@ -313,22 +313,20 @@ describe('fj:分组身份不许撞 key', () => {
 
 
 /**
- * fz:**内容相同但对象全换掉时,组身份必须还认得出来。**
+ * 内容相同但对象全换掉时,组身份必须还认得出来。
  *
- * 每一轮 `complete` 都会触发 `refreshFromServer`,它把 `serverMessages` 整个
- * 换成刚从接口 parse 出来的新对象;转换缓存也是 WeakMap,旧 key 一起没。
- * 于是按对象引用的认亲全部落空 → `_key` 全变 → React 卸载重挂每一条时间轴 →
- * 用户展开过的那一步自己收回去、页面蹿半屏。
+ * 每一轮 `complete` 都会触发 `refreshFromServer`,它把 `serverMessages` 整个换成刚从接口
+ * parse 出来的新对象;转换缓存也是 WeakMap,旧 key 一起没。按对象引用认亲会全部落空:
+ * `_key` 全变 → React 卸载重挂每一条时间轴 → 用户展开过的那一步自己收回去、页面蹿半屏。
  *
- * 老的三条用例(追加新步骤、窗口从头部长大、开关思考)全都传的是**同一批对象**,
- * 所以这个洞一条都红不起来 —— 这次的输入必须是"深拷贝之后的新对象"。
+ * 只传同一批对象的用例测不出这个问题,所以这里的输入必须是"深拷贝之后的新对象"。
  */
 describe('组身份:对象被整体换掉之后', () => {
   const row = (id: string, extra: Record<string, unknown> = {}) => ({
     id, type: 'assistant', isToolUse: true, toolName: 'Bash', content: '', timestamp: 1, ...extra,
   }) as never;
 
-  it('**深拷贝一份重新分组,_key 必须继承**', () => {
+  it('深拷贝一份重新分组,_key 必须继承', () => {
     const first = [row('u1', { type: 'user', isToolUse: false }), row('a1'), row('a2')];
     const state0 = createGroupIdentityState();
     const pass1 = stabilizeGroupIdentity(groupConsecutiveTools(first, true), state0);

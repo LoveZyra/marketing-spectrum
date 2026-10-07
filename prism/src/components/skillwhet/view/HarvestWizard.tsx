@@ -12,19 +12,19 @@ import {
 import { Badge } from './StatusStrip';
 
 /**
- * ha(F3-01):「从会话挖」—— root 专用向导。
+ * 「从会话挖」:root 专用向导。
  *
  *   ① 选 skill、项目(多选)、时间窗 → 「预览会话」:dry-run 作业,零模型调用,只列会被读的会话;
  *   ② 「开始挖」:同样的会话白名单 + 反馈叠加层,挖掘器(sonnet / mock)出任务 → 预览(脱敏后的
  *      intent、判据、outcome 来源:投票 or 猜测、split / 家族);
  *   ③ 勾选 → 「入库」。
  *
- * 白名单由服务端按**当前用户可见**的会话生成(root 也走可见性);这里只传项目路径与时间窗。
- * 挖出来的东西不会自己进任务集 —— 入库是第三步单独点的。
+ * 白名单由服务端按当前用户可见的会话生成(root 也走可见性);这里只传项目路径与时间窗。
+ * 挖出来的东西不会自己进任务集,入库是第三步单独点的。
  */
 type Stage = 'idle' | 'listing' | 'listed' | 'mining' | 'mined';
 
-// 日期框按**本地**日历走;发给服务端的是本地零点对应的 ISO 时刻(不是 UTC 零点,差一个时区)
+// 日期框按本地日历走;发给服务端的是本地零点对应的 ISO 时刻(不是 UTC 零点,差一个时区)
 const pad = (n: number) => String(n).padStart(2, '0');
 const daysAgo = (n: number): string => { const d = new Date(Date.now() - n * 86_400_000); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const localMidnightIso = (day: string): string | undefined => {
@@ -52,8 +52,8 @@ export default function HarvestWizard({ skills, onImported }: { skills: ManagedS
     if (!skill && skills.length > 0) setSkill(skills[0].name);
   }, [skill, skills]);
 
-  // hl(静态 P2-28):jobId 原来只存组件本地,跑到一半离开页面回来,挖出的任务再也入不了库。
-  // 回到页面时从作业表找回最近一个还活着、或已跑完但**还没入库**的 harvest 作业(非 dry-run),接着轮询 / 直接进入库那一步。
+  // jobId 只存在组件里,离开页面就丢:挂载时从作业表找回最近一个还活着、或已跑完但还没入库的
+  // harvest 作业(非 dry-run),接着轮询或直接进入库那一步,否则挖出的任务再也入不了库。
   const [recovered, setRecovered] = useState(false);
   useEffect(() => {
     if (recovered) return undefined;
@@ -87,8 +87,8 @@ export default function HarvestWizard({ skills, onImported }: { skills: ManagedS
   // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在挂载时找一次
   }, []);
 
-  // 条件改了,上一次的预览就不作数了(开始挖用的是**当前**条件,不能拿旧清单当确认)。
-  // 找回来的、还没入库的结果不受这条影响:它不是预览,改条件不该把它扔掉(hl)
+  // 条件改了,上一次的预览就不作数了(开始挖用的是当前条件,不能拿旧清单当确认)。
+  // 找回来的、还没入库的结果不受这条影响:它不是预览,改条件不该把它扔掉。
   const restoredRef = useRef(false);
   useEffect(() => { restoredRef.current = stage === 'mined' && Boolean(result) && !result?.imported && recovered; }, [stage, result, recovered]);
   useEffect(() => {

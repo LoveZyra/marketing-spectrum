@@ -45,9 +45,9 @@ const hasConcreteSessionId = (value) =>
   typeof value === "string" && value.trim().length > 0;
 
 /**
- * 这一刻"当前模型"是谁。hn:服务端只知道默认值时(没有会话 id / 新会话 transcript 还没落盘,
- * `source === 'default'`),用客户端带来的 —— 下一轮真正发出去的就是它(复审:否则 /models 与 /cost
- * 会把目录默认模型当成当前模型,别名的"→ 真实模型"箭头也跟着指错)。
+ * 这一刻"当前模型"是谁。服务端只知道默认值时(没有会话 id / 新会话 transcript 还没落盘,
+ * `source === 'default'`),用客户端带来的,下一轮真正发出去的就是它;否则 /models 与 /cost
+ * 会把目录默认模型当成当前模型,别名的"→ 真实模型"箭头也跟着指错。
  */
 const resolveCommandModel = async (provider, catalog, sessionId, requestedModel) => {
   const requested = typeof requestedModel === "string" && requestedModel.trim() ? requestedModel.trim() : null;
@@ -64,8 +64,8 @@ const resolveCommandModel = async (provider, catalog, sessionId, requestedModel)
 };
 
 /**
- * hq:模型表**按人**(「可用人员」/ 私有模型 / 有没有 key)。`context.viewer` 由 /execute 按登录身份注入,
- * 请求体里带来的同名字段会被覆盖。没有 viewer(老调用方 / 测试)就是全量。
+ * 模型表按人算(「可用人员」/ 私有模型 / 有没有 key)。`context.viewer` 由 /execute 按登录身份注入,
+ * 请求体里带来的同名字段会被覆盖。没有 viewer 的调用方(如测试)拿到全量。
  */
 const modelsFor = async (provider, context) => {
   const result = await providerModelsService.getProviderModels(provider);
@@ -84,7 +84,7 @@ export const executeModelsCommand = async (args, context) => {
     context?.model,
   );
   const availableModels = catalog.OPTIONS.map((option) => option.value);
-  // hn(B4):选择器要按厂商分组、画图标、标窗口与推荐 —— 这几个字段一并带上(见 ProviderModelOption)。
+  // 选择器要按厂商分组、画图标、标窗口与推荐:这几个字段一并带上(见 ProviderModelOption)。
   const availableOptions = catalog.OPTIONS.map((option) => ({
     value: option.value,
     label: option.label,
@@ -95,7 +95,7 @@ export const executeModelsCommand = async (args, context) => {
     recommended: Boolean(option.recommended),
     contextWindow: option.contextWindow ?? null,
     ...(option.realModel ? { realModel: option.realModel } : {}),
-    // hq:网关 / 私有 / 能不能用
+    // 网关 / 私有 / 能不能用
     ...(option.gatewayId !== undefined ? { gatewayId: option.gatewayId } : {}),
     ...(option.gatewayName ? { gatewayName: option.gatewayName } : {}),
     ...(option.private ? { private: true } : {}),
@@ -317,7 +317,7 @@ Custom commands can be created in:
     const provider = readModelProvider(context?.provider);
     const catalog = (await modelsFor(provider, context)).models;
     const model = await resolveCommandModel(provider, catalog, context?.sessionId, context?.model);
-    // hn(Q12):真名与厂商 —— 非 Claude 模型的费用是 CLI 按 Claude 价估算的,前端据此加一句说明(别名先换真名)
+    // 真名与厂商:非 Claude 模型的费用是 CLI 按 Claude 价估算的,前端据此加一句说明(别名先换真名)
     const resolvedEntry = await claudeModelCatalog.resolveEntry(model, context?.viewer).catch(() => ({ realModel: null, entry: null }));
 
     const reportedUsed =
@@ -372,19 +372,18 @@ Custom commands can be created in:
     const computedUsed = inputTokens + outputTokens;
     const hasTokenBreakdown = computedUsed > 0;
     const used = Math.max(reportedUsed, computedUsed);
-    // 会话累计费用(F4):来自 SDK result 帧的 total_cost_usd,经 token_budget
+    // 会话累计费用:来自 SDK result 帧的 total_cost_usd,经 token_budget
     // 状态帧透传到前端 tokenBudget,再随 /cost 的 context 走到这里。
     const costUsd = Number(tokenUsage.costUsd ?? tokenUsage.total_cost_usd ?? 0) || 0;
 
     /*
-     * fh:台账里这条会话的**累计花销**。
+     * 台账里这条会话的累计花销。
      *
-     * 上面那个 `costUsd` 来自前端内存里的 tokenBudget —— 刷新就没,换台机器就没。
-     * 这一条读 `usage_records`,是落了库的,而且**跨重启、跨设备都在**。
+     * 上面那个 `costUsd` 来自前端内存里的 tokenBudget,刷新就没,换台机器就没;这一条读 `usage_records`,
+     * 落了库,跨重启、跨设备都在。
      *
-     * 两个数并列显示是刻意的:它们口径不同(内存里那个是本次页面会话看到的最后
-     * 一个累计值,台账那个是这条会话历次回合的增量之和),对不上的时候正好说明
-     * "你这次打开之前它还花过钱"。合成一个数反而会把这层信息抹掉。
+     * 两个数并列显示是刻意的:口径不同(内存里那个是本次页面会话看到的最后一个累计值,台账那个是
+     * 这条会话历次回合的增量之和),对不上时正好说明"你这次打开之前它还花过钱",合成一个数会抹掉这层信息。
      */
     let ledger = null;
     try {
@@ -443,7 +442,7 @@ Custom commands can be created in:
     } catch (err) {
       log.error("Error reading package.json:", err);
     }
-    // v2.0.0:带上发布日期与提交号(包里的 RELEASE.json;从源码跑时只有版本号)
+    // 带上发布日期与提交号(包里的 RELEASE.json;从源码跑时只有版本号)
     const release = readReleaseInfo(APP_ROOT).label;
 
     const uptime = process.uptime();
@@ -543,15 +542,14 @@ router.post("/list", async (req, res) => {
     // Scan project-level commands (.claude/commands/)
     if (projectPath) {
       /**
-       * fj:项目路径来自请求体,必须过归属门。
+       * 项目路径来自请求体,必须过归属门。
        *
-       * 此前这条路由只挂了 `authenticateToken`,`projectPath` 直接拿去
-       * `path.join(projectPath, ".claude", "commands")` 递归扫 —— 任何登录用户
-       * 传 `/home/别人/项目` 就能读出对方自定义命令的路径、frontmatter 与描述,
-       * `/execute` 更能拿到**全文**(部署步骤、内部地址、凭据取用方式常写在里面)。
+       * `projectPath` 会被拿去 `path.join(projectPath, ".claude", "commands")` 递归扫;不过门的话,任何登录用户
+       * 传 `/home/别人/项目` 就能读出对方自定义命令的路径、frontmatter 与描述,`/execute` 更能拿到全文
+       * (部署步骤、内部地址、凭据取用方式常写在里面)。
        *
-       * 用的是与 MCP 三条路由同一道现成的门(`assertViewerMayCreateSessionAt`):
-       * 已登记项目查可见性,未登记路径同时过 `validateWorkspacePath`,失败统一 404。
+       * 用与 MCP 三条路由同一道门(`assertViewerMayCreateSessionAt`):已登记项目查可见性,
+       * 未登记路径同时过 `validateWorkspacePath`,失败统一 404。
        */
       await assertViewerMayCreateSessionAt(readRequestViewer(req), projectPath);
       const projectCommandsDir = path.join(projectPath, ".claude", "commands");
@@ -604,7 +602,7 @@ router.post("/list", async (req, res) => {
 router.post("/execute", async (req, res) => {
   try {
     const { commandName, commandPath, args = [] } = req.body;
-    // hq:模型表按登录身份(见 modelsFor);请求体里的 viewer 一律不认
+    // 模型表按登录身份(见 modelsFor);请求体里的 viewer 一律不认
     const context = {
       ...(req.body?.context && typeof req.body.context === "object" ? req.body.context : {}),
       viewer: modelViewerFor(req.user?.id ?? null, req.user?.username ?? null),
@@ -617,16 +615,12 @@ router.post("/execute", async (req, res) => {
     }
 
     /**
-     * fj:`context.sessionId` / `context.projectPath` 都来自请求体,必须过归属门。
+     * `context.sessionId` / `context.projectPath` 都来自请求体,必须过归属门。
      *
-     * 内置 handler 里 `/cost` 读 `usageRecordsDb.totalsForSession(context.sessionId)`,
-     * `/models` 和 `/status` 读 `getCurrentActiveModel(provider, sessionId)` ——
-     * 此前一条鉴权都没有,任何登录用户拿到一个会话 id(截图、分享链接)就能长期
-     * 查别人会话的 runs / 花费 / token / 当前模型。
-     *
-     * 这条判据在别处是**明确补过的**:`provider.routes.ts` 那两条 active-model
-     * 路由的注释直接写着"读会泄露别人会话的当前模型",`server/index.js` 的
-     * `/api/claude/*` 也补了。唯独这里漏了。统一回 404,不给存在性预言机。
+     * 内置 handler 里 `/cost` 读 `usageRecordsDb.totalsForSession(context.sessionId)`,`/models` 和 `/status`
+     * 读 `getCurrentActiveModel(provider, sessionId)`;不鉴权的话,任何登录用户拿到一个会话 id(截图、分享链接)
+     * 就能长期查别人会话的 runs / 花费 / token / 当前模型。与 `provider.routes.ts` 的 active-model 路由、
+     * `server/index.js` 的 `/api/claude/*` 同一判据。统一回 404,不给存在性预言机。
      */
     if (context?.sessionId && !canViewerSeeSession(context.sessionId, readRequestViewer(req))) {
       return res.status(404).json({ error: "Session not found" });

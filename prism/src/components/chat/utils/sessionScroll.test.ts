@@ -33,7 +33,7 @@ describe('rememberReadingSpot', () => {
 });
 
 /**
- * **倒数下标越界就别硬来。** 回来时行数可能比离开时少(窗口被钳、这一页还没
+ * 倒数下标越界就别硬来。 回来时行数可能比离开时少(窗口被钳、这一页还没
  * 补齐),`rows[负数]` 是 undefined,再往下就是把视口钉到一个算不出来的地方。
  */
 describe('resolveReadingSpot', () => {
@@ -42,7 +42,7 @@ describe('resolveReadingSpot', () => {
     expect(resolveReadingSpot({ indexFromEnd: 9, offset: -4 }, 10)).toEqual({ rowIndex: 0, offset: -4 });
   });
 
-  it('**行数不够 → null(放弃守位,跟底)**', () => {
+  it('行数不够 → null(放弃守位,跟底)', () => {
     expect(resolveReadingSpot({ indexFromEnd: 10, offset: 0 }, 10)).toBeNull();
     expect(resolveReadingSpot({ indexFromEnd: 250, offset: 0 }, 30)).toBeNull();
   });
@@ -89,11 +89,11 @@ describe('stepScrollRestore', () => {
     }
   });
 
-  it('**串会话立刻放弃** —— 这份位置属于别人', () => {
+  it('串会话立刻放弃 —— 这份位置属于别人', () => {
     expect(stepScrollRestore(armed(), 'B', 100)).toEqual({ action: 'giveUp' });
   });
 
-  it('**行数不再增长,宽限用完就放弃**(否则一直不跟底)', () => {
+  it('行数不再增长,宽限用完就放弃(否则一直不跟底)', () => {
     let state = armed();
     let step = stepScrollRestore(state, 'A', 20);           // 第一次:从 -1 长到 20
     expect(step.action).toBe('wait');
@@ -105,7 +105,7 @@ describe('stepScrollRestore', () => {
     expect(step.action).toBe('giveUp');
   });
 
-  it('**总 commit 数封顶**,哪怕行数一直在长', () => {
+  it('总 commit 数封顶,哪怕行数一直在长', () => {
     let state = armed();
     let rows = 0;
     let step = stepScrollRestore(state, 'A', rows);
@@ -131,16 +131,16 @@ describe('stepScrollRestore', () => {
 });
 
 /**
- * fz:**用户已经接管方向盘时,恢复必须让位。**
+ * 用户已经接管方向盘时,恢复必须让位。
  *
- * 恢复落地时会故意把锚点的 scrollTop 写成当前值好让 `userMoved` 失效 ——
- * 那是为了让守位分支肯动手,代价是恢复完全不认"用户自己滚过了",
+ * 恢复落地时会故意把锚点的 scrollTop 写成当前值好让 `userMoved` 失效,
+ * 那是为了让守位分支肯动手,代价是恢复本身不认"用户自己滚过了",
  * 而控制器其余部分处处以 userMoved 为最高优先级。
  */
 describe('stepScrollRestore 的第四条放弃条件:用户自己滚了', () => {
   const armed = (): ScrollRestoreState => beginScrollRestore('A', { indexFromEnd: 40, offset: 12 })!;
 
-  it('**等待期间用户滚过 → 放弃**,哪怕行数已经够了', () => {
+  it('等待期间用户滚过 → 放弃,哪怕行数已经够了', () => {
     expect(stepScrollRestore(armed(), 'A', 100, { userMoved: true })).toEqual({ action: 'giveUp' });
   });
 

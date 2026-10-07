@@ -3,15 +3,15 @@ import { useEffect, useRef, type RefObject } from 'react';
 import { isLocalEscapeTarget, isTopModal, pushModal, removeModal } from './modalStack';
 
 /**
- * 自建弹层的键盘行为:**Esc 关闭 + Tab 焦点陷阱 + 打开时锁 body 滚动**。
+ * 自建弹层的键盘行为:Esc 关闭 + Tab 焦点陷阱 + 打开时锁 body 滚动。
  *
  * ## 为什么会有这个 hook
  *
- * 共用的 `<Dialog>` 早就把这三件事做对了。但仓库里还有三处**自己糊的**弹层
+ * 共用的 `<Dialog>` 早就把这三件事做对了。但仓库里还有三处自己糊的弹层
  * (定时任务表单、图片查看器、检查点面板),它们只写了
- * `role="dialog" aria-modal="true"` —— **声明了自己是模态,却没有模态该有的行为**。
+ * `role="dialog" aria-modal="true"` —— 声明了自己是模态,却没有模态该有的行为。
  *
- * 对键盘用户这不是"不够好",是**出不来**:Tab 会一路跑到弹层背后的页面上去,
+ * 对键盘用户这不是"不够好",是出不来:Tab 会一路跑到弹层背后的页面上去,
  * 而 Esc 没人接。定时任务那个还是多字段表单,尤其难受。
  * `aria-modal="true"` 同时告诉读屏软件"背后的内容不存在" —— 焦点真跑出去了,
  * 用户会听到一片它以为不存在的东西。
@@ -19,7 +19,7 @@ import { isLocalEscapeTarget, isTopModal, pushModal, removeModal } from './modal
  * ## 为什么不直接把那三处迁到 `<Dialog>`
  *
  * 三处各有各的版式(右侧抽屉、全屏图片、居中表单),迁移要动布局,风险远大于收益。
- * 把**行为**抽出来共用、**版式**各自保留,是这里更划算的切法。
+ * 把行为抽出来共用、版式各自保留,是这里更划算的切法。
  *
  * 判据只有一份,以后再有第四个自建弹层直接接上就行 —— 而不是又抄一遍。
  */
@@ -33,13 +33,13 @@ export function useModalKeyboard(
 ): void {
   const { open = true, onClose, lockScroll = true } = options;
   // onClose 走 ref:调用方常传内联函数,放进依赖会让 effect 每次渲染都重跑 ——
-  // 而重跑 = 出栈再入栈,父弹层一重渲染就会跑到已打开的子弹层**上面**去。
+  // 而重跑 = 出栈再入栈,父弹层一重渲染就会跑到已打开的子弹层上面去。
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return undefined;
-    // hl 复核 P2-2:入栈;只有栈顶这一层处理键盘(见 modalStack.ts)。
+    // 入栈;只有栈顶这一层处理键盘(见 modalStack.ts)。
     const modalId = pushModal();
 
     const handleKeyDown = (event: KeyboardEvent): void => {

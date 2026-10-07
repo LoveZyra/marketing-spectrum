@@ -28,15 +28,15 @@ import { readAliasConfigMappings } from './claude-settings-mapping.service.js';
 const log = createLogger('providers');
 
 /**
- * hn(B1 / B2):**模型目录的服务层** —— 校验、30 秒缓存、别名解析、闸口、播种、给选择器的定义。
+ * 模型目录的服务层:校验、30 秒缓存、别名解析、闸口、播种、给选择器的定义。
  *
- * 目录是"选择器里能选什么";四个别名(settings.json 的 `ANTHROPIC_DEFAULT_*_MODEL`)
- * 始终留在服务端的别名组里 —— 档位解析与模型校验都靠它,存量会话 / 定时任务 / 外部调用方
- * 传的别名才能继续被接受(方案 v3 B3)。
+ * 目录是"选择器里能选什么";别名(经 settings.json 的 `ANTHROPIC_DEFAULT_*_MODEL` 映射)
+ * 始终留在服务端的别名组里:档位解析与模型校验都靠它,存量会话 / 定时任务 / 外部调用方
+ * 传的别名才能继续被接受。
  *
- * hq 起**按人**:
+ * 按人区分:
  * - 目录条目可以限定「可用人员」(`allowed_users`,root 不受限);不在名单里的人看不到、发不出;
- * - 每个人可以有自己的**私有模型**(`user_models`,挂在本人的私有网关上),只有本人看得到、用得了;
+ * - 每个人可以有自己的私有模型(`user_models`,挂在本人的私有网关上),只有本人看得到、用得了;
  *   与目录条目同名时,对本人来说私有的那条优先;
  * - 网关与 key 的解析在 claude-gateways.service(这里只管"能不能选、长什么样")。
  */
@@ -82,15 +82,15 @@ export type CatalogEntry = {
   createdAt: string;
   updatedAt: string;
   updatedBy: number | null;
-  /** hq:走哪个网关;0 = settings.json 那一套。 */
+  /** 走哪个网关;0 = settings.json 那一套。 */
   gatewayId: number;
-  /** hq:可用人员(用户 id);null = 所有人。 */
+  /** 可用人员(用户 id);null = 所有人。 */
   allowedUsers: number[] | null;
-  /** hq:私有模型的主人(目录条目为 null)。 */
+  /** 私有模型的主人(目录条目为 null)。 */
   ownerUserId: number | null;
 };
 
-/** hq:谁在看 / 谁在用 —— 闸口与选择器按人。`isRoot` 不受「可用人员」限制。 */
+/** 谁在看 / 谁在用:闸口与选择器按人。`isRoot` 不受「可用人员」限制。 */
 export type ModelViewer = { userId: number | null; isRoot: boolean };
 
 export class CatalogValidationError extends Error {
@@ -161,7 +161,7 @@ function parseAllowedUsers(raw: string | null | undefined): number[] | null {
   return parsed.map(Number).filter((value) => Number.isInteger(value) && value > 0);
 }
 
-/** hq:私有模型 → 与目录条目同形(没有推荐 / 默认 / 可用人员)。 */
+/** 私有模型 → 与目录条目同形(没有推荐 / 默认 / 可用人员)。 */
 export const userModelToEntry = (row: UserModelRow): CatalogEntry => {
   const levels = (parseJson<unknown[]>(row.effort_levels) ?? [])
     .filter((value): value is EffortLevel => (EFFORT_LEVELS as readonly string[]).includes(String(value)));
@@ -190,7 +190,7 @@ export const userModelToEntry = (row: UserModelRow): CatalogEntry => {
   };
 };
 
-/* ------------------------- hq:私有网关开关 ------------------------- */
+/* ------------------------- 私有网关开关 ------------------------- */
 
 export const PRIVATE_GATEWAYS_KEY = 'claude_private_gateways_enabled';
 
@@ -204,8 +204,8 @@ export function privateGatewaysEnabled(): boolean {
 }
 
 /**
- * hq:**这个人现在能用的私有模型**(上架的、挂在他自己且启用的私有网关上的;私有网关被 root 关掉时一条都没有)。
- * 每次读库 —— 一个人几条,索引命中,不值得为它加缓存再操心失效。
+ * 这个人现在能用的私有模型(上架的、挂在他自己且启用的私有网关上的;私有网关被 root 关掉时一条都没有)。
+ * 每次读库:一个人几条,索引命中,不值得为它加缓存再操心失效。
  */
 export function privateEntriesFor(userId: number | null | undefined): CatalogEntry[] {
   if (!userId || !privateGatewaysEnabled()) return [];
@@ -220,7 +220,7 @@ export function privateEntriesFor(userId: number | null | undefined): CatalogEnt
   }
 }
 
-/** 目录条目对这个人可见吗(「可用人员」;root 不受限;没给 viewer = 不按人,老调用方)。 */
+/** 目录条目对这个人可见吗(「可用人员」;root 不受限;没给 viewer = 不按人过滤)。 */
 export const entryVisibleTo = (entry: CatalogEntry, viewer?: ModelViewer | null): boolean => {
   if (!viewer || viewer.isRoot || entry.allowedUsers === null) return true;
   return viewer.userId !== null && entry.allowedUsers.includes(viewer.userId);
@@ -254,9 +254,9 @@ export type CatalogInput = {
   sortOrder?: unknown;
   enabled?: unknown;
   isDefault?: unknown;
-  /** hq:0 / null = settings.json 那一套;其余 = 共享网关 id(存在性在 create / update 里查)。 */
+  /** 0 / null = settings.json 那一套;其余 = 共享网关 id(存在性在 create / update 里查)。 */
   gatewayId?: unknown;
-  /** hq:null = 所有人;数组 = 用户 id。 */
+  /** null = 所有人;数组 = 用户 id。 */
   allowedUsers?: unknown;
 };
 
@@ -396,7 +396,7 @@ export function validateCatalogInput(input: CatalogInput, base: CatalogEntry | n
 }
 
 /**
- * hq:**私有模型**的校验 —— 复用目录的字段规则(模型名、显示名、厂商、窗口、档位、上架),
+ * 私有模型的校验:复用目录的字段规则(模型名、显示名、厂商、窗口、档位、上架),
  * 推荐 / 默认 / 可用人员 / 说明这些面向全员的字段不收。网关的归属在 claude-gateways.service 里查。
  */
 export function validateUserModelInput(input: CatalogInput & { gatewayId?: unknown }, base: CatalogEntry | null) {
@@ -423,8 +423,8 @@ export function validateUserModelInput(input: CatalogInput & { gatewayId?: unkno
 }
 
 /**
- * hq:目录条目引用的网关 / 人员必须存在(写库前查)。
- * 复审(P2):人员只查**这次新加的** —— 名单里有人被停用之后(listBasicUsers 只列在用的),
+ * 目录条目引用的网关 / 人员必须存在(写库前查)。
+ * 人员只查这次新加的:名单里有人被停用后(listBasicUsers 只列在用的),
  * 不能因此连"上架 / 下架"这种只改别的字段的写都被拒。
  */
 function assertCatalogReferences(write: ModelCatalogWrite, before: CatalogEntry | null = null): void {
@@ -471,18 +471,18 @@ export const invalidateCatalogCache = (): void => {
   subagentPolicyCache = undefined;
 };
 
-/* ------------------------- ho:子代理模型 ------------------------- */
+/* ------------------------- 子代理模型 ------------------------- */
 
 /**
- * ho:**子代理用哪个模型。**
+ * 子代理用哪个模型。
  *
- * CLI 的默认:内置子代理(Explore / general-purpose)都是 `model: "inherit"` —— 跟主模型走;主模型派活时
+ * CLI 的默认:内置子代理(Explore / general-purpose)都是 `model: "inherit"`,跟主模型走;主模型派活时
  * 也可以在 Agent 工具里点名 `sonnet / opus / haiku / fable`(只收这四个别名),再经 settings.json 的映射落到网关模型。
  * 想固定用目录里某个模型:`CLAUDE_CODE_SUBAGENT_MODEL=<模型名>` 设成子代理的默认模型(不限别名);再加
- * `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` 则一律用它,点名的别名、agent 定义里写的 model 都不算(2.1.251 起)。
- * 两个都是进程环境变量,起进程时生效 —— 进 runtime 签名,改了下一条消息重建。
+ * `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` 则一律用它,点名的别名、agent 定义里写的 model 都不算(需要 CLI ≥ 2.1.251)。
+ * 两个都是进程环境变量,起进程时生效,所以进 runtime 签名,改了之后下一条消息重建。
  *
- * 存 `app_config`(全局一份,root 在 设置 → 模型 里改);没设 = 跟随主模型(与改动前一致)。
+ * 存 `app_config`(全局一份,root 在 设置 → 模型 里改);没设 = 跟随主模型。
  */
 export const SUBAGENT_POLICY_KEY = 'claude_subagent_model';
 export type SubagentModelPolicy = { model: string | null; force: boolean };
@@ -506,9 +506,9 @@ export function readSubagentPolicy(): SubagentModelPolicy {
 }
 
 /**
- * 给 SDK 的 env(没设就一个都不写 —— CLI 默认 inherit)。目录里下架了 → 也不写(别让子代理打到下架的模型上)。
+ * 给 SDK 的 env(没设就一个都不写,CLI 默认 inherit)。目录里下架了 → 也不写(别让子代理打到下架的模型上)。
  *
- * hq:按**这一轮的人和网关**再筛两道(给了 `scope` 时):
+ * 给了 `scope` 时再按这一轮的人和网关筛两道:
  * - 子代理模型对这个人不可见(「可用人员」没他)→ 不写,跟随主模型;
  * - 子代理模型走的网关 ≠ 主模型的网关 → 不写:一个 CLI 进程同一时刻只有一套网关地址与 key,
  *   子代理打到另一个网关的模型名上只会 404。
@@ -555,8 +555,8 @@ export const claudeModelCatalog = {
   },
 
   /**
-   * hq:**按人查**:先看这个人能用的私有模型,再看目录(上不上架都返回,可见性不在这里判)。
-   * 同名时私有的优先 —— 本人在自己的网关上配了同名模型,意思就是"我用我自己的那个"。
+   * 按人查:先看这个人能用的私有模型,再看目录(上不上架都返回,可见性不在这里判)。
+   * 同名时私有的优先:本人在自己的网关上配了同名模型,意思就是"我用我自己的那个"。
    */
   lookupFor(modelId: string | null | undefined, viewer?: ModelViewer | null): CatalogEntry | null {
     const name = typeof modelId === 'string' ? modelId.trim() : '';
@@ -574,7 +574,7 @@ export const claudeModelCatalog = {
 
   /**
    * 能不能拿这个模型发一轮:别名组 / 空(= default)/ 目录里上架的。
-   * hq:给了 viewer 就按人 —— 「可用人员」里没他的不行;他自己的私有模型可以。
+   * 给了 viewer 就按人:「可用人员」里没他的不行;他自己的私有模型可以。
    */
   isAllowed(model: string | null | undefined, viewer?: ModelViewer | null): boolean {
     if (isModelAlias(model)) return true;
@@ -589,8 +589,8 @@ export const claudeModelCatalog = {
   },
 
   /**
-   * hq(复审 P2-1 / 二轮 P2-3):**连别名一起判的闸口** —— `isAllowed` 对别名一律放行(同步、读不了映射);
-   * 别名映射到的目录模型限了人、这个人不在名单里 → 也不许(否则选择器里看不到的模型,别名直通)。
+   * 连别名一起判的闸口:`isAllowed` 对别名一律放行(同步、读不了映射);
+   * 别名映射到的目录模型限了人、这个人不在名单里 → 也不许(否则选择器里看不到的模型能经别名直通)。
    * 发起回合的所有入口(回合本身、/compact 回落、一次性预检、预热、定时任务的模型回落)都用这一个。
    */
   async isUsable(model: string | null | undefined, viewer?: ModelViewer | null): Promise<boolean> {
@@ -610,7 +610,7 @@ export const claudeModelCatalog = {
 
   /**
    * 新会话默认用哪个:`is_default` 那条(上架的)→ 第一条上架的推荐条目 → 别名 `default`。
-   * hq:给了 viewer 就只在他看得见的里面挑(默认那条限了人、他不在名单里 → 往下找)。
+   * 给了 viewer 就只在他看得见的里面挑(默认那条限了人、他不在名单里 → 往下找)。
    */
   defaultModel(viewer?: ModelViewer | null): string {
     const enabled = this.listEnabled().filter((entry) => entryVisibleTo(entry, viewer));
@@ -621,10 +621,10 @@ export const claudeModelCatalog = {
   },
 
   /**
-   * **别名先换成真名再查目录**(方案 v3 B2)—— 存量会话、定时任务、子代理大多用别名,
+   * 别名先换成真名再查目录:存量会话、定时任务、子代理大多用别名,
    * 生产里它们映射到的正是目录里的网关模型(sonnet → deepseek / kimi 之类)。解析链与 CLI 一致:
    * 别名 → `ANTHROPIC_DEFAULT_*_MODEL`;`default` → settings `"model"` →(再经别名一层)→ `ANTHROPIC_MODEL`。
-   * hq:真名查的时候按人(私有模型优先)。别名只映射到目录条目(别名属于 settings.json 那一套网关)。
+   * 真名按人查(私有模型优先);别名只映射到目录条目(别名属于 settings.json 那一套网关)。
    */
   async resolveEntry(model: string | null | undefined, viewer?: ModelViewer | null): Promise<{ realModel: string | null; entry: CatalogEntry | null }> {
     const name = typeof model === 'string' ? model.trim() : '';
@@ -650,11 +650,11 @@ export const claudeModelCatalog = {
 
   /**
    * 给 `/models` 与选择器的定义:上架的目录条目 + 别名组(`group: 'alias'`)。
-   * 别名组始终在里面 —— `resolveClaudeEffort` 靠它给别名带档位。
+   * 别名组始终在里面:`resolveClaudeEffort` 靠它给别名带档位。
    *
-   * hq:给了 viewer 就按人:目录条目只留他看得见的;他的私有模型排在目录条目前面(`private: true`),
+   * 给了 viewer 就按人:目录条目只留他看得见的;他的私有模型排在目录条目前面(`private: true`),
    * 与目录同名的目录条目对他隐去(私有优先,见 lookupFor);DEFAULT 也在他看得见的里面挑。
-   * 每条带 `gatewayId`(0 = settings.json 那一套)—— 可不可用(有没有 key)由 claude-gateways.service 再标。
+   * 每条带 `gatewayId`(0 = settings.json 那一套);可不可用(有没有 key)由 claude-gateways.service 再标。
    */
   buildModelsDefinition(viewer?: ModelViewer | null): ProviderModelsDefinition {
     const toOption = (entry: CatalogEntry): ProviderModelOption => ({
@@ -724,7 +724,7 @@ export const claudeModelCatalog = {
     return toEntry(row);
   },
 
-  /** ho:子代理模型(见 readSubagentPolicy)。 */
+  /** 子代理模型(见 readSubagentPolicy)。 */
   subagentPolicy(): SubagentModelPolicy {
     return readSubagentPolicy();
   },
@@ -752,9 +752,9 @@ export const MODEL_CATALOG_SEEDED_KEY = 'model_catalog_seeded_at';
 
 /**
  * 首次启动时按 settings.json 播种:四个 `ANTHROPIC_DEFAULT_*_MODEL` 与顶层 `"model"` 解析出的
- * **不同**网关名各一条(label 先等于 id,上架、推荐),`"model"` 那条设默认。
+ * 不同网关名各一条(label 先等于 id,上架、推荐),`"model"` 那条设默认。
  *
- * 用 `app_config` 里的标记记"播过了",**不用"表为空"判断** —— 否则 root 故意清空目录后,
+ * 用 `app_config` 里的标记记"播过了",不用"表为空"判断:否则 root 故意清空目录后,
  * 下次重启又被播回来。settings.json 读不到也记标记(root 手动添加即可)。
  */
 export async function seedModelCatalogOnce(): Promise<{ seeded: boolean; added: string[] }> {
@@ -771,8 +771,8 @@ export async function seedModelCatalogOnce(): Promise<{ seeded: boolean; added: 
     ordered.push({ modelId: real, alias });
   }
   /**
-   * 档位跟着"第一个映射到它的别名"走 —— 播种前用户选 `default` / `opus` 时档位 chip 是有的,
-   * 播种后默认模型换成目录条目,不能因为条目没填档位就把 chip 变没了(复审 P2-6)。
+   * 档位跟着"第一个映射到它的别名"走:播种前用户选 `default` / `opus` 时有档位 chip,
+   * 播种后默认模型换成目录条目,不能因为条目没填档位就让 chip 消失。
    */
   const effortOf = (alias: string): { levels: EffortLevel[] | null; def: EffortLevel | null } => {
     const effort = CLAUDE_FALLBACK_MODELS.OPTIONS.find((option) => option.value === alias)?.effort;

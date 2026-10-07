@@ -89,8 +89,8 @@ export default function SidebarProjectSessions({
   const hasSessions = sessions.length > 0;
 
   return (
-    /* ef:会话块只靠 18px 缩进表达从属,不再画一条左侧竖线 —— 设计稿里侧栏
-       除了分区发丝线没有别的线,项目行的展开箭头已经把层级说清楚了。 */
+    /* 会话块只靠 18px 缩进表达从属,不画左侧竖线:侧栏除了分区发丝线没有别的线,
+       项目行的展开箭头已经把层级说清楚了。 */
     <div className="ml-[18px] space-y-0.5">
       <div className="px-3 pb-1 pt-1 md:hidden">
         <button

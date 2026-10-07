@@ -1,11 +1,12 @@
 import { type ReactNode } from 'react';
-import { Activity, Archive, Folder, MessageSquare, RotateCcw, Search, Trash2 } from 'lucide-react';
+import { Activity, AlertTriangle, Archive, Folder, MessageSquare, RotateCcw, Search, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project } from '../../../../types/app';
 import type { ProjectBulkSelection } from '../../hooks/useProjectBulkSelection';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
+import type { ConversationSearchFailure } from '../../utils/conversationSearch';
 import type { ArchivedProjectListItem, ArchivedSessionListItem, SidebarSearchMode } from '../../types/types';
 import ClaudeLogo from '../../../llm-logo-provider/ClaudeLogo';
 import { getAllSessions } from '../../utils/utils';
@@ -122,21 +123,21 @@ type SidebarContentProps = {
   archivedProjects: ArchivedProjectListItem[];
   archivedSessions: ArchivedSessionListItem[];
   archivedSessionsCount: number;
-  /** E10:服务端分页后的归档会话总数 —— 与本地已加载条数不同才有得说。 */
+  /** 服务端分页后的归档会话总数(「加载更多」按钮上显示),不是本地已加载的条数。 */
   archivedSessionsTotal: number;
   archivedSessionsHasMore: boolean;
   isLoadingMoreArchivedSessions: boolean;
   onLoadMoreArchivedSessions: () => void;
-  /** F8:回收站批量操作。选中集合由控制器持有(跨渲染保持)。 */
+  /** 归档会话的批量操作。选中集合由控制器持有(跨渲染保持)。 */
   selectedArchivedIds: ReadonlySet<string>;
   onToggleArchivedSelection: (sessionId: string) => void;
   onClearArchivedSelection: () => void;
   onBulkArchivedAction: (action: 'restore' | 'delete') => void;
   onEmptyArchive: () => void;
   isBulkArchiving: boolean;
-  /** gk:最近删除里恢复了一条 —— 侧栏与归档列表要刷新。 */
-  /** gk:「最近删除」那一段的重拉信号(见 useSidebarController 的 trashReloadToken)。 */
+  /** 「最近删除」那一段的重拉信号(见 useSidebarController 的 trashReloadToken)。 */
   trashReloadToken?: number;
+  /** 最近删除里恢复了一条:侧栏与归档列表要刷新。 */
   onTrashRestored?: () => void;
   isArchivedSessionsLoading: boolean;
   searchFilter: string;
@@ -147,6 +148,9 @@ type SidebarContentProps = {
   conversationResults: ConversationSearchResults | null;
   isSearching: boolean;
   searchProgress: SearchProgress | null;
+  /** 搜索没跑完:没有结果时画「搜索没有完成」,有部分结果时在列表顶部标「结果不完整」。 */
+  searchFailure: ConversationSearchFailure | null;
+  onRetrySearch: () => void;
   onRestoreArchivedProject: (projectId: string) => void;
   onArchivedSessionClick: (session: ArchivedSessionListItem) => void;
   onRestoreArchivedSession: (sessionId: string) => void;
@@ -160,7 +164,7 @@ type SidebarContentProps = {
   onShowSettings: () => void;
   notificationCount?: number;
   projectListProps: SidebarProjectListProps;
-  /** eo:项目多选。工具条与三个确认框都在 ProjectBulkPanel 里,这里只转交状态。 */
+  /** 项目多选。工具条与三个确认框都在 ProjectBulkPanel 里,这里只转交状态。 */
   projectBulk: ProjectBulkSelection;
   t: TFunction;
 };
@@ -195,6 +199,8 @@ export default function SidebarContent({
   conversationResults,
   isSearching,
   searchProgress,
+  searchFailure,
+  onRetrySearch,
   onRestoreArchivedProject,
   onArchivedSessionClick,
   onRestoreArchivedSession,
@@ -211,6 +217,7 @@ export default function SidebarContent({
 }: SidebarContentProps) {
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
+  const failedProgress = searchFailure?.progress ?? null;
   const groupedArchivedSessions = groupArchivedSessionsByProject(archivedSessions);
 
   return (
@@ -254,6 +261,34 @@ export default function SidebarContent({
                 </p>
               )}
             </div>
+          ) : !isSearching && searchFailure && !hasPartialResults ? (
+            <div className="px-4 py-12 text-center md:py-8" role="alert">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-muted md:mb-3">
+                <AlertTriangle className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h3 className="mb-2 text-base font-medium text-foreground md:mb-1">
+                {t('search.failedTitle', { defaultValue: '搜索没有完成' })}
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                {searchFailure.kind === 'ticket'
+                  ? t('search.ticketFailed', { defaultValue: '没能连上搜索服务,请稍后重试。' })
+                  : failedProgress
+                    ? t('search.interruptedAt', {
+                      scanned: failedProgress.scannedProjects,
+                      total: failedProgress.totalProjects,
+                      defaultValue: '搜索中途断开(已扫描 {{scanned}}/{{total}} 个项目),请重试。',
+                    })
+                    : t('search.interrupted', { defaultValue: '搜索中途断开,请重试。' })}
+              </p>
+              <button
+                type="button"
+                onClick={onRetrySearch}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                {t('search.retry', { defaultValue: '重试' })}
+              </button>
+            </div>
           ) : !isSearching && conversationResults && conversationResults.results.length === 0 ? (
             <div className="px-4 py-12 text-center md:py-8">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-muted md:mb-3">
@@ -264,6 +299,30 @@ export default function SidebarContent({
             </div>
           ) : hasPartialResults ? (
             <div className="space-y-3 px-2">
+              {!isSearching && searchFailure && (
+                <div
+                  role="alert"
+                  className="mx-1 flex items-center justify-between gap-2 rounded-md border border-border bg-muted px-2 py-1.5 text-xs text-muted-foreground"
+                >
+                  <span>
+                    {failedProgress
+                      ? t('search.incompleteAt', {
+                        scanned: failedProgress.scannedProjects,
+                        total: failedProgress.totalProjects,
+                        defaultValue: '结果不完整:搜索在扫描到 {{scanned}}/{{total}} 个项目时断开。',
+                      })
+                      : t('search.incomplete', { defaultValue: '结果不完整:搜索中途断开。' })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onRetrySearch}
+                    className="inline-flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-foreground transition-colors hover:bg-accent"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    {t('search.retry', { defaultValue: '重试' })}
+                  </button>
+                </div>
+              )}
               <div className="flex items-center justify-between px-1">
                 <p className="text-xs text-muted-foreground">
                   {t('search.matches', { count: conversationResults.totalMatches })}
@@ -409,8 +468,7 @@ export default function SidebarContent({
                     archivedSessionsCount === 1 ? 'archived item' : 'archived items',
                   )}`}
                 </p>
-                {/* F8:清空回收站。放在这里而不是每行旁边 —— 它是"一次性清账"的
-                    动作,和逐条删除是两种意图。确认交给调用方(不可逆)。 */}
+                {/* 清空归档放在这里而不是每行旁边:它是一次性清账,和逐条删除是两种意图。确认由调用方做。 */}
                 <button
                   type="button"
                   onClick={onEmptyArchive}
@@ -571,7 +629,7 @@ export default function SidebarContent({
                   <div className="divide-y divide-border">
                     {group.sessions.map((session) => (
                       <div key={session.sessionId} className="flex items-center gap-2 px-3 py-2.5">
-                        {/* F8:多选。回收站里攒到几百条时,一条条点纯粹是体力活。 */}
+                        {/* 多选。归档会话攒到几百条时,一条条点纯粹是体力活。 */}
                         <input
                           type="checkbox"
                           checked={selectedArchivedIds.has(session.sessionId)}
@@ -620,10 +678,7 @@ export default function SidebarContent({
                 </div>
               ))}
 
-              {/*
-                E10:归档会话改成服务端分页。少列出来的那些必须**说出来**并且给得出
-                下一页 —— 静默截断会让人以为会话丢了。
-              */}
+              {/* 归档会话走服务端分页:没列出来的要说出来并给得出下一页,静默截断会让人以为会话丢了。 */}
               {archivedSessionsHasMore && (
                 <button
                   type="button"
@@ -641,7 +696,7 @@ export default function SidebarContent({
               )}
             </div>
           )}
-          {/* gk:最近删除 —— 永久删除的会话保留期内躺在这里,可恢复。空归档时也显示。 */}
+          {/* 最近删除:永久删除的会话在保留期内放在这里,可恢复。归档为空时也显示。 */}
           <RecentlyDeletedSection active={searchMode === 'archived'} reloadToken={trashReloadToken} onRestored={onTrashRestored} t={t} />
           </>
         ) : (

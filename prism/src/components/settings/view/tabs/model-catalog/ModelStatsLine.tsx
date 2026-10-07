@@ -12,10 +12,10 @@ import {
 import type { ModelTurnStats } from './modelCatalogApi';
 
 /**
- * ho:目录行上的一行健康度 —— `近 7 天 42 轮 · 失败 5% · 首字 1.2s`。
+ * 目录行上的一行健康度:`近 7 天 42 轮 · 失败 5% · 首字 1.2s`。
  *
  * 只给"够不够用"的信号,不做报表:失败率在样本够(≥ 5 轮)且 ≥ 10% 时标琥珀色;
- * 失败原因与首字 p90 放进悬停提示(title),不占行。没有记录就淡淡一行「无记录」——
+ * 失败原因与首字 p90 放进悬停提示(title),不占行。没有记录就淡淡一行「无记录」,
  * 和"统计没拉到"(整行不画)区分开,否则 root 分不清是没人用还是接口挂了。
  */
 export default function ModelStatsLine({ stats, days }: { stats: ModelTurnStats | undefined; days: number }) {

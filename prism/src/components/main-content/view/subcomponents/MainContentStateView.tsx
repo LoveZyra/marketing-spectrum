@@ -18,10 +18,9 @@ export default function MainContentStateView({ mode, isMobile, onMenuClick, acti
 
   const isLoading = mode === 'loading';
   /**
-   * 没选项目时,四个页签渲染的都是这块空态 —— 点了终端 / 文件 / notebook,
-   * 轨上的图标亮了,主区却一动不动,读起来就是"点了没反应"。
-   * 这里把用户刚点的那个页签名说出来:点是点到了,缺的是一个项目。
-   * 聊天是默认页签,不额外提示,免得刚进来就先看到一句多余的话。
+   * 没选项目时,点终端 / 文件也落到这块空态:轨上的图标亮了,主区却不动,读起来像点了没反应。
+   * 这里说出用户刚点的页签名:点到了,缺的是一个项目。
+   * 聊天是默认页签,不额外提示,免得一进来就先看到一句多余的话。
    */
   const pendingTabLabel = activeTab && activeTab !== 'chat'
     ? t(TAB_LABEL_KEY[activeTab] ?? '', { defaultValue: '' })

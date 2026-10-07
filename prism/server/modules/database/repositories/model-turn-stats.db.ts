@@ -1,8 +1,8 @@
 /**
- * ho(hq-4):**每模型的回合健康度** —— 首字延迟、失败率、失败原因。
+ * 每模型的回合健康度 —— 首字延迟、失败率、失败原因。
  *
- * 多模型(hn)之后,"哪个网关模型工具调用不稳、哪个慢"只能靠用户口头反馈。SDK 的 result 帧
- * 其实带着答案:`terminal_reason`(`api_error` / `malformed_tool_use_exhausted` / `prompt_too_long` …)
+ * 多个网关模型并存时,"哪个模型工具调用不稳、哪个慢"不能只靠用户口头反馈。SDK 的 result 帧
+ * 带着答案:`terminal_reason`(`api_error` / `malformed_tool_use_exhausted` / `prompt_too_long` …)
  * 与 `ttft_ms`(首字延迟)。每个用户回合记一行,设置 → 模型 里按模型汇总最近 N 天。
  *
  * 与用量台账分开记:台账只记有 token 的回合(空轮不记),而失败恰恰常是零 token 的 —— 混在一起

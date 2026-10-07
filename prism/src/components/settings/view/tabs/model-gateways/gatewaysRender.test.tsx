@@ -14,7 +14,7 @@ import SharedGatewayRow from './SharedGatewayRow';
 import type { GatewayView, MyGatewayView } from './gatewaysApi';
 
 /**
- * hq:网关设置页的几块在 node 里渲染一遍(客户端测试没有 jsdom,只能静态渲染初始状态)。
+ * 网关设置页的几块在 node 里渲染一遍(客户端测试没有 jsdom,只能静态渲染初始状态)。
  * 钉的是:不抛错;中英文下都没有漏翻成键名的文案;key 输入框是 password + autocomplete=new-password、从不预填;
  * key 来源 / 默认 key 缺失 / 私有网关被关掉这些状态的文案确实画出来了。
  */

@@ -6,16 +6,15 @@ import type { PermissionMode } from '../types/types';
 /**
  * The execution-mode gears shown in the composer.
  *
- * These are a *presentation* of the provider's permission modes, not a
+ * These are a presentation of the provider's permission modes, not a
  * replacement for them: each gear maps 1:1 onto a mode the server already
- * understands, so nothing new travels over the wire. What changes is that the
- * chip used to cycle blindly through five values with only a colour and a
- * two-word label to tell them apart — you had to click through the whole ring
- * to find out what the options were, and two of them (`bypassPermissions`,
- * `acceptEdits`) hand real authority to the agent.
+ * understands, so nothing new travels over the wire. Each gear carries a label,
+ * a one-line description and an icon so the options can be told apart without
+ * cycling through all of them — two (`bypassPermissions`, `acceptEdits`) hand
+ * real authority to the agent.
  *
- * Per-tool confirmation is untouched and stays the backstop. A gear decides
- * what is allowed *without* asking; anything outside that still prompts.
+ * Per-tool confirmation stays the backstop: a gear decides what is allowed
+ * without asking; anything outside that still prompts.
  */
 export type ExecutionModeMeta = {
   mode: PermissionMode;
@@ -28,8 +27,8 @@ export type ExecutionModeMeta = {
   /** Tailwind classes for the status dot. */
   dotClassName: string;
   /**
-   * ee:每档一个图标,替掉芯片上的色点 —— 底栏最窄时芯片只剩图标,色点分不清
-   * 五档,图标能。与「默认」的盾形成一对的是「无限制」的划掉的盾。
+   * 每档一个图标:底栏最窄时芯片只剩图标,色点分不清五档,图标能。
+   * 与「默认」的盾形成一对的是「无限制」的划掉的盾。
    */
   Icon: LucideIcon;
   /** 图标颜色(与 dotClassName 同一套语义:默认灰、有授权绿、无限制前景色)。 */
@@ -37,7 +36,7 @@ export type ExecutionModeMeta = {
 };
 
 /**
- * 设计语言:单一绿色强调,权限档不再一档一色。区分交给文字标签与点的形态:
+ * 设计语言:单一绿色强调,不给每一档单独配色。区分交给文字标签与点的形态:
  * default = 弱化灰点;plan/acceptEdits/auto = 绿点(有授权在身);
  * bypassPermissions = 前景色实点 + 描边加重(最高权限,视觉上最"重")。
  */

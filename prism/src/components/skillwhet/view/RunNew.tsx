@@ -11,9 +11,10 @@ import SkillWhetModelSelect from './SkillWhetModelSelect';
 import { Badge } from './StatusStrip';
 
 /**
- * gz:新建训练。表单字段 ↔ `whet train` 旗标(服务端白名单校验);预算三项显示"上限 X(由管理员配置)",
- * 表单值超过会被服务端钳回。非 root 打开时先看两行硬前置:G1 安全门 PASS、今日剩余额度 —— 任一不满足按钮灰掉
- * 并说原因。提交失败的原话留在表单上(et 的规矩),成功后显示排队位次。
+ * 新建训练。表单字段 ↔ `whet train` 旗标(服务端白名单校验)。费用 / 时长超过 .env 上限时,非 root 直接拦下并说明
+ * 怎么改,root 可越过到硬上限(审计记一笔);服务端仍会钳住其余超限参数,并把被钳的参数名回给页面。
+ * 非 root 先看两条硬前置:G1 安全门 PASS、今日剩余额度,任一不满足按钮灰掉并说原因。
+ * 提交失败的原话留在表单上,成功后显示排队位次。
  */
 type RunNewProps = {
   skills: ManagedSkill[];
@@ -24,7 +25,7 @@ type RunNewProps = {
   onCreated: (jobId: string) => void;
 };
 
-/** 老 Prism / 拿不到预算时的兜底(hn 之前的写死列表)。 */
+/** 拿不到预算、或服务端不回 allowedModels 时,非 root 的兜底名单。 */
 const FALLBACK_MODELS = ['haiku', 'sonnet', 'opus'];
 
 export default function RunNew({ skills, taskSummary, isRoot, username, initialSkill, onCreated }: RunNewProps) {
@@ -52,7 +53,7 @@ export default function RunNew({ skills, taskSummary, isRoot, username, initialS
   const [mock, setMock] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // hn(B7):模型从目录选(与对话同一份);非 root 只列允许的(服务端 /jobs/budget 的 allowedModels)
+  // 模型从目录选(与对话同一份);非 root 只列允许的(服务端 /jobs/budget 的 allowedModels)
   const { models: catalogModels, aliasModels, realModels } = useModelCatalog();
 
   useEffect(() => {
@@ -104,17 +105,17 @@ export default function RunNew({ skills, taskSummary, isRoot, username, initialS
   const remaining = budget ? Math.max(0, budget.userDailyMaxCostUsd - budget.spentToday) : null;
   const costCap = budget?.maxCostUsd ?? 2;
   const minutesCap = (budget?.maxHours ?? 2) * 60;
-  // hf2:.env 的上限只管非 root;root 可以填到硬上限(超过 .env 的那一次审计记 cost_override)
+  // .env 的上限只管非 root;root 可以填到硬上限(超过 .env 的那一次审计记 cost_override)
   const costHard = isRoot ? (budget?.hardMaxCostUsd ?? costCap) : costCap;
   const minutesHard = isRoot ? (budget?.hardMaxHours ?? minutesCap / 60) * 60 : minutesCap;
   const costAsked = Number(maxCost) > 0 ? Number(maxCost) : costCap;
   const minutesAsked = Number(maxMinutes) > 0 ? Number(maxMinutes) : minutesCap;
   const effectiveCost = Math.min(costAsked, costHard);
-  // hl(动态 P3):服务端(夜训与训练器 Roles.validate)要求评估模型既不同于慢环、也不同于快环;原来只拦慢环
-  // hn(B7):**按真名比** —— `opus` 映射到 glm-5.2 时,与直接选 glm-5.2 是同一个模型(服务端同样按真名拦)
+  // 服务端(夜训与训练器 Roles.validate)要求评估模型既不同于慢环、也不同于快环。
+  // 按真实模型比:`opus` 映射到 glm-5.2 时,与直接选 glm-5.2 是同一个模型(服务端同样按真名拦)。
   const realOf = (model: string) => realModels[model] ?? model;
   const sameModel = (realOf(evalModel) === realOf(slowModel) || realOf(evalModel) === realOf(fastModel)) && !mock;
-  // 非 root:预算还没拿到 / 老 Prism 不回 allowedModels 时按三个别名收紧(不给手填),与服务端的默认一致
+  // 非 root:预算还没拿到、或服务端不回 allowedModels 时按三个别名收紧(不给手填),与服务端的默认一致
   const allowedModels = isRoot ? null : (budget?.allowedModels ?? FALLBACK_MODELS);
   const disallowed = Array.isArray(allowedModels)
     ? [fastModel, slowModel, evalModel].filter((model) => !allowedModels.includes(model))
@@ -123,7 +124,7 @@ export default function RunNew({ skills, taskSummary, isRoot, username, initialS
   if (!selected) blockers.push(t('run.noSkill', { defaultValue: '先选一个自己能训练的 skill' }));
   else if (!selected.bootstrapped) blockers.push(t('run.notBootstrapped', { defaultValue: '这个副本还没 bootstrap(冻结 S₀)' }));
   if (selected && (!tasks || tasks.total === 0)) blockers.push(t('run.noTasks', { defaultValue: '这个 skill 还没有任务集' }));
-  // hl(复核 P2-4):G1 是 SKIP 且因为服务器缺工具 —— 直说缺什么,不让人以为是 skill 的问题
+  // G1 因服务器缺工具而 SKIP 时直说缺什么,不让人以为是 skill 的问题
   const g1Missing = Array.isArray(g1?.detail?.missing_tools) ? (g1?.detail?.missing_tools as unknown[]).map(String) : [];
   if (!isRoot && !g1Pass) blockers.push(g1 && g1.verdict === 'skip' && g1Missing.length > 0
     ? t('run.g1MissingTools', { defaultValue: 'G1 安全门没查成:服务器上缺 {{tools}},请管理员装好后重跑体检', tools: g1Missing.join(' / ') })
@@ -139,7 +140,7 @@ export default function RunNew({ skills, taskSummary, isRoot, username, initialS
   if (minutesAsked > minutesHard) {
     blockers.push(t('run.overMinutesCap', { defaultValue: '时长上限 {{v}} 分钟超过允许的 {{cap}} 分钟', v: minutesAsked, cap: minutesHard }));
   }
-  // hb:不拦,但要说清楚 —— 测试环境实测:没有 tests/unit 的 skill 默认 pytest runner,训练安静地 no_signal
+  // 以下只提示不拦,但要说清楚:比如没有 tests/unit 的副本用 pytest runner 时任务都不计分,训练只会安静地 no_signal。
   const warnings: string[] = [];
   if (selected && (runner === 'pytest' || runner === 'mixed') && !selected.has_unit_tests) {
     warnings.push(runner === 'pytest'

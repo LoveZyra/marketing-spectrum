@@ -1,11 +1,11 @@
 {
   "name": "prism",
-  "version": "2.0.0",
+  "version": "2.1.1",
   "engines": {
     "node": ">=22"
   },
   "productName": "Prism",
-  "description": "Prism - agent workbench for algorithms and analysis, built on claudecodeui with claude-web enhancements",
+  "description": "Prism - multi-user web workspace for Claude Code: chat, terminal, files, notebooks, scheduled tasks and skill optimization",
   "type": "module",
   "main": "dist-server/server/index.js",
   "bin": {

@@ -5,10 +5,8 @@
  * 到点直接 worker.terminate() —— 这是唯一能可靠打断 CPU 密集解析的办法,
  * 在主线程上做不到。
  *
- * 用 pdfjs-dist 而不是 pdf-parse:后者打包的是 2018 年的 pdf.js v1.10.100,
- * 实测读不了 reportlab 生成的 PDF(一律 `bad XRef entry`),而 reportlab 是各类
- * 系统开发票、出报表的常用生成器。换成维护中的 pdf.js 之后,同一批样本
- * (reportlab 四种变体、手写残缺 PDF、LibreOffice、Chromium)全部能读。
+ * 用 pdfjs-dist 而不是 pdf-parse:后者打包的 pdf.js v1.10.100 读不了 reportlab 生成的
+ * PDF(一律 `bad XRef entry`),而开票、出报表的系统常用 reportlab。
  *
  * 位置说明:这个文件放在 server/workers/ 下,是因为 server/tsconfig.json 用
  * allowJs 收了 ./**\/*.js 且 outDir=../dist-server,所以它会被输出到

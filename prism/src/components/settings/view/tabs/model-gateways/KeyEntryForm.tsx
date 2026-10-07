@@ -8,7 +8,7 @@ import { FORM_PROBLEM_FALLBACKS, formProblemKey, formProblemVars, keyProblem } f
 import { errorMessage, type GatewayTestResult } from './gatewaysApi';
 
 /**
- * hq:内联的「填 key」小表单 —— 默认 key、我的个人 key、私有网关的 key 共用。
+ * 内联的「填 key」小表单,默认 key、我的个人 key、私有网关的 key 共用。
  * 保存成功后清空输入(父级通常顺手把表单收起);「先测试」拿输入框里这把测,不保存。
  */
 type Props = {

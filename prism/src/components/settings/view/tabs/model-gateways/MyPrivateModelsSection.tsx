@@ -12,9 +12,9 @@ import { toGatewayChoice, type PrivateSectionMode } from './gatewayLogic';
 import { errorMessage, myGatewaysApi, type MyGatewayView } from './gatewaysApi';
 
 /**
- * hq:「模型网关 → 我的私有模型」。挂在我的私有网关上,只有我在选择器里看得到。
+ * 「模型网关 → 我的私有模型」。挂在我的私有网关上,只有我在选择器里看得到。
  * 编辑表单复用目录的 ModelCatalogEditor(`variant="private"`:网关只能选我的私有网关,没有推荐 / 默认 / 可用人员);
- * 「实测」与目录同一套检查,但结果不落库 —— 只在这一页显示到刷新为止。
+ * 「实测」与目录同一套检查,但结果不落库,只在这一页显示到刷新为止。
  */
 type Props = {
   models: CatalogEntry[];

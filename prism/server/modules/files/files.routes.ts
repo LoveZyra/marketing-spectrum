@@ -74,7 +74,7 @@ export function isInlineSafeContentType(mimeType: string): boolean {
 }
 
 /**
- * 一次打包最多收多少个**顶层**条目(目录仍然整棵打进去,不计入这个数)。
+ * 一次打包最多收多少个顶层条目(目录仍然整棵打进去,不计入这个数)。
  *
  * 这不是内存保护 —— 打包是边压边发的,多少个条目都不占内存。它挡的是签票那一步:
  * 每个条目都要 stat 一次,前端要是把一整棵树的路径全贴过来,签票请求本身会卡住。
@@ -117,11 +117,11 @@ const MAX_FILE_UPLOAD_TOTAL_LABEL = formatUploadSizeLabel(MAX_FILE_UPLOAD_TOTAL_
 const UPLOAD_TOTAL_EXCEEDED_MESSAGE =
   `Upload too large. Maximum total size is ${MAX_FILE_UPLOAD_TOTAL_LABEL} per upload.`;
 
-// 分片上传:给"Prism 挂在请求体受限的反向代理后面"这类部署用。nginx/openresty 的
+// 分片上传:给挂在请求体受限的反向代理后面的部署用。nginx/openresty 的
 // client_max_body_size 在请求到达 Node 之前就把超限的体砍掉、回自己的 413 HTML 页,
-// 上游允许 1GB 也没用,而且那层拒绝在应用日志里不留痕迹。把文件切成小于代理上限的片
-// 逐个发,服务端按序追加还原,最后落到与批量上传完全相同的目标路径。
-// 默认 15MB 为本部署实测通过的值;用 PRISM_UPLOAD_CHUNK_MB 调,不必改代码。
+// 应用日志里不留痕迹。把文件切成小于代理上限的片逐个发,服务端按序追加还原,
+// 最后落到与批量上传完全相同的目标路径。
+// 默认 15MB,用 PRISM_UPLOAD_CHUNK_MB 调。
 const parseChunkMb = (raw: string | undefined): number => {
   const parsed = Number.parseInt(raw ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 15;
@@ -134,7 +134,7 @@ const UPLOAD_CHUNK_REQUEST_BYTES = UPLOAD_CHUNK_BYTES + 1024 * 1024;
 const UPLOAD_CHUNK_TTL_MS = 60 * 60 * 1000;
 
 type ChunkSession = {
-  /** hk:谁开的会话 —— 按人限制同时进行的分片上传数与总字节数。 */
+  /** 谁开的会话:按人限制同时进行的分片上传数与总字节数。 */
   userId: string;
   name: string;
   relativePath: string;
@@ -173,8 +173,8 @@ const appendChunkFile = (partPath: string, chunkPath: string): Promise<void> => 
 );
 
 /**
- * hk(审计 P2-9):每个人同时进行的分片上传数与声明总字节数的上限。原来不限:每人可以开无数个会话、
- * 每个 1GB,全部写进临时盘。
+ * 每个人同时进行的分片上传数与声明总字节数的上限。不限的话,一个人可以开任意多个会话、
+ * 每个都到单文件上限,全部写进临时盘。
  */
 const UPLOAD_MAX_PENDING_PER_USER = (() => {
   const raw = Number.parseInt(process.env.PRISM_UPLOAD_MAX_PENDING_PER_USER ?? '', 10);
@@ -194,10 +194,11 @@ const pendingUploadsOf = (userId: string): { count: number; bytes: number } => {
 };
 
 /**
- * hk(审计 P2-9):清掉**没人认领**的临时分片文件。
+ * 清掉没人认领的临时分片文件。
  *
  * 会话只存在内存里:服务一重启,`chunkasm-*.part`(拼接中的文件)与 `chunkpart-*`(multer 落下、
- * 还没拼进去的单片)就再也没人收,临时盘只涨不落。按修改时间超过保留时长、且不属于任何在途会话来判。
+ * 还没拼进去的单片)就再也没人收,临时盘只涨不落。按修改时间超过保留时长、且不属于任何
+ * 在途会话来判。
  */
 const sweepOrphanChunkFiles = async (): Promise<void> => {
   const tracked = new Set([...uploadChunkSessions.values()].map((session) => session.partPath));
@@ -245,7 +246,7 @@ const chunkUploadMiddleware = multer({
 /**
  * 一个条目在压缩包里叫什么。
  *
- * 用**相对项目根**的路径,而不是 basename:多选到两个不同目录下的同名文件时,
+ * 用相对项目根的路径,而不是 basename:多选到两个不同目录下的同名文件时,
  * basename 会在包里撞车 —— 后一个把前一个覆盖掉,而且不报错。
  *
  * 开了 `PRISM_FILETREE_ALLOW_EXTERNAL_READ` 的部署能读到项目根之外,那时相对路径
@@ -271,9 +272,9 @@ const zipEntryName = (projectRoot: string, absPath: string): string => {
 };
 
 /**
- * 项目文件的**直传**路由:`/api/downloads` 下的 `/file` 与 `/zip`。
+ * 项目文件的直传路由:`/api/downloads` 下的 `/file` 与 `/zip`。
  *
- * 单独成一个 router,并且**不接受 `authenticateToken`**(连注入口都不留)——
+ * 单独成一个 router,并且不接受 `authenticateToken`(连注入口都不留)——
  * 这是本次唯一新增的、不带登录态的接口面,把它们收在一个工厂里,审计时一眼能数清。
  *
  * 挂在 `/api/downloads` 而不是 `/api/projects` 的理由见 download-ticket 那条路由里的注释:
@@ -293,7 +294,7 @@ export function createFileDownloadRouter(): Router {
       if (!payload) {
         return res.status(401).json({ error: '下载链接已过期,请重新点一次下载。' });
       }
-      // hj(审计 P1-2):票里的人现在还能不能用 —— 停用 / 驳回 / 退出所有设备之后票即作废。
+      // 票里的人现在还能不能用:停用 / 驳回 / 退出所有设备之后票即作废。
       if (!userDb.getUsableUser(payload.viewer.userId, payload.viewer.tokenVersion ?? null)) {
         return res.status(401).json({ error: '下载链接已失效,请重新登录后再下载。' });
       }
@@ -321,7 +322,7 @@ export function createFileDownloadRouter(): Router {
       }
 
       /**
-       * 这条口**永远是附件** —— 与 `files/content` 的 inline 白名单不同。
+       * 这条口永远是附件 —— 与 `files/content` 的 inline 白名单不同。
        * 那条口要服务图片查看器和媒体预览,所以位图/音视频允许内联;这条口的存在
        * 理由就是"存到硬盘",一个 MP4 在标签页里播起来是彻底的答非所问。
        */
@@ -331,7 +332,7 @@ export function createFileDownloadRouter(): Router {
         mimeType: mime.lookup(resolved) || 'application/octet-stream',
       });
 
-      // **必须给 source 挂 error**:pipe() 只给 dest 挂,ReadStream 自己的 'error'
+      // 必须给 source 挂 error:pipe() 只给 dest 挂,ReadStream 自己的 'error'
       // 无监听就是 EventEmitter 抛 → uncaughtException → 整个进程退出。
       const fileStream = fs.createReadStream(resolved);
       fileStream.on('error', (error) => {
@@ -352,27 +353,24 @@ export function createFileDownloadRouter(): Router {
   /**
    * GET /api/downloads/zip?ticket=…
    *
-   * **边压边发**:浏览器侧内存占用接近零,点完立刻开始传。代价是压完才知道多大,
-   * 所以**不写 `Content-Length`,也就没有百分比**,只有"已下载 XX MB"。
-   * 写一个猜的长度比不写糟得多 —— 浏览器会在到达那个数字时提前判定完成,
-   * 用户拿到一个截断的包。JupyterLab 下文件夹同样没有百分比。
+   * 边压边发:浏览器侧内存占用接近零,点完立刻开始传。代价是压完才知道多大,
+   * 所以不写 `Content-Length`,也就没有百分比,只有"已下载 XX MB"。
+   * 不能写一个猜的长度:浏览器会在到达那个数字时提前判定完成,用户拿到一个截断的包。
    *
-   * 顺带修掉一个旧缺陷:以前的 ZIP 是拿**前端已加载的那棵树**打的,而那棵树有
-   * 深度上限和条目预算,超出的子目录会被静默吞掉(所以才有 folderDownloadedPartial
-   * 那句"有 N 个子目录未包含")。archiver 走的是真实文件系统,不存在这个问题。
+   * 打包走真实文件系统,不受前端文件树的深度上限和条目预算影响。
    */
   router.get('/zip', async (req, res) => {
     const payload = readDownloadTicket(req.query.ticket as string, 'project-zip');
     /**
-     * `entries` 这个形状检查看着多余(kind 已经核过了),但它换掉的是一个**挂死**:
+     * `entries` 这个形状检查看着多余(kind 已经核过了),但它换掉的是一个挂死:
      * 这段没有 try/catch 的时候,`for…of undefined` 抛出去就是一个未处理的 rejection,
      * express 不会回任何东西 —— 请求永远悬着,浏览器的下载栏一直转。
-     * 反向验证里把 kind 检查摘掉之后,这条测试正是**超时**而不是报错才发现的。
+     * 反向验证里把 kind 检查摘掉之后,这条测试正是超时而不是报错才发现的。
      */
     if (!payload || !Array.isArray(payload.entries)) {
       return res.status(401).json({ error: '下载链接已过期,请重新点一次下载。' });
     }
-    // hj(审计 P1-2):票里的人现在还能不能用。
+    // 票里的人现在还能不能用。
     if (!userDb.getUsableUser(payload.viewer.userId, payload.viewer.tokenVersion ?? null)) {
       return res.status(401).json({ error: '下载链接已失效,请重新登录后再下载。' });
     }
@@ -382,7 +380,7 @@ export function createFileDownloadRouter(): Router {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // 每个条目的路径**重新校验一遍**,不信票里那份。
+    // 每个条目的路径重新校验一遍,不信票里那份。
     const entries: { absPath: string; entryName: string; isDirectory: boolean }[] = [];
     for (const entry of payload.entries) {
       const validation = await resolveReadablePath(projectRoot, entry.absPath);
@@ -392,14 +390,14 @@ export function createFileDownloadRouter(): Router {
       entries.push({ ...entry, absPath: validation.resolved });
     }
 
-    // hk(审计 P1-7):同时打包的数量有上限,满了先回 429 —— 头还没发,浏览器下载栏会显示失败。
+    // 同时打包的数量有上限,满了回 429(响应头还没发,浏览器下载栏会显示失败)。
     const releaseSlot = acquireZipSlot();
     if (!releaseSlot) {
       return res.status(429).json({ error: '同时打包下载的人太多了,请稍后再试。' });
     }
-    // 名额与读流的收尾挂在 `finished(res)` 上:它对**已经关闭**的响应也会回调 —— 浏览器在上面几次
-    // await(路径重验)期间就取消了下载时,后挂的 `res.on('close')` 永远等不到事件,名额就永久丢了
-    // (复核实测:4 次之后所有人的打包下载都 429,只能重启)。
+    // 名额与读流的收尾挂在 `finished(res)` 上:它对已经关闭的响应也会回调。浏览器在上面几次
+    // await(路径重验)期间就取消下载时,后挂的 `res.on('close')` 永远等不到事件,名额会永久
+    // 泄漏,攒满之后所有人的打包下载都是 429。
     let zip: ReturnType<typeof streamZipEntries> | null = null;
     finished(res, () => {
       releaseSlot();
@@ -419,7 +417,7 @@ export function createFileDownloadRouter(): Router {
     let handle: ReturnType<typeof streamZipEntries> | null = null;
 
     /**
-     * 打包开始之后**头已经发出去了**,再也改不成一个错误状态码。所以这里的规矩是:
+     * 打包开始之后头已经发出去了,再也改不成一个错误状态码。所以这里的规矩是:
      * 单个条目出问题(打包期间被删、权限变了)记一条警告继续打,整体出错就掐断
      * 连接 —— 让浏览器把这次下载判成失败,而不是收下一个悄悄残缺的包。
      */
@@ -434,7 +432,7 @@ export function createFileDownloadRouter(): Router {
     });
     archive.pipe(res);
 
-    // hk:条目按需一个一个打开;客户端取消(close 且没写完)时停止追加、关掉所有打开的读流。
+    // 条目按需一个一个打开;客户端取消(close 且没写完)时停止追加、关掉所有打开的读流。
     zip = streamZipEntries(archive, entries, (message) => log.warn('[download-zip] 读取失败:', message));
     handle = zip;
     return await zip.done;
@@ -563,8 +561,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         return res.status(404).json({ error: 'Directory not accessible' });
       }
 
-      // Use existing getFileTree function with shallow depth (only direct children)
-      // hl:只要直接子目录的名字,深度 0 就够(原来传 1 会把每个子目录也各 readdir 一遍)。
+      // 只要直接子目录的名字:深度 0 就够,更深会把每个子目录也各 readdir 一遍。
       const fileTree = await getFileTree(resolvedPath, 0, 0, false);
 
       // Filter only directories and format for suggestions
@@ -679,10 +676,10 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
       const resolved = validation.resolved;
 
-      // hk(审计 P2-8):先看大小。几百 MB 的日志整份读进内存再 JSON 序列化会拖住整个服务,
-      // 而保存又受请求体 50MB 限制 —— 能打开、改完存不上。超过上限只给下载。
+      // 先看大小:几百 MB 的日志整份读进内存再 JSON 序列化会拖住整个服务,而保存又受
+      // 请求体 50MB 限制,能打开也存不上。超过上限只给下载。
       const stat = await fsPromises.stat(resolved);
-      // hl(P3 文件组):指向目录的软链(或直接传目录路径)原来一路走到 readFile,回 500 `EISDIR`。
+      // 指向目录的软链(或直接传目录路径)不能走到 readFile,否则是 500 `EISDIR`。
       if (stat.isDirectory()) {
         return res.status(400).json({ error: '这是一个目录,不能在编辑器里打开;请在文件树里展开它。', code: 'IS_DIRECTORY' });
       }
@@ -697,8 +694,8 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       const buffer = await fsPromises.readFile(resolved);
       // 带上 mtime 作保存冲突检测的基线(D1)。前端保存时回传,不一致就 409。
       const mtimeMs: number | null = stat.mtimeMs;
-      // hk(审计 P1-6):二进制与非 UTF-8 文本**只读**。原来一律按 UTF-8 读,非法字节变成替换字符,
-      // 按一次保存就把 .pkl / .parquet / GBK 的 csv 写坏,不可逆。
+      // 二进制与非 UTF-8 文本只读:按 UTF-8 读会把非法字节变成替换字符,保存一次就把
+      // .pkl / .parquet / GBK 的 csv 写坏,不可逆。
       const sniff = sniffText(buffer);
       if (sniff.binary) {
         return res.json({ content: '', path: resolved, mtimeMs, binary: true, readOnly: true, readOnlyReason: 'binary' });
@@ -764,20 +761,14 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
 
       /**
-       * 类型照实报,但**只有媒体类才允许 inline 呈现**,其余一律按附件下发。
+       * 类型照实报,但只有媒体类才允许 inline 呈现,其余一律按附件下发。
        *
-       * 加固之前这里是 `mime.lookup()` 直出、不带 Content-Disposition、也没有 CSP:
-       * 项目里放一个 `evil.html`,这个路由就会把它以 `text/html` 内联渲染在应用
-       * **同源**下。`nosniff` 挡不住 —— 类型是我们自己显式声明的。实测那份 HTML
-       * 里的脚本确实执行了,并把 localStorage 里的整个 JWT 读了出来。
+       * 否则项目里放一个 `evil.html`,这个路由就会把它以 `text/html` 内联渲染在应用同源下,
+       * 脚本能读走 localStorage 里的 JWT;`nosniff` 挡不住,因为类型是这里显式声明的。
+       * assets 与 preview 模块的同类处理见 image-assets.service.ts、static-content.service.ts。
        *
-       * 同仓的 assets 与 preview 两个模块早就为同一件事加过固(见
-       * image-assets.service.ts 的注释、static-content.service.ts 的白名单 + CSP),
-       * 只有这条没跟上。
-       *
-       * 应用内的调用方全部是 `authenticatedFetch` + blob(图片查看器、媒体预览、
-       * 下载、打包 zip),fetch 根本不看 Content-Disposition,所以这里加了不影响
-       * 任何现有功能 —— 变的只是"直接导航到这个 URL"时的行为:从渲染变成下载。
+       * 应用内的调用方全部是 `authenticatedFetch` + blob(图片查看器、媒体预览、下载、打包 zip),
+       * fetch 不看 Content-Disposition;受影响的只有直接导航到这个 URL 的情形:从渲染变成下载。
        */
       const mimeType = mime.lookup(resolved) || 'application/octet-stream';
       res.setHeader('Content-Type', mimeType);
@@ -809,21 +800,21 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
   /**
    * ## 交给浏览器自己下:签票 + 直传两条路由
    *
-   * 上面那条 `files/content` 是**页面自己 fetch**用的:整份字节先进内存拼成 blob,
+   * 上面那条 `files/content` 是页面自己 fetch用的:整份字节先进内存拼成 blob,
    * 再交给 `a[download]`。代价是没有进度条、切页就断、大文件把标签页撑崩 ——
    * 下载这件事本来就该归浏览器的下载管理器管。
    *
-   * 想让浏览器自己去下,就得让它**导航**到一个 URL,而**一次普通导航设不了
-   * `Authorization` 头**。仓里同一堵墙撞过两次(EventSource、沙箱 iframe),
+   * 想让浏览器自己去下,就得让它导航到一个 URL,而一次普通导航设不了
+   * `Authorization` 头。仓里同一堵墙撞过两次(EventSource、沙箱 iframe),
    * 解法都是短命票据。这里是第三次。
    *
    * 拆成两条而不是一条的理由:
-   * - **签票这条带登录校验**,并且把可见性、路径、存在性**全部前移到这一步**。
+   * - 签票这条带登录校验,并且把可见性、路径、存在性全部前移到这一步。
    *   导航失败不会弹应用内提示(浏览器只会在下载栏里显示"失败"),所以失败必须
    *   发生在用户按下去的那一瞬间、还在 fetch 语境里的时候。
-   * - **直传这条不挂 `authenticateToken`**。不去扩 auth 中间件里那个 `?ticket=`
+   * - 直传这条不挂 `authenticateToken`。不去扩 auth 中间件里那个 `?ticket=`
    *   分支 —— 那会让下载票变成一张通用凭据,能打任何认证路由。它只认自己签的票,
-   *   而且**拿票里的身份把可见性和路径又跑了一遍**:票能证明"是谁在下",
+   *   而且拿票里的身份把可见性和路径又跑了一遍:票能证明"是谁在下",
    *   不能证明"现在还能下"。
    */
 
@@ -879,18 +870,18 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
 
       /**
-       * 直传口挂在 `/api/downloads` 下,**不在 `/api/projects` 下** —— 这不是口味问题。
+       * 直传口挂在 `/api/downloads` 下,不在 `/api/projects` 下 —— 这不是口味问题。
        *
        * `server/index.js` 里有一句 `app.use('/api/projects', authenticateToken, …)`,
-       * 它排在文件路由**之前**。任何挂在 `/api/projects/...` 上的路由,不管自己挂不挂
-       * authenticateToken,请求都要先过那一道 —— 一条**靠票据、不带 JWT** 的下载链接
+       * 它排在文件路由之前。任何挂在 `/api/projects/...` 上的路由,不管自己挂不挂
+       * authenticateToken,请求都要先过那一道 —— 一条靠票据、不带 JWT 的下载链接
        * 会被它直接 401 掉,而且失败形态和"票过期"一模一样,极难排查。
        *
        * 换个前缀之后,注册顺序怎么变都影响不到它,而且"不带登录态的路由"全部集中在
        * `/api/downloads` 这一个前缀下,审计时一眼能数清。
        */
       const base = '/api/downloads';
-      // hj:票里记下签发时的 token_version,直传口比对(见 download-tickets.js)。
+      // 票里记下签发时的 token_version,直传口比对(见 download-tickets.js)。
       const ticketViewer = { ...viewer, tokenVersion: (req as { user?: { token_version?: number | null } }).user?.token_version ?? 0 };
 
       // 单个文件才走直传 —— 只有它能事先算出 Content-Length,也就只有它有百分比。
@@ -908,8 +899,8 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         });
       }
 
-      // hl(P3 文件组):名额满时签票就拒 —— 导航到 /zip 才 429 的话浏览器只在下载栏里写一行
-      // 「失败」,应用内那条「正在准备打包」永远等不到结果。
+      // 名额满时签票就拒:等导航到 /zip 才 429 的话,浏览器只在下载栏里写一行「失败」,
+      // 应用内那条「正在准备打包」永远等不到结果。
       if (!hasZipSlot()) {
         return res.status(429).json({ error: '同时打包下载的人太多了,请稍后再试。', code: 'ZIP_BUSY' });
       }
@@ -969,19 +960,16 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
       const resolved = validation.resolved;
 
-      // 保存冲突检测(D1):前端加载时拿到的 mtime 作基线,保存时回传。若磁盘上的
-      // 当前 mtime 与基线不符,说明这期间别人(Claude / 另一用户 / 外部编辑)改过 ——
-      // 无条件 writeFile 就是"最后写入者赢"、悄悄覆盖别人的改动(多用户 IDE 高频
-      // 事故)。回 409 让前端提示"磁盘已变化:重载 / 仍覆盖"。基线缺省(旧前端 / 新建
-      // 文件)时退化为不检测,保持兼容。
+      // 保存冲突检测:前端加载时拿到的 mtime 作基线,保存时回传。磁盘上的当前 mtime 与基线
+      // 不符,说明这期间别人(Claude / 另一用户 / 外部编辑)改过,无条件 writeFile 会悄悄覆盖
+      // 别人的改动;回 409 让前端提示"磁盘已变化:重载 / 仍覆盖"。不带基线时不检测。
       if (typeof baseMtimeMs === 'number') {
         let currentMtimeMs: number | null = null;
         try {
           currentMtimeMs = (await fsPromises.stat(resolved)).mtimeMs;
         } catch (statError) {
-          // hk(审计 P2-6):带着基线却找不到文件 = 打开之后被删了或改名了。原来吞掉错误继续
-          // writeFile,于是改名 foo→bar 之后在 foo 的标签页里保存,会把 foo 重新建出来、新内容
-          // 也没进 bar。现在回 409,让用户明确选择「另存到原路径」(再点一次保存,不带基线)。
+          // 带着基线却找不到文件 = 打开之后被删了或改名了。直接 writeFile 会在原路径重新建出文件,
+          // 新内容也进不了改名后的那份;回 409,让用户明确选择「另存到原路径」(再点一次保存,不带基线)。
           if ((statError as NodeJS.ErrnoException).code === 'ENOENT') {
             return res.status(409).json({
               error: '这个文件在你打开之后被删除或改名了,保存已中止。再次点击保存会在原路径重新建出这个文件。',
@@ -999,8 +987,8 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         }
       }
 
-      // hk(审计 P1-6):磁盘上已有的文件是二进制或非 UTF-8 文本时,**服务端**也拒绝按文本覆盖 ——
-      // 不只靠前端只读(旧前端、别的调用方)。要真的整份替换,删掉再建。
+      // 磁盘上已有的文件是二进制或非 UTF-8 文本时,服务端也拒绝按文本覆盖,不只靠前端只读
+      // (别的调用方不一定遵守)。要真的整份替换,删掉再建。
       const existing = await sniffExistingFile(resolved);
       if (existing && existing.size > 0 && (existing.binary || !existing.utf8)) {
         return res.status(409).json({
@@ -1011,7 +999,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         });
       }
 
-      // hk(审计 P2-7):原文件是 CRLF 换行、而编辑器发来的是纯 \n(CodeMirror 一律按 \n 存)时还原成 CRLF ——
+      // 原文件是 CRLF 换行、而编辑器发来的是纯 \n(CodeMirror 一律按 \n 存)时还原成 CRLF,
       // 否则改一个字,整份文件在 git diff 里全变了。
       const text = typeof content === 'string' ? content : String(content);
       const toWrite = existing?.lineEnding === 'crlf' && !text.includes('\r') ? text.replace(/\n/g, '\r\n') : text;
@@ -1091,7 +1079,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       if (budget.truncated) {
         res.setHeader('X-Prism-Truncated', '1');
       }
-      // hl(动态 P2-10):被列的根目录自己的直接子项被砍了 —— 根没有节点可打标,单独一个头。
+      // 被列的根目录自己的直接子项被截断了:根没有节点可打标,单独用一个响应头。
       if (budget.rootTruncated) {
         res.setHeader('X-Prism-Root-Truncated', '1');
       }
@@ -1211,7 +1199,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         return res.status(404).json({ error: 'Project not found' });
       }
 
-      // Validate old path —— hj:源路径按目录项本身校验(不跟随软链),见 validateEntryInProject
+      // 源路径按目录项本身校验(不跟随软链),见 validateEntryInProject
       const oldValidation = await validateEntryInProject(projectRoot, oldPath);
       if (!oldValidation.valid) {
         return res.status(403).json({ error: oldValidation.error });
@@ -1286,7 +1274,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         return res.status(404).json({ error: 'Project not found' });
       }
 
-      // Validate path —— hj:删除作用在目录项本身(软链删的是链接),不跟随最后一段软链
+      // 删除作用在目录项本身(软链删的是链接),校验时不跟随最后一段软链
       const validation = await validateEntryInProject(projectRoot, targetPath);
       if (!validation.valid) {
         return res.status(403).json({ error: validation.error });
@@ -1294,8 +1282,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
 
       const resolvedPath = validation.resolved;
 
-      // Check if path exists and get stats
-      // hj:lstat —— 悬空软链用 stat 会 404(删不掉);指向目录的软链用 stat 会被当成目录。
+      // 用 lstat:悬空软链用 stat 会 404(删不掉);指向目录的软链用 stat 会被当成目录。
       let stats;
       try {
         stats = await fsPromises.lstat(resolvedPath);
@@ -1311,9 +1298,8 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       // Delete based on type
       if (stats.isDirectory()) {
         await fsPromises.rm(resolvedPath, { recursive: true, force: true });
-        // 附件台账按绝对路径记账;删掉整个目录就把它名下所有附件行一并收走,
-        // 否则用户手删了 attachments/ 里的东西,配额与设置页用量会一直挂着
-        // 幽灵条目,直到 30 天 TTL 才消(forget() 此前是死代码,没有任何调用点)。
+        // 附件台账按绝对路径记账:删掉目录就把它名下所有附件行一并收走,否则手删的附件
+        // 会作为幽灵条目继续占配额与设置页用量,直到 TTL 过期。
         attachmentsDb.forgetUnder(resolvedPath);
       } else {
         await fsPromises.unlink(resolvedPath);
@@ -1481,8 +1467,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
 
         // Move uploaded files from temp to target directory
         const uploadedFiles = [];
-        // hl(动态 P2-12):同名文件此前被 copyFile 静默覆盖,响应里只有「上传完成」。
-        // 落盘前查一次存在性,把被覆盖的相对名列在响应里,前端据此提示。
+        // copyFile 会静默覆盖同名文件:落盘前查一次存在性,把被覆盖的相对名列在响应里,前端据此提示。
         const overwritten: string[] = [];
         log.debug('Processing files:', uploadedRequestFiles.map(f => ({ originalname: f.originalname, path: f.path })));
         for (let i = 0; i < uploadedRequestFiles.length; i++) {
@@ -1491,10 +1476,10 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
            * Use relative path if provided (for folder uploads), otherwise use originalname.
            *
            * `originalname` 要过一道编码恢复:multer 把 multipart 的 filename 按 latin1
-           * 读,`报告.docx` 到这里是 `æ¥å.docx`,而这一行的名字**会直接落到用户的
-           * 项目文件树上** —— 传完在自己的文件夹里再也认不出那个文件。
+           * 读,`报告.docx` 到这里是 `æ¥å.docx`,而这一行的名字会直接落到用户的
+           * 项目文件树上 —— 传完在自己的文件夹里再也认不出那个文件。
            *
-           * `filePaths` 不过这道:它来自 multipart 的**字段值**(`relativePaths`),
+           * `filePaths` 不过这道:它来自 multipart 的字段值(`relativePaths`),
            * busboy 按 utf8 解,本来就是对的;再套一层只会白担误伤的风险。
            */
           const fileName = (filePaths && filePaths[i]) ? filePaths[i] : recoverUploadFilename(file.originalname);
@@ -1557,9 +1542,9 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
   };
 
   /**
-   * F10:跨文件全局搜索(内容,不是文件名)。
+   * 跨文件全局搜索(内容,不是文件名)。
    *
-   * 搜索根**必须**是调用者可见的项目目录 —— `resolveVisibleProjectRoot` 同时做
+   * 搜索根必须是调用者可见的项目目录 —— `resolveVisibleProjectRoot` 同时做
    * 归属校验与路径解析,拿不到就是 404(与"项目不存在"同形,不做存在性预言机)。
    */
   router.get('/api/projects/:projectId/search', authenticateToken, async (req, res) => {
@@ -1644,7 +1629,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         if (!validation.valid) return res.status(403).json({ error: validation.error });
       }
 
-      // hk(审计 P2-9):按人限并发会话数与声明总字节数。
+      // 按人限并发会话数与声明总字节数。
       const ownerId = String(readRequestViewer(req).userId ?? '');
       const pending = pendingUploadsOf(ownerId);
       if (pending.count >= UPLOAD_MAX_PENDING_PER_USER) {
@@ -1712,8 +1697,8 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
       }
       // 上限在服务端累加校验 —— 客户端声明的 size 只是提示,不能当约束。
       const chunkSize = req.file.size || 0;
-      // hk:不许超过 start 时声明的大小(原来只看全局 1GB 上限 —— 声明 1 字节也能往里追加 1GB,
-      // 按人的总量上限就被绕过了)。留一个分片的余量给客户端的取整误差。
+      // 不许超过 start 时声明的大小,否则声明 1 字节也能一直追加到全局上限,按人的总量上限就被绕过了。
+      // 留一个分片的余量给客户端的取整误差。
       if (session.received + chunkSize > Math.min(MAX_FILE_UPLOAD_SIZE_BYTES, session.declaredSize + UPLOAD_CHUNK_BYTES)) {
         discardTempFile();
         dropUploadChunkSession(uploadId);
@@ -1782,7 +1767,7 @@ export function createFilesRouter(dependencies: FilesRouterDependencies): Router
         return res.status(403).json({ error: destValidation.error });
       }
       await fsPromises.mkdir(path.dirname(destPath), { recursive: true });
-      // hl(动态 P2-12):与批量上传同口径,报出被覆盖的同名文件。
+      // 与批量上传同口径,报出被覆盖的同名文件。
       const overwritten = (await pathExists(destPath)) ? [fileName] : [];
 
       // copy + unlink:分片是攒在 os.tmpdir() 的,与项目目录很可能不在同一设备上。

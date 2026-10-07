@@ -7,13 +7,13 @@ import { describe, expect, it } from 'vitest';
 import { MODEL_VENDORS, detectModelVendor } from '../../../shared/modelVendors';
 
 /**
- * hn(方案 v3 B4 / B6 / B7)前端接线 —— 客户端测试跑在 node 环境(挂不起组件),读源码与静态文件钉住:
- * 图标文件就是方案里核过 md5 的那 9 个、单色图走遮罩、选择器 / chip / 设置页 / SkillWhet 都接上了目录。
+ * 模型目录的前端接线 —— 客户端测试跑在 node 环境(挂不起组件),读源码与静态文件钉住:
+ * 图标文件就是核过 md5 的那 9 个、单色图走遮罩、选择器 / chip / 设置页 / SkillWhet 都接上了目录。
  */
 const read = (relative: string) => readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
 const readBytes = (relative: string) => readFileSync(fileURLToPath(new URL(relative, import.meta.url)));
 
-/** 方案 v3 B6 表:@lobehub/icons-static-svg 1.95.1,重新从 npm 取包核过。 */
+/** 图标文件的 md5:@lobehub/icons-static-svg 1.95.1,从 npm 取包核过。 */
 const ICON_MD5: Record<string, string> = {
   'claude-color.svg': '9e17036145c6f918d950b9ba9435f5b7',
   'openai.svg': '0f50ad4f3a6548123711a4868e8bbbc8',
@@ -27,7 +27,7 @@ const ICON_MD5: Record<string, string> = {
   'doubao-color.svg': 'f2137c7dca53570370711a1e6f8a3935',
 };
 
-describe('B6 厂商图标', () => {
+describe('厂商图标', () => {
   it('9 家的图标文件都在 public/model-icons/,md5 与方案里核过的一致', () => {
     expect(MODEL_VENDORS).toHaveLength(9);
     for (const vendor of MODEL_VENDORS) {
@@ -61,7 +61,7 @@ describe('B6 厂商图标', () => {
   });
 });
 
-describe('B4 选择器 / chip / 设置页', () => {
+describe('选择器 / chip / 设置页', () => {
   it('/models 弹窗用新选择器,拿到当前上下文用量', () => {
     const modal = read('../chat/view/subcomponents/CommandResultModal.tsx');
     expect(modal).toMatch(/<ModelPickerContent/);
@@ -103,7 +103,7 @@ describe('B4 选择器 / chip / 设置页', () => {
   });
 });
 
-describe('B7 SkillWhet 从目录选模型', () => {
+describe('SkillWhet 从目录选模型', () => {
   it('训练表单:不再写死三个别名;按真名判评估 ≠ 提议;非 root 只列允许的', () => {
     const form = read('../skillwhet/view/RunNew.tsx');
     expect(form).not.toMatch(/<datalist id="skillwhet-models">/);

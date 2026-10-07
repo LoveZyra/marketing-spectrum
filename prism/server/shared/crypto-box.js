@@ -3,7 +3,7 @@
  *
  * Prism stores third-party tokens (GitHub PATs, provider keys) in a plain
  * SQLite file under the user's home directory. Anything that can read that
- * file — a backup, a sync client, another process — could previously read
+ * file — a backup, a sync client, another process — would otherwise read
  * those tokens verbatim. This module wraps them in AES-256-GCM so the
  * database alone is not enough.
  *
@@ -21,8 +21,9 @@
  *   v1:<iv>:<authTag>:<ciphertext>
  *
  * `decrypt()` passes through any value that does not carry the v1 prefix, so
- * rows written before encryption existed keep working and get upgraded
- * lazily on their next write.
+ * legacy plaintext rows keep working. Nothing here rewrites them: the
+ * credentials repository encrypts such rows in place at startup
+ * (`credentialsDb.encryptLegacyPlaintext`).
  */
 
 import crypto from 'crypto';
@@ -115,7 +116,7 @@ export function encrypt(plaintext, key) {
 
 /**
  * Decrypts a v1 envelope. Values without the prefix are returned as-is
- * (pre-encryption rows). A malformed or tampered envelope throws, because
+ * (legacy plaintext rows). A malformed or tampered envelope throws, because
  * silently returning ciphertext would push a corrupt token into a git
  * operation and produce a far more confusing failure downstream.
  */

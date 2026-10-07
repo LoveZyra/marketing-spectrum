@@ -3,9 +3,8 @@ import { describe, test, expect } from 'vitest';
 import { calculateDiff, createCachedDiffCalculator } from './messageTransforms';
 
 /**
- * C9 回归:diff 的 LCS 表加了格子预算(前后缀先裁剪、改动区超预算退化成
- * 全删+全增)。修前一次几千行×几千行的 Edit 会在渲染路径上分配千万级格子,
- * 主线程冻住数秒。
+ * diff 的 LCS 表有格子预算:先裁掉公共前后缀,改动区超预算时退化成全删 + 全增。
+ * 否则一次几千行 × 几千行的 Edit 会在渲染路径上分配千万级格子,主线程冻住数秒。
  */
 describe('calculateDiff', () => {
   test('小改动:输出与行号不变', () => {
@@ -31,7 +30,7 @@ describe('calculateDiff', () => {
   });
 
   test('大文件小改动:前后缀裁剪后行号仍指向原文', () => {
-    // 5000 行文件改中间一行 —— 修前要建 5001×5001 的表;裁剪后改动区只有 1×1。
+    // 5000 行文件改中间一行:不裁剪要建 5001×5001 的表,裁剪后改动区只有 1×1。
     const lines = Array.from({ length: 5000 }, (_, index) => `line-${index}`);
     const oldStr = lines.join('\n');
     const changed = [...lines];

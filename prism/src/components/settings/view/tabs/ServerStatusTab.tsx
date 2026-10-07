@@ -12,7 +12,7 @@ import UsageCostSection from './UsageCostSection';
 type ServerStatus = {
   now: string;
   appVersion: string | null;
-  /** v2.0.0:「v2.0.0 · 日期 · 提交号」;老服务端没有这个字段。 */
+  /** 形如「v<版本> · 日期 · 提交号」;旧版服务端不返回该字段,此时显示 appVersion。 */
   appRelease?: string | null;
   nodeVersion: string;
   processUptimeSec: number;
@@ -37,8 +37,7 @@ type StatusResponse = { success?: boolean; status?: ServerStatus; error?: string
 
 const REFRESH_MS = 10_000;
 
-// 口径见 utils/formatBytes —— 这里原来是四份实现之一,和它的子组件
-// RuntimeStatsSection 并排渲染却对不上(MB 档小数位不同,而且缺 < 1KB 分支)。
+// 磁盘容量以 KB 计;格式化口径统一用 utils/formatBytes,与并排渲染的 RuntimeStatsSection 一致。
 const formatKb = formatKilobytes;
 
 const formatUptime = (seconds: number): string => {
@@ -103,11 +102,7 @@ export default function ServerStatusTab() {
     : 0;
   const loadPerCore = status ? status.load1 / Math.max(1, status.cpuCount) : 0;
 
-  /*
-    gn:与其余设置页同口径 —— 页面这一层不设宽度上限,由弹窗的宽度决定。
-    三个页签原来各设各的(xl / 2xl / 3xl),而别的页签一个都没有,弹窗放宽之后
-    就是三种不同的右边留白(2026-09-15 用户逐个截图报过来)。
-  */
+  /* 与其余设置页一致:页面这一层不设宽度上限,由弹窗的宽度决定。 */
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
@@ -212,13 +207,11 @@ export default function ServerStatusTab() {
             </div>
           </div>
 
-          {/* F6:进程内资源 + 每账号附件配额。机器指标很闲而 Prism 很慢时,
-              原因通常在这两块里,而它们此前一个都看不见。 */}
+          {/* 进程内资源 + 每账号附件配额:机器指标很闲而 Prism 很慢时,原因通常在这两块里。 */}
           <RuntimeStatsSection refreshMs={REFRESH_MS} />
           <AttachmentQuotaSection />
-          {/* fg:用量与费用台账。放在服务器页而不是"我的账号",是因为它回答的是
-              运维/负责人的问题("这个月花了多少、谁花的"),不是个人偏好。
-              非 root 打开时服务端只给他自己的行,组件里有一句说明。 */}
+          {/* 用量与费用台账放在服务器页而不是「我的账号」:它回答的是运维 / 负责人的问题
+              (这个月花了多少、谁花的),不是个人偏好。服务端对非 root 只返回其本人的行。 */}
           <UsageCostSection />
         </>
       )}

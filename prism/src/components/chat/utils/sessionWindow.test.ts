@@ -38,7 +38,7 @@ describe('rememberSessionWindow', () => {
     expect(memory.has(`s${MAX_REMEMBERED_WINDOWS + 4}`)).toBe(true);
   });
 
-  it('**重复记同一条要排到队尾**,否则淘汰的是刚看过的那条', () => {
+  it('重复记同一条要排到队尾,否则淘汰的是刚看过的那条', () => {
     let memory: SessionWindowMemory = EMPTY_WINDOW_MEMORY;
     for (let i = 0; i < MAX_REMEMBERED_WINDOWS; i += 1) {
       memory = rememberSessionWindow(memory, `s${i}`, { visibleCount: 30, allLoaded: false });
@@ -59,7 +59,7 @@ describe('rememberSessionWindow', () => {
 });
 
 /**
- * **两条不变式,任何一条破了都会把分页搞死。**
+ * 两条不变式,任何一条破了都会把分页搞死。
  *
  * 1. `allLoaded` 只在"手里现在还是全量"时才恢复 —— 它为真会让
  *    `loadOlderMessages` / 自动补页 / 「看更早」全部直接 return;
@@ -80,7 +80,7 @@ describe('recallSessionWindow', () => {
     })).toEqual({ visibleCount: 400, allLoaded: true });
   });
 
-  it('**手里已经不是全量了 → allLoaded 必须降级**(否则「看更早」永久失效)', () => {
+  it('手里已经不是全量了 → allLoaded 必须降级(否则「看更早」永久失效)', () => {
     // 期间槽位被淘汰/过期,回来只重新拉了首页 20 条
     expect(recallSessionWindow({
       memo: { visibleCount: 400, allLoaded: true },
@@ -113,7 +113,7 @@ describe('recallSessionWindow', () => {
     }).allLoaded).toBe(false);
   });
 
-  it('**窗口不能超过手里的条数**', () => {
+  it('窗口不能超过手里的条数', () => {
     expect(recallSessionWindow({
       memo: { visibleCount: 400, allLoaded: false },
       loadedCount: 120, hasMore: true, total: 500, phase1: PHASE1,
@@ -155,14 +155,13 @@ describe('recallSessionWindow', () => {
 
 
 /**
- * fz:**槽位马上要被换掉的话,它现在说什么都不算数。**
+ * 槽位马上要被换掉的话,它现在说什么都不算数。
  *
- * 调用点原来喂的是**重拉之前**的槽位 —— `recallSessionWindow` 的不变式本身
- * 是对的,但输入是过期的。回到一条放置过久的长会话:`allLoaded` 按旧槽位恢复
- * 成 true,紧接着重拉把正文换成尾部 20 条、`hasMore` 变回 true。两条横幅互斥,
- * 同时消失;`loadOlderMessages` / 自动补页 / 「加载全部」浮层又全在
- * `if (allMessagesLoadedRef.current) return` 上退出 —— 内容取不回来,
- * 屏幕上一个入口都没有。
+ * `recallSessionWindow` 的不变式本身是对的,但调用点若喂重拉之前的槽位,输入就是过期的:
+ * 回到一条放置过久的长会话,`allLoaded` 按旧槽位恢复成 true,紧接着重拉把正文换成尾部
+ * 20 条、`hasMore` 变回 true。两条横幅互斥,同时消失;`loadOlderMessages` / 自动补页 /
+ * 「加载全部」浮层又全在 `if (allMessagesLoadedRef.current) return` 上退出,
+ * 内容取不回来,屏幕上一个入口都没有。
  */
 describe('过期槽位不能作数(调用点把 hasMore 喂成 true)', () => {
   it('要重拉时 → allLoaded 一律降级', () => {

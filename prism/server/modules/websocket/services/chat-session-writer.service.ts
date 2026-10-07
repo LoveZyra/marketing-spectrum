@@ -15,7 +15,7 @@ const log = createLogger('ws');
 
 type ChatSessionWriterOptions = {
   /**
-   * 起这条 run 的那个 socket。**可以是 null** —— 外部 API 触发的回合一开始
+   * 起这条 run 的那个 socket。可以是 null —— 外部 API 触发的回合一开始
    * 一个浏览器都没有,人是拿着返回的 session id 去点链接的,晚几秒才接上来。
    * 那时走 `addConnection` 加进来,照样能看到后半段,再靠补发游标补前半段。
    */
@@ -38,24 +38,29 @@ type ChatSessionWriterOptions = {
    */
   decorateOutboundEvent: (message: NormalizedMessage) => NormalizedMessage | null;
   /**
-   * du:这一轮的出站帧要不要落显示日志。默认要。
+   * 这一轮的出站帧要不要落显示日志。默认要。
    *
-   * 唯一置 false 的场合:老会话的历史**没能抄进日志**(seed 失败)。那时候
+   * 唯一置 false 的场合:已有会话的历史没能抄进日志(seed 失败)。那时候
    * 往日志里写哪怕一行,`fetchHistory` 都会立刻改判日志为权威,几百条历史
-   * 从界面消失且不可恢复。宁可这一轮不留日志(照样正常推流、transcript
-   * 那条老路还在),等下一轮 seed 重试成功再开始记。
+   * 从界面消失且不可恢复。宁可这一轮不留日志(照样正常推流,历史仍从
+   * transcript 读),等下一轮 seed 重试成功再开始记。
    */
   persistDisplayLog?: boolean;
 };
 
+/** 可见性复检的缓存窗口:撤权之后最多再多收这么久的帧。 */
+const VISIBILITY_CACHE_MS = 2000;
+
+/** 单个订阅者的出站积压上限。超过就摘掉,让它重连走补发。 */
+const MAX_OUTBOUND_BUFFER_BYTES = 8 * 1024 * 1024;
+
 /**
- * Gateway writer handed to provider runtimes instead of a raw websocket writer.
+ * Gateway writer handed to provider runtimes instead of a raw websocket.
  *
- * It exposes the exact same surface as `WebSocketWriter` (`send`,
- * `setSessionId`, `getSessionId`, `updateWebSocket`, `userId`,
- * `isWebSocketWriter`) so the provider runtime (`claude-sdk.js`) needs zero
- * changes — but everything that flows through it is translated from the
- * provider's world into the app's protocol:
+ * Provider runtimes (`claude-sdk.js`) only use the writer surface (`send`,
+ * `sendAndCountDelivered`, `setSessionId`, `getSessionId`, `userId`);
+ * everything that flows through it is translated from the provider's world
+ * into the app's protocol:
  *
  * - `session_created` events are swallowed and turned into a provider-id
  *   mapping; the frontend never learns provider-native ids.
@@ -64,38 +69,27 @@ type ChatSessionWriterOptions = {
  * - `setSessionId(...)` calls (used by runtimes to label captured ids) are
  *   intercepted and recorded as the provider-id mapping as well.
  */
-/** fj:可见性复检的缓存窗口。撤权最多再多收这么久的帧(此前是整整一轮)。 */
-const VISIBILITY_CACHE_MS = 2000;
-
-/** fj:单个订阅者的出站积压上限。超过就摘掉,让它重连走补发。 */
-const MAX_OUTBOUND_BUFFER_BYTES = 8 * 1024 * 1024;
-
 export class ChatSessionWriter {
   userId: string | number | null;
   /**
-   * Some runtimes feature-detect their writer with this flag; keep it so the
-   * gateway writer is a drop-in replacement for `WebSocketWriter`.
+   * Writer-type marker for runtimes that feature-detect their writer;
+   * nothing in the repo reads it at present.
    */
   isWebSocketWriter = true;
 
   /**
-   * 每一个订阅着这条 run 的 socket。
+   * 每一个订阅着这条 run 的 socket,出站帧广播给所有订阅者。
    *
-   * 原来这里是单个 `ws`,`updateWebSocket` 直接覆盖 —— **谁最后订阅,流就归谁**。
-   * 于是同一个人开第二个标签页(或者公开项目里另一个人打开同一会话)就把流抢走了,
-   * 原来那个标签页从此一个字节都收不到,转圈到刷新为止。
+   * 不能只认最后一个订阅者:同一个人开第二个标签页(或公开项目里另一个人打开同一会话)
+   * 就会把流抢走,前一个标签页从此收不到;审批请求也走这条路,抢走流的浏览器若没在看
+   * 这个会话,前端那道 `sid === activeViewSessionId` 会把它丢掉,两边都没人看见。
    *
-   * 更隐蔽的后果在审批上:审批请求也走这条路。抢走流的那个浏览器如果没在看这个
-   * 会话,前端那道 `sid === activeViewSessionId` 会把它丢掉 —— **两边都没人看见**,
-   * 用户这边只等到一句超时。
-   *
-   * 改成集合之后语义变成"广播给所有订阅者"。谁该进这个集合由调用方的可见性检查
-   * 决定(`assertSocketMaySeeSession`),这里只负责发。
+   * 谁该进这个集合由调用方的可见性检查决定(`assertSocketMaySeeSession`),这里只负责发。
    */
   private readonly connections = new Set<RealtimeClientConnection>();
 
   /**
-   * fj:每帧可见性复检的结果缓存(见 canDeliverToConnection)。
+   * 每帧可见性复检的结果缓存(见 canDeliverToConnection)。
    *
    * WeakMap 按 socket 记:连接一断,条目跟着连接一起被回收,不需要额外清扫。
    */
@@ -173,7 +167,7 @@ export class ChatSessionWriter {
   /**
    * 把一个 socket 加进这条 run 的订阅者集合。
    *
-   * **加入,不是替换** —— 见 `connections` 上的说明。刷新页面时旧 socket 已经
+   * 加入,不是替换 —— 见 `connections` 上的说明。刷新页面时旧 socket 已经
    * 关掉了,会在下一次 `forward` 时被顺手清掉,不需要调用方配对地摘除。
    */
   addConnection(connection: RealtimeClientConnection): void {
@@ -212,28 +206,40 @@ export class ChatSessionWriter {
   }
 
   /**
-   * 广播给所有还开着的订阅者,返回**真正送出去了几份**。
+   * 发一帧实时事件,但不落显示日志。返回送达了几个订阅者。
    *
-   * 返回值不是装饰。原来这里是 `if (readyState === OPEN) send()`,不满足就
-   * 静默返回 —— 调用方拿不到任何信号。审批请求正是从这条路发出去的:发完就
-   * 开始等,而"到底有没有送到"无人知晓。掉线时那一帧进了黑洞,系统却照样
-   * 在计时,时间一到就替一个从没看见过它的用户按下了拒绝。
+   * 给调用方已经自己写进显示日志的那一行用:用户这条消息是入站的,由 chat 网关直接落库,
+   * 再作为这一轮的实时帧推给所有查看者。照样经 `decorateOutboundEvent` 编号、进重放缓冲,
+   * 中途订阅或重连的人也补得到;走 `send` 的话,同一行会在出站收口再写一次显示日志。
+   */
+  sendWithoutPersist(data: unknown): number {
+    const record = readObjectRecord(data);
+    if (!record || typeof record.kind !== 'string') return 0;
+    const outbound = this.options.decorateOutboundEvent(record as NormalizedMessage);
+    return outbound ? this.forward(outbound, { persist: false }) : 0;
+  }
+
+  /**
+   * 广播给所有还开着的订阅者,返回真正送出去了几份。
+   *
+   * 审批请求从这条路发出,发完就开始计时,调用方必须知道到底有没有送到:
+   * 否则掉线时那一帧进了黑洞,时间一到就替一个从没看见过它的用户按下了拒绝。
    *
    * 顺手清掉已经关闭的 socket:刷新页面留下的旧连接没人会来摘,靠这里回收。
    */
-  private forward(message: NormalizedMessage): number {
+  private forward(message: NormalizedMessage, { persist = true }: { persist?: boolean } = {}): number {
     /**
      * 落一份「给人看的对话日志」。
      *
      * 这里是所有出站消息的唯一收口:`decorateAndRecordEvent` 已经把 `sessionId`
-     * 换成了**应用侧**的 id,provider 的原生 id 到不了这一步 —— 正好和
+     * 换成了应用侧的 id,provider 的原生 id 到不了这一步 —— 正好和
      * `fetchHistory` 的键对齐。
      *
-     * 写在投递**之前**、且不看有没有 socket 在连:用户关掉标签页,回合照跑,
+     * 写在投递之前、且不看有没有 socket 在连:用户关掉标签页,回合照跑,
      * 日志照记。这一点是它比"前端 store"更可靠的地方。
      */
-    // du:seed 失败的那一轮整轮不落日志(见 persistDisplayLog 的说明)。
-    if (this.options.persistDisplayLog !== false
+    // seed 失败的那一轮整轮不落日志(见 persistDisplayLog 的说明);调用方已自己落过库的帧也不再写。
+    if (persist && this.options.persistDisplayLog !== false
       && typeof message.sessionId === 'string' && message.sessionId) {
       sessionMessagesDb.append(message.sessionId, message);
     }
@@ -249,15 +255,12 @@ export class ChatSessionWriter {
         continue;
       }
       /**
-       * fj:每帧复检可见性。
+       * 每帧复检可见性。
        *
-       * 进这个集合时是过了检查的,但**进来之后整轮都不再复检** —— 于是 A 撤销
-       * 共享后,B 会继续完整收完这一轮剩下的全部内容:工具参数、`tool_result`
-       * 正文(含被读文件的内容)、`changed_files` 的 diff、审批请求。一轮可以跑
-       * 几十分钟。
-       *
-       * `attachSessionViewers` 早就是每轮重判、`broadcastToSessionViewers` 更是
-       * 每帧重判,唯独 run 的**主内容流**漏了 —— 而它恰恰是内容最多的那条。
+       * 进这个集合时过了检查,但一轮可以跑几十分钟:不复检的话,A 撤销共享后 B 仍会收完
+       * 这一轮剩下的全部内容 —— 工具参数、`tool_result` 正文(含被读文件的内容)、
+       * `changed_files` 的 diff、审批请求。与 `attachSessionViewers`(每轮重判)、
+       * `broadcastToSessionViewers`(每帧重判)同一口径。
        *
        * 成本靠 2 秒 TTL 的结果缓存摊平(见 canDeliverToConnection)。
        */
@@ -266,13 +269,12 @@ export class ChatSessionWriter {
         continue;
       }
       /**
-       * fj:背压闸。
+       * 背压闸。
        *
-       * 出站帧此前只判 `readyState` 就 `send`,全仓一处 `bufferedAmount` 都没有;
-       * 而 `tool_result` / `changed_files` 单帧可达几百 KB 到 MB 级。一个订阅者的
+       * `tool_result` / `changed_files` 单帧可达几百 KB 到 MB 级。一个订阅者的
        * TCP 读端停住(手机切后台、网络劣化、代理挂起)但连接没断时,每一帧都在
-       * Node 侧排队 —— 心跳兜得晚(ping 排在积压后面,要 30~60 秒才判死),
-       * 也就是说单个卡住的订阅者最多能让服务端替它缓冲一整分钟的完整帧流。
+       * Node 侧排队;心跳兜得晚(ping 排在积压后面,要 30~60 秒才判死),
+       * 单个卡住的订阅者能让服务端替它缓冲一整分钟的完整帧流。
        *
        * 摘掉之后客户端重连,靠 `chat.subscribe` 的补发游标 + 前端的 seq 空洞检测
        * 回到正轨,语义上是安全的。
@@ -300,12 +302,11 @@ export class ChatSessionWriter {
    * 这个连接现在还能看这条会话吗 —— 带 2 秒 TTL 的缓存。
    *
    * 不缓存的话,一条工具密集的回合里每帧每连接都要跑三次 SQLite 查询;
-   * 缓存 2 秒意味着撤权最多再多收两秒的帧,而那是可以接受的窗口
-   * (对照:此前是**整整一轮**)。
+   * 缓存 2 秒意味着撤权最多再多收两秒的帧,这是可以接受的窗口。
    */
   private canDeliverToConnection(connection: RealtimeClientConnection, sessionId: string): boolean {
     /**
-     * 没有身份戳的连接**不参与**这道复检。
+     * 没有身份戳的连接不参与这道复检。
      *
      * 浏览器过来的 chat socket 在握手完成时无条件盖戳(`handleChatConnection`),
      * 所以"没戳"只可能是服务端自己造的写入方 —— 外部 API 的无浏览器回合、

@@ -33,7 +33,6 @@
   },
   "input": {
     "placeholder": "Tapez / pour les commandes, @ pour les fichiers, ou posez une question à {{provider}}...",
-    "attachImages": "Joindre des images",
     "send": "Envoyer",
     "stop": "Arrêter",
     "hintText": {

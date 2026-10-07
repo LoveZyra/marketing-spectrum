@@ -8,8 +8,8 @@ interface MarkdownContentProps {
 }
 
 /**
- * Renders markdown content with proper styling
- * Used by: exit_plan_mode, long text results, etc.
+ * Markdown body for tool details, in the chat's prose style.
+ * Used by: PlanDisplay (ExitPlanMode) and the subagent `Task` input / result.
  */
 export const MarkdownContent: React.FC<MarkdownContentProps> = ({
   content,

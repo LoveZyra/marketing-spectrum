@@ -1,9 +1,8 @@
 /**
  * Coverage for server/routes/recsys-proxy.js.
  *
- * 这层比 ma-proxy 松:没有路径白名单。松掉白名单之后,剩下能挡住事故的就只有
- * "只转回环""剥 Prism 凭据""挡路径穿越"这三条,外加一条不属于安全但会直接
- * 让页面用不了的 Location 改写。每条都得有断言盯着。
+ * 这层比 ma-proxy 松:没有路径白名单。能挡住事故的就只有"只转回环""剥 Prism 凭据""挡路径穿越"
+ * 这三条,外加一条不属于安全但会直接让页面用不了的 Location 改写。每条都得有断言盯着。
  */
 import assert from 'node:assert/strict';
 import http from 'node:http';

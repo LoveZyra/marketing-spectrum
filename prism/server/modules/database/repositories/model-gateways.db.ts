@@ -3,12 +3,12 @@ import { appConfigDb } from '@/modules/database/repositories/app-config.js';
 import { decrypt, encrypt, getEncryptionKey } from '@/shared/crypto-box.js';
 
 /**
- * hq:**模型网关 / 个人 key / 私有模型**(表结构见 schema.ts 的三张 hq 表)。
+ * 模型网关 / 个人 key / 私有模型(表结构见 schema.ts 的 model_gateways、gateway_user_keys、user_models)。
  *
  * 只做存取 + 加解密;校验、解析、权限在 providers 模块的 claude-gateways.service 里。
  *
- * **key 只以密文落库**(与 user_credentials 同一把 AES 密钥,见 shared/crypto-box.js)。
- * 读接口分两类:`list*` / `get*` 返回的行**不带明文**;明文只有 `read*Key` 两个函数给,
+ * key 只以密文落库(与 user_credentials 同一把 AES 密钥,见 shared/crypto-box.js)。
+ * 读接口分两类:`list*` / `get*` 返回的行不带明文;明文只有 `readDefaultKey` / `readKey` 给,
  * 调用方只有「这一轮该用哪把 key」那一处(claude-gateways.service 的 resolveTurnGateway)和「测试连接」。
  */
 

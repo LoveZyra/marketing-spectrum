@@ -13,10 +13,10 @@ type ModelVendorIconProps = {
 };
 
 /**
- * hn(B6):模型厂商图标。图来自 `@lobehub/icons-static-svg` 1.95.1(MIT,见 NOTICE),拷在 `public/model-icons/`。
+ * 模型厂商图标。图来自 `@lobehub/icons-static-svg` 1.95.1(MIT,见 NOTICE),拷在 `public/model-icons/`。
  *
- * - **彩色**图直接 `<img>`;
- * - **单色**图(`fill="currentColor"`)用 CSS mask + `bg-current`,颜色跟着文字色走 —— `<img>` 拿不到 currentColor,
+ * - 彩色图直接 `<img>`;
+ * - 单色图(`fill="currentColor"`)用 CSS mask + `bg-current`,颜色跟着文字色走 —— `<img>` 拿不到 currentColor,
  *   深色主题下会是一块黑(与 `PrismWordmark` 同法);
  * - 认不出厂商 → 首字母徽标。
  */

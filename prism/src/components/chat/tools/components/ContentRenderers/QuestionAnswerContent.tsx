@@ -8,7 +8,7 @@ interface QuestionAnswerContentProps {
   className?: string;
 }
 
-// Exception to the stateless ContentRenderer pattern: multi-question navigation requires local state.
+// Unlike the other content renderers this one is stateful: it tracks which question is expanded.
 export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
   questions,
   answers,

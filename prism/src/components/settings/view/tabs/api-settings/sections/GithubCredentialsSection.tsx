@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Github, Plus, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Github, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../../../../../shared/view/ui';
@@ -6,6 +6,9 @@ import type { GithubCredentialItem } from '../types';
 
 type GithubCredentialsSectionProps = {
   githubCredentials: GithubCredentialItem[];
+  /** 最近一次拉列表失败:列表是上次拉到的(或空),不能显示成「还没有令牌」。 */
+  loadFailed?: boolean;
+  onRetryLoad?: () => void;
   showNewGithubForm: boolean;
   showNewTokenPlainText: boolean;
   newGithubName: string;
@@ -24,6 +27,8 @@ type GithubCredentialsSectionProps = {
 
 export default function GithubCredentialsSection({
   githubCredentials,
+  loadFailed = false,
+  onRetryLoad,
   showNewGithubForm,
   showNewTokenPlainText,
   newGithubName,
@@ -106,9 +111,28 @@ export default function GithubCredentialsSection({
         </div>
       )}
 
+      {loadFailed && (
+        <div
+          role="alert"
+          className="mb-3 flex flex-col gap-2 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between"
+        >
+          <span>
+            {githubCredentials.length > 0
+              ? t('apiKeys.github.refreshFailed', { defaultValue: 'GitHub 令牌列表刷新失败,下面是上次加载到的内容,可能不是最新的。' })
+              : t('apiKeys.github.loadFailed', { defaultValue: 'GitHub 令牌列表加载失败,请重试。' })}
+          </span>
+          {onRetryLoad && (
+            <Button type="button" variant="outline" size="sm" onClick={onRetryLoad}>
+              <RefreshCw className="h-4 w-4" />
+              {t('apiKeys.retryLoad', { defaultValue: '重试' })}
+            </Button>
+          )}
+        </div>
+      )}
+
       <div className="space-y-2">
         {githubCredentials.length === 0 ? (
-          <p className="text-sm italic text-muted-foreground">{t('apiKeys.github.empty')}</p>
+          loadFailed ? null : <p className="text-sm italic text-muted-foreground">{t('apiKeys.github.empty')}</p>
         ) : (
           githubCredentials.map((credential) => (
             <div key={credential.id} className="flex items-center justify-between rounded-lg border border-border p-3">

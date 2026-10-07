@@ -6,10 +6,6 @@ import type { AgentsSettingsTabProps } from './types';
 import AgentCategoryContentSection from './sections/AgentCategoryContentSection';
 import AgentCategoryTabsSection from './sections/AgentCategoryTabsSection';
 
-// OpenCode had no per-agent skills of its own, so the category list used to be
-// computed per agent and an effect snapped `selectedCategory` back whenever the
-// current one fell out of the list. Claude has all four, so the list is fixed
-// and the effect had nothing left to correct.
 const CATEGORIES: AgentCategory[] = ['account', 'permissions', 'mcp', 'skills'];
 
 export default function AgentsSettingsTab({

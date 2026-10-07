@@ -7,17 +7,12 @@ import { chatMessageToNormalized } from './useChatSessionState';
 import { normalizedToChatMessages } from './useChatMessages';
 
 /**
- * ga:**这条测试必须走完整条真实链路。**
+ * 这条测试必须走完整条真实链路。
  *
- * fw/fz 给前端那九处红字打了 `isLocalNotice`,`endsTurnForOutputs` 也按它放行 ——
- * 可这些红字全部走 `addMessage` → `chatMessageToNormalized` → store →
- * `normalizedToChatMessages`,而**标记在第一步就被剥掉了**
- * (`NormalizedMessage` 里当时根本没有这个字段)。
- * 修复代码在,数据到不了它:拖个大附件照旧把正在跑的清单折掉、标「已中断」、
- * 清空产出卡 —— 和 fw 之前一模一样。
- *
- * 而当时的单测是手搓 `{type:'error', isLocalNotice:true}` 字面量喂给纯函数,
- * 所以一直是绿的。**手搓字面量不算证明。**
+ * 前端本地红字(附件超限、文档解析失败等)带 `isLocalNotice`,`endsTurnForOutputs` 按它放行;
+ * 这些红字走 `addMessage` → `chatMessageToNormalized` → store → `normalizedToChatMessages`,
+ * 任何一步丢掉这个标记,拖个大附件就会把正在跑的清单折掉、标「已中断」、清空产出卡。
+ * 只拿手写的 `{type:'error', isLocalNotice:true}` 字面量喂纯函数,证明不了这一点。
  */
 const roundTrip = (message: ChatMessage): ChatMessage => {
   const normalized = chatMessageToNormalized(message, 'S', 'claude');
@@ -28,7 +23,7 @@ const roundTrip = (message: ChatMessage): ChatMessage => {
 };
 
 describe('isLocalNotice 走完 addMessage → store → 渲染 这条真实链路', () => {
-  it('**本地红字的标记活得下来,而且不被当成回合边界**', () => {
+  it('本地红字的标记活得下来,而且不被当成回合边界', () => {
     const back = roundTrip({
       type: 'error',
       isLocalNotice: true,

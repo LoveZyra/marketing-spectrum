@@ -21,7 +21,6 @@
     "noSessions": "暂无会话",
     "loadingSessions": "加载会话中...",
     "unnamed": "未命名",
-    "loading": "加载中...",
     "runningMeta": "运行中 · {{age}}",
     "messageCount": "{{count}} 条"
   },
@@ -78,7 +77,9 @@
     "restoreSessionError": "恢复会话时出错，请重试。",
     "bulkDeleteConfirm": "永久删除选中的 {{count}} 条归档会话?它们会先进入「最近删除」,保留期内可恢复。",
     "emptyTrashConfirm": "清空归档会把 {{count}} 条归档会话移入「最近删除」(只有你负责的项目里的会被处理),保留期内可恢复。继续?",
-    "bulkActionFailed": "批量操作失败,请重试。"
+    "bulkActionFailed": "批量操作失败,请重试。",
+    "bulkRestoreShortfall": "选中 {{requested}} 条,恢复了 {{done}} 条(没有权限或已不在归档里:{{skipped}} 条;处理出错:{{failed}} 条)。",
+    "bulkDeleteShortfall": "选中 {{requested}} 条,删除了 {{done}} 条(没有权限或已不在归档里:{{skipped}} 条;处理出错:{{failed}} 条)。"
   },
   "search": {
     "modeProjects": "项目",
@@ -87,6 +88,13 @@
     "searching": "搜索中...",
     "noResults": "未找到结果",
     "tryDifferentQuery": "尝试不同的搜索词",
+    "failedTitle": "搜索没有完成",
+    "ticketFailed": "没能连上搜索服务,请稍后重试。",
+    "interrupted": "搜索中途断开,请重试。",
+    "interruptedAt": "搜索中途断开(已扫描 {{scanned}}/{{total}} 个项目),请重试。",
+    "incomplete": "结果不完整:搜索中途断开。",
+    "incompleteAt": "结果不完整:搜索在扫描到 {{scanned}}/{{total}} 个项目时断开。",
+    "retry": "重试",
     "modeRunning": "运行中",
     "modeArchived": "归档",
     "switchMode": "切换搜索范围",
@@ -149,7 +157,14 @@
       "permissions": "设置权限",
       "owner": "改所有者",
       "delete": "归档或删除",
-      "exit": "退出多选"
+      "exit": "退出多选",
+      "sessionCount": "{{count}} 会话",
+      "archiveExplain": "<strong>归档</strong>:只是从活跃列表里隐藏,随时能在「归档」里恢复,什么都不会删。",
+      "deleteExplain": "<danger>彻底删除</danger>:删掉这 {{projectCount}} 个项目的会话记录(共 {{sessionCount}} 条)与它们的附件目录,<strong>不可恢复</strong>。项目目录本身和里面的代码文件不会被删。",
+      "permissionsNote": "只有你是所有者的项目(以及 root 的全部项目)会被修改,其余会被跳过并在结果里报出来。",
+      "chooseOwner": "选择一位用户…",
+      "noOwner": "置为无主",
+      "noOwnerNote": "「置为无主」之后,项目只有落在公共目录(<code>PRISM_PUBLIC_WORKSPACE</code>)下才对所有人可见;否则只有 root 看得到。这一步会写进审计日志。"
     }
   },
   "archived": {

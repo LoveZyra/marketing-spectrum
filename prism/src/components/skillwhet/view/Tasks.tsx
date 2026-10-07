@@ -14,13 +14,13 @@ import HarvestWizard from './HarvestWizard';
 import { Badge } from './StatusStrip';
 
 /**
- * gy:任务集 —— 按 skill 挂;JSON / JSONL / CSV 粘贴或选文件 → 浏览器先逐行校验 →
+ * 任务集:按 skill 挂;JSON / JSONL / CSV 粘贴或选文件 → 浏览器先逐行校验 →
  * 服务端复校 → 入库。入库的权限与副本一致(技能库来源 → root;上传来源 → 上传者或 root),
  * 前端只是把不能点的按钮说明白,门在服务端。
  *
- * gz 加两样:「从测试派生」(tests/unit 的用例 → 规则型任务,权限同入库)和
- * 「来自反馈 · 待入库」(root;👎 与调查卡的期望结果 → 任务,勾选后一键转换,回填 task_id)。
- * ha 再加「从会话挖」(root;HarvestWizard):dry-run 列会话 → 挖 → 预览 → 勾选入库。
+ * 另有三个来源:「从测试派生」(tests/unit 的用例 → 规则型任务,权限同入库);
+ * 「来自反馈 · 待入库」(root;👎 与调查卡的期望结果 → 任务,勾选后一键转换,回填 task_id);
+ * 「从会话挖」(root;HarvestWizard):dry-run 列会话 → 挖 → 预览 → 勾选入库。
  */
 export default function Tasks({ data, isRoot, username }: { data: SkillWhetData; isRoot: boolean; username: string }) {
   const { t } = useTranslation('skillwhet');
@@ -93,7 +93,7 @@ export default function Tasks({ data, isRoot, username }: { data: SkillWhetData;
     setServerReport(null);
     setReport(text.trim() ? checkTasks(text, fmt) : null);
   }, []);
-  // hl(动态 P3):格式允许手选 —— 自动识别把坏了一行的 JSONL 当 JSON 时,用户能切回 jsonl 看逐行结果
+  // 格式允许手选:自动识别把坏了一行的 JSONL 当成 JSON 时,用户能切回 jsonl 看逐行结果
   const onFormat = (fmt: TaskFormat) => runLocal(content, fileName, fmt);
 
   const onText = (text: string) => { setContent(text); setFileName(null); runLocal(text, null); };

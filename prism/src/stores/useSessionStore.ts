@@ -12,6 +12,8 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { authenticatedFetch } from '../utils/api';
 import type { LLMProvider } from '../types/app';
 
+import { serverNow } from './serverClock';
+
 // ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
 
 export type MessageKind =
@@ -29,7 +31,7 @@ export type MessageKind =
   | 'session_created'
   | 'interactive_prompt'
   | 'task_notification'
-  // gd:后台任务进展。**故意不落库**(每几秒一条),只走直播 —— 见 server/shared/types.ts
+  // 后台任务进展。故意不落库(每几秒一条),只走直播,见 server/shared/types.ts
   | 'task_progress'
   // prism additions: per-turn git checkpoints + changed-files summaries
   | 'checkpoint_created'
@@ -66,25 +68,32 @@ export interface NormalizedMessage {
   isLocalCommandStdout?: boolean;
   isCompactSummary?: boolean;
   /**
-   * ga:**这条 error 是前端就地插的本地提示,不是这一轮的结果。**
+   * 这条 error 是前端就地插的本地提示,不是这一轮的结果。
    *
-   * 附件太大、文档解析失败、抓网页失败…… 一共九处,与正在跑的那一轮毫无关系。
-   * `endsTurnForOutputs` 靠它放行(fw/fz),可这个字段此前**没有出现在这个类型里**,
-   * 于是 `chatMessageToNormalized` 的 error 分支把它剥掉、`convertMessage` 也不还原 ——
-   * **修复代码在,数据到不了它**,拖个大附件照旧把正在跑的清单折掉。
-   *
-   * 类型缺一个字段,整条链路就会在某一段悄悄把它丢掉。这条要跟着走完全程。
+   * 附件太大、文档解析失败、抓网页失败……与正在跑的那一轮毫无关系;`endsTurnForOutputs` 靠它放行,
+   * 不把它当回合结束。这个字段要跟着走完全程:`chatMessageToNormalized` 的 error 分支和
+   * `convertMessage` 都得保留它,丢在任何一段,拖个大附件就会把正在跑的清单折掉。
    */
   isLocalNotice?: boolean;
-  /** ho(ho-1):用户这条的幂等键(只在本地回声上有)—— 合流消息的「撤回」按它认气泡。 */
+  /**
+   * 用户这条的幂等键。本地回声带着它;服务端落库的用户行(和作为实时帧推来的同一行)也带着,
+   * 前提是发送时带了 —— 定时任务、外部 API 写的行没有。本地回声与服务端那份按它配对
+   * (见 claimRealtimeUserEchoes),合流消息的「撤回」也按它认气泡。
+   */
   clientMessageId?: string;
-  /** ho(ho-1):合流消息没执行就被撤掉了(服务端落库时标的)。 */
+  /** 合流消息没执行就被撤掉了(服务端落库时标的)。 */
   withdrawn?: boolean;
-  /** ho(复审):插话(合流进正在跑的这一轮)—— 不是回合边界。服务端落库时标;本地回声在 ACK 带 mergedUuid 时补标。 */
+  /** 插话(合流进正在跑的这一轮),不是回合边界。服务端落库时标;本地回声在 ACK 带 mergedUuid 时补标。 */
   interjection?: boolean;
-  /** hq(复审五轮):本地回声 —— 发出时回合还在跑(进度区数回合用,见 ChatMessage.sentDuringTurn)。 */
+  /** 本地回声:发出时回合还在跑(进度区数回合用,见 ChatMessage.sentDuringTurn)。 */
   sentDuringTurn?: boolean;
-  /** ho(hq-2):这一轮推进 CLI 时带的 uuid(服务端落库的用户行才有)—— 非 git 目录按它撤销这一轮之后的文件改动。 */
+  /**
+   * 本地回声:打戳时这个标签页还没收到过带服务器时间的控制帧,时间戳是浏览器时间,
+   * 浏览器表不准时可能差出几分钟。退回同文 + 时间窗配对时,只有这种回声才按宽的时钟偏差容忍
+   * (见 claimRealtimeUserEchoes)。服务端来的行和校正过的回声都不带它。
+   */
+  clockUnsynced?: boolean;
+  /** 这一轮推进 CLI 时带的 uuid(服务端落库的用户行才有);非 git 目录按它撤销这一轮之后的文件改动。 */
   turnUuid?: string;
   images?: Array<{ path?: string; data?: string; name?: string }>;
   toolName?: string;
@@ -103,8 +112,8 @@ export interface NormalizedMessage {
   status?: string;
   summary?: string;
   /**
-   * gd:后台任务。`toolId` 就是那次 Task/Agent 调用的 `tool_use_id` ——
-   * 也就是子代理卡的身份;前端据此把进展与汇报归到卡上(见 useChatMessages)。
+   * 后台任务。`toolId` 就是那次 Task/Agent 调用的 `tool_use_id`,也就是子代理卡的身份;
+   * 前端据此把进展与汇报归到卡上(见 useChatMessages)。
    */
   taskId?: string;
   taskProgress?: {
@@ -134,14 +143,12 @@ export interface SessionSlot {
   /**
    * 正在打字的那段助手正文。
    *
-   * **它不在 `realtimeMessages` 里,也不参与合并排序。**以前它是列表里的一条
-   * 普通消息,每 100ms 一次 flush 都要:重建数组 → Set → filter → concat →
-   * **全量 sort** → dedupe → 重建全部 React element,整份 transcript 每秒十次;
-   * 而且它的时间戳每次都被重锚到"现在",而排序键正是时间戳 —— 同期到达的
-   * 工具行会在它上下来回换位,那就是肉眼看到的"抖"。
+   * 它不在 `realtimeMessages` 里,也不参与合并排序。放进列表的话,每 100ms 一次 flush
+   * 都要全量重排、去重、重建全部 React element;它的时间戳还会被重锚到"现在",
+   * 同期到达的工具行会在它上下来回换位,肉眼看到的就是"抖"。
    *
    * 时序上它天然可以独立:`stream_end` 在下一批工具行之前就到并提交,所以
-   * 任意时刻最多只有一个活跃流式块,而且它一定在末尾 —— 那就没必要参与排序。
+   * 任意时刻最多只有一个活跃流式块,而且它一定在末尾,没必要参与排序。
    */
   streamingText: string | null;
   streamingProvider: LLMProvider | null;
@@ -196,22 +203,25 @@ export function createEmptySlot(): SessionSlot {
 }
 
 /**
- * Compute merged messages: server + realtime, deduped by id and adjacent
- * assistant echo (same trimmed text), so finalized stream rows do not stack
- * on top of the persisted copy before realtime is cleared.
+ * 同文 + 时间窗配对的窗口:服务端那份晚于本地回声多久以内还算它的回声。
+ *
+ * 只用于服务端行不带 `clientMessageId` 的情况(升级前写的老行、定时任务和外部 API 写的行),
+ * 带键的行按键精确配对,见 `claimRealtimeUserEchoes`。
  */
 const LOCAL_USER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 /**
- * ga:**改成对称。**
+ * 服务端那份早于本地回声时允许的时钟偏差,分两档。
  *
- * 本地乐观回声与服务端那份**只能靠时间戳去重**(id 永远对不上 —— 服务端那份
- * 刻意不外发帧)。此前给了"服务端最晚 5 分钟"的余量,却只给"服务端最早 10 秒",
- * 两侧差 30 倍。而这两个时间来自**两块不同的表**:浏览器时钟与服务器时钟。
+ * 服务端落库的时刻不早于用户发出的时刻,所以同一块表下服务端那份只会更晚。会更早,只因为
+ * 回声的时间戳来自另一块表。回声按服务器时钟校正过(`serverNow()`,见 stores/serverClock)时,
+ * 剩下的误差只有几秒,留 10 秒就够;再放宽的话,几分钟前同文的那一句(「继续」「好」)
+ * 会把刚发的这一句认领掉,这一轮整轮看不到自己的提问。
  *
- * 客户端表快 30 秒(手动设过时间、虚机/手机 NTP 没同步)就判成两条:
- * **用户自己发的每句话渲染两遍,页内无法自愈**;还会让回合序号整体错位一个
- * 回合,连锁污染 thinking / 正文的去重。时钟偏差是双向的,没有理由只容忍一边。
+ * 打戳时还没有时钟样本的回声(`clockUnsynced`)用的是浏览器时间。客户端表快一些
+ * (手动设过时间、虚机 / 手机 NTP 没同步)就会判成两条:用户自己发的话渲染两遍、页内无法自愈,
+ * 回合序号还会整体错位,连锁污染 thinking / 正文的去重。所以这种回声与上面的窗口对称,两侧都容忍几分钟。
  */
+const LOCAL_USER_DEDUPE_SYNCED_SKEW_MS = 10 * 1000;
 const LOCAL_USER_DEDUPE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 function userTextFingerprint(m: NormalizedMessage): string | null {
@@ -241,28 +251,83 @@ function readMessageTime(m: NormalizedMessage): number | null {
   return value;
 }
 
-function hasServerEchoForLocalUser(
-  localMessage: NormalizedMessage,
+function isUserTextRow(m: NormalizedMessage): boolean {
+  return m.kind === 'text' && m.role === 'user';
+}
+
+/**
+ * 本地回声 ↔ 服务端用户行的配对:返回已被服务端那份认领了的实时用户行的 id。
+ *
+ * 发送时前端先画一条乐观回声,服务端落库的那一行带着同一个 `clientMessageId`
+ * (同一行作为实时帧推来时也带着)。判据:
+ *   - 服务端行带着同一个键:就是它的回声,正文不必逐字相同(服务端那份可能带着附件块);
+ *   - 服务端行带着别的键:一定不是,哪怕同文、同一秒;
+ *   - 服务端行没有键(升级前写的老行、定时任务和外部 API 写的行):退回同文 + 时间窗,
+ *     服务端那份早于回声的容忍度见 `LOCAL_USER_DEDUPE_SYNCED_SKEW_MS`。
+ * 一条服务端行最多认领一条实时行:先按键配对,剩下的再按时间先后与无键行逐条配对。
+ * 只靠同文 + 宽时间窗、又不限一对一的话,两分钟前那句「继续」会把刚发的这句也认领掉,
+ * 这一轮整轮看不到自己的提问,回合序号也会把两轮并成一轮。
+ *
+ * `computeMerged`、`pruneRealtimeSupersededByServer` 与回合序号用的都是这一份判据。
+ */
+function claimRealtimeUserEchoes(
   serverMessages: NormalizedMessage[],
-): boolean {
-  const localText = userTextFingerprint(localMessage);
-  const localTime = readMessageTime(localMessage);
-  if (!localText || localTime === null) {
-    return false;
+  realtimeMessages: NormalizedMessage[],
+  serverIds: ReadonlySet<string>,
+): Set<string> {
+  const claimed = new Set<string>();
+  const candidates = realtimeMessages.filter((m) => isUserTextRow(m) && !serverIds.has(m.id));
+  if (candidates.length === 0) return claimed;
+
+  const keyed = new Map<string, NormalizedMessage>();
+  const unkeyedByText = new Map<string, NormalizedMessage[]>();
+  for (const serverMessage of serverMessages) {
+    if (!isUserTextRow(serverMessage)) continue;
+    if (serverMessage.clientMessageId) {
+      if (!keyed.has(serverMessage.clientMessageId)) keyed.set(serverMessage.clientMessageId, serverMessage);
+      continue;
+    }
+    const text = userTextFingerprint(serverMessage);
+    if (!text) continue;
+    const list = unkeyedByText.get(text);
+    if (list) list.push(serverMessage);
+    else unkeyedByText.set(text, [serverMessage]);
   }
 
-  return serverMessages.some((serverMessage) => {
-    if (userTextFingerprint(serverMessage) !== localText) {
-      return false;
+  const used = new Set<NormalizedMessage>();
+  const unmatched: NormalizedMessage[] = [];
+  for (const candidate of candidates) {
+    const echo = candidate.clientMessageId ? keyed.get(candidate.clientMessageId) : undefined;
+    if (echo && !used.has(echo)) {
+      used.add(echo);
+      claimed.add(candidate.id);
+    } else {
+      unmatched.push(candidate);
     }
+  }
 
-    const serverTime = readMessageTime(serverMessage);
-    return (
-      serverTime !== null
-      && serverTime >= localTime - LOCAL_USER_DEDUPE_CLOCK_SKEW_MS
-      && serverTime - localTime <= LOCAL_USER_DEDUPE_WINDOW_MS
-    );
-  });
+  if (unkeyedByText.size === 0) return claimed;
+  unmatched.sort(compareMessagesChronologically);
+  for (const candidate of unmatched) {
+    const text = userTextFingerprint(candidate);
+    const localTime = readMessageTime(candidate);
+    if (!text || localTime === null) continue;
+    const skew = candidate.clockUnsynced ? LOCAL_USER_DEDUPE_CLOCK_SKEW_MS : LOCAL_USER_DEDUPE_SYNCED_SKEW_MS;
+    const echo = unkeyedByText.get(text)?.find((serverMessage) => {
+      if (used.has(serverMessage)) return false;
+      const serverTime = readMessageTime(serverMessage);
+      return (
+        serverTime !== null
+        && serverTime >= localTime - skew
+        && serverTime - localTime <= LOCAL_USER_DEDUPE_WINDOW_MS
+      );
+    });
+    if (echo) {
+      used.add(echo);
+      claimed.add(candidate.id);
+    }
+  }
+  return claimed;
 }
 
 function compareMessagesChronologically(a: NormalizedMessage, b: NormalizedMessage): number {
@@ -292,15 +357,18 @@ function getUserTurnOrdinalBefore(
   serverMessages: NormalizedMessage[],
   realtimeMessages: NormalizedMessage[],
   /**
-   * 预先排好的合并视图。不传就地排一次(保持旧调用方可用),但热路径上必须传:
-   * 这个函数会对**每一条** realtime 行调用一次,而排序的是 server+realtime 全量。
-   * 实测 40 条 realtime × 3000 条 server = 75 ms,realtime 上限是 500 条。
+   * 预先排好的合并视图。不传就地排一次,但热路径上必须传:这个函数会对每一条
+   * realtime 行调用一次,而排序的是 server + realtime 全量(40 条 realtime × 3000 条 server
+   * 约 75 ms,realtime 上限是 500 条)。
    */
   presortedMerged?: NormalizedMessage[],
+  /** 已被服务端那份认领的实时用户行(见 claimRealtimeUserEchoes)。热路径上同样预先算好传进来。 */
+  claimedEchoes?: ReadonlySet<string>,
 ): number {
   const messageTime = readMessageTime(message);
   let userCount = 0;
   const serverIds = new Set(serverMessages.map((serverMessage) => serverMessage.id));
+  const claimed = claimedEchoes ?? claimRealtimeUserEchoes(serverMessages, realtimeMessages, serverIds);
 
   const merged = presortedMerged
     ?? [...serverMessages, ...realtimeMessages].sort(compareMessagesChronologically);
@@ -321,28 +389,21 @@ function getUserTurnOrdinalBefore(
 
     if (candidate.kind === 'text' && candidate.role === 'user') {
       /**
-       * 同一条用户消息只算**一次**。
+       * 同一条用户消息只算一次。
        *
-       * 合并视图里同一句话常常有两份:实时那份和服务端落库那份。
-       * `computeMerged` 对它们的去重是"渲染时"做的,而这里数的是**原始合并数组**
-       * —— 于是回合序号被多算,按"同一轮同文"判定的 thinking / 助手正文去重就会
-       * 漏删(序号对不上)或跨回合误删(两条不同回合被算成同一轮)。
+       * 合并视图里同一句话常常有两份:实时那份和服务端落库那份。`computeMerged` 的去重是
+       * 渲染时做的,而这里数的是原始合并数组;多算的话,按"同一轮同文"判定的 thinking /
+       * 助手正文去重就会漏删(序号对不上)或跨回合误删。
        *
-       * **N01:判据是"这条是不是服务端那份",不是"id 像不像 `local_`"。**
+       * 判据是"这条是不是服务端那份"(id 是否出现在服务端快照里),不是"id 像不像 `local_`":
+       * 队列续发、回放补帧以及任何由服务端帧构造出的实时用户行都不是 `local_` 形状。
        *
-       * fj 那版只认 `local_` 前缀 —— 那只是实时用户行的**一种** id 形状。
-       * 队列续发、回放补帧、以及任何由服务端帧构造出的实时用户行都不是这个
-       * 形状,于是它们照旧被多算一次(fk 审计里的 N01,和 K01/K02 一样是
-       * "收窄判据时只收窄了一半")。
-       * 现在按 id 是否出现在服务端快照里判定,一次覆盖所有形状。
-       *
-       * 回声判定复用 `hasServerEchoForLocalUser` —— 它带时间窗,所以
-       * **十分钟后又发一次同样的"继续"不会被当成回声**(纯比正文会,那会让
-       * 第二轮的序号少算一,thinking 去重整体错位一个回合)。
+       * 回声判定复用 `claimRealtimeUserEchoes`(按幂等键、一对一),所以刚发的「继续」不会被上一轮
+       * 那句同文消息认领(纯比正文会让第二轮的序号少算一,thinking 去重整体错位一个回合)。
        */
       if (serverIds.has(candidate.id)) {
         userCount++;
-      } else if (!hasServerEchoForLocalUser(candidate, serverMessages)) {
+      } else if (!claimed.has(candidate.id)) {
         userCount++;
       }
     }
@@ -389,15 +450,16 @@ function isAssistantTextEchoedInSameTurnOnServer(
   serverMessages: NormalizedMessage[],
   realtimeMessages: NormalizedMessage[],
   presortedMerged?: NormalizedMessage[],
-  // fi:thinking 行也走同一套"同一轮里服务端有没有同文"判定,只是 kind 不同。
+  // thinking 行也走同一套"同一轮里服务端有没有同文"判定,只是 kind 不同。
   kind: 'text' | 'thinking' = 'text',
+  claimedEchoes?: ReadonlySet<string>,
 ): boolean {
   const assistantText = (message.content || '').trim();
   if (!assistantText) {
     return false;
   }
 
-  const turnOrdinal = getUserTurnOrdinalBefore(message, serverMessages, realtimeMessages, presortedMerged);
+  const turnOrdinal = getUserTurnOrdinalBefore(message, serverMessages, realtimeMessages, presortedMerged, claimedEchoes);
   const turnRange = findServerTurnRangeByOrdinal(serverMessages, turnOrdinal);
   if (!turnRange) {
     return false;
@@ -464,10 +526,12 @@ export function pruneRealtimeSupersededByServer(
   }
 
   const serverIds = new Set(serverMessages.map((message) => message.id));
+  // 回声配对一次算完(一对一,不能逐条各判各的),下面的用户行与回合序号都用它。
+  const claimed = claimRealtimeUserEchoes(serverMessages, realtimeMessages, serverIds);
 
-  // 合并视图只排一次,传给下面每一次判定复用。之前是每条 realtime 行各排一遍
-  // 全量 —— O(R × (S+R) log(S+R)),40×3000 实测 75 ms,而 realtime 上限 500 条。
-  // 只在真的会用到它的时候才排:纯 user 行的分支根本不需要。
+  // 合并视图只排一次,传给下面每一次判定复用;每条 realtime 行各排一遍全量是
+  // O(R × (S+R) log(S+R)),40 × 3000 就要约 75 ms,而 realtime 上限 500 条。
+  // 只在真会用到时才排:纯 user 行的分支根本不需要。
   let presortedMerged: NormalizedMessage[] | undefined;
   const mergedView = () => {
     if (!presortedMerged) {
@@ -481,26 +545,23 @@ export function pruneRealtimeSupersededByServer(
       return false;
     }
 
-    if (message.id.startsWith('local_') && hasServerEchoForLocalUser(message, serverMessages)) {
-      return false;
-    }
-
     if (message.kind === 'stream_delta' || message.id === `__streaming_${message.sessionId}`) {
-      if (isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages, mergedView())) {
+      if (isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages, mergedView(), 'text', claimed)) {
         return false;
       }
       return true;
     }
 
     if (message.kind === 'text' && message.role === 'assistant') {
-      if (isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages, mergedView())) {
+      if (isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages, mergedView(), 'text', claimed)) {
         return false;
       }
       return true;
     }
 
+    // 本地回声与其他实时用户行同一个判据(按幂等键、一对一)
     if (message.kind === 'text' && message.role === 'user') {
-      return !hasServerEchoForLocalUser(message, serverMessages);
+      return !claimed.has(message.id);
     }
 
     if (message.kind === 'tool_use' && message.toolId) {
@@ -510,17 +571,13 @@ export function pruneRealtimeSupersededByServer(
     }
 
     /*
-     * fi:tool_result 与 thinking 原来**没有任何规则**,直接落到下面的 `return true`。
-     * 只要 id 和服务端那份对不上(服务端补了 id、或前端那份是本地合成的),
-     * 服务端刷新之后它们就永远留在 realtime 里,和服务端那份**并排渲染成两份**,
-     * 而且没有任何刷新能清掉 —— 只有 F5。
+     * tool_result 与 thinking 也要有清理规则,不能落到下面的 `return true`:id 和服务端那份
+     * 对不上时(服务端补了 id、或前端那份是本地合成的),它们会永远留在 realtime 里,
+     * 和服务端那份并排渲染成两份,只有 F5 能清掉。
      *
-     * 实测构造 id 不一致的场景:3 条变 6 条,整组原样重复。
-     *
-     * 判据和它们的邻居对齐:tool_result 按 toolId(与 tool_use 同源);
-     * thinking 按"同一轮里服务端有同文"(与助手正文同一套)。
-     * 都是**只在服务端确实有对应行时才清**,服务端还没落库的照旧留着 —— 这条
-     * 边界不能动,否则回合进行中正文会闪空。
+     * 判据和邻居对齐:tool_result 按 toolId(与 tool_use 同源);thinking 按"同一轮里服务端有同文"
+     * (与助手正文同一套)。都只在服务端确实有对应行时才清,还没落库的照旧留着;
+     * 这条边界不能动,否则回合进行中正文会闪空。
      */
     if (message.kind === 'tool_result' && message.toolId) {
       if (serverMessages.some((serverMessage) => serverMessage.kind === 'tool_result' && serverMessage.toolId === message.toolId)) {
@@ -529,7 +586,7 @@ export function pruneRealtimeSupersededByServer(
     }
 
     if (message.kind === 'thinking') {
-      if (isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages, mergedView(), 'thinking')) {
+      if (isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages, mergedView(), 'thinking', claimed)) {
         return false;
       }
     }
@@ -554,20 +611,10 @@ export function computeMerged(server: NormalizedMessage[], realtime: NormalizedM
   }
 
   const serverIds = new Set(server.map((message) => message.id));
-  const extra = realtime.filter((message) => {
-    if (serverIds.has(message.id)) {
-      return false;
-    }
-    // Optimistic user rows use `local_*` ids; once the same text exists on the
-    // server-backed copy from the same send window, drop the realtime echo to
-    // avoid duplicate bubbles without hiding repeated prompts from history.
-    if (message.id.startsWith('local_')) {
-      if (hasServerEchoForLocalUser(message, server)) {
-        return false;
-      }
-    }
-    return true;
-  });
+  // 服务端那份已经在的用户行(按幂等键配对,无键时退回同文 + 时间窗,一对一)不再画第二个气泡;
+  // 判据与 pruneRealtimeSupersededByServer 是同一份。
+  const claimed = claimRealtimeUserEchoes(server, realtime, serverIds);
+  const extra = realtime.filter((message) => !serverIds.has(message.id) && !claimed.has(message.id));
 
   if (extra.length === 0) {
     return dedupeAdjacentAssistantEchoes(server);
@@ -603,9 +650,26 @@ const STALE_THRESHOLD_MS = 30_000;
 
 const MAX_REALTIME_MESSAGES = 500;
 
-/** realtime 行的上限。提交流式正文和逐条追加共用同一个口径。 */
+/**
+ * realtime 行的上限。提交流式正文和逐条追加共用同一个口径。
+ *
+ * 超出时从最早的行裁起,但用户行留着。长回合(几百次工具调用、带子代理)会在回合进行中把 realtime
+ * 撑过上限,而回合进行中没有服务端刷新,裁掉的本轮提问在 complete 之前补不回来,上翻看到的是
+ * "上一轮回答 → 本轮第 N 个工具"。一轮只有一条用户行,留着它们几乎不占名额;
+ * 只在除了用户行再没有可裁的时候,才裁最早的用户行。
+ */
 function capRealtime(rows: NormalizedMessage[]): NormalizedMessage[] {
-  return rows.length > MAX_REALTIME_MESSAGES ? rows.slice(-MAX_REALTIME_MESSAGES) : rows;
+  let overflow = rows.length - MAX_REALTIME_MESSAGES;
+  if (overflow <= 0) return rows;
+  const kept: NormalizedMessage[] = [];
+  for (const row of rows) {
+    if (overflow > 0 && !isUserTextRow(row)) {
+      overflow -= 1;
+      continue;
+    }
+    kept.push(row);
+  }
+  return overflow > 0 ? kept.slice(overflow) : kept;
 }
 
 /**
@@ -613,7 +677,7 @@ function capRealtime(rows: NormalizedMessage[]): NormalizedMessage[] {
  *
  * 原设计是"切会话不清、旧数据全留"—— 换回上一个会话零等待。但槽位从不
  * 淘汰意味着逛几十个长会话后内存只涨不落(每个槽位攥着全量消息数组和它们
- * 的 merged 副本)。折中:保留最近用过的 N 个,其余在**切会话**这个自然
+ * 的 merged 副本)。折中:保留最近用过的 N 个,其余在切会话这个自然
  * 边界上丢弃 —— 被丢的会话再次打开时走正常的首屏拉取,和冷启动一个体验。
  * 60 秒保护窗兜住"正在后台跑着流"的会话:实时帧会刷新 lastTouchedAt,
  * 只要还有动静就不会进候选。
@@ -640,38 +704,47 @@ export function planSlotEviction(
   return candidates.slice(0, overflow).map((entry) => entry.sessionId);
 }
 
-// ─── Hook ────────────────────────────────────────────────────────────────────
+/**
+ * 流式正文提交进列表时打的时间戳。
+ *
+ * 它要和前后的工具行(服务器时间)按时间戳混排,所以优先用触发提交的那一帧自己带的服务器时间;
+ * 帧上没有(或解析不了)时用"浏览器时间 + 服务器时钟偏差"(见 serverClock)。直接用浏览器时间的话,
+ * 浏览器表不准时这段正文会和它前后的工具行换位。
+ */
+export function streamCommitTimestamp(serverTimestamp: unknown, localNow: number = Date.now()): string {
+  if (typeof serverTimestamp === 'string' && Number.isFinite(Date.parse(serverTimestamp))) {
+    return new Date(Date.parse(serverTimestamp)).toISOString();
+  }
+  return new Date(serverNow(localNow)).toISOString();
+}
+
+/** 本地乐观回声(`local_*` 的用户行)带的幂等键;不是本地回声返回 null。 */
+function localEchoKey(m: NormalizedMessage): string | null {
+  return isUserTextRow(m) && m.id.startsWith('local_') && m.clientMessageId ? m.clientMessageId : null;
+}
+
+/** 服务端来的用户行(实时帧)带的幂等键;本地回声、没带键的行返回 null。 */
+function serverUserKey(m: NormalizedMessage): string | null {
+  return isUserTextRow(m) && !m.id.startsWith('local_') && m.clientMessageId ? m.clientMessageId : null;
+}
 
 /**
- * fm:**服务端快照落地的唯一入口。**
+ * 实时行按 id 落位:同一个 id 再来一次是覆盖,不是追加。
  *
- * 首屏(`fetchFromServer`)、刷新(`refreshFromServer`)、补页(`fetchMore`)、
- * 搜索定位四条路径原来各写一遍"怎么合并、要不要剪实时行、游标怎么推" ——
- * 于是每加一条规则就要记得改四处,而实际上每次只改了一两处:
- *
- *   - `pruneRealtimeSupersededByServer` 一开始只在 refresh 里(fi),
- *     fj 补了首屏,**补页至今没有** → 上翻之后旧的实时思考/结果仍会两份(N02);
- *   - `offset` 与窗口是同一个不变量,refresh 里为此写了一整段注释(du),
- *     而那段道理对补页同样成立。
- *
- * 收到一处之后,规则只有一份,四条路径的差别缩到 `mode` 这一个参数。
- */
-/**
- * F16:**实时行按 id 落位** —— 同一个 id 再来一次是覆盖,不是追加。
- *
- * 原来两个入口都是无脑 `[...realtime, ...新来的]`。而同一个事件**会**来第二次:
+ * 同一个事件会来第二次:
  *   - 断线重连按游标补发,而游标只为部分 kind 推进(审批帧故意不推),
- *     于是补发窗口会盖住一些已经收到的帧;
+ *     补发窗口会盖住一些已经收到的帧;
  *   - 订阅重叠(旧 socket 还没关、新 socket 已经补发)时整段重放;
  *   - seq 跳号触发的 REST 补拉与随后的实时帧,在服务端行落库前是两份。
- *
- * 后果是同一个工具调用、同一段 thinking 在屏幕上并排出现两次,而且
- * `pruneRealtimeSupersededByServer` 只会**整体**剪掉它们(服务端接管之后),
- * 在那之前一直是两份。
+ * 直接追加的话,同一个工具调用、同一段 thinking 会并排出现两次,
+ * 要等服务端接管后 `pruneRealtimeSupersededByServer` 才整体剪掉。
  *
  * 覆盖而不是丢弃:后到的那份通常更完整(工具调用补上了结果、流式块补上了尾巴)。
- * 位置保持第一次出现的位置 —— 否则一条早先的工具行会被重排到末尾,
- * 屏幕上的顺序会跳。
+ * 位置保持第一次出现的位置,否则一条早先的工具行会被重排到末尾,屏幕上的顺序会跳。
+ *
+ * 用户消息的实时帧(服务端落库那一行同时推给所有查看者)与本地回声按幂等键对上:
+ * 帧到时原位替换掉同键的本地回声(id 换成服务端的,之后服务端快照里同 id 的行按上面的规则接管);
+ * 帧先到、回声后到时回声不再追加。发起端因此不会出现两份。
  */
 export function upsertRealtimeRows(
   existing: NormalizedMessage[],
@@ -685,26 +758,70 @@ export function upsertRealtimeRows(
   ));
 
   const indexById = new Map<string, number>();
+  const echoIndexByKey = new Map<string, number>();
+  const serverUserKeys = new Set<string>();
+  const remember = (msg: NormalizedMessage, index: number) => {
+    const echoKey = localEchoKey(msg);
+    if (echoKey) echoIndexByKey.set(echoKey, index);
+    const userKey = serverUserKey(msg);
+    if (userKey) serverUserKeys.add(userKey);
+  };
   for (let i = 0; i < existing.length; i++) {
     indexById.set(existing[i].id, i);
+    remember(existing[i], i);
   }
 
   const next = existing.slice();
   for (const msg of normalized) {
     const at = indexById.get(msg.id);
-    if (at === undefined) {
-      indexById.set(msg.id, next.length);
-      next.push(msg);
-    } else {
+    if (at !== undefined) {
       next[at] = msg;
+      continue;
     }
+    const echoKey = localEchoKey(msg);
+    if (echoKey && serverUserKeys.has(echoKey)) continue;
+    const userKey = serverUserKey(msg);
+    const echoAt = userKey ? echoIndexByKey.get(userKey) : undefined;
+    if (userKey && echoAt !== undefined) {
+      indexById.delete(next[echoAt].id);
+      echoIndexByKey.delete(userKey);
+      indexById.set(msg.id, echoAt);
+      next[echoAt] = msg;
+      serverUserKeys.add(userKey);
+      continue;
+    }
+    indexById.set(msg.id, next.length);
+    remember(msg, next.length);
+    next.push(msg);
   }
 
-  return next.length > MAX_REALTIME_MESSAGES ? next.slice(-MAX_REALTIME_MESSAGES) : next;
+  return capRealtime(next);
+}
+
+/**
+ * 从实时行里撤掉某条没发出去的本地回声(服务端排队后被中止 / 撤销 / 过期的那条)。
+ *
+ * 只撤 `local_*` 的回声:这条从没落库,服务端那份永远不会来替掉它,不撤的话它像"已发送"一样
+ * 一直留到 F5,用户把退回的正文再发一遍时还会并排出现两条。返回被撤掉的那行(调用方要它的正文)。
+ */
+export function withoutLocalEcho(
+  rows: NormalizedMessage[],
+  clientMessageId: string,
+): { rows: NormalizedMessage[]; removed: NormalizedMessage | null } {
+  const index = rows.findIndex((row) => localEchoKey(row) === clientMessageId);
+  if (index < 0) return { rows, removed: null };
+  return { rows: [...rows.slice(0, index), ...rows.slice(index + 1)], removed: rows[index] };
 }
 
 export type SnapshotMode = 'replace' | 'prepend';
 
+/**
+ * 服务端快照落地的唯一入口(`applyServerSnapshot`)。
+ *
+ * 首屏(`fetchFromServer`)、刷新(`refreshFromServer`)、补页(`fetchMore`)、搜索定位
+ * 四条路径都走这里:怎么合并、剪实时行、游标怎么推只有一份规则,差别只在 `mode` 这一个参数。
+ * 各写一遍的话,每加一条规则都得记得改四处,迟早漏掉一处。
+ */
 export function applyServerSnapshot(
   slot: SessionSlot,
   data: { messages?: NormalizedMessage[]; total?: number; hasMore?: boolean; tokenUsage?: unknown },
@@ -714,7 +831,7 @@ export function applyServerSnapshot(
 
   if (opts.mode === 'prepend') {
     /**
-     * 补页是**前插**。去重按 id:流式期间新行不断落盘、`total` 在涨,而补页按
+     * 补页是前插。去重按 id:流式期间新行不断落盘、`total` 在涨,而补页按
      * "已加载条数"算 offset 从尾部取页,这一页可能与已加载窗口重叠。
      */
     const existingIds = new Set(
@@ -723,20 +840,16 @@ export function applyServerSnapshot(
     const freshOlder = incoming.filter((m) => typeof m.id !== 'string' || !existingIds.has(m.id));
     const prepended = [...freshOlder, ...slot.serverMessages];
     /**
-     * fz:**前插之后要确认它真的是"更早的"。**
+     * 前插之后要确认它真的是"更早的"。
      *
-     * 服务端的 `offset` 是**尾部偏移**。回合跑着、`total` 在涨,而这期间没有
-     * 任何整体刷新落地(`complete` 还没到;`externalMessageUpdate` 在
-     * `isProcessing` 时刻意跳过 refresh;seq 没跳号)—— 这时上翻一页,
-     * 服务端按**新的** total 算窗口,取回的那一页尾部可能落在我们已有窗口
-     * **之后**:那几行比手里所有行都新,却不在 `existingIds` 里,于是被当成
-     * "更早的一页"塞到了数组最前面。
+     * 服务端的 `offset` 是尾部偏移。回合跑着、`total` 在涨,而这期间没有任何整体刷新落地
+     * (`complete` 还没到;`externalMessageUpdate` 在 `isProcessing` 时刻意跳过 refresh;seq 没跳号)
+     * 时上翻一页,服务端按新的 total 算窗口,取回的那一页尾部可能落在已有窗口之后:
+     * 那几行比手里所有行都新,却不在 `existingIds` 里,会被当成"更早的一页"塞到数组最前面。
+     * 这条落地路径紧接着会 prune 掉它们的实时副本,`computeMerged` 随后走"realtime 为空就
+     * 原样返回 server"的快路径、不排序,本轮最新的几条就会跳到 transcript 最顶端。
      *
-     * 而这条落地路径紧接着会 prune 掉它们的实时副本,`computeMerged` 随后走
-     * "realtime 为空就原样返回 server"的快路径 —— **不排序**。用户看到的是:
-     * 上翻一页之后,本轮最新的几条从底部跳到了 transcript 最顶端。
-     *
-     * 只在真的乱了的时候排一次:绝大多数补页都是纯粹的更早页,`isSorted`
+     * 只在真的乱了的时候排一次:绝大多数补页都是纯粹的更早页,`isChronological`
      * 一趟线性扫描就结束,不额外付 O(n log n)。
      */
     slot.serverMessages = isChronological(prepended)
@@ -750,12 +863,12 @@ export function applyServerSnapshot(
   } else {
     slot.serverMessages = incoming;
     /**
-     * 游标必须跟着窗口一起改写(du 的原文保留在这里)。
+     * 游标必须跟着窗口一起改写。
      *
-     * `limit` 是在 await **之前**按当时的 loadedCount 算的,而这中间用户可能
-     * 刚上翻了一页。刷新随后落地把窗口换回尾部 20 条,却把 offset 留在 40 ——
-     * 下一次「看更早」按 offset=40 去取,服务端的尾部偏移语义直接跳过了
-     * 倒数 20~40 那一段,**20 条消息永久缺失**且毫无提示。
+     * `limit` 是在 await 之前按当时的 loadedCount 算的,而这中间用户可能
+     * 刚上翻了一页。刷新随后落地把窗口换回尾部 20 条,如果把 offset 留在 40,
+     * 下一次「看更早」按 offset=40 去取,服务端的尾部偏移语义直接跳过
+     * 倒数 20~40 那一段,20 条消息永久缺失且毫无提示。
      */
     slot.offset = (opts.offsetBase ?? 0) + incoming.length;
     slot.total = data.total ?? incoming.length;
@@ -763,16 +876,15 @@ export function applyServerSnapshot(
   }
 
   /**
-   * fm:**四条路径都剪实时行**(此前只有 refresh + 首屏)。
+   * 四条路径都剪实时行。
    *
-   * `computeMerged` 对服务端行只按 id 去重,而实时帧的 id 是服务端现生成的、
-   * REST 历史的 id 来自 jsonl 的 uuid —— 两边永远对不上。真正按 toolId /
-   * 同轮同文去重的规则全在 `pruneRealtimeSupersededByServer` 里。
+   * `computeMerged` 对服务端行只按 id 去重,而实时帧的 id 是服务端现生成的、REST 历史的 id
+   * 来自 jsonl 的 uuid,两边永远对不上。真正按 toolId / 同轮同文去重的规则全在
+   * `pruneRealtimeSupersededByServer` 里。
    *
-   * 前插之后同样要剪:补页带回来的正是"更早那一段"的服务端行,而实时里
-   * 可能还留着它们的副本(后台跑完、没被 refresh 剪过的那一轮)。
-   * 按**合并后的完整已加载快照**剪,不是只按这一页 —— 否则会把尚未落盘的
-   * 实时行误删。
+   * 前插之后同样要剪:补页带回来的正是"更早那一段"的服务端行,而实时里可能还留着它们的副本
+   * (后台跑完、没被 refresh 剪过的那一轮)。按合并后的完整已加载快照剪,不是只按这一页,
+   * 否则会把尚未落盘的实时行误删。
    */
   slot.realtimeMessages = pruneRealtimeSupersededByServer(
     slot.serverMessages,
@@ -783,6 +895,8 @@ export function applyServerSnapshot(
   slot.fetchedAt = Date.now();
   recomputeMergedIfNeeded(slot);
 }
+
+// ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useSessionStore() {
   const storeRef = useRef(new Map<string, SessionSlot>());
@@ -866,25 +980,17 @@ export function useSessionStore() {
       /**
        * A later-started fetch already applied: this response is stale.
        *
-       * du:返回 **null**,不再原样返回 slot。丢弃与成功此前无法区分,调用方
-       * 把别人落地的窗口当成自己这次的结果:搜索跳转发起的 `limit:null` 全量
-       * 拉取被一次普通刷新挤掉后,调用方照样执行
-       * `setAllMessagesLoaded(true)` / `hasMore=false` / `offset=slot.total`
-       * —— 界面认定"全部已加载",上翻分页从此永久关死。null 让它们跳过。
+       * 返回 null 而不是 slot,让调用方能区分"被丢弃"与"成功",否则调用方会把别人落地的窗口
+       * 当成自己这次的结果。比如搜索跳转发起的 `limit:null` 全量拉取被一次普通刷新挤掉后,
+       * 调用方照样执行 `setAllMessagesLoaded(true)` / `hasMore=false` / `offset=slot.total`,
+       * 界面认定"全部已加载",上翻分页从此关死。
        */
       if (fetchTicket <= slot._appliedFetchSeq) {
         return null;
       }
       slot._appliedFetchSeq = fetchTicket;
 
-      /**
-       * fm:首屏/搜索定位统一走 `applyServerSnapshot`(mode='replace')。
-       *
-       * 原来这里是手写的一段:窗口、游标、total/hasMore、剪实时行、重算合并
-       * 各写一遍,而 `refreshFromServer` / `fetchMore` 各自还有一份。三份规则
-       * 长得像但**并不相同** —— 剪实时行只有这条和 refresh 有、`offset` 的
-       * 改写只有 refresh 讲清了道理。收到一处之后差别只剩 `mode`。
-       */
+      /** 首屏 / 搜索定位统一走 `applyServerSnapshot`(mode='replace'),规则只有一份。 */
       applyServerSnapshot(slot, data, { mode: 'replace', offsetBase: opts.offset ?? 0 });
       slot.status = 'idle';
 
@@ -898,15 +1004,11 @@ export function useSessionStore() {
         notify(sessionId);
       }
       /**
-       * fl:失败也返回 **null**,与上面"被更新的请求顶替了"那条一致。
+       * 失败也返回 null,与上面"被更新的请求顶替了"那条一致。
        *
-       * 原来返回 `slot` —— 一个 truthy 值,而调用方只判 `if (slot)` 就照着它
-       * 写 `hasMore` / `total`。失败时 slot 还是初始值(`hasMore=false`、
-       * `total=0`),于是**一次网络失败长得和"加载完了,没有更多"一模一样**:
-       * 「加载更多 / 看更早 / 加载全部」三个入口一起消失,用户以为这条会话
-       * 就这么点内容,而实际上一条历史都没拉到。
-       *
-       * `du` 轮为同一个理由把那条分支改成了 null,这条漏了。
+       * 调用方只判 `if (slot)` 就照着它写 `hasMore` / `total`;失败时 slot 还是初始值
+       * (`hasMore=false`、`total=0`),返回它的话,一次网络失败就和"加载完了,没有更多"一模一样:
+       * 「加载更多 / 看更早 / 加载全部」三个入口一起消失,而实际上一条历史都没拉到。
        */
       return null;
     }
@@ -936,10 +1038,9 @@ export function useSessionStore() {
     try {
       const response = await authenticatedFetch(url);
       /*
-        gn:404 = 这条会话已经不在了(被别处永久删除)。这**不是"加载失败"**,
-        是"没有更多历史可加载"。gk 把**发送**那条路换成了友好的说明卡,
-        **加载历史**这条却还在往控制台打 `HTTP 404`(排查时是噪声),而且因为
-        返回 null 被判成失败,自动补页还会一直重试。落下 hasMore、当"到头了"返回。
+        404 = 这条会话已经不在了(被别处永久删除),是"没有更多历史可加载",不是加载失败:
+        落下 hasMore、当"到头了"返回。不要抛错或返回 null,否则控制台多一条 `HTTP 404` 噪声,
+        自动补页还会把它当失败一直重试。
       */
       if (response.status === 404) {
         slot.hasMore = false;
@@ -958,11 +1059,8 @@ export function useSessionStore() {
       slot._appliedFetchSeq = fetchTicket;
 
       /**
-       * fm:补页走 `applyServerSnapshot`(mode='prepend')。
-       *
-       * 前插的去重规则、游标推进的道理原样搬进了 applier;顺带补上此前**只有
-       * 首屏和 refresh 才做**的实时行清理(N02):后台跑完的那一轮留在 realtime
-       * 里,上翻把它对应的服务端行取回来之后,两份会一直并排渲染到 F5。
+       * 补页走 `applyServerSnapshot`(mode='prepend'),同样会剪实时行:后台跑完的那一轮留在
+       * realtime 里,上翻把它对应的服务端行取回来之后,不剪的话两份会一直并排渲染到 F5。
        */
       applyServerSnapshot(slot, data, { mode: 'prepend' });
       recomputeMergedIfNeeded(slot);
@@ -970,10 +1068,9 @@ export function useSessionStore() {
       return slot;
     } catch (error) {
       console.error(`[SessionStore] fetchMore failed for ${sessionId}:`, error);
-      // 失败必须**能被调用方区分**。原来是原样返回 slot,而调用方判成功看的是
-      // `serverMessages.length === 0`(那是累计条数,不是"这次新增几条")——
-      // 于是断网/500 被当成加载成功:pendingScrollRestore 被挂上却永远清不掉,
-      // 这条会话从此不再自动跟底;自动补页还会连打 30 次请求且一声不吭。
+      // 失败必须能被调用方区分,所以返回 null:slot 的 `serverMessages.length` 是累计条数,
+      // 不能拿来判断这次成没成。把断网 / 500 当成加载成功,pendingScrollRestore 会挂上却永远
+      // 清不掉,会话从此不再自动跟底,自动补页还会连打 30 次请求且一声不吭。
       return null;
     }
   }, [getSlot, notify]);
@@ -990,7 +1087,7 @@ export function useSessionStore() {
   }, [getSlot, notify]);
 
   /**
-   * hq(复审五轮):一轮结束 —— 回合在跑时发出、又没被合流的本地回声(被服务端排到后面的那条)从这里起就是
+   * 一轮结束:回合在跑时发出、又没被合流的本地回声(被服务端排到后面的那条)从这里起就是
    * 下一轮的开头了,摘掉 `sentDuringTurn`,进度区照常把它算成新回合。不等服务端那份落库行替掉它:
    * 收尾时的刷新可能抢在服务端落库之前,那样这条标记会一直挂到下一轮结束。
    */
@@ -1011,7 +1108,7 @@ export function useSessionStore() {
   }, [getSlot, notify]);
 
   /**
-   * ho(复审):ACK 说这条被合流进了正在跑的那一轮 —— 给本地回声补上 `interjection`(时间轴不把它当回合边界)。
+   * ACK 说这条被合流进了正在跑的那一轮:给本地回声补上 `interjection`(时间轴不把它当回合边界)。
    */
   const markInterjection = useCallback((sessionId: string, clientMessageId: string) => {
     const slot = getSlot(sessionId);
@@ -1026,6 +1123,21 @@ export function useSessionStore() {
     recomputeMergedIfNeeded(slot);
     notify(sessionId);
   }, [getSlot, notify]);
+
+  /**
+   * 服务端说这条没有发出去(排队后被中止 / 撤销 / 过期,准备期被停止):把它的本地回声撤掉。
+   * 返回被撤掉的那行(没有就是 null),调用方据此决定提示里要不要抄原文。
+   */
+  const dropUnsentEcho = useCallback((sessionId: string, clientMessageId: string): NormalizedMessage | null => {
+    const slot = storeRef.current.get(sessionId);
+    if (!slot) return null;
+    const { rows, removed } = withoutLocalEcho(slot.realtimeMessages, clientMessageId);
+    if (!removed) return null;
+    slot.realtimeMessages = rows;
+    recomputeMergedIfNeeded(slot);
+    notify(sessionId);
+    return removed;
+  }, [notify]);
 
   /**
    * Append multiple realtime messages at once (batch).
@@ -1049,13 +1161,11 @@ export function useSessionStore() {
     try {
       // 只要回已经在手里的那个窗口,不要整份 transcript。
       //
-      // 这个刷新每轮对话结束都会触发(complete 事件),而原来的请求不带 limit,
-      // 于是三千轮的会话每轮都回传 42 MB,服务端光 JSON.stringify 就阻塞事件
-      // 循环 190ms —— 单线程,那段时间所有用户的请求一起排队。
+      // 这个刷新每轮对话结束都会触发(complete 事件)。不带 limit 的话,三千轮的会话每轮都要
+      // 回传几十 MB,服务端光 JSON.stringify 就阻塞事件循环约 190ms,那段时间所有用户的请求一起排队。
       //
-      // 服务端 `sliceTailPage` 的语义正是"取末尾 N 条",所以传当前已加载条数
-      // 就得到同一个窗口,内容不变、体积回到几百 KB。初次打开会话仍走
-      // fetchFromServer 的分页路径,不受影响。
+      // 服务端 `sliceTailPage` 的语义正是"取末尾 N 条",所以传当前已加载条数就得到同一个窗口,
+      // 体积只有几百 KB。初次打开会话仍走 fetchFromServer 的分页路径。
       const loadedCount = slot.serverMessages.length;
       const limit = Math.max(loadedCount, MESSAGES_PER_PAGE);
       const url = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}&offset=0`;
@@ -1066,17 +1176,15 @@ export function useSessionStore() {
       const data = body?.data ?? body;
 
       /**
-       * ga:**这份快照比手里的窄,就别落地。**
+       * 这份快照比手里的窄,就别落地。
        *
-       * `limit` 是在 `await` **之前**按当时的条数冻结的。用户滚到顶等答案时
-       * 上翻一页(+20 条),几十毫秒后 `complete` 触发这次刷新 —— 它的 limit
-       * 还是旧的那个数。补页先落地(220 条),刷新后落地:票**更大**所以通过
-       * 下面那道检查,整份替换成尾部 200 条,**刚翻出来的 20 条原地消失**,
-       * 守位锚点跟着失效、视口再跳一次。
+       * `limit` 是在 `await` 之前按当时的条数冻结的。用户滚到顶等答案时上翻一页(+20 条),
+       * 几十毫秒后 `complete` 触发这次刷新,它的 limit 还是旧的那个数。补页先落地(220 条),
+       * 刷新后落地:票更大所以能通过下面那道检查,整份替换成尾部 200 条,刚翻出来的 20 条
+       * 原地消失,守位锚点跟着失效、视口再跳一次。
        *
-       * 票据只能回答"谁更晚发起",回答不了"谁覆盖得更全" —— 而这里票更新的
-       * 那个请求恰恰是按**更小的窗口**构造的。所以票据之外再加这一条。
-       * 丢掉即可:下一轮 complete 还会再刷,那时 limit 是新的。
+       * 票据只能回答"谁更晚发起",回答不了"谁覆盖得更全",而这里票更新的那个请求恰恰是按
+       * 更小的窗口构造的,所以票据之外再加这一条。丢掉即可:下一轮 complete 还会再刷,那时 limit 是新的。
        */
       if (slot.serverMessages.length > limit) {
         return;
@@ -1090,13 +1198,7 @@ export function useSessionStore() {
       }
       slot._appliedFetchSeq = fetchTicket;
 
-      /**
-       * fm:刷新走 `applyServerSnapshot`(mode='replace',offsetBase=0)。
-       *
-       * 这条路径原本写得最全(游标改写的道理、只剪不清的实时行规则),
-       * 现在那两段注释搬进了 applier —— 规则只有一份,另外三条路径不会再
-       * 各自漏掉其中一半。
-       */
+      /** 刷新走 `applyServerSnapshot`(mode='replace',offsetBase=0);游标改写与实时行剪除的规则见那里。 */
       applyServerSnapshot(slot, data, { mode: 'replace' });
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
@@ -1124,11 +1226,7 @@ export function useSessionStore() {
   }, []);
 
   /**
-   * Update or create a streaming message (accumulated text so far).
-   * Uses a well-known ID so subsequent calls replace the same message.
-   */
-  /**
-   * 流式正文更新。**只动 `streamingText`,不碰列表、不重排。**
+   * 流式正文更新。只动 `streamingText`,不碰列表、不重排。
    *
    * 关键在于 `slot.merged` 的引用保持不变 —— 下游 `normalizedToChatMessages`、
    * 分组、key 表全是挂在它上面的 useMemo,引用不变它们就整体跳过。
@@ -1144,18 +1242,16 @@ export function useSessionStore() {
   }, [getSlot, notify]);
 
   /**
-   * Finalize streaming: convert the streaming message to a regular text message.
-   * The well-known streaming ID is replaced with a unique text message ID.
-   */
-  /**
-   * 流式结束:把这段正文**一次性**提交进列表。
+   * 流式结束:把这段正文一次性提交进列表。
    *
-   * id 在这一刻铸定,此后再也不变 —— 以前是"流式期间用 `__streaming_<sid>`、
-   * 收尾换成随机新 id",key 一变 React 就卸载重建整条最终回答:markdown 全量
-   * 重解析、代码块重走 Suspense、mermaid 重新 import、KaTeX 重排,高度先塌后涨。
-   * 那就是每轮"答完猛跳一次"的来源。
+   * id 在这一刻铸定,此后再也不变:列表里的 key 一变,React 就会卸载重建整条最终回答,
+   * markdown 全量重解析、代码块重走 Suspense、mermaid 重新 import、KaTeX 重排,
+   * 高度先塌后涨,每轮答完都会猛跳一次。
+   *
+   * `serverTimestamp` 是触发提交的那一帧(stream_end / complete)上的服务器时间,
+   * 时间戳取法见 `streamCommitTimestamp`。
    */
-  const finalizeStreaming = useCallback((sessionId: string) => {
+  const finalizeStreaming = useCallback((sessionId: string, serverTimestamp?: unknown) => {
     const slot = storeRef.current.get(sessionId);
     if (!slot) return;
     const text = slot.streamingText;
@@ -1167,7 +1263,7 @@ export function useSessionStore() {
     const committed: NormalizedMessage = {
       id: `text_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       sessionId,
-      timestamp: new Date().toISOString(),
+      timestamp: streamCommitTimestamp(serverTimestamp),
       provider: slot.streamingProvider ?? 'claude',
       kind: 'text',
       role: 'assistant',
@@ -1229,9 +1325,10 @@ export function useSessionStore() {
     getSessionSlot,
     markInterjection,
     clearSentDuringTurn,
+    dropUnsentEcho,
   }), [
     getSlot, has, getStreamingText, fetchFromServer, fetchMore,
-    appendRealtime, appendRealtimeBatch, refreshFromServer, markInterjection, clearSentDuringTurn,
+    appendRealtime, appendRealtimeBatch, refreshFromServer, markInterjection, clearSentDuringTurn, dropUnsentEcho,
     setActiveSession, setStatus, isStale, updateStreaming, finalizeStreaming,
     clearRealtime, getMessages, getSessionSlot,
   ]);

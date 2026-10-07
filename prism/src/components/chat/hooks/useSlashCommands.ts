@@ -78,12 +78,12 @@ const isBuiltinCommand = (command: SlashCommand) =>
 /**
  * 这条命令该由谁来跑?
  *
- * `/api/commands/execute` 只认两种:**六个内置命令**(服务端有 handler),
- * 以及**带 path 的自定义命令**(服务端去 `.claude/commands/` 读文件)。
- * 除此之外的一律得**打进输入框、当成提示词发给 CLI 去解释**。
+ * `/api/commands/execute` 只认两种:六个内置命令(服务端有 handler),
+ * 以及带 path 的自定义命令(服务端去 `.claude/commands/` 读文件)。
+ * 除此之外的一律得打进输入框、当成提示词发给 CLI 去解释。
  *
- * 之前只挑出了技能,于是从 `/api/claude/slash-commands` 拿回来的那批 **CLI 自带
- * 命令**(`/compact`、`/clear`、`/init`…)也被送去 execute 端点 ——
+ * 之前只挑出了技能,于是从 `/api/claude/slash-commands` 拿回来的那批 CLI 自带
+ * 命令(`/compact`、`/clear`、`/init`…)也被送去 execute 端点 ——
  * 它们既没有 handler 也没有 path,一律撞在
  * 「Command path is required for custom commands」上。
  */
@@ -170,15 +170,12 @@ export function useSlashCommands({
   sessionId,
 }: UseSlashCommandsOptions) {
   /**
-   * dv:静态列表与 CLI 动态列表**分开存**,读的时候再合。
+   * 静态列表与 CLI 动态列表分开存,读的时候再合。
    *
-   * 原来两者共用一个 state:静态那条链(内置 + 项目自定义 + 技能,两次串行
-   * 往返)用**整体替换**写入,而动态 CLI 那条(`/compact`、`/clear`、`/init`…)
-   * 只在 `[sessionId, provider]` 变化时跑一次、用追加写入。于是两种情况都会
-   * 把 CLI 命令抹掉且再也回不来:① 首屏动态先到、静态后到;② 会话运行中
-   * 侧栏刷新让 `selectedProject` 换了对象身份,静态 effect 重跑而 sessionId
-   * 没变、动态 effect 不重跑。用户敲 `/compact` 还能靠"无 path 交给模型"那条
-   * 兜底,但菜单里看不见、补全不了。
+   * 静态那条链(内置 + 项目自定义 + 技能,两次串行往返)用整体替换写入,而动态 CLI 那条
+   * (`/compact`、`/clear`、`/init`…)只在 `[sessionId, provider]` 变化时跑一次。共用一个
+   * state 的话,两种情况都会把 CLI 命令抹掉且再也回不来:① 首屏动态先到、静态后到;
+   * ② 静态 effect 因项目变化重跑,而 sessionId 没变、动态 effect 不重跑。
    */
   const [staticCommands, setStaticCommands] = useState<SlashCommand[]>([]);
   const [cliCommands, setCliCommands] = useState<SlashCommand[]>([]);
@@ -193,7 +190,7 @@ export function useSlashCommands({
   const [commandQuery, setCommandQuery] = useState('');
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(-1);
   /**
-   * fj:鼠标悬停的那一项。**只用于视觉高亮**,不参与回车行为判定
+   * 鼠标悬停的那一项。只用于视觉高亮,不参与回车行为判定
    * (见 handleCommandSelect 的说明)。
    */
   const [hoveredCommandIndex, setHoveredCommandIndex] = useState(-1);
@@ -216,9 +213,9 @@ export function useSlashCommands({
     clearCommandQueryTimer();
   }, [clearCommandQueryTimer]);
 
-  // hl(09-24 静态 P2-30):依赖只取真正用到的**原始值**。原来依赖整个 selectedProject 对象 ——
-  // 项目列表每刷新一次(会话写盘、sessions-watcher 推送)它就换一个新引用,斜杠命令与技能列表
-  // 跟着整套重拉两个接口。
+  // 依赖只取真正用到的原始值,不放整个 selectedProject 对象:项目列表每刷新一次
+  // (会话写盘、sessions-watcher 推送)它就换一个新引用,斜杠命令与技能列表
+  // 会跟着整套重拉两个接口。
   const selectedProjectId = selectedProject?.projectId ?? null;
   const selectedProjectWorkspacePath = selectedProject ? (selectedProject.fullPath || selectedProject.path || '') : null;
 
@@ -313,8 +310,7 @@ export function useSlashCommands({
         const data = await response.json();
         if (cancelled || !data?.available || !Array.isArray(data.commands)) return;
 
-        // dv:存进自己那份 state —— 去重放到合并那一步,静态列表怎么重写都不会
-        // 再把它们抹掉。
+        // 存进自己那份 state:去重放到合并那一步,静态列表怎么重写都不会抹掉它们。
         setCliCommands(
           (data.commands as Array<{ name?: string; description?: string; argumentHint?: string }>)
             .filter((entry) => Boolean(entry?.name))
@@ -385,12 +381,10 @@ export function useSlashCommands({
         : currentTextarea?.selectionStart ?? input.length;
       const textBeforeCommand = input.slice(0, insertionStart);
       /**
-       * fj:命令 token 的结尾同样是**第一个空白字符**(与 `@` 提及同源的 bug)。
+       * 命令 token 的结尾是第一个空白字符,与 `@` 提及共用判据。
        *
-       * 原来是 `indexOf(' ')` 之后 `slice(spaceIndex).trimStart()` —— 空格**之前**
-       * 的所有内容(含换行和那一行的正文)被整段丢掉:`/comp\nabc def` 补全成
-       * `/compact def`,`\nabc` 没了。没有空格时才走 `selectionEnd` 兜底、内容才
-       * 保得住,所以这个 bug 是"有空格才炸",更难被发现。判据与 `@` 提及共用。
+       * 不能按 `indexOf(' ')` 切:空格之前的所有内容(含换行和那一行的正文)会被整段丢掉,
+       * `/comp\nabc def` 会补全成 `/compact def`。
        */
       const separator = textBeforeCommand && !/\s$/.test(textBeforeCommand) ? ' ' : '';
       const { text: newInput } = replaceCompletionToken(
@@ -435,11 +429,9 @@ export function useSlashCommands({
   /**
    * 键盘选中一条命令。
    *
-   * `mode` 区分 **Tab 与 Enter**:
-   * - `complete`(Tab):**只把命令补进输入框**,任何类型都一样。以前 Tab 走的是
-   *   和 Enter 完全相同的分支 —— 于是只有技能"像补全",其余的一按 Tab 就直接执行了,
-   *   看起来就是"除了 skill 都不支持 tab 补全"。
-   * - `submit`(Enter):技能与 CLI 命令进输入框,内置/自定义命令交服务端执行。
+   * `mode` 区分 Tab 与 Enter:
+   * - `complete`(Tab):只把命令补进输入框,任何类型都一样;
+   * - `submit`(Enter):技能与 CLI 命令进输入框,内置 / 自定义命令交服务端执行。
    */
   const selectCommandFromKeyboard = useCallback(
     (command: SlashCommand, mode: 'complete' | 'submit') => {
@@ -454,8 +446,8 @@ export function useSlashCommands({
   );
 
   /**
-   * fj:输入框里当前那个斜杠 token(去掉前导 `/`)—— Tab 补全据此实时算匹配,
-   * 不吃 150ms 去抖之后才更新的 `commandQuery`。
+   * 输入框里当前那个斜杠 token(去掉前导 `/`)。Tab 补全据此实时算匹配,
+   * 不用 150ms 去抖之后才更新的 `commandQuery`。
    */
   const currentSlashToken = useCallback((): string => {
     if (slashPosition < 0) return '';
@@ -472,13 +464,11 @@ export function useSlashCommands({
 
       if (isHover) {
         /**
-         * fj:悬停只做**视觉高亮**,不写决定回车行为的那个 index。
+         * 悬停只做视觉高亮,不写决定回车行为的那个 index。
          *
-         * 菜单是 440px 宽的 portal,锚在输入框上方最多 360px 高 —— 正好盖在最后
-         * 几条消息上,是鼠标很自然的停放位置。原来 `onMouseEnter` 直接写
-         * `selectedCommandIndex`,而"没高亮就不抢回车"的判据是 `< 0`,
-         * **悬停也算高亮**:用户输入 `/deploy 到测试环境` 这类以斜杠开头的正常
-         * 消息,鼠标恰好在那片区域,按回车就变成"插入鼠标底下那条命令"。
+         * 菜单是 440px 宽的 portal,锚在输入框上方最多 360px 高,正好盖在最后几条消息上,
+         * 是鼠标很自然的停放位置。悬停若算高亮,用户输入 `/deploy 到测试环境` 这类以斜杠开头的
+         * 正常消息、鼠标恰好在那片区域时,回车就变成"插入鼠标底下那条命令"。
          */
         setHoveredCommandIndex(index);
         return;
@@ -583,28 +573,24 @@ export function useSlashCommands({
 
       if (event.key === 'Tab' || event.key === 'Enter') {
         const mode = event.key === 'Tab' ? 'complete' : 'submit';
-        // 没高亮任何一项时**不抢回车**(注意 preventDefault 也要一起让开,
-        // 否则回车既不选中也不发送)。
+        // 没高亮任何一项时不抢回车(preventDefault 也要一起让开,否则回车既不选中也不发送)。
         //
-        // 原来这里无条件退而取首项:配上 150ms 的查询去抖,快打 `/clear` 立刻回车,
-        // 插进去的是 `commandQuery` 还停在 `cle`/`c`/`''` 时那份列表的首项 ——
-        // 用户敲的和插进去的完全无关。让回车按它本来的意思走(发送);
-        // 想选命令的人本来就会先按方向键。
+        // 不退而取首项:查询有 150ms 去抖,快打 `/clear` 立刻回车时,列表首项可能来自
+        // `commandQuery` 还停在 `cle`/`c`/`''` 时的那份,与用户敲的完全无关。
+        // 回车按它本来的意思走(发送);想选命令的人会先按方向键。
         //
-        // Tab 不在此列 —— 它是补全键,"补成第一个匹配项"正是它该有的行为。
-        // fj:只看**键盘**选中的那个 index —— 悬停不参与(见 handleCommandSelect)。
+        // Tab 不在此列:它是补全键,"补成第一个匹配项"正是它该有的行为。
+        // 只看键盘选中的那个 index,悬停不参与(见 handleCommandSelect)。
         if (event.key === 'Enter' && selectedCommandIndex < 0) {
           return false;
         }
         event.preventDefault();
         /**
-         * fj:Tab 补全用**当前输入实时算**的匹配,不用 `filteredCommands`。
+         * Tab 补全用当前输入实时算的匹配,不用 `filteredCommands`。
          *
-         * `filteredCommands` 由 `commandQuery` 派生,而 `commandQuery` 晚 150ms
-         * (去抖)—— 连打 `/compact` 后 150ms 内按 Tab(快打字者的键间隔常在
-         * 100ms 上下),列表可能还停在上一次查询上,补进去的是一个和用户所敲
-         * 毫无关系的命令。第 573 行那条修复只把 **Enter** 排除在"退而取首项"
-         * 之外,注释也写明"Tab 不在此列",但没考虑列表本身是旧的。
+         * `filteredCommands` 由 `commandQuery` 派生,而 `commandQuery` 有 150ms 去抖:
+         * 连打 `/compact` 后 150ms 内按 Tab(快打字者的键间隔常在 100ms 上下),
+         * 列表可能还停在上一次查询上,补进去的会是一个和用户所敲毫无关系的命令。
          */
         const liveTarget = event.key === 'Tab' && selectedCommandIndex < 0
           ? filterSlashCommands(slashCommands, currentSlashToken())[0]

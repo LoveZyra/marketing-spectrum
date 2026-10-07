@@ -1,5 +1,5 @@
 /**
- * hl(P3 中英混排):服务端建项目的错误码 → 界面语言。未登记的码原文透传(总比吞掉强)。
+ * 服务端建项目的错误码 → 界面语言。未登记的码原文透传(总比吞掉强)。
  */
 export const CREATE_PROJECT_ERROR_CODES: Record<string, string> = {
   PROJECT_PATH_REQUIRED: '请填写项目路径',

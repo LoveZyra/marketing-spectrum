@@ -11,8 +11,7 @@ import { broadcastPendingApprovalCount } from '@/modules/websocket/index.js';
 import { createLogger } from '@/shared/logger.js';
 const log = createLogger('admin');
 
-// bcrypt 不带类型声明(auth.js 是纯 JS 无所谓,这里是 TS)。只用到 hash 一个
-// 方法,自己给个最小签名,别为一个函数引 @types 依赖。
+// bcrypt 没有类型声明;这里只用到 hash,给一个最小签名,不为一个函数引入 @types 依赖。
 const require = createRequire(import.meta.url);
 const bcrypt = require('bcrypt') as { hash(data: string, saltOrRounds: number): Promise<string> };
 
@@ -21,10 +20,10 @@ type AdminRouterDependencies = {
   requireRoot: RequestHandler;
   /** 运行中代码的版本号(index.js 启动时取一次),状态面板展示。 */
   runningVersion?: string | null;
-  /** v2.0.0:「v2.0.0 · 2026-10-01 · 3c84d6c」(含发布日期与提交号),状态面板展示。 */
+  /** 发布标识「v版本号 · 发布日期 · 提交号」(格式见 shared/releaseInfo.ts),状态面板展示。 */
   runningRelease?: string | null;
   /**
-   * 常驻 Claude 池的只读快照来源(F6)。由组合根注入 —— admin 模块不直接
+   * 常驻 Claude 池的只读快照来源。由组合根注入 —— admin 模块不直接
    * import claude-sdk.js,与 shell 模块注入 `releaseConversation` 同一套约定。
    */
   runtimePool?: () => RuntimePoolSnapshot;
@@ -38,9 +37,9 @@ const readUserId = (raw: unknown): number | null => {
 };
 
 /**
- * hl(动态 P2-9):管理类审计的公共字段 —— 操作者、ip / user-agent,以及 **targetUserId**。
- * 此前这几条 `record` 都没传 targetUserId,「与我有关的操作记录」查的是 target_user_id 列,
- * 于是被审批 / 驳回 / 重置密码 / 停用 / 改配额的人在自己的记录里一条都看不到。
+ * 管理类审计的公共字段:操作者、ip / user-agent 与 targetUserId。
+ * targetUserId 不能省:「与我有关的操作记录」按 target_user_id 查,缺了它,
+ * 被审批 / 驳回 / 重置密码 / 停用 / 改配额的人在自己的记录里看不到这些操作。
  */
 const adminAuditBase = (req: express.Request, targetUserId: number) => {
   const actor = (req as typeof req & { user?: RequestUser }).user ?? null;
@@ -54,7 +53,9 @@ const adminAuditBase = (req: express.Request, targetUserId: number) => {
 };
 
 /**
- * Root-only account administration: list accounts, approve, reject.
+ * Root-only administration: account review (approve / reject), password reset,
+ * (de)activation, per-account attachment quotas, and the server status /
+ * runtime stats panels.
  *
  * Every route sits behind `requireRoot`, which derives rootness from
  * `PRISM_ROOT_USERS` at request time rather than from a database column — so
@@ -175,10 +176,10 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): Router
   });
 
   /**
-   * F6:进程内资源快照 —— 常驻池 / 在飞回合 / 待审批 / PTY / 缓存。
+   * 进程内资源快照:常驻池 / 在飞回合 / 待审账号 / PTY / 缓存。
    *
-   * **只读**。没有"一键回收"按钮:能一键杀掉别人正在跑的回合,风险远大于它
-   * 省下的事;真要收,重启服务是更诚实的动作。
+   * 只读,刻意不提供"一键回收":能一键杀掉别人正在跑的回合,风险远大于它
+   * 省下的事;真要回收,重启服务是更诚实的动作。
    */
   router.get('/stats', (req, res) => {
     try {
@@ -190,10 +191,10 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): Router
   });
 
   /**
-   * F6:每个账号的附件用量与配额。
+   * 每个账号的附件用量与配额,按用量降序。
    *
-   * 配额是**按账号**的,可逐人覆盖(users.attachment_quota_mb,NULL = 跟随全局)。
-   * 没有这张表,root 只能靠用户自己来报"我传不上去了",而且无从判断该调谁的。
+   * 配额按账号计,可逐人覆盖(users.attachment_quota_mb,NULL = 跟随全局),
+   * 这张表让 root 能直接看出谁接近上限、该调谁的配额。
    */
   router.get('/attachment-usage', (req, res) => {
     try {
@@ -230,9 +231,9 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): Router
   });
 
   /**
-   * F6:设置/清除某账号的附件配额覆盖。`quotaMb: null` = 回到全局默认。
+   * 设置/清除某账号的附件配额覆盖。`quotaMb: null` = 回到全局默认。
    *
-   * 上限 1024 GB 只是防手滑(打成 100000000 之后配额等于没有);下限 1 MB
+   * 上限 1024 GB 只是防手滑(多打几个 0 之后配额等于没有);下限 1 MB
    * 同理 —— 0 会让那个账号一个字节都传不了,想禁用附件应该是另一个开关。
    */
   router.put('/users/:id/attachment-quota', (req, res) => {

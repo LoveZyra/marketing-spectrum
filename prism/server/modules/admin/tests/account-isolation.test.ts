@@ -39,8 +39,8 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 
 describe('项目归属与可见性', () => {
   test('未指定 owner 的项目默认不再公开:不在公共目录下时对非 root 不可见', async () => {
-    // 2026-08-14 口径变更:无主 ≠ 公开。没配公共目录时,无主项目对普通用户
-    // 一个都不出现(只有 root 的不过滤视图看得到)。
+    // 无主 ≠ 公开:没配公共目录时,无主项目对普通用户一个都不出现
+    // (只有 root 的不过滤视图看得到)。
     const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
     delete process.env.PRISM_PUBLIC_WORKSPACE;
     try {

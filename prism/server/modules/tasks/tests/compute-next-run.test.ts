@@ -3,7 +3,7 @@ import { describe, test, expect } from 'vitest';
 import { computeNextRunAt, toDbUtc } from '@/modules/tasks/services/scheduled-tasks.service.js';
 
 /**
- * cj 回归:定时任务的下一次运行时刻(预设频率,本地时区,注入 from 不摸真钟)。
+ * 定时任务的下一次运行时刻(预设频率,本地时区,注入 from 不摸真钟)。
  */
 const fields = (over: Partial<Parameters<typeof computeNextRunAt>[0]>) => ({
   frequency: 'daily' as const,

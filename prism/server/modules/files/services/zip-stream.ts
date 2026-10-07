@@ -4,14 +4,13 @@ import path from 'node:path';
 import type { Archiver } from 'archiver';
 
 /**
- * hk(审计 P1-7):zip 下载**按需打开文件、取消时全部关掉**。
+ * zip 下载:按需打开文件,取消时全部关掉。
  *
- * 原来用 `archive.directory()` / `archive.file()`:archiver 内部为条目开的读流,在客户端中途取消
- * (`archive.abort()`)之后不会被关掉 —— 探针里打包两个 300MB 文件、限速下载后断开,每断一次进程里
- * 就多一个永远不关的 fd,`finalize()` 也永不返回。取消得多了整个服务报 EMFILE。
+ * 不用 `archive.directory()` / `archive.file()`:archiver 内部为条目开的读流在 `archive.abort()`
+ * 之后不会被关掉,每次中途取消都泄漏 fd,`finalize()` 也永不返回,取消多了整个服务报 EMFILE。
  *
- * 现在自己走目录树,**一次只开一个文件**:append 一个条目、等 archiver 发 `entry`(它读完了)再开下一个;
- * 登记每一个打开的流,客户端断开时逐个 destroy。目录里的软链仍以链接条目存入(不带目标内容),与原来一致。
+ * 所以自己走目录树,一次只开一个文件:append 一个条目、等 archiver 发 `entry`(它读完了)再开下一个;
+ * 登记每一个打开的流,客户端断开时逐个 destroy。目录里的软链以链接条目存入(不带目标内容)。
  */
 
 export type ZipInputEntry = { absPath: string; entryName: string; isDirectory: boolean };
@@ -30,8 +29,8 @@ async function* walk(absPath: string, name: string): AsyncGenerator<WalkItem> {
   }
   if (stat.isSymbolicLink()) {
     try {
-      // 与原来 archiver.directory() 同口径:链接目标换算成相对链接所在目录的路径 ——
-      // 直接写 readlink 的原串会把服务器上的绝对路径带进 zip,解压出来也是断链。
+      // 链接目标换算成相对链接所在目录的路径(与 archiver.directory() 同口径):直接写 readlink
+      // 的原串会把服务器上的绝对路径带进 zip,解压出来也是断链。
       const raw = await fsPromises.readlink(absPath);
       const dir = path.dirname(absPath);
       yield { kind: 'link', name, target: path.relative(dir, path.resolve(dir, raw)) };
@@ -72,8 +71,8 @@ export type ZipStreamHandle = {
 export function streamZipEntries(archive: Archiver, entries: ZipInputEntry[], onSkip?: (message: string) => void): ZipStreamHandle {
   const open = new Set<fs.ReadStream>();
   let aborted = false;
-  // 当前在等的那一个条目的 resolve。abort 时直接叫醒它 —— 不要每个条目都挂一个 abort 回调:
-  // 正常打包时那个 promise 永远不 resolve,回调全留在内存里(复核实测 20 万条目约 116MB)。
+  // 当前在等的那一个条目的 resolve。abort 时直接叫醒它,不要每个条目都挂一个 abort 回调:
+  // 正常打包时 abort 不会发生,挂上的回调全留在内存里(20 万条目约 116MB)。
   let wakeCurrent: (() => void) | null = null;
 
   const abort = () => {
@@ -138,7 +137,7 @@ export const ZIP_MAX_CONCURRENT = (() => {
 
 let activeZips = 0;
 
-/** hl(P3 文件组):签票时先看名额 —— 满了在 fetch 语境里就回 429,前端弹得出提示;不占名额。 */
+/** 签票时先看名额(只看不占):满了在 fetch 语境里就回 429,前端弹得出提示。 */
 export function hasZipSlot(): boolean {
   return activeZips < ZIP_MAX_CONCURRENT;
 }

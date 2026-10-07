@@ -7,21 +7,20 @@ import { fileURLToPath } from 'node:url';
 import { describe, test } from 'vitest';
 
 /**
- * 后端不许**新增**循环依赖。
+ * 后端不许新增循环依赖。
  *
  * ## 为什么这条测试必须自己跑 madge,而不是靠人记得跑
  *
- * 这个仓库为循环依赖出过一次真事故:`en` 轮 provider 反向 import watcher,
- * `ClaudeSessionSynchronizer is not a constructor`,整个 provider 层起不来 ——
- * **而类型检查完全看不出来**。
+ * 循环依赖在加载期才暴露,类型检查完全看不出来:例如 provider 反向 import watcher
+ * 会报 `ClaudeSessionSynchronizer is not a constructor`,整个 provider 层起不来。
  *
  * 更麻烦的是查这件事的工具会骗人:
  *
  *     npx madge --circular --extensions ts,tsx,js src server   →  "No circular dependency found"
  *
- * 这条命令(也是任何人凭直觉会敲的那条)对 server **无效** —— madge 解析不了 `@/`
- * 别名,也解析不了 `.js` → `.ts` 的扩展名改写,于是它**静默跳过 135 个文件**后宣布干净。
- * 必须带 `--ts-config server/tsconfig.json`。加上之后实测出 4 个环。
+ * 这条命令(也是任何人凭直觉会敲的那条)对 server 无效 —— madge 解析不了 `@/`
+ * 别名,也解析不了 `.js` → `.ts` 的扩展名改写,于是它静默跳过大量文件后宣布干净。
+ * 必须带 `--ts-config server/tsconfig.json`。
  *
  * 一条会骗人的检查比没有检查更糟,所以把正确的命令钉在这里。
  *
@@ -33,8 +32,8 @@ import { describe, test } from 'vitest';
  * `seedDisplayLogFromTranscript`,两个都是有状态的业务服务,不像
  * `websocket-state` / `project-display-name` 那样能往叶子上搬。
  *
- * 真要拆得动依赖注入或事件总线,那是独立一轮的事。在那之前先把数字钉住:
- * **可以变少,不许变多**。变少了就把 BASELINE 调下来(测试会提示)。
+ * 拆掉它需要依赖注入或事件总线。在那之前先把数字钉住:可以变少,不许变多。
+ * 变少了就把 BASELINE 调下来(测试会提示)。
  */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -50,7 +49,7 @@ const findRepoRoot = (): string | null => {
   return null;
 };
 
-/** 当前已知的环数。**只允许下调。** */
+/** 当前已知的环数,只允许下调。 */
 const BASELINE = 1;
 
 const root = findRepoRoot();

@@ -15,7 +15,7 @@ import {
 import providerRouter from '../provider.routes.js';
 
 /**
- * gy:反馈路由与 work-frames 里的 `skillSurveys` —— 在**路由层**测可见性与三道闸。
+ * 反馈路由与 work-frames 里的 `skillSurveys`:在路由层测可见性与三道闸。
  *
  * 会话可见性是唯一的门:看得见就能投,看不见一律 404(与 usage-visibility 同一策略:
  * 用文案 / 状态码区分"被门挡下"与"过门后的失败")。

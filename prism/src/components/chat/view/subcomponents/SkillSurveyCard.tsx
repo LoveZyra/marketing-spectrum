@@ -6,8 +6,8 @@ import { useToast } from '../../../../shared/view/ui';
 import type { FeedbackPayload, FeedbackVerdict } from '../../hooks/useMessageFeedback';
 
 /**
- * gy:「这次「<skill>」处理得怎么样?」—— 调过 skill 的回合结束后,按抽样弹给发起人的
- * **主动**反馈入口。不是弹窗:产出卡同一位置的行内卡。
+ * 「这次「<skill>」处理得怎么样?」:调过 skill 的回合结束后,按抽样弹给发起人的
+ * 主动反馈入口。不是弹窗,是与产出卡同一位置的行内卡。
  *
  * 该不该出现由服务端算(work-frames 的 `skillSurveys`),这里只画:选一档即落库(文本框
  * 此时才展开,填了再提交一次更新同一行);「跳过」记一条 dismissed,同样不再弹。

@@ -4,10 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * ej:时间轴与产出列表的三处外观约定,读源码钉住。
+ * 时间轴与产出列表的几处外观约定,读源码钉住。
  *
- * 都是"看得见、但没有任何单元能替它把关"的细节 —— 改回去不会有测试变红,
- * 只会在用户下一次截图里出现。所以这里退一步,直接对源码断言。
+ * 这些细节看得见,却没有单元测试能替它把关(vitest 这边不挂组件),所以直接对源码断言。
  */
 const read = (name: string) =>
   readFileSync(fileURLToPath(new URL(name, import.meta.url)), 'utf8');
@@ -27,8 +26,8 @@ describe('ActivityTimeline 的竖线与复制按钮', () => {
   });
 
   it('narration 圆点与正文首行中心对齐(格高跟着首行算,不是拍脑袋的 26px)', () => {
-    // 正文 py-1.5(6px)+ 13.5/22 首行 → 中心 17px;格高 34 时圆点正落在那儿。
-    // 26px 时圆点比字高 4px —— 探针量出来就是 −4。
+    // 正文 py-1.5(6px)+ 13.5/22 首行 → 中心 17px;格高 34 时圆点正落在那儿,
+    // 26px 时圆点会比字高 4px。
     expect(source).toMatch(/flex h-\[34px\] items-center justify-center/);
     expect(source).not.toMatch(/flex h-\[26px\] items-center justify-center/);
   });
@@ -45,7 +44,7 @@ describe('产出列表的文件图标', () => {
     for (const name of ['./ChatWorkPanel.tsx', './TurnOutputsCard.tsx']) {
       const source = read(name);
       expect(source, name).toMatch(/<FileTypeIcon path=\{file\.path\} \/>/);
-      // 一律 FileText 的老写法不能回来:一列产出里 .py/.svg/.html 得分得开。
+      // 不能一律用 FileText:一列产出里 .py / .svg / .html 得分得开。
       expect(source, name).not.toMatch(/FileText className="filetype-doc/);
     }
   });

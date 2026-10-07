@@ -9,11 +9,11 @@ import {
 import type { ProviderMcpServer } from '@/shared/types.js';
 
 /**
- * F03:`user` 作用域的 MCP 配置能看见,但看不见里面的凭据。
+ * `user` 作用域的 MCP 配置能看见,但非 root 看不见里面的凭据。
  *
- * `scope: 'user'` 写的是 `~/.claude.json` —— **服务进程的家目录**,全机生效,
- * 而 `env` / `headers` 正是放 API key、bearer token 的地方。不带 `scope` 的那条
- * 列表接口过了项目检查就把三组原样返回,任何登录用户读一次就全拿到了。
+ * `scope: 'user'` 写的是 `~/.claude.json` —— 服务进程的家目录,全机生效,
+ * 而 `env` / `headers` 正是放 API key、bearer token 的地方。列表接口(包括不带
+ * `scope`、几个作用域一起返回的那条)若原样返回,任何登录用户读一次就全拿到了。
  */
 const stdioServer: ProviderMcpServer = {
   provider: 'claude',
@@ -35,7 +35,7 @@ const httpServer: ProviderMcpServer = {
 };
 
 describe('redactMcpSecrets', () => {
-  it('env 的**键名保留、值打掉** —— 用户要能看出这个 server 需要什么', () => {
+  it('env 的键名保留、值打掉 —— 用户要能看出这个 server 需要什么', () => {
     const redacted = redactMcpSecrets(stdioServer);
     expect(Object.keys(redacted.env!)).toEqual(['GITHUB_TOKEN', 'LOG_LEVEL']);
     expect(redacted.env).toEqual({ GITHUB_TOKEN: REDACTED_VALUE, LOG_LEVEL: REDACTED_VALUE });
@@ -45,7 +45,7 @@ describe('redactMcpSecrets', () => {
     expect(redactMcpSecrets(httpServer).headers).toEqual({ Authorization: REDACTED_VALUE });
   });
 
-  it('**非凭据字段一个不动** —— 打码不该顺手改掉别的东西', () => {
+  it('非凭据字段一个不动 —— 打码不该顺手改掉别的东西', () => {
     const redacted = redactMcpSecrets(stdioServer);
     expect(redacted.name).toBe('github');
     expect(redacted.command).toBe('npx');
@@ -82,7 +82,7 @@ describe('shouldRedactScope', () => {
   });
 
   it('root 看到真值(他本来就写得了这份配置)', () => {
-    // 规矩:**能读到的 = 能写的**。
+    // 规矩:能读到的 = 能写的。
     expect(shouldRedactScope('user', true)).toBe(false);
   });
 

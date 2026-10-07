@@ -11,15 +11,13 @@ import { afterEach, beforeEach, describe, test } from 'vitest';
 import { createCheckpoint, restoreCheckpoint } from '../git-checkpoint.js';
 
 /**
- * E9:checkpoint 的 untracked 快照改成增量。
- *
- * 每个回合前都会给工作区打一份 checkpoint,而 untracked 快照原来是**每轮全量
- * copyFile**。仓库里躺着构建产物或数据文件时,这就是每轮几百 MB 的纯拷贝。
- * 现在同一路径只要 size + mtimeMs + inode 三者全同,就硬链到上一份副本上。
+ * checkpoint 的 untracked 快照是增量的:同一路径 size + mtimeMs + inode 三者全同,
+ * 就硬链到上一份 checkpoint 的副本上,不再每轮全量拷贝(仓库里躺着构建产物或数据
+ * 文件时,全量拷贝每轮就是几百 MB)。
  *
  * 这个测试盯着三件事,任何一件破了都是数据问题而不只是性能问题:
- *   1. 没动过的文件被复用(不再重复占磁盘);
- *   2. 动过的文件必须重新拷贝 —— 旧 checkpoint 里存的仍是**旧内容**;
+ *   1. 没动过的文件被复用(不重复占磁盘);
+ *   2. 动过的文件必须重新拷贝,旧 checkpoint 里存的仍是旧内容;
  *   3. 老 checkpoint 被清掉后,新 checkpoint 里那份硬链接照样能读、能还原。
  */
 const run = promisify(execFile);

@@ -32,7 +32,7 @@ interface ChatMessagesPaneProps {
   onWheel: () => void;
   onTouchMove: () => void;
   isLoadingSessionMessages: boolean;
-  /** B3:这条会话的正文处于哪一步 —— 'error' 与 'empty' 必须分开渲染。 */
+  /** 这条会话的正文处于哪一步 —— 'error' 与 'empty' 必须分开渲染。 */
   chatViewState: ChatViewState;
   /** 首屏拉取失败时的重试入口。 */
   onRetryLoadMessages: () => void;
@@ -74,42 +74,35 @@ interface ChatMessagesPaneProps {
   selectedProject: Project;
   /** Prism: fork + edit-and-rerun from a user message. */
   onEditRerun?: (message: ChatMessage) => void;
-  /** F2:失败一键重试 —— 重发最近一条用户消息。 */
+  /** 失败一键重试:重发最近一条用户消息。 */
   onRetryLastTurn?: () => void;
   /**
    * 首页空态(没选会话、没有消息)。这时滚动容器铺点阵画布(全库只此一处)。
-   *
-   * ef 时这里还带着 `composerSlot` / `recentSessions` —— 输入框嵌在问候语下面、
-   * 底下挂最近会话。ex 把首页还原回两栏版式,输入框回到页面底部,这三个入参
-   * 一起撤了;留下的 `isHome` 只管点阵画布和居中。
+   * `isHome` 只管点阵画布和居中;输入框始终在页面底部。
    */
   isHome?: boolean;
   /**
-   * ej:助手回答 id → 这一轮的产出文件,**服务端按全量历史算好**的那份。
+   * 助手回答 id → 这一轮的产出文件,由服务端按全量历史算好。
    * 有它就以它为准,没有(还没拉到 / 刚跑完的这一轮)才退回窗口内现推。
    */
   serverTurnOutputs?: ReadonlyMap<string, TurnOutputFile[]>;
-  /** gy:服务端抽中的「效果如何」卡(助手回答 id → skill)。 */
+  /** 服务端抽中的「效果如何」卡(助手回答 id → skill)。 */
   skillSurveys?: ReadonlyMap<string, string>;
-  /** gy:我对各条回答的反馈(message id → 行),与两个回调。 */
+  /** 当前用户对各条回答的反馈(message id → 行),以及提交 / 撤销两个回调。 */
   feedbackByMessageId?: ReadonlyMap<string, MessageFeedbackRow>;
   onFeedbackSubmit?: (messageId: string, payload: FeedbackPayload) => Promise<unknown>;
   onFeedbackRemove?: (messageId: string) => Promise<void>;
 }
 
 /**
- * 流式气泡的时间戳。**恒定值** —— 它不参与排序(不在列表里),而一个每 100ms
+ * 流式气泡的时间戳。恒定值 —— 它不参与排序(不在列表里),而一个每 100ms
  * 变一次的时间戳会让下游所有以它为依据的 memo 全部失效。
  */
 const STREAMING_TIMESTAMP = 0;
 
 /**
- * fj:模块级空数组常量。
- *
- * 之前这里是字面量 `[]` —— 每次渲染都是**新数组**,而 `MessageComponent` 是浅
- * 比较的 `memo`,一个引用变化就让整条列表重渲。流式期间 `streamingText` 每次
- * flush 都会让本组件重渲(约 10Hz),窗口内 100 条消息也就跟着全部重渲,
- * 文件顶部那段"memo 形同虚设"的分析在消息这一档仍然成立。
+ * 模块级空数组常量,不能写成字面量 []:MessageComponent 是浅比较的 memo,每次渲染一个新数组
+ * 就会让整条列表重渲;流式期间本组件约 10Hz 重渲,窗口内的消息会跟着全部重渲。
  */
 const NO_TURN_OUTPUTS: TurnOutputFile[] = [];
 
@@ -173,15 +166,15 @@ function ChatMessagesPane({
   );
 
   /**
-   * 组的 React key。取组自己的稳定身份,**不能取段首消息** —— 窗口从头部长大
+   * 组的 React key。取组自己的稳定身份,不能取段首消息 —— 窗口从头部长大
    * (补页 / 看更早 / 全部展开)会换掉段首,key 一变 React 就卸载重建整个
    * 时间轴:展开态丢失、高度当场突变。
    */
   /**
-   * ej:服务端产出映射落到**这一遍渲染的下标**上。
+   * 把服务端产出映射落到这一遍渲染的下标上。
    *
    * 一条显示日志消息可能被拆成多条 ChatMessage(id 带 `#序号` 后缀),卡片只
-   * 挂**最后一条** —— 产出该在这一轮说完话之后。先扫一遍再渲染,省得渲染中途
+   * 挂最后一条 —— 产出该在这一轮说完话之后。先扫一遍再渲染,省得渲染中途
    * 还要往后看。
    */
   const serverOutputsByIndex = useMemo(() => {
@@ -205,7 +198,7 @@ function ChatMessagesPane({
   }, [groupedVisibleMessages, serverTurnOutputs]);
 
   /**
-   * gy:「效果如何」卡落到**这一遍渲染的下标**上 —— 与 serverOutputsByIndex 同一道理:
+   * 「效果如何」卡落到这一遍渲染的下标上,与 serverOutputsByIndex 同理:
    * 一条显示日志消息可能被拆成多条,卡只挂最后一条。
    */
   const surveyByIndex = useMemo(() => {
@@ -226,7 +219,7 @@ function ChatMessagesPane({
   }, [groupedVisibleMessages, skillSurveys]);
 
   /**
-   * gy:每条助手回答所属回合调用的 skill(👎 表单预填用)。从**扁平的可见消息**扫:
+   * 每条助手回答所属回合调用的 skill(点踩表单预填用)。从扁平的可见消息扫:
    * 用户消息开新一轮,`Skill` 工具帧记 skill,助手正文都记为这一轮的回答。
    */
   const skillByAnswerId = useMemo(() => {
@@ -267,14 +260,12 @@ function ChatMessagesPane({
     // `_key` 由 stabilizeGroupIdentity 保证存在;兜底只为类型完备。
     item._key ?? `${item.messages.length}-${String(item.timestamp)}`;
   /**
-   * gh:**滚动锚点用的行标识必须跨会话稳定 —— 不能用 `_key`。**
+   * 滚动锚点用的行标识必须跨会话稳定,不能用 `_key`。
    *
-   * `_key` 是 `group_${流水号}`,只在"上一次渲染的登记表里认得出"时沿用;登记表
-   * 不分会话,切到别的会话再回来,这条会话的每个组都是新面孔、全部换号。于是
-   * ga 按 rowKey 找回阅读位置这件事,只要上次停在一个活动组/子代理组上就必然失败
-   * (`resolveReadingSpot` 找不到 rowKey 直接放弃)—— 编码会话里约一半的行是组。
-   * React 的 `key` 仍用 `_key`(那是为了组件身份保持);**DOM 上的 data-row-key
-   * 改用尾成员的内在 key**:尾成员在头部补页时不变,跨会话也不变。
+   * `_key` 是 `group_${流水号}`,只在上一次渲染的登记表里认得出时沿用;登记表不分会话,
+   * 切走再回来,这条会话的每个组都会换号,`resolveReadingSpot` 按 rowKey 就找不回阅读位置。
+   * React 的 `key` 仍用 `_key`(保持组件身份);DOM 上的 data-row-key 用尾成员的内在 key:
+   * 头部补页时不变,跨会话也不变。
    */
   const getGroupRowKey = (item: ToolGroupItem | SubagentGroupItem) => {
     const last = item.messages[item.messages.length - 1];
@@ -310,7 +301,7 @@ function ChatMessagesPane({
     return keys;
   }, [groupedVisibleMessages]);
 
-  // getMessageKey 的引用要**恒定**:它是 ActivityTimeline 的 prop,每轮换新
+  // getMessageKey 的引用要恒定:它是 ActivityTimeline 的 prop,每轮换新
   // 引用会把上面组身份保持换来的 memo 又全部击穿。改成经 ref 读,值永远是本轮
   // 的 key 表(ref 在渲染期先于子组件赋值),引用一次都不变。
   const messageKeyMapRef = useRef(messageKeyMap);
@@ -327,22 +318,15 @@ function ChatMessagesPane({
       onWheel={onWheel}
       onTouchMove={onTouchMove}
       /*
-       * 底部留白**常驻**,不随运行状态切换。
-       *
-       * 原来是 `pb-3 ↔ pb-12`(桌面 `pb-4 ↔ pb-14`),一开跑一收尾各跳约 40px:
-       * scrollHeight 骤变、浏览器钳一次 scrollTop,整屏内容上跳。留白本来就是
-       * 给活动指示器让位的,常驻的代价只是空会话底部多一点空,比每轮跳两次划算。
+       * 底部留白(给活动指示器让位)常驻,不随运行状态切换:切换会让 scrollHeight
+       * 在每轮开跑 / 收尾时各跳约 40px,浏览器钳一次 scrollTop,整屏内容跟着上跳。
        */
       className={cn(
         'chat-messages-pane relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto',
         isHome ? 'prism-canvas py-6' : 'pb-12 pt-3 sm:pb-14 sm:pt-4',
       )}
     >
-      {/*
-        * 正文宽度**恒定**。原来空会话用 68rem(给起始卡片排得开),有消息之后收到
-        * 54.25rem —— 第一条消息落地的瞬间容器从 1088px 缩到 868px,已渲染的内容
-        * 全部重新折行。宽度改成只属于空态那一块,消息列表这一支永远是 54.25rem。
-        */}
+      {/* 消息列表这一支宽度恒定 54.25rem(空态的宽度只属于空态那一块):第一条消息落地时容器宽度不变,已渲染的内容不会重新折行 */}
       <div className={isHome ? 'flex min-h-full flex-col justify-center' : 'mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4'}>
       {(isLoadingSessionMessages || isProcessing) && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-muted-foreground">
@@ -352,12 +336,8 @@ function ChatMessagesPane({
         </div>
       ) : chatViewState === 'error' && chatMessages.length === 0 ? (
         /*
-         * B3:**加载失败不是空会话。**
-         *
-         * 在此之前这两种情况走同一个分支:一条 5000 条的会话拉取失败之后,
-         * 界面显示的是「这里还没有消息,开始聊天吧」的起始卡片 —— 用户没有
-         * 任何线索知道那只是一次网络失败,也没有重试的地方,只能切走再切回来
-         * (还得等过 30 秒的 isStale 窗口)。
+         * 加载失败不是空会话:不能落到「这里还没有消息」的起始卡片,
+         * 要说明是加载失败并给出重试入口。
          */
         <div className="mt-8 text-center" role="alert">
           <p className="text-sm text-muted-foreground">{t('session.messages.loadFailed')}</p>
@@ -380,9 +360,7 @@ function ChatMessagesPane({
         </div>
       ) : (
         <>
-          {/* Loading indicator for older messages (hide when load-all is active).
-              dl:换成骨架行 —— 顶端在补一页的时候,看到的是"内容的形状",
-              而不是一行孤零零的文字。高度固定,落地后由滚动控制器守位。 */}
+          {/* 补更早一页时顶端显示骨架行(load-all 进行中不显示);高度固定,落地后由滚动控制器守位 */}
           {isLoadingMoreMessages && !isLoadingAllMessages && !allMessagesLoaded && (
             <div className="space-y-2.5 py-3" role="status" aria-label={t('session.loading.olderMessages')}>
               <div className="h-3.5 w-2/5 animate-pulse rounded bg-muted" />
@@ -434,7 +412,7 @@ function ChatMessagesPane({
           {(() => {
             let prevMessage: ChatMessage | null = null;
             /**
-             * gi 自查:「最后一条」跳过回执行。定时任务的「✅ 执行完成」落在模型回复之后,
+             * 「最后一条」跳过回执行。定时任务的「✅ 执行完成」落在模型回复之后,
              * 若把它当最后一条,真正的最后一条回复/报错就失去「重发上一条」的控制。
              */
             let lastItem = groupedVisibleMessages[groupedVisibleMessages.length - 1];
@@ -445,18 +423,18 @@ function ChatMessagesPane({
               break;
             }
             /**
-             * **哪一段属于"正在跑的这一轮",以及它的正文写了没有。**
+             * 哪一段属于"正在跑的这一轮",以及它的正文写了没有。
              *
              * 两件事一次倒扫算出来,判据收在 `focusActivityGroup` 里
              * (为什么必须一起算,见那个函数的注释)。这里只负责把结果分发下去:
-             * `sessionIsProcessing` 管**行状态**(运行中 / 已中断),
-             * `keepTailOpen` 管**折不折**。
+             * `sessionIsProcessing` 管行状态(运行中 / 已中断),
+             * `keepTailOpen` 管折不折。
              *
              * 正文正在流式打字时它不在这张列表里(流式气泡在 map 之外单独渲染),
              * 所以要把 `streamingText` 显式告诉它 —— 否则"正文出现就收起"
              * 会一直等到这一段正文落地才生效,慢整整一个回合。
              */
-            // fz:最后一条回合边界之后的项都属于最新那一轮 —— 子代理卡拿它判
+            // 最后一条回合边界之后的项都属于最新那一轮 —— 子代理卡拿它判
             // 「进行中」还是「已中断」(见 lastTurnBoundaryIndex 的注释)。
             const turnBoundaryIndex = lastTurnBoundaryIndex(
               groupedVisibleMessages.length,
@@ -468,39 +446,32 @@ function ChatMessagesPane({
               Boolean(streamingText),
             );
             /**
-             * ef:一轮的「产出」卡跟在**回答正文之后**(设计稿)。产出来自上面
-             * 那段工具流,所以先在渲染工具组时把它算出来存这儿,等这一轮的助手
-             * 回答渲染完再一起吐出来;中途遇到别的东西(用户又发了一条、错误)
-             * 就丢掉 —— 那说明这一轮没有正文可挂。
+             * 一轮的「产出」卡跟在回答正文之后。产出来自前面的工具流,所以渲染工具组时
+             * 先算好存在这里,等这一轮的助手回答渲染时再挂上;遇到回合边界(用户又发了
+             * 一条、错误)就丢掉 —— 那说明这一轮没有正文可挂。
              */
             let pendingTurnOutputs: TurnOutputFile[] = NO_TURN_OUTPUTS;
             /**
-             * eh 修:**窗口没到头时,第一段工具流是被切断的,不能拿它算产出。**
+             * 窗口没到头时,第一段工具流是被切断的,不能拿它算产出。
              *
              * 重进会话时先渲染的是尾部窗口,窗口起点常常落在某一轮的工具流中间 ——
              * 这一段只有末尾几个 Write,卡片先显示「产出 2」;等更早的消息补进来、
-             * 这一段接回完整,又变成「产出 5」(用户截图)。数字当着人的面跳,
-             * 比晚一点出现糟得多。
+             * 这一段接回完整,又变成「产出 5」。数字当着人的面跳,比晚一点出现糟得多。
              *
-             * 判据很直白:**渲染列表的第一项就是工具组**,而且窗口并没有覆盖到
+             * 判据很直白:渲染列表的第一项就是工具组,而且窗口并没有覆盖到
              * 对话开头 —— 真实对话的第一条永远是用户消息,所以"工具组排在最前"
              * 只可能是被窗口切掉了前半截。这种情况下这一轮不出卡片,等窗口补齐。
              */
             const windowStartsAtBeginning = !hasMoreMessages && visibleMessageCount >= chatMessages.length;
 
             return groupedVisibleMessages.map((item, renderedIndex) => {
-              // 子代理卡片组:抬头 + 网格子卡 + 点开看各自的步骤时间轴(ci 轮)。
+              // 子代理卡片组:抬头 + 网格子卡 + 点开看各自的步骤时间轴。
               if (isSubagentGroupItem(item)) {
                 const groupPrevMessage = item.messages[item.messages.length - 1] || prevMessage;
                 prevMessage = groupPrevMessage;
                 /**
-                 * fj:子代理写出的文件也算本轮产出。
-                 *
-                 * `extractTurnOutputs` 本来就会扫 `subagentState.childTools`,但它
-                 * 此前只在工具组分支被调用 —— 一轮里只派子代理干活(常见:并行派
-                 * 几路子代理写文档)时,`pendingTurnOutputs` 全程为空,回答下面
-                 * 没有产出卡;而右侧工作面板的会话级产出表(走全量消息)里**有**
-                 * 这些文件,两处对不上,用户会以为正文这边漏了。
+                 * 子代理写出的文件也算本轮产出(extractTurnOutputs 会扫 subagentState.childTools):
+                 * 一轮里只派子代理干活时也要有产出卡,与右侧工作面板的会话级产出表对得上。
                  */
                 if (renderedIndex !== 0 || windowStartsAtBeginning) {
                   pendingTurnOutputs = mergeTurnOutputs(
@@ -526,15 +497,9 @@ function ChatMessagesPane({
                 const groupPrevMessage = prevMessage;
                 prevMessage = item.messages[item.messages.length - 1] || prevMessage;
                 /**
-                 * fz:**累加,不是赋值。**
-                 *
-                 * 一轮里出现两段工具流是常事(中间夹一个子代理组、
-                 * `ExitPlanMode` / `AskUserQuestion`、压缩摘要、任务通知都会
-                 * 把工具流切成两段)。这里原来是**赋值**,而紧邻的子代理分支
-                 * 是**累加** —— 同一个变量两种语义。于是
-                 * 「工具组 A 写了报告 → 子代理各写一章 → 工具组 B 写汇总」
-                 * 这一轮,B 一行就把前面攒的全覆盖掉,回答下面的产出卡只剩一个
-                 * 文件;要等服务端那份补回来才跳成五个,接口失败就永远是一个。
+                 * 累加而不是赋值,与子代理分支一致:一轮里常有多段工具流(子代理组、
+                 * ExitPlanMode / AskUserQuestion、压缩摘要、任务通知都会把它切开),
+                 * 赋值会让后一段覆盖前面攒下的产出。
                  */
                 pendingTurnOutputs = renderedIndex === 0 && !windowStartsAtBeginning
                   ? NO_TURN_OUTPUTS
@@ -559,7 +524,7 @@ function ChatMessagesPane({
                     selectedProject={selectedProject}
                     // 行状态:只有"正在跑的这一轮"那一段的无结果工具行算「运行中」。
                     sessionIsProcessing={isCurrentTurnGroup}
-                    // 折叠:属于这一轮 **且正文还没开始出现**才留尾部三行。
+                    // 折叠:属于这一轮 且正文还没开始出现才留尾部三行。
                     keepTailOpen={shouldKeepActivityTailOpen(isCurrentTurnGroup, activityFocus.replyStarted)}
                   />
                 );
@@ -572,15 +537,10 @@ function ChatMessagesPane({
               // 才退回窗口内现推 —— 那一轮就在眼前,窗口一定是完整的。
               const serverOutputs = serverOutputsByIndex?.get(renderedIndex);
               /**
-               * fj:判据从"是不是助手且不在流式"换成"**这条能不能真的挂产出卡**"。
-               *
-               * `ExitPlanMode` / `AskUserQuestion`(不入组、单独成项)、任务通知、
-               * 压缩摘要**都是** `assistant && !isStreaming` —— 它们在这里"领走"
-               * `pendingTurnOutputs`,而各自的渲染分支根本不读 `turnOutputs`,
-               * 紧接着下面那句又把它清空。于是「Write 几个文件 → ExitPlanMode →
-               * 最终回答」这一轮的产出卡直接不出现,要等服务端映射回来才补上。
-               *
-               * 不满足的项现在**既不领也不清**,让 pending 继续传给真正的正文那条。
+               * 判据是"这条能不能真的挂产出卡"(canRenderTurnOutputs),不只是"助手且不在流式":
+               * ExitPlanMode / AskUserQuestion、任务通知、压缩摘要也满足后者,但它们的渲染分支
+               * 不读 turnOutputs,让它们领走产出就丢了。挂不了的项不领取,pending 继续传给
+               * 真正的正文那条;要不要清空由下面的回合边界判断决定。
                */
               const canCarryOutputs = canRenderTurnOutputs(item);
               const turnOutputs = canCarryOutputs
@@ -590,22 +550,14 @@ function ChatMessagesPane({
                 pendingTurnOutputs = NO_TURN_OUTPUTS;
               } else if (endsTurnForOutputs(item)) {
                 /**
-                 * fl:**回合边界要清账。**
-                 *
-                 * fj 把"领取"的判据收窄成 `canRenderTurnOutputs` 是对的(此前
-                 * `ExitPlanMode` 之类会把产出卡吃掉),但连"清空"也一起收窄了 ——
-                 * 于是产出会**跨过回合边界**:`Write → 报错 → 用户又问一句 →
-                 * 助手回答`,那几个文件被挂到了**下一轮**的回答下面。
-                 * 用户会以为是这一轮生成的,点开的却是上一轮的文件。
-                 *
-                 * 所以分成两类:不可展示但**属于本轮**的(思考、工具行、
-                 * 交互式提示)继续往下传;**开启新一轮**的(用户消息)和
-                 * **终结本轮**的(错误行)就地清空。
+                 * 回合边界要清账,否则产出会跨到下一轮的回答下面(Write → 报错 → 用户又问一句 → 助手回答)。
+                 * 挂不了卡但属于本轮的(思考、工具行、交互式提示)继续往下传;开启新一轮的(用户消息)
+                 * 和终结本轮的(错误行)就地清空。
                  */
                 pendingTurnOutputs = NO_TURN_OUTPUTS;
               }
 
-              // 只有**收尾在错误上**的对话才给重试按钮:老错误早被后面的
+              // 只有收尾在错误上的对话才给重试按钮:老错误早被后面的
               // 对话翻篇了,回合在跑时也不该再塞一条。
               const showRetry = Boolean(
                 onRetryLastTurn
@@ -645,7 +597,7 @@ function ChatMessagesPane({
           })()}
 
           {/*
-            * 正在打字的正文。**列表外的独立元素**,不参与合并排序。
+            * 正在打字的正文。列表外的独立元素,不参与合并排序。
             *
             * 时序上它天然在末尾:`stream_end` 在下一批工具行之前就到并提交
             * (提交后它就是列表里一条普通的助手消息)。所以任意时刻最多只有

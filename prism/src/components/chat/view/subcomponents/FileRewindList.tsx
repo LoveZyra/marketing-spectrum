@@ -7,10 +7,10 @@ import { uiLocale } from '../../../../utils/uiLocale';
 import type { FileRewindTurn } from '../../utils/fileRewind';
 
 /**
- * ho(hq-2):**非 git 目录的「撤销这一轮之后的文件改动」**(CLI 文件检查点)。
+ * 非 git 目录的「撤销这一轮之后的文件改动」(CLI 文件检查点)。
  *
- * git 仓库里每轮有 Prism 自己的 git 检查点;营销类工作区多数不是 git,原来没有任何回退办法。
- * 这里按轮列出,先「预览」(dryRun:会动哪些文件、增删多少行),确认后再真退。
+ * git 仓库里每轮有 Prism 自己的 git 检查点;非 git 工作区靠这里回退。
+ * 按轮列出,先「预览」(dryRun:会动哪些文件、增删多少行),确认后再真退。
  * 覆盖面:Claude 用 Write / Edit 碰过的文件(之后又被 Bash 改了也算)和新建的文件;
  * 只被 Bash 动过、从没经过文件工具的文件不在内。
  */

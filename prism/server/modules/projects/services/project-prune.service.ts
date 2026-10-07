@@ -8,9 +8,9 @@ const log = createLogger('projects');
  *
  * ## 为什么忽略判据不够,还要这一步
  *
- * `isPrismInternalTranscript` 挡的是 transcript **进不进列表**。但项目一旦在
+ * `isPrismInternalTranscript` 挡的是 transcript 进不进列表。但项目一旦在
  * `projects` 表里落了行,侧栏就直接从库里读 —— 挡不挡它都在。所以要有一次
- * **按真实路径**的清账:项目路径是 Prism 自己的临时工作目录(目前只剩模型探测
+ * 按真实路径的清账:项目路径是 Prism 自己的临时工作目录(目前只剩模型探测
  * 那一种),就不是用户的项目,连同它的会话行一起删掉。
  *
  * ## 只删库里的行,不碰磁盘

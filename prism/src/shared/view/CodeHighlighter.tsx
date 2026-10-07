@@ -47,10 +47,9 @@ function PlainCodeBlock({ customStyle, codeTagProps, children }: Omit<CodeHighli
       style={{
         ...(isDarkMode ? DARK_FALLBACK : LIGHT_FALLBACK),
         fontSize: '0.875rem',
-        // **必须和高亮版一致**。这里不写的话会继承 prose-sm 的 1.6666667,
-        // 而 oneDark/oneLight 的 `pre[class*="language-"]` 是 1.5 ——
-        // 高亮 chunk 落地那一刻每个代码块高度掉约 11%(40 行的块少 90 多像素),
-        // 下面所有内容整体上跳。转录里十几个代码块就是十几次。
+        // 必须和高亮版一致:不写会继承 prose-sm 的 1.6666667,而 oneDark/oneLight 的
+        // `pre[class*="language-"]` 是 1.5 —— 高亮 chunk 落地那一刻每个代码块矮约 11%
+        // (40 行的块少 90 多像素),下面所有内容整体上跳,每个代码块跳一次。
         lineHeight: 1.5,
         overflow: 'auto',
         ...customStyle,
@@ -62,11 +61,11 @@ function PlainCodeBlock({ customStyle, codeTagProps, children }: Omit<CodeHighli
 }
 
 /**
- * 大代码块过了这个字符数才做「进视口再上色」(dl)。
+ * 大代码块过了这个字符数才做「进视口再上色」。
  *
  * tokenize 是同步跑在主线程上的:几百行的块落地那一瞬能顶住几十毫秒;而长
  * 转录里多数大块根本不在视口内。小块不值得为省一次 tokenize 养一个
- * IntersectionObserver,直接照旧。
+ * IntersectionObserver,直接高亮。
  */
 const LAZY_HIGHLIGHT_MIN_CHARS = 2000;
 

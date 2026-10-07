@@ -82,7 +82,7 @@ test('empty and nullish values pass through unchanged', () => {
 });
 
 test('legacy plaintext values decrypt to themselves', () => {
-  // Rows written before encryption existed carry no v1 prefix.
+  // Legacy plaintext rows carry no v1 prefix.
   const legacy = 'plain-text-token-from-an-older-install';
   assert.equal(isEncrypted(legacy), false);
   assert.equal(decrypt(legacy, KEY), legacy);

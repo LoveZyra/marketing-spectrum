@@ -5,7 +5,7 @@ import { describe, test } from 'vitest';
 import { checkTasks, detectFormat, keepPassing, parseRows, TASK_TEMPLATES } from './task-upload';
 
 /**
- * gy:任务集的浏览器侧校验 —— 与 SkillWhet `imports.validate_and_map` 同一套规则,
+ * 任务集的浏览器侧校验,与 SkillWhet `imports.validate_and_map` 同一套规则;
  * 这里钉住的每一条都在 Python 侧的 `tests/test_imports.py` 有对应用例。
  */
 describe('task-upload · 格式识别', () => {

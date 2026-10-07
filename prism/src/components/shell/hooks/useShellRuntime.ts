@@ -3,6 +3,7 @@ import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 
 import type { UseShellRuntimeOptions, UseShellRuntimeResult } from '../types/types';
+import { detachAndCloseSocket } from '../utils/socket';
 
 import { useShellConnection } from './useShellConnection';
 import { useShellTerminal } from './useShellTerminal';
@@ -36,7 +37,7 @@ export function useShellRuntime({
    * 是长期存活的闭包,读 state 会读到建立连接那一刻的旧值。
    */
   const takeoverRef = useRef(false);
-  /** F10:多标签时每个终端一个 id,服务端据此各给一个 PTY。 */
+  /** 多标签时每个终端一个 id,服务端据此各给一个 PTY。 */
   const terminalIdRef = useRef<string | null>(terminalId);
   const [isTakenOver, setIsTakenOver] = useState(false);
 
@@ -49,20 +50,24 @@ export function useShellRuntime({
     onProcessCompleteRef.current = onProcessComplete;
   }, [selectedProject, selectedSession, initialCommand, isPlainShell, onProcessComplete]);
 
+  /**
+   * 主动关掉 socket 之后同步复位连接状态的回调,由 useShellConnection 填入。
+   *
+   * 关掉的 socket 回调已经摘掉,不会再有 onclose 来复位。终端拆掉重建(换项目、
+   * 切 minimal)时只调 closeSocket、不走 disconnectFromShell,不在这里复位的话
+   * isConnected 一直是 true,自动连接不会再连到新终端上。
+   */
+  const resetConnectionRef = useRef<(() => void) | null>(null);
+
   const closeSocket = useCallback(() => {
     const activeSocket = wsRef.current;
     if (!activeSocket) {
       return;
     }
 
-    if (
-      activeSocket.readyState === WebSocket.OPEN ||
-      activeSocket.readyState === WebSocket.CONNECTING
-    ) {
-      activeSocket.close();
-    }
-
     wsRef.current = null;
+    detachAndCloseSocket(activeSocket);
+    resetConnectionRef.current?.();
   }, []);
 
   const { isInitialized, clearTerminalScreen, disposeTerminal } = useShellTerminal({
@@ -90,6 +95,7 @@ export function useShellRuntime({
     isInitialized,
     autoConnect,
     closeSocket,
+    resetConnectionRef,
     clearTerminalScreen,
     onOutputRef,
   });

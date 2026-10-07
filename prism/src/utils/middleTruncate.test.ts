@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { middleTruncate } from './middleTruncate';
 
 /**
- * 账号审批表里用户名过长会把整行撑成两行(2026-09-15 实测截图)。
- * 尾部省略在这里不行 —— `zhangsan-2024` 和 `zhangsan-2025` 会截成同一个名字。
+ * 账号审批表里用户名过长会把整行撑成两行。尾部省略在这里不行:
+ * `zhangsan-2024` 和 `zhangsan-2025` 会截成同一个名字,所以从中间省略。
  */
 describe('middleTruncate', () => {
   it('没超长就原样返回', () => {

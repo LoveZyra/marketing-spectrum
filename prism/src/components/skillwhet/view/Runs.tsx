@@ -14,14 +14,14 @@ import RunNew from './RunNew';
 import { Badge } from './StatusStrip';
 
 /**
- * gz:优化训练(原名优化运行)—— 左边作业表(有在跑的就 3 秒一刷),右边「新建训练」。
+ * 优化训练页:顶部是最近一晚的夜训小结,其下「新建训练」,再下面是作业表(有在跑的就 3 秒一刷)。
  * 同时只跑一个训练,其余排队;产物只进 staging,发布是另一个动作。
  */
 const fmtTime = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleString() : '—');
 
 /**
- * he(F4-02):最近一晚的夜训一句话 ——「昨夜 2026-09-24 夜训 3 个 skill:A 有候选待审阅、B 无变化、C 超预算」。
- * 只有纳入过夜训、且至少处理过一晚时才画。
+ * 最近一晚的夜训小结:「最近一晚(<日期>)夜训处理了 3 个 skill」,后面跟每个 skill 的结果徽章。
+ * 有 skill 纳入夜训、或夜训至少跑过一晚时才画。
  */
 function NightlySummary({ data }: { data: SkillWhetData }) {
   const { t } = useTranslation('skillwhet');
@@ -102,7 +102,7 @@ export default function Runs({ data, isRoot, username, userId, initialSkill, onO
 
       <NightlySummary data={data} />
 
-      {/* hc:新建训练放上面,作业记录(优化运行)在下面 —— 原来左右两栏,表单挤在右边 400px */}
+      {/* 新建训练在上、作业记录在下,上下排布,表单不必挤在窄栏里。 */}
       <RunNew skills={data.skills?.skills ?? []} taskSummary={data.taskSummary} isRoot={isRoot} username={username} initialSkill={initialSkill} onCreated={(id) => { void refresh(); onOpen(id); }} />
 
       <div className="flex flex-col gap-2">
@@ -150,7 +150,7 @@ export default function Runs({ data, isRoot, username, userId, initialSkill, onO
                       <td className="px-2 py-2 text-body">{ownerOf(job)}</td>
                       <td className="px-2 py-2 text-right">
                         {mayCancel(job) && (confirmCancel === job.id ? (
-                          // hl(动态 P3):「撤」原来一点就撤,误触就丢一次训练 —— 加一步确认
+                          // 「撤」要二次确认:误触就会丢掉一次训练
                           <span className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                             <button type="button" onClick={() => { setConfirmCancel(null); void cancel(job); }} className="h-6 rounded-md border border-red-500/40 px-2 text-[11px] text-red-700 hover:bg-red-500/10 dark:text-red-300" data-testid={`cancel-yes-${job.id}`}>{t('runs.cancelYes', { defaultValue: '确认撤销' })}</button>
                             <button type="button" onClick={() => setConfirmCancel(null)} className="h-6 rounded-md px-1.5 text-[11px] text-muted-foreground hover:bg-muted">{t('card.cancel', { defaultValue: '取消' })}</button>

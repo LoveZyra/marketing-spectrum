@@ -66,9 +66,19 @@ function createNotificationEvent({
   };
 }
 
+/**
+ * 通知里写的那句失败原因。
+ *
+ * 有 `prismUserMessage`(claude-sdk 给内部错误配的中文说明,见 describeForUser)就用它:通知是用户看得到的通道,
+ * 应与聊天里那条一致,英文原文只进服务端日志。去重键也按这句算。
+ */
 function normalizeErrorMessage(error) {
   if (typeof error === 'string') {
     return error;
+  }
+
+  if (error && typeof error.prismUserMessage === 'string' && error.prismUserMessage.trim()) {
+    return error.prismUserMessage;
   }
 
   if (error && typeof error.message === 'string') {
@@ -146,16 +156,11 @@ function resolveSessionName(event) {
   return normalizeSessionName(sessionsDb.getSessionName(event.sessionId, event.provider));
 }
 
-function buildNotificationPayload(event) {
-  return buildPayloadFromNormalized(normalizeNotificationSession(event));
-}
-
 /**
  * 已归一化事件 → 推送 payload。
  *
- * 与 `buildNotificationPayload` 分开是因为归一化要查库(app session id ↔
- * provider session id),而 `notifyUserIfEnabled` 一开头已经归一过一次 ——
- * 再归一一次就是白白多两次查询。
+ * 只收归一化过的事件:归一化要查库(app session id ↔ provider session id),
+ * `notifyUserIfEnabled` 一开头已经归一过一次,这里再做就是白白多两次查询。
  */
 function buildPayloadFromNormalized(normalizedEvent) {
   const CODE_MAP = {
@@ -183,39 +188,32 @@ function buildPayloadFromNormalized(normalizedEvent) {
   };
 }
 
-// Server-push channels (Web Push, Electron desktop) were removed with the
-// web-only refactor. In-app cues are driven client-side from the chat
-// websocket stream (permission_request / complete / error events) and the
-// sound channel is handled entirely in the browser, so no server-side
-// delivery channel remains here. The orchestrator still normalizes events
-// and applies per-user event preferences and dedupe so future channels can
-// plug back in without touching the call sites.
+// In-app cues are driven client-side from the chat websocket stream
+// (permission_request / complete / error events), and the notification sound
+// is played entirely in the browser. The server only delivers out-of-app
+// notifications, through the channels below. The orchestrator normalizes
+// events and applies per-user event preferences and dedupe, so a channel
+// plugs in without touching the call sites.
 /**
- * 投递通道。
- *
- * Web Push / Electron 两个通道在 web-only 重构时删掉了,此后这个数组**一直是空的**
- * —— 也就是说服务端一条通知都发不出去,而编排管线(偏好闸、去重、payload)还完整跑着。
- * 最直接的后果:**定时任务失败没有任何人会知道**,而无人值守正是定时任务存在的理由。
- *
- * fd 轮把 webhook 通道接了回来。它按"配没配 `PRISM_NOTIFY_WEBHOOK_URL`"自启用,
- * 没配就等于零通道,`hasDeliveryChannels()` 照常早退,一次多余的查询都不会发生。
+ * 投递通道。目前只有 webhook:按是否配置 `PRISM_NOTIFY_WEBHOOK_URL` 自启用,没配就等于
+ * 零通道,`hasDeliveryChannels()` 照常早退,不做任何多余的查询。
+ * 没有通道时服务端发不出任何通知,定时任务失败也无人知晓。
  */
 const notificationChannels = [webhookChannel];
 
 /**
- * E11 —— 零通道时整条编排都是白算。
+ * 没有启用的投递通道时,整条编排都是白算。
  *
  * 每个 permission_request / run.stopped / run.failed 都会走进来,而走一趟要:
  * 归一化会话 id(最多两次查询)、读用户偏好(一次)、算 payload(里面再解析一次
- * 会话名,又一次查询),然后交给一个**空数组**去投递。权限请求在一轮里能出现
- * 几十次,这就是几十次纯白扔掉的查询。
+ * 会话名,又一次查询)。权限请求在一轮里能出现几十次,没有通道可投时这些查询
+ * 全是白扔。
  *
- * 这里在最前面按通道数早退。整条管道(偏好闸、去重窗口、payload 构造)原样留着
- * —— 哪天真接上一个通道(F6 管理面那批),把它 push 进 `notificationChannels`
- * 就全都活过来,调用点一个字都不用改。
+ * 所以在最前面早退。整条管道(偏好闸、去重窗口、payload 构造)原样留着:配上
+ * webhook 地址或往 `notificationChannels` 里加通道就全部生效,调用点不用改。
  */
 function hasDeliveryChannels() {
-  // 看**启用了几个**,不是配了几个 —— webhook 没配地址时是"在册但未启用",
+  // 看启用了几个,不是配了几个 —— webhook 没配地址时是"在册但未启用",
   // 这时仍然要早退,否则那几十次白算的查询又回来了。
   return notificationChannels.some((channel) => channel.isEnabled());
 }
@@ -278,7 +276,6 @@ function notifyRunFailed({ userId, provider, sessionId = null, error, sessionNam
 }
 
 export {
-  buildNotificationPayload,
   createNotificationEvent,
   notifyUserIfEnabled,
   notifyRunStopped,

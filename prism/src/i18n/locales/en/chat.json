@@ -16,7 +16,8 @@
   "messageTypes": {
     "error": "Error",
     "tool": "Tool",
-    "claude": "AI"
+    "claude": "AI",
+    "servedModelTitle": "The model that actually served this turn (from response metadata, not the model's own claim)"
   },
   "interactive": {
     "title": "Interactive Prompt",
@@ -35,7 +36,6 @@
   },
   "input": {
     "placeholder": "Type / for commands, @ for files, or ask {{provider}} anything...",
-    "attachImages": "Attach images",
     "send": "Send",
     "stop": "Stop",
     "hintText": {
@@ -74,7 +74,13 @@
     "checkpointsHint": "Snapshots of every turn's changes — roll back any of them",
     "showAllCommandsHint": "Typing / in the box opens this too",
     "attach": "Add attachment",
-    "attachHint": "Images go to the model; other types are saved into the project for the agent (up to 500MB)"
+    "attachHint": "Images go to the model; other types are saved into the project for the agent (up to 500MB)",
+    "dropHint": "Drop to attach",
+    "dropHintDetail": "Images are sent with the message; other files are saved into the project",
+    "extractedChars": "Extracted {{chars}} characters of text",
+    "docChars": "{{chars}} chars",
+    "modelAliasHint": "Alias {{alias}} · actual model {{model}} · click to switch",
+    "fileMentionsLabel": "Files to mention"
   },
   "providerSelection": {
     "pressToSearch": "Press <kbd>{{shortcut}}</kbd> to search sessions, files, and commits"
@@ -98,7 +104,8 @@
       "loadingAll": "Loading all messages...",
       "allLoaded": "All messages loaded",
       "loadFailed": "Couldn't load this conversation's messages.",
-      "retryLoad": "Try again"
+      "retryLoad": "Try again",
+      "loadOlderFailed": "Couldn't load earlier messages. Please try again later."
     }
   },
   "shell": {
@@ -216,7 +223,8 @@
     "allowRemember": "Allow & remember",
     "allowSaved": "Remembered",
     "allowOnce": "Allow once",
-    "backgroundTitle": "A background task needs permission"
+    "backgroundTitle": "A background task needs permission",
+    "ruleSuffix": " · rule {{rule}}"
   },
   "activity": {
     "read": "Read {{target}}",
@@ -261,7 +269,9 @@
     "expandAllWithCount": "Expand all · {{count}} lines",
     "collapse": "Collapse",
     "copy": "Copy",
-    "copied": "Copied"
+    "copied": "Copied",
+    "diffHiddenLines": "{{count}} more lines not shown — open the file to see the full content.",
+    "diffHiddenLines_one": "{{count}} more line not shown — open the file to see the full content."
   },
   "compactSummary": {
     "title": "Context compacted — earlier turns were folded into a summary"
@@ -375,7 +385,21 @@
       "aliasHint": "Aliases map to real models in settings.json; the first line is the configured model",
       "gatewayVia": "via gateway",
       "noMatch": "No models match that search.",
-      "privateModels": "My private models"
+      "privateModels": "My private models",
+      "probedJustNow": "Probed just now",
+      "probedMinutesAgo": "Probed {{count}} min ago",
+      "probedHoursAgo": "Probed {{count}} h ago",
+      "probedDaysAgo": "Probed {{count}} d ago",
+      "probeFailedHttp": "Probe failed (HTTP {{status}})",
+      "probeFailed": "Probe failed",
+      "probedLabel": "Probed",
+      "probeMismatch": "⚠ Probe differs from config: the gateway rewrote “{{configured}}” to “{{probed}}”",
+      "probeVerified": "Probe matches config",
+      "probeError": "Probe failed: {{error}}",
+      "unknownReason": "unknown reason",
+      "configSource": "Source: {{source}} (settings.json, live)",
+      "probeAliasesTitle": "Sends one minimal request per alias to read which model the gateway actually uses",
+      "probeStale": "The model config (settings.json) changed after the last probe — the “Probed” lines below may be out of date."
     },
     "cost": {
       "eyebrow": "Session telemetry",
@@ -404,7 +428,21 @@
     "escHint": "Esc closes the modal.",
     "sessionCost": "Session cost",
     "ledgerCost": "Ledger total (all time)",
-    "close": "Close"
+    "close": "Close",
+    "ledgerRuns": "{{count}} run(s)"
+  },
+  "commandMenu": {
+    "groups": {
+      "frequent": "Frequent",
+      "builtin": "Built-in commands",
+      "cli": "CLI commands",
+      "skill": "Skills",
+      "project": "Project commands",
+      "user": "User commands",
+      "other": "Other commands"
+    },
+    "empty": "No commands available",
+    "ariaLabel": "Available commands"
   },
   "retry": {
     "lastTurn": "Resend last message"
@@ -428,7 +466,8 @@
     "promptLabel": "Prompt:",
     "elapsed": "{{seconds}}s elapsed",
     "noStepsYet": "No steps yet — the agent is starting up.",
-    "failed": "Agent failed:"
+    "failed": "Agent failed:",
+    "stepError": "error"
   },
   "workPanel": {
     "title": "Work panel",
@@ -451,7 +490,9 @@
     "earlierSteps_one": "{{count}} earlier step",
     "earlierStepsHide": "Hide earlier steps",
     "progressCollapse": "Collapse progress",
-    "progressExpand": "Expand progress"
+    "progressExpand": "Expand progress",
+    "downloadFailed": "Download failed (HTTP {{status}})",
+    "untitledTask": "Task #{{id}}"
   },
   "skills": {
     "invokedBadge": "Skill"
@@ -601,7 +642,12 @@
       "queueHandledElsewhere": "This queued message was sent or cancelled in another tab — the text is back in the composer.",
       "permissionNotSent": "Disconnected — the approval was not sent. Retry once the connection is back.",
       "retryBlockedByDraft": "The composer has unsent text — send or clear it before retrying.",
-      "sendFailed": "Send failed"
+      "sendFailed": "Send failed",
+      "queueDroppedAborted": "The queued message was cancelled along with the stopped turn and was not sent.",
+      "queueDroppedUndeliverable": "The queued message could not be sent (this session's state changed while it was waiting).",
+      "queueDroppedExpired": "The queued message waited more than 30 minutes and was discarded without being sent.",
+      "queueDroppedOriginal": "Original text (copyable) —",
+      "queuedImagesNotRestored": "Images attached to the queued message could not be restored — add them again before sending."
     }
   },
   "merged": {
@@ -641,5 +687,13 @@
     "busy": "This conversation is running; rewind after the turn ends",
     "notResident": "Could not start this conversation's process; try again later",
     "failed": "Rewind failed"
+  },
+  "toolMetric": {
+    "linesAdded": "+{{count}} lines",
+    "linesAdded_one": "+{{count}} line",
+    "matches": "{{count}} matches",
+    "matches_one": "{{count}} match",
+    "lines": "{{count}} lines",
+    "lines_one": "{{count}} line"
   }
 }

@@ -88,6 +88,12 @@
     "toast": {
       "pathCopied": "路徑已複製到剪貼簿",
       "copyFailed": "複製失敗"
+    },
+    "upload": {
+      "failedAfterPartial": "{{reason}}({{uploaded}} 個檔案已上傳,其餘 {{rest}} 個沒有上傳)"
+    },
+    "serverErrors": {
+      "proxyTooLarge": "上傳請求超過了反向代理的大小上限(client_max_body_size)。請聯絡管理員調大代理上限,或調小分片大小(PRISM_UPLOAD_CHUNK_MB)"
     }
   },
   "projectWizard": {
@@ -156,6 +162,20 @@
     "retry": "重試"
   },
   "tasksPage": {
+    "loadFailed": "定時任務清單載入失敗,請稍後重試。",
+    "staleData": "重新整理失敗,下面顯示的可能不是最新狀態。",
+    "retry": "重試",
+    "errors": {
+      "saveFailed": "儲存失敗",
+      "actionFailed": "操作失敗",
+      "deleteFailed": "刪除失敗",
+      "runFailed": "啟動失敗",
+      "ticketFailed": "領取票據失敗",
+      "startFailed": "發起失敗",
+      "network": "網路請求沒有送出(可能被代理攔截),請檢查網路後重試",
+      "withReason": "{{action}}:{{reason}}",
+      "withStatus": "{{action}}(HTTP {{status}})"
+    },
     "form": {
       "privateModel": "私有",
       "modelUnavailable": "暫不可用"

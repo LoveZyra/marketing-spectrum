@@ -17,10 +17,10 @@ import { ATTACHMENT_DIR_NAME } from '@/shared/attachment-storage.js';
 import { deleteOrArchiveProject } from '../project-delete.service.js';
 
 /**
- * B10 回归:force 删项目要清掉它的 attachments 目录 + 台账行。
+ * force 删项目要清掉它的 attachments 目录 + 台账行。
  *
- * 修前:删项目只清 sessions/transcripts/项目行,附件行继续按用户计配额,只能
- * 等 30 天 TTL —— 而那时目录可能已随项目消失,徒留僵尸配额行。
+ * 只清 sessions/transcripts/项目行的话,附件行会继续按用户计配额,直到 30 天
+ * TTL —— 而那时目录可能已随项目消失,只剩僵尸配额行。
  */
 
 async function withDb(runTest: (tempDir: string) => Promise<void>): Promise<void> {

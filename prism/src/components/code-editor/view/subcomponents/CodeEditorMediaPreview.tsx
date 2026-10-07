@@ -7,12 +7,12 @@ import { getPreviewMimeType, type PreviewKind } from '../../utils/previewableFil
 type CodeEditorMediaPreviewProps = {
   file: CodeEditorFile;
   kind: PreviewKind;
-  // DB projectId used to build the raw-content URL; falls back to projectPath
-  // for older callers, mirroring useCodeEditorDocument.
+  // DB projectId used to build the raw-content URL (CodeEditor passes the one
+  // useCodeEditorDocument resolved); without it the preview shows the error state.
   projectId?: string;
   isSidebar: boolean;
   isFullscreen: boolean;
-  /** ec:侧栏形态的「最大化 / 还原」,与 CodeEditorHeader 同一个开关。 */
+  /** 侧栏形态的「最大化 / 还原」,与 CodeEditorHeader 同一个开关。 */
   isExpanded?: boolean;
   onToggleExpand?: (() => void) | null;
   onClose: () => void;

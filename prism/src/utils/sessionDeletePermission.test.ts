@@ -1,9 +1,8 @@
 /**
  * 删除确认框里那枚红色「永久删除」按钮该不该画出来。
  *
- * 2026-09-15 用非 root 账号在测试环境实测:说明文字写着「只有项目负责人或
- * 管理员可以永久删除」,按钮照样是可点的红色主按钮,点下去撞 403。
- * 这里把客户端的判据钉成与服务端一致的三条。
+ * 说明文字写着「只有项目负责人或管理员可以永久删除」时,按钮不能还是可点的红色主按钮
+ * (点下去只会撞 403)。这里把客户端的判据钉成与服务端一致的三条。
  */
 import { describe, it, expect } from 'vitest';
 
@@ -41,7 +40,7 @@ describe('canPermanentlyDeleteSession', () => {
 });
 
 /**
- * gn:项目的归档与永久删除收紧到同一条规则(服务端 canArchiveProject === canDeleteProject)。
+ * 项目的归档与永久删除是同一条规则(服务端 canArchiveProject === canDeleteProject)。
  * 这里钉住"客户端这一份没有自己另走一套"。
  */
 describe('canArchiveOrDeleteProject', () => {
@@ -58,7 +57,7 @@ describe('canArchiveOrDeleteProject', () => {
     }
   });
 
-  it('hl(动态 P2-7):无主项目只给 root —— 会话级仍回落到可见性,项目级不再', () => {
+  it('无主项目只给 root —— 会话级回落到可见性,项目级不回落', () => {
     expect(canArchiveOrDeleteProject({ viewerUserId: 4, projectOwnerUserId: null })).toBe(false);
     expect(canArchiveOrDeleteProject({ isRoot: true, viewerUserId: 4, projectOwnerUserId: null })).toBe(true);
     expect(canPermanentlyDeleteSession({ viewerUserId: 4, projectOwnerUserId: null })).toBe(true);

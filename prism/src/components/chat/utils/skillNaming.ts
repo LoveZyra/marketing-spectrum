@@ -1,5 +1,5 @@
 /**
- * 技能调用的纯识别逻辑(do)。徽标(MessageComponent)和会话命名
+ * 技能调用的纯识别逻辑。徽标(MessageComponent)和会话命名
  * (useChatComposerState)共用,零依赖,方便单测。
  */
 
@@ -41,7 +41,7 @@ const isSkillEntry = (command: SkillCommandLike): boolean =>
 /**
  * 会话命名对技能调用友好:首条消息是 `/echo-probe 参数…` 时,侧栏别挂一行
  * 斜杠黑话 —— 换成「技能名:参数」;没带参数就用技能描述(再退回技能名)。
- * 不是技能调用时原样返回,命名行为与从前一致。
+ * 不是技能调用时原样返回。
  */
 export function describeSkillInvocationInput(
   rawInput: string,

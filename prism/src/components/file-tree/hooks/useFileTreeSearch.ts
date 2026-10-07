@@ -12,12 +12,10 @@ type UseFileTreeSearchResult = {
   setSearchQuery: (query: string) => void;
   filteredFiles: FileTreeNode[];
   /**
-   * 搜索期间**临时**要展开的目录集合(命中项的全部祖先)。
+   * 搜索期间临时要展开的目录集合(命中项的全部祖先)。
    *
-   * 旧实现直接调 `expandDirectories` 把它们**永久**写进用户的展开状态 ——
-   * 搜一次,清掉关键词后整棵树还是全摊开的,用户原来折叠的结构回不去了。
-   * 现在改为派生值:消费方渲染时把它与用户自己的展开集合做并集,查询一清空
-   * 这个集合就归空,树回到用户之前的样子。
+   * 是派生值,不写进用户的展开状态:消费方渲染时把它与用户自己的展开集合做并集,
+   * 查询一清空这个集合就归空,树回到用户之前折叠的样子。
    */
   searchExpandedPaths: Set<string>;
 };

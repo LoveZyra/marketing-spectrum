@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * hm(A7):**SDK / CLI 升级探针。** 每次升 SDK 先在容器里跑一遍,结果贴进部署文档。
+ * SDK / CLI 升级探针。每次升 SDK 先在容器里跑一遍,结果贴进部署文档。
  *
  *   node scripts/sdk-probe/run.mjs            # 全部场景
  *   node scripts/sdk-probe/run.mjs 5 7        # 只跑第 5、7 个

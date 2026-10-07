@@ -31,6 +31,9 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   }
 }
 
+/** 归档面板走的那条查询(root 视角,不按可见性过滤)。 */
+const archivedSessions = () => sessionsDb.getArchivedSessionsPage({ kind: 'all' }, 100, 0).rows;
+
 test('session archive queries hide archived rows from active project views', async () => {
   await withIsolatedDatabase(() => {
     sessionsDb.createSession('session-active', 'claude', '/workspace/demo-project', 'Active Session');
@@ -38,12 +41,12 @@ test('session archive queries hide archived rows from active project views', asy
     sessionsDb.updateSessionIsArchived('session-archived', true);
 
     const activeSessions = sessionsDb.getAllSessions();
-    const archivedSessions = sessionsDb.getArchivedSessions();
+    const archivedRows = archivedSessions();
     const activeProjectSessions = sessionsDb.getSessionsByProjectPath('/workspace/demo-project');
     const allProjectSessions = sessionsDb.getSessionsByProjectPathIncludingArchived('/workspace/demo-project');
 
     assert.deepEqual(activeSessions.map((session) => session.session_id), ['session-active']);
-    assert.deepEqual(archivedSessions.map((session) => session.session_id), ['session-archived']);
+    assert.deepEqual(archivedRows.map((session) => session.session_id), ['session-archived']);
     assert.deepEqual(activeProjectSessions.map((session) => session.session_id), ['session-active']);
     assert.deepEqual(
       allProjectSessions.map((session) => session.session_id).sort(),
@@ -54,17 +57,14 @@ test('session archive queries hide archived rows from active project views', asy
 });
 
 /**
- * fj:磁盘同步**不再**把归档会话拉回活跃列表。
+ * 磁盘同步不把归档会话拉回活跃列表。
  *
- * 这条用例原来断言的是相反的行为(同步即解档)。那个行为看着合理,实际后果是
- * 归档形同虚设:
- *   1. 归档面板里的会话可以直接点开,而打开任意会话 400ms 后会 prewarm、
- *      prewarm 跑 `claude --resume` —— 它会碰一下 JSONL 的 mtime 却不追加消息
- *      → chokidar `change` → `createSession` → **会话自己跑回了活跃列表**;
- *   2. 归档一条正在流式输出的会话,transcript 持续追加,3 秒内必然被重新索引解档。
- * 用户反复归档也没用,而且回收站里会莫名少一条。
+ * 同步即解档的话,归档形同虚设:
+ *   1. 打开归档会话 400ms 后会 prewarm,`claude --resume` 会碰 JSONL 的 mtime 却不追加消息
+ *      → chokidar `change` → `createSession` → 会话自己跑回活跃列表;
+ *   2. 正在流式输出的会话被归档后,transcript 持续追加,很快就会被重新索引解档。
  *
- * 解档现在必须显式调 `updateSessionIsArchived(id, false)`。
+ * 解档必须显式调 `updateSessionIsArchived(id, false)`。
  */
 test('createSession 不解档 —— 归档是人的决定,不该被一次磁盘同步推翻', async () => {
   await withIsolatedDatabase(() => {
@@ -78,7 +78,7 @@ test('createSession 不解档 —— 归档是人的决定,不该被一次磁盘
     assert.equal(stillArchived?.isArchived, 1, '一次磁盘同步不该把它拉回活跃列表');
     assert.equal(stillArchived?.custom_name, 'Updated Name', '其它字段照旧同步');
     assert.equal(sessionsDb.getAllSessions().length, 0);
-    assert.equal(sessionsDb.getArchivedSessions().length, 1);
+    assert.equal(archivedSessions().length, 1);
 
     // 显式复活仍然有效
     sessionsDb.updateSessionIsArchived('session-reused', false);

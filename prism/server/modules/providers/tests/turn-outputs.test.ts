@@ -4,15 +4,11 @@ import { collectWorkFrames, MAX_FILES_PER_TURN, MAX_TURN_OUTPUT_ENTRIES } from '
 import type { NormalizedMessage } from '@/shared/types.js';
 
 /**
- * ej:「产出」卡的**回合归属**。
+ * 「产出」卡的回合归属。
  *
- * 这张卡此前由前端从"当前加载到的消息窗口"现推,窗口起点常落在某一轮工具流
- * 中间,于是数字会随历史补齐而变(用户两次实测:先「产出 2」变「产出 5」,
- * 加了截断保护之后变成先没有、过一会儿才出现)。改成服务端按**全量历史**算好、
- * 挂到收尾那条助手回答上,卡片才能"和正文一起到达、此后不变"。
- *
- * 下面这些用例就是那句话的判据:挂在哪条消息上、什么时候清空、回滚怎么减、
- * 截断不影响它。
+ * 服务端按全量历史算好每一轮的产出,挂到收尾那条助手回答上,卡片才能和正文一起到达、此后不变;
+ * 由前端从已加载的窗口现推,数字会随历史补齐而跳动。下面的用例钉住:挂在哪条消息上、
+ * 什么时候清空、回滚怎么减、截断不影响它。
  */
 const write = (toolId: string, filePath: string, content = 'a\nb\nc'): NormalizedMessage[] => ([
   { id: toolId, kind: 'tool_use', provider: 'claude', toolName: 'Write', toolId, toolInput: { file_path: filePath, content } } as NormalizedMessage,
@@ -22,7 +18,7 @@ const text = (id: string, role: 'user' | 'assistant', content: string): Normaliz
   ({ id, kind: 'text', provider: 'claude', role, content } as NormalizedMessage);
 
 describe('collectWorkFrames · turnOutputs', () => {
-  it('产出挂在**收尾的助手回答**上,不挂在用户提问上', () => {
+  it('产出挂在收尾的助手回答上,不挂在用户提问上', () => {
     const { turnOutputs } = collectWorkFrames([
       text('u1', 'user', '写两个文件'),
       ...write('w1', '/p/a.md'),
@@ -98,7 +94,7 @@ describe('collectWorkFrames · turnOutputs', () => {
     expect(turnOutputs.a1).toHaveLength(1);
   });
 
-  it('帧数截断不影响它 —— 产出在截断**之前**算好', () => {
+  it('帧数截断不影响它 —— 产出在截断之前算好', () => {
     const messages: NormalizedMessage[] = [
       text('u1', 'user', '写'), ...write('w1', '/p/first.md'), text('a1', 'assistant', '好'),
       text('u2', 'user', '再写一堆'),
@@ -111,10 +107,10 @@ describe('collectWorkFrames · turnOutputs', () => {
     expect(turnOutputs.a1.map((f) => f.path)).toEqual(['/p/first.md']);
   });
 
-  it('过渡性正文不偷锚点 —— 整轮的产出都挂在**最后一条**助手正文上(ek 修)', () => {
+  it('过渡性正文不偷锚点 —— 整轮的产出都挂在最后一条助手正文上', () => {
     // 真实会话里模型在工具之间不停说话("任务 32 完成。任务 33:"),这些
-    // 中间正文同样是 kind:'text' role:'assistant';ej 的写法会把产出挂到它们
-    // 身上,而它们在前端被吸进活动时间轴当 narration 渲染 —— 卡片谁也看不见。
+    // 中间正文同样是 kind:'text' role:'assistant';产出若挂到它们身上,
+    // 它们在前端会被吸进活动时间轴当 narration 渲染,卡片谁也看不见。
     const { turnOutputs } = collectWorkFrames([
       text('u1', 'user', '随机测试几个任务'),
       ...write('w1', '/p/urlparse.py'),

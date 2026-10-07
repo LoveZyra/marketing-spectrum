@@ -68,7 +68,7 @@ describe('normalizedToChatMessages', () => {
   });
 
   it('keeps later messages stable when older history is prepended', () => {
-    // The pagination case that used to remount the whole list.
+    // Prepending older history must not remount the list: existing rows keep their objects.
     const a = userText('recent question');
     const b = assistantText('recent answer');
 
@@ -111,8 +111,7 @@ describe('normalizedToChatMessages', () => {
     // tool_use, so the cache has to track it separately.
     expect(resolved).toHaveLength(1);
     expect(resolved[0]).not.toBe(pending[0]);
-    // dv:结果帧的 timestamp 现在也带过来 —— 工具行的「耗时」列读的就是它,
-    // 此前不传导致真实会话里耗时恒为空(单测因为手搓对象一直是绿的)。
+    // 结果帧的 timestamp 要带过来:工具行的「耗时」列读的就是它,不传的话真实会话里耗时恒为空。
     expect(resolved[0].toolResult).toEqual({
       content: 'export const a = 1;',
       isError: false,
@@ -160,9 +159,9 @@ describe('normalizedToChatMessages', () => {
     expect(normalizedToChatMessages([orphan])).toHaveLength(0);
   });
 
-  // ── C1:身份透传(id / seq / rowid)──
-  // 修前 convertMessage 不带 id,导致「编辑重跑」按钮(gated 在 message.id)整体
-  // 失效,且流式气泡 key 退化到 timestamp+正文、每 100ms 漂移触发重挂载。
+  // ── 身份透传(id / seq / rowid)──
+  // convertMessage 必须带上 id:「编辑重跑」按钮以 message.id 为前提;流式气泡的
+  // key 也靠它保持稳定,否则退化成 timestamp+正文,每 100ms 变一次、触发重挂载。
   describe('身份透传', () => {
     it('单条消息把 NormalizedMessage.id 盖到 ChatMessage 上', () => {
       const u = message({ id: 'uuid-abc', kind: 'text', role: 'user', content: '问题' });
@@ -211,7 +210,7 @@ describe('normalizedToChatMessages', () => {
 });
 
 /**
- * ci 回归:子代理实时子步骤归拢 —— 带 parentToolUseId 的行不出顶层,
+ * 子代理实时子步骤归拢:带 parentToolUseId 的行不出顶层,
  * 塞进父容器(Task/Agent)的 subagentState.childTools。
  */
 describe('子代理子步骤归拢', () => {

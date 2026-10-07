@@ -171,11 +171,10 @@ describe('summarizeActivityRun', () => {
 });
 
 /**
- * db:会话闲下来之后,没有结果的工具行不能再显示「运行中」。
+ * 会话闲下来之后,没有结果的工具行不能再显示「运行中」。
  *
- * 回合被中止/超时收掉时,那条 tool_result 永远不会到 —— 卡片会一直转下去。
- * 线上就是这个画面:界面显示"正在压缩",旁边一张 Bash 卡片转个不停。
- * 会话都已经不在跑了还说"运行中",是在骗人。
+ * 回合被中止 / 超时收掉时,那条 tool_result 永远不会到;不处理的话卡片会一直转下去,
+ * 而会话其实已经不在跑了。
  */
 describe('会话闲下来后的工具行', () => {
   const running = () => toolMessage({ toolName: 'Bash', toolInput: { command: 'sleep 999' } });
@@ -202,7 +201,7 @@ describe('会话闲下来后的工具行', () => {
   });
 });
 
-describe('ho:TaskCreate / TaskUpdate 行', () => {
+describe('TaskCreate / TaskUpdate 行', () => {
   it('归到任务清单:TaskCreate 用任务标题,TaskUpdate 不再退回原始 JSON', () => {
     expect(activityIconKey('TaskCreate')).toBe('todo');
     expect(activityIconKey('TaskUpdate')).toBe('todo');

@@ -1,9 +1,11 @@
 /**
  * Security audit log repository.
  *
- * Records authentication and credential-management events so an operator can
- * answer "did anyone else get in?" after the fact. Prism listens on 0.0.0.0
- * by default, so the answer is not always obvious from the outside.
+ * Records authentication, credential, account-administration and destructive
+ * events (deletions, archives, skill / model / gateway changes) so an operator
+ * can answer "did anyone else get in?" or "who deleted this?" after the fact.
+ * Prism listens on 0.0.0.0 by default, so the answer is not always obvious
+ * from the outside.
  *
  * Writes are best-effort: an audit failure must never block the operation it
  * was describing, or a full disk would lock the owner out of their own tool.
@@ -35,28 +37,22 @@ export type AuditEvent =
   | 'user_rejected'
   | 'project_owner_changed'
   | 'attachment_quota_changed'
-  // eo:项目的批量删除/归档。不可逆,事后"谁把那批项目删了"要查得到
+  // 项目的批量删除/归档。不可逆,事后"谁把那批项目删了"要查得到
   | 'projects_bulk_deleted'
   | 'projects_bulk_archived'
   /*
-   * fd:技能的装/卸。
+   * 技能的装/卸。
    *
-   * 技能目录是**服务进程自己的 home**,一台机器上所有用户共用同一份 —— 不像项目
+   * 技能目录是服务进程自己的 home,一台机器上所有用户共用同一份 —— 不像项目
    * 那样属于谁。所以 B 卸掉 A 装的技能,A 的所有会话行为会静默改变:某个
    * `/xxx` 命令突然不存在了,或者同名技能换成了另一份内容。
-   *
-   * 这件事本身是产品设计(共享技能库),不改。但它此前**不留任何痕迹**——
-   * 25 个审计事件里一个 skill 都没有,事后没法回答"这技能谁卸的"。补上两条,
-   * 至少让它可追溯。
+   * 共享技能库是产品设计,但"这技能谁卸的"必须可追溯。
    */
   | 'skill_installed'
   | 'skill_removed'
   /*
-   * gk:会话与项目的删除 / 归档 / 恢复。
-   *
-   * 2026-09-14 生产上一条跑了一天的会话被人永久删除,事后**查不出是谁、从哪个入口**:
-   * 25 个审计事件里没有一个是会话级的,单个删项目也没记。这里把"东西没了"这一类
-   * 全部补齐,detail 是一段 JSON(见 sessions.service 的 auditDetail),前端渲染成人话。
+   * 会话与项目的删除 / 归档 / 恢复 —— "东西没了"这一类,事后必须查得出是谁、从哪个入口。
+   * detail 是一段 JSON(见 sessions.service 的 recordSessionAudit),前端渲染成人话。
    */
   | 'session_deleted'
   | 'session_archived'
@@ -68,7 +64,8 @@ export type AuditEvent =
   | 'session_trash_restored'
   | 'session_trash_purged'
   /*
-   * gy:技能优化(SkillWhet)。反馈本身低频,不进裁剪豁免;其余都是 root 的动作。
+   * 技能优化(SkillWhet)。message_feedback 是用户反馈本身,低频,不进耐久档;
+   * 其余动作的权限见 skillwhet.routes.ts,只有 root 专属的进耐久档。
    */
   | 'message_feedback'
   | 'skillwhet_import'
@@ -83,23 +80,23 @@ export type AuditEvent =
   | 'skillwhet_publish'
   | 'skillwhet_rollback'
   | 'skillwhet_feedback_accept'
-  // ha:从会话挖任务 / 挖出的任务入库 / 一次性留出集评估
+  // 从会话挖任务 / 挖出的任务入库 / 一次性留出集评估
   | 'skillwhet_harvest'
   | 'skillwhet_harvest_import'
   | 'skillwhet_release_eval'
   | 'skillwhet_feedback_overlay'
-  // he:夜训 —— 纳入 / 移出 / 连续无收益自动暂停(调度器以系统身份记,user 为空)
+  // 夜训 —— 纳入 / 移出 / 连续无收益自动暂停(调度器以系统身份记,user 为空)
   | 'skillwhet_nightly_enroll'
   | 'skillwhet_nightly_unenroll'
   | 'skillwhet_nightly_autopause'
-  // hn:模型目录(root)与别名映射(PUT model-config 此前一直没记审计)
+  // 模型目录(root)与别名映射(PUT model-config)
   | 'model_catalog_created'
   | 'model_catalog_updated'
   | 'model_catalog_deleted'
   | 'model_config_updated'
-  // ho:子代理模型(root)
+  // 子代理模型(root)
   | 'subagent_model_updated'
-  // hq:共享网关(root)—— 增删改、默认 key、替人填 / 清 key、私有网关总开关
+  // 共享网关(root)—— 增删改、默认 key、替人填 / 清 key、私有网关总开关
   | 'model_gateway_created'
   | 'model_gateway_updated'
   | 'model_gateway_deleted'
@@ -108,7 +105,7 @@ export type AuditEvent =
   | 'gateway_key_set_by_root'
   | 'gateway_key_cleared_by_root'
   | 'private_gateways_toggled'
-  // hq:本人 —— 个人 key、私有网关、私有模型(值从不进审计)
+  // 本人 —— 个人 key、私有网关、私有模型(值从不进审计)
   | 'gateway_key_set'
   | 'gateway_key_cleared'
   | 'private_gateway_created'
@@ -120,15 +117,14 @@ export type AuditEvent =
   | 'user_model_deleted';
 
 /**
- * gk:这几类事件不参与"只留最新 5000 行"的常规裁剪 —— `ws_ticket_issued` 每次
- * 连 WebSocket 都记一条,几天就能把 5000 行冲满,而"上个月谁删了我的会话"正是
- * 审计日志最该答得上的问题。它们另有一个宽得多的上限(见 trim)。
+ * 耐久档:不参与"只留最新 5000 行"的常规裁剪,另按一个宽得多的上限裁(见 trim)。
  *
- * hj(审计 P2-4):**再加上只有 root 能触发的管理类事件。** 原来只有删除类耐久,于是任何登录用户
- * 每换一张 WS 票写一行、限流允许 600 次/分,约 8 分钟就能把「谁驳回了谁 / 谁重置了谁的密码 /
- * 谁发布了技能」挤出去。这里只收**普通用户刷不了**的事件(root 专属操作 + gk 的删除类):
- * 普通用户能高频触发的(开关 API key、归档、装技能、上传副本……)留在常规那一档 ——
- * 放进来的话,这一档就又能被刷满(第二双眼睛复核时指出过,34 分钟冲满 20000 行)。
+ * 常规档很容易被冲满:`ws_ticket_issued` 每次连 WebSocket 都记一条,任何登录用户每换一张
+ * 票写一行(限流允许 600 次/分),几分钟就能把「上个月谁删了我的会话 / 谁驳回了谁 /
+ * 谁重置了谁的密码 / 谁发布了技能」挤出去 —— 而这些正是审计日志最该答得上的问题。
+ *
+ * 只收普通用户无法廉价刷量的事件:删除 / 恢复类与 root 专属的管理类。普通用户能高频触发的
+ * (开关 API key、归档、装技能、上传副本……)留在常规档,否则耐久档也会被刷满。
  */
 export const DURABLE_AUDIT_EVENTS: readonly AuditEvent[] = [
   'session_deleted',
@@ -138,7 +134,7 @@ export const DURABLE_AUDIT_EVENTS: readonly AuditEvent[] = [
   'projects_bulk_deleted',
   'session_trash_restored',
   'session_trash_purged',
-  // hj:root 专属的管理类
+  // root 专属的管理类
   'password_reset_by_admin',
   'user_deactivated',
   'user_activated',
@@ -153,14 +149,14 @@ export const DURABLE_AUDIT_EVENTS: readonly AuditEvent[] = [
   'skillwhet_nightly_enroll',
   'skillwhet_nightly_unenroll',
   'skillwhet_nightly_autopause',
-  // hn:模型目录与别名映射都只有 root 能改
+  // 模型目录与别名映射都只有 root 能改
   'model_catalog_created',
   'model_catalog_updated',
   'model_catalog_deleted',
   'model_config_updated',
-  // ho:子代理模型同样只有 root 能改
+  // 子代理模型同样只有 root 能改
   'subagent_model_updated',
-  // hq:共享网关与 key 的 root 动作(本人的 key / 私有网关普通用户刷得动,留在常规一档)
+  // 共享网关与 key 的 root 动作(本人的 key / 私有网关普通用户刷得动,留在常规一档)
   'model_gateway_created',
   'model_gateway_updated',
   'model_gateway_deleted',
@@ -181,7 +177,7 @@ export type AuditEntry = {
   ip?: string | null;
   userAgent?: string | null;
   detail?: string | null;
-  /** gk:这条记录**对谁做的**(被删会话所属项目的 owner)。见 buildAuditWhere。 */
+  /** 这条记录对谁做的(如被删会话所属项目的 owner、被管理操作的账号)。见 buildAuditWhere。 */
   targetUserId?: number | null;
 };
 
@@ -201,45 +197,43 @@ export type AuditRow = {
 /**
  * Keep the table from growing without bound on a long-lived install.
  *
- * 两个上限都在 `trim()` 里**每次读** —— 不是模块加载时读一次。裁剪每 100 次写
- * 才跑一次,读两个环境变量的代价可以忽略;而写死在模块顶层的值没法在测试里换,
- * 于是"第二档到底裁不裁"这件事就只能不测(审计里正是这么漏掉的)。
+ * 两个上限都在 `trim()` 里每次读,而不是模块加载时读一次:裁剪每 100 次写
+ * 才跑一次,读两个环境变量的代价可以忽略;写死在模块顶层的值没法在测试里换,
+ * 耐久档裁不裁就测不到。
  */
 const maxRows = (): number => Number.parseInt(process.env.PRISM_AUDIT_LOG_MAX_ROWS ?? '', 10) || 5000;
-// gk:删除类事件的独立上限 —— 一条删除记录只有几百字节,两万条也不到 10 MB。
+// 耐久档(DURABLE_AUDIT_EVENTS)的独立上限 —— 一条记录只有几百字节,两万条也不到 10 MB。
 const maxDurableRows = (): number => Number.parseInt(process.env.PRISM_AUDIT_LOG_MAX_DURABLE_ROWS ?? '', 10) || 20000;
 
 let writesSinceTrim = 0;
 const TRIM_EVERY = 100;
 
 /**
- * 审计日志的筛选条件(ff 轮)。
+ * 审计日志的筛选条件。
  *
- * 事件类型现在有 27 种,而列表是纯倒序分页 —— 想回答"上周三谁把那个项目删了",
- * 只能一页一页翻。审计报告里把这条记成"现在能回答'有没有别人登进来过',
- * 答不了'上周三谁把那个模型文件覆盖了'"。
+ * 事件类型很多,而列表是纯倒序分页 —— 不能筛的话,想回答"上周三谁把那个项目删了"
+ * 只能一页一页翻。
  */
 export type AuditFilters = {
   /** 只看这几类事件。空数组和不传都表示"不筛"。 */
   events?: readonly string[];
   outcome?: AuditOutcome;
-  /** 用户名模糊匹配(大小写不敏感)。**不改变可见范围**,见下面的注释。 */
+  /** 用户名模糊匹配(大小写不敏感)。不改变可见范围,见下面的注释。 */
   usernameLike?: string;
 };
 
 /**
  * 拼 WHERE。
  *
- * ## 这里唯一要紧的一件事:`userId` 的作用域是**闸门**,不是筛选条件
+ * 唯一要紧的一件事:`userId` 的作用域是闸门,不是筛选条件。
  *
- * 非 root 调用者只能看见自己那些行 —— 这不是"默认筛选",是权限边界:
+ * 非 root 调用者只能看见自己做的、或对自己做的那些行 —— 这不是"默认筛选",是权限边界:
  * 这些行带着用户名、登录时间和客户端 IP,不设防的话任何账号都能把同事的
  * 作息拉一遍。
  *
- * 所以 `user_id = ?` 这一条是**先拼上去、且任何 filters 都去不掉的**。
- * `usernameLike` 是在这个范围**之内**再缩小,不是另一条并列的路 ——
- * 传 `usernameLike=别人` 得到的是空结果,不是别人的行。
- * (`audit-filter.test.ts` 里专门有一条钉这个。)
+ * 所以作用域子句先拼上去,且任何 filters 都去不掉。`usernameLike` 是在这个范围之内
+ * 再缩小,不是另一条并列的路 —— 传 `usernameLike=别人` 得到的是空结果,不是别人的行
+ * (`audit-filter.test.ts` 里专门有一条钉这个)。
  */
 const buildAuditWhere = (
   userId: number | null,
@@ -250,9 +244,9 @@ const buildAuditWhere = (
 
   // 闸门先拼。位置在前不影响 SQL 语义,但读代码的人一眼能看出它不受下面影响。
   //
-  // gk:范围从"我做的"扩成"我做的 OR **对我做的**"(target_user_id = 我)。
-  // 被删会话所属项目的 owner 要能看到"谁删了我的会话" —— 否则删除记了也等于白记:
-  // 只有删的人自己看得到。对我做的那些行,ip / user_agent 在 list 里脱敏(那是别人的)。
+  // 范围是"我做的 OR 对我做的"(target_user_id = 我):被删会话所属项目的 owner 要能看到
+  // "谁删了我的会话",否则删除记了也只有删的人自己看得到。对我做的那些行,
+  // ip / user_agent 在 list 里脱敏(那是别人的)。
   if (userId !== null) {
     clauses.push('(user_id = ? OR target_user_id = ?)');
     params.push(userId, userId);
@@ -271,9 +265,8 @@ const buildAuditWhere = (
 
   const usernameLike = filters.usernameLike?.trim();
   if (usernameLike) {
-    // LIKE 的通配符要转义 —— 用户输入里的 % 和 _ 不该当成通配符。
-    // 这个仓库在 P0-6 上栽过一次(附件台账的 LIKE 把兄弟目录一起删了),
-    // 那次的教训就是"别假设用户数据里不会出现元字符"。
+    // LIKE 的通配符要转义 —— 用户输入里的 % 和 _ 不该当成通配符
+    // (别假设用户数据里不会出现元字符)。
     const escaped = usernameLike.replace(/[\\%_]/g, (char) => `\\${char}`);
     clauses.push("username LIKE ? ESCAPE '\\'");
     params.push(`%${escaped}%`);
@@ -292,7 +285,7 @@ export const auditLogDb = {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         entry.userId ?? null,
-        // hj(审计 P2-3):登录失败会把**客户端提交的原始用户名**写进来,不截断的话一个 5MB 的
+        // 登录失败会把客户端提交的原始用户名写进来,不截断的话一个 5MB 的
         // 用户名就是一行 5MB,拖垮审计页。正常用户名 ≤ 64(注册时校验)。
         entry.username ? String(entry.username).slice(0, 128) : null,
         entry.event,
@@ -339,7 +332,7 @@ export const auditLogDb = {
       .prepare(`SELECT ${columns} FROM audit_log${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`)
       .all(...params, safeLimit, safeOffset) as AuditRow[];
 
-    // gk:非 root 拿到的"对我做的"行,ip / user_agent 是**别人的**,抹掉。
+    // 非 root 拿到的"对我做的"行,ip / user_agent 是别人的,抹掉。
     // 操作者用户名保留 —— "谁删的"正是这条记录存在的意义。
     if (userId === null) return rows;
     return rows.map((row) => (
@@ -360,11 +353,10 @@ export const auditLogDb = {
   },
 
   /**
-   * Drops the oldest rows beyond MAX_ROWS.
+   * Drops the oldest rows, in two tiers.
    *
-   * gk:分两档。常规事件仍是"只留最新 MAX_ROWS 行";删除类与 root 专属的管理类事件(DURABLE_AUDIT_EVENTS)
-   * 不进这一刀,另按 MAX_DURABLE_ROWS 裁 —— 否则一周的 ws_ticket_issued 就能把
-   * 上个月那条删除记录挤出去。
+   * 常规事件只留最新 maxRows() 行;耐久档(DURABLE_AUDIT_EVENTS)不进这一刀,另按
+   * maxDurableRows() 裁 —— 否则一周的 ws_ticket_issued 就能把上个月那条删除记录挤出去。
    */
   trim(): void {
     try {

@@ -73,9 +73,8 @@ export const CollapsibleDisplay: React.FC<CollapsibleDisplayProps> = ({
               raw params
             </CollapsibleTrigger>
             {/*
-              fj:`mountOnOpen` —— 折叠着的时候不挂 children。
-              工具详情里可能是几千行的 diff 或一大坨 JSON,而"收起"本来只是
-              CSS 技巧,不打开这个开关的话它们在没人看的时候就已经进 DOM 了。
+              `mountOnOpen`:折叠时不挂载内容。原始参数可能是一大段 JSON;
+              不开这个开关,收起只是 CSS 隐藏,没人看时它也已经在 DOM 里。
             */}
             <CollapsibleContent mountOnOpen>
               <ClampedBlock

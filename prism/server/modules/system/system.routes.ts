@@ -12,7 +12,7 @@ type SystemPublicRouterDependencies = {
   installMode: string;
   /** Version of the running code, captured at process start (may be null). */
   runningVersion: string | null;
-  /** v2.0.0:同一时刻读到的发布日期与提交号(包里 RELEASE.json;从源码跑时为 null)。 */
+  /** 进程启动时读到的发布日期与提交号(来自包里的 RELEASE.json;从源码跑时为 null)。 */
   runningRelease?: { date: string | null; commit: string | null } | null;
   /**
    * Reports whether the sessions watcher finished initializing. Optional:
@@ -43,7 +43,7 @@ export function createSystemPublicRouter(dependencies: SystemPublicRouterDepende
       timestamp: new Date().toISOString(),
       installMode,
       version: runningVersion,
-      // v2.0.0:部署后 curl 一下就能核对是哪个包(日期 / 提交号来自 RELEASE.json)
+      // 部署后 curl 一下就能核对是哪个包(日期 / 提交号来自 RELEASE.json)。
       releaseDate: runningRelease?.date ?? null,
       commit: runningRelease?.commit ?? null,
     });
@@ -70,9 +70,9 @@ export function createSystemPublicRouter(dependencies: SystemPublicRouterDepende
     // (no accessor injected) never blocks readiness.
     const ready = dbState === 'ok' && watcherState !== 'pending';
 
-    // dm:数据目录剩余空间(MB),给运维一个能直接看的数字 —— SQLite 写满盘
-    // 时的报错五花八门,等报错再查就晚了。statfs 不可用(老内核/容器权限)
-    // 就报 null,**只作信息,不参与 ready 判定**:磁盘阈值该由监控方定。
+    // 数据目录剩余空间(MB),给运维一个能直接看的数字:SQLite 写满盘时的报错五花八门,
+    // 等报错再查就晚了。statfs 不可用(老内核 / 容器权限)时报 null。只作信息,
+    // 不参与 ready 判定,磁盘阈值该由监控方定。
     let diskFreeMb: number | null = null;
     try {
       const statfs = (fs as unknown as { statfsSync?: (p: string) => { bavail: number; bsize: number } }).statfsSync;

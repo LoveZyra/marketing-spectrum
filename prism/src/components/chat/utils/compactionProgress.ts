@@ -1,12 +1,12 @@
 /**
  * 压缩实况的展示逻辑。
  *
- * **压缩没有进度条可做** —— 它是一次模型调用(把整段对话交给模型总结),
+ * 压缩没有进度条可做 —— 它是一次模型调用(把整段对话交给模型总结),
  * 不存在 0→100 的完成度,任何百分比都是编的。能诚实回答的只有三件事:
  *
  *   1. 还在跑吗?     → `beat`,只在 CLI 真的往流里推东西时才递增
  *   2. 跑多久了?     → 客户端从 phase 进入 running 起自己计时
- *   3. 正常吗?       → 对照本会话**上次**压缩的耗时(`lastDurationMs`)
+ *   3. 正常吗?       → 对照本会话上次压缩的耗时(`lastDurationMs`)
  *
  * 心跳是这里最重要的一条:定时动画在真卡住时照转不误,而心跳会跟着停。
  */
@@ -17,7 +17,7 @@ export type CompactionTrigger = 'manual' | 'auto' | 'maintenance' | 'presend';
 export interface CompactionActivity {
   phase: CompactionPhase;
   /**
-   * `skipped` 时为什么没压。**「没压」和「压失败」是两件事** —— CLI 自己也把
+   * `skipped` 时为什么没压。「没压」和「压失败」是两件事 —— CLI 自己也把
    * "对话太短"和"用户中止"排除在错误通知之外,只有别的才算真失败。
    */
   skipReason?: 'too-short' | 'aborted';
@@ -28,7 +28,7 @@ export interface CompactionActivity {
   /** 心跳断多久算「没有响应」。服务端按该回合的看门狗预算给。 */
   stallAfterMs?: number;
   /**
-   * 服务端算的已用时长。**必须**由服务端给:客户端自己从"第一次看到 running"
+   * 服务端算的已用时长。必须由服务端给:客户端自己从"第一次看到 running"
    * 起算的话,断线重连或换个标签页看就会从 0 重来,"比平常久"永远判不出来。
    */
   elapsedMs?: number;
@@ -45,7 +45,7 @@ export interface CompactionActivity {
  * 存在的理由:压缩跑在 `complete` 之前,结果帧刚到、下一帧 `complete` 就把活动
  * 状态清空 —— 按原生 220ms 的退场动画,等于没显示过。
  *
- * 只给 500ms 的理由:它是**一闪而过的提示,不是记录**。压缩本身在 transcript 里
+ * 只给 500ms 的理由:它是一闪而过的提示,不是记录。压缩本身在 transcript 里
  * 已经有那张可折叠的摘要卡;这一行只负责"刚刚压完了"。尤其在 CLI 原生压缩那条
  * 路径上(压完继续答这一轮),它必须赶在正文streaming 起来之前退场,
  * 否则就会一直挂在正式回答下面。
@@ -58,7 +58,7 @@ export function isTerminalCompactionPhase(phase: CompactionPhase | null | undefi
 }
 
 /**
- * 心跳断多久算「没有响应」的**兜底**值。
+ * 心跳断多久算「没有响应」的兜底值。
  *
  * 正常情况下这个阈值由服务端随帧带过来(`stallAfterMs`,取该回合静默看门狗预算
  * 的一半)—— 看门狗认为多久没动静算异常,界面就在一半的时候先出声。写死一个
@@ -127,7 +127,7 @@ export function formatTokens(value: number | null | undefined): string {
 }
 
 /**
- * 38s / 2m14s。**不足一秒返回空串** —— 一次空操作后面挂个「0s」是纯噪声,
+ * 38s / 2m14s。不足一秒返回空串 —— 一次空操作后面挂个「0s」是纯噪声,
  * 而且会让人以为发生过什么。
  */
 export function formatDuration(ms: number | null | undefined): string {

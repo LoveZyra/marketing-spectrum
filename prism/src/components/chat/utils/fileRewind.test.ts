@@ -4,7 +4,7 @@ import { fileRewindTurns } from './fileRewind';
 
 const row = (extra: Record<string, unknown>) => ({ id: String(Math.random()), sessionId: 's', timestamp: '2026-10-01T00:00:00Z', provider: 'claude', kind: 'text', role: 'user', content: 'hi', ...extra }) as never;
 
-describe('ho(hq-2) 文件回退的轮次', () => {
+describe('文件回退的轮次', () => {
   it('只取带 turnUuid、没被撤回的用户行,新的在前,去重', () => {
     const a = '11111111-1111-4111-8111-111111111111';
     const b = '22222222-2222-4222-8222-222222222222';

@@ -5,8 +5,8 @@ import { version as packageVersion } from '../../package.json';
 import { BUILD_RELEASE, BUILD_RELEASE_LABEL } from './releaseInfo';
 
 /**
- * v2.0.0:前端显示的版本来自 package.json;日期与提交号是构建时注入的(vite.config.js 读包里的 RELEASE.json)。
- * 测试里没有注入值 —— 只有版本号,不能因为少了注入值就崩。
+ * 前端显示的版本来自 package.json;日期与提交号是构建时注入的(vite.config.js 读包里的 RELEASE.json)。
+ * 测试里没有注入值,只有版本号,不能因为少了注入值就崩。
  */
 describe('前端版本信息', () => {
   it('没有构建注入时只有 package.json 的版本号', () => {

@@ -26,7 +26,7 @@ function QuickSettingsToggleRow({
         type="checkbox"
         checked={checked}
         onChange={(event) => onCheckedChange(event.target.checked)}
-        // hl(P3 可访问性):显式名称 —— 隐式 label 在部分读屏器 / 自动化里取不到(图标节点干扰)。
+        // 显式给名称:隐式 label 在部分读屏器 / 自动化工具里取不到(图标节点干扰)。
         aria-label={label}
         className={CHECKBOX_CLASS}
       />

@@ -46,9 +46,8 @@ type ClaudeHistoryMessagesResult =
 
 async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
   const tools: AnyRecord[] = [];
-  // toolId -> tool。原来是在 tool_result 的循环里 `tools.find(...)` 线性查找,
-  // 于是复杂度 O(T²):一个有 500 次工具调用的 subagent transcript 是 12.5 万次
-  // 比较,2000 次就是 200 万次。
+  // toolId -> tool:tool_result 按 id 直接取,不在循环里线性查找(那是 O(T²),
+  // 工具调用上千次的子代理 transcript 会慢得明显)。
   const toolsById = new Map<string, AnyRecord>();
 
   try {
@@ -172,19 +171,9 @@ async function getSessionMessages(
       }
     }
 
-    /**
-     * F35:**两种目录形状都要找。**
-     *
-     * 这里原来只找扁平的 `<projectDir>/agent-<id>.jsonl`,而**同一个仓库里的
-     * 同步器**(`claude-session-synchronizer.provider.ts`)白纸黑字写着当前
-     * 形状是 `<projectDir>/<session-id>/subagents/agent-<id>.jsonl` ——
-     * 它为此还专门写了一个 `isSubagentTranscript()` 来跳过那些文件。
-     *
-     * 两处对同一件事的认知不一致,而读取这一侧找不到就**静默 continue**:
-     * Task 工具在界面上永远没有内层细节,也没有任何地方说过它去哪儿找过。
-     *
-     * 按候选顺序逐个试:嵌套那份是当前形状,排前面;扁平那份是老形状,留作兼容。
-     * 命中即停。全部落空时记一行 debug —— 下次排查不用再猜它找过哪里。
+    /*
+     * 子代理 transcript 的几种目录形状都要找(见 subagentTranscriptCandidates):
+     * 按候选顺序逐个试,命中即停;全部落空时记一行 debug,写明找过哪些路径。
      */
     for (const agentId of agentIds) {
       const candidates = subagentTranscriptCandidates(projectDir, providerSessionId, agentId);
@@ -283,14 +272,10 @@ type ClaudeLocalCommandPayload = {
  * normal text path continue untouched for unrelated messages.
  */
 function parseLocalCommandPayload(content: string): ClaudeLocalCommandPayload | null {
-  /**
-   * dv:只认**整条消息就是命令载荷**的情况。
-   *
-   * 原来三个标签命中任意一个就判定为本地命令,随后调用方 `return messages`
-   * 提前收尾 —— 于是用户(或工具结果回显的外部内容)在正文里粘了一段含
-   * `<command-name>` 字面量的文本,这条消息在历史里就只剩一个短命令串,
-   * 标签之外的正文**永远读不出来**(磁盘上还在)。真正的本地命令消息通体
-   * 就是这几个标签,去掉它们之后不该剩下别的正文。
+  /*
+   * 只认整条消息就是命令载荷的情况:真正的本地命令消息通体就是这几个标签,去掉后不该剩下正文。
+   * 正文里碰巧含 `<command-name>` 字面量的普通消息(用户粘贴、工具结果回显)不能当成命令,
+   * 否则调用方会提前收尾,标签之外的正文在历史里就读不出来了。
    */
   const commandName = extractTaggedContent(content, 'command-name');
   const commandMessage = extractTaggedContent(content, 'command-message');
@@ -343,20 +328,18 @@ function stripAnsiFormatting(text: string): string {
   return text.replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, '');
 }
 
-// 单条目上限设为总预算的 1/4。
-//
-// 只有总预算这一道闸时,一个 24 MB 的会话能独占 3/4 额度,把其他所有人的条目
-// 挤出去 —— 单人使用无所谓,多用户下就是"某人打开长会话,其余人的历史集体变冷"。
-// 超过这个尺寸的会话干脆不缓存,让它每次冷读,好过让它清空别人的。
+// 单条目上限设为总预算的 1/4:只有总预算一道闸的话,一个大会话能独占大半额度,
+// 多用户下就是"某人打开长会话,其余人的历史集体变冷"。超过这个尺寸的会话不缓存,
+// 每次冷读,好过把别人的条目清空。
 const historyCache = new FetchHistoryCache({
   maxEntryBytes: Math.floor((32 * 1024 * 1024) / 4),
 });
 
 /**
- * 历史缓存快照(F6 管理面)。**只读**,不碰缓存。
+ * 历史缓存快照(管理面板用)。只读,不碰缓存。
  *
- * 这份缓存是进程里最大的一块可变内存(默认 32 MB 预算),而它对外一直是个
- * 黑盒 —— 面板上给出条目数与字节数,root 才判断得了"内存涨上去了"是不是它。
+ * 这份缓存是进程里最大的一块可变内存(默认 32 MB 预算);面板上给出条目数与字节数,
+ * root 才判断得了"内存涨上去了"是不是它。
  */
 export function getHistoryCacheStats(): { entries: number; bytes: number } {
   return { entries: historyCache.size, bytes: historyCache.bytes };
@@ -417,15 +400,12 @@ export function buildHistoryPage(
 }
 
 /**
- * F35:一个子代理 transcript 可能在哪儿 —— 按**当前形状优先**排序。
+ * 一个子代理 transcript 可能在哪儿,按 CLI 当前的形状优先排序。
  *
- * 同步器(`claude-session-synchronizer.provider.ts`)记录的当前形状是
- * `<projectDir>/<session-id>/subagents/agent-<id>.jsonl`;更早的版本写在
- * `<projectDir>/agent-<id>.jsonl`。读取这一侧此前只认后者,于是新版本上
- * **子代理的工具细节永远读不到**,而且找不到时一声不吭。
+ * 当前形状是 `<projectDir>/<session-id>/subagents/agent-<id>.jsonl`(同步器的
+ * `isSubagentTranscript()` 据此跳过这些文件);较早的 CLI 写在 `<projectDir>/agent-<id>.jsonl`。
  *
- * 单独抽出来是为了让"去哪儿找"这件事只有一份定义,并且能被测试钉住 ——
- * SDK 换目录时,改这里一处、测试立刻告诉你哪些调用点会受影响。
+ * 单独抽出来是为了让"去哪儿找"只有一份定义,并且能被测试钉住:CLI 换目录时只改这里。
  */
 export function subagentTranscriptCandidates(
   projectDir: string,
@@ -492,7 +472,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
 
         for (let partIndex = 0; partIndex < raw.message.content.length; partIndex++) {
           const part = raw.message.content[partIndex];
-          // dv:`content` 数组里可能有 null(并发写截断后重拼、或上游格式变动)。
+          // `content` 数组里可能有 null(并发写截断后重拼,或 CLI 的格式变动)。
           // 行级 JSON.parse 有 try/catch,归一化没有 —— 一个坏元素就能让
           // fetchHistory 整段 500,实时链路上则打掉整个 runtime、废掉这一回合。
           if (part?.type === 'tool_result') {
@@ -589,7 +569,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
          * Local slash commands are serialized as tagged text even though they
          * are semantically a user action. Expose the parsed fields to the
          * frontend and emit a plain user-visible command string so the command
-         * no longer disappears from history.
+         * does not disappear from history.
          */
         const localCommandPayload = parseLocalCommandPayload(text);
         if (localCommandPayload) {
@@ -755,8 +735,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
   }
 
   /**
-   * Loads Claude JSONL history for a project/session and returns normalized
-   * messages, preserving the existing pagination behavior from projects.js.
+   * Loads Claude JSONL history for a session and returns normalized messages,
+   * paged from the newest end (`offset` counts back from the latest message).
    */
   async fetchHistory(
     sessionId: string,
@@ -791,7 +771,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     for (const raw of rawMessages) {
       if (raw.message?.role === 'user' && Array.isArray(raw.message?.content)) {
         for (const part of raw.message.content) {
-          // dv:同上 —— 坏元素跳过,不要让一条脏行打掉整段历史。
+          // 同上:坏元素跳过,不要让一条脏行打掉整段历史。
           if (part?.type === 'tool_result' && part.tool_use_id) {
             toolResultMap.set(part.tool_use_id, {
               content: part.content,
@@ -827,14 +807,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       }
     }
 
-    /**
-     * dv:`total` 与 `messages` 必须同一口径。
-     *
-     * 原来这里刻意不数 `tool_result`,而 `buildHistoryPage` 是在**含**
-     * tool_result 的完整数组上切片的 —— 前端拿到的 total 恒小于真实可翻页
-     * 条数:靠 total 判"是否加载完"的地方(加载全部之后的 offset、翻页
-     * 上界)会提前停手或永远差一截。要么两边都排除,要么两边都算;
-     * 切片那侧是权威,所以这边跟它对齐。
+    /*
+     * `total` 与 `messages` 必须同一口径:`buildHistoryPage` 在含 tool_result 的完整数组上切片,
+     * total 也按这个数组数。口径不一致时,前端靠 total 判"是否加载完"的地方(加载全部之后的
+     * offset、翻页上界)会提前停手或永远差一截。
      */
     const total = normalized.length;
 

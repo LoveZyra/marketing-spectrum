@@ -5,50 +5,33 @@ import path from 'node:path';
 import { describe, test } from 'vitest';
 
 /**
- * `.env.example` 与代码里真正读的变量,双向对账(审计 A-5)。
+ * `.env.example` 与代码里真正读的变量双向对账。
  *
- * ## 为什么要有这条
- *
- * `.env.example` 开头写着"只列代码真正读的变量"。审计时这句话**是假的**:
- * 12 个变量代码在读、文档里没有(其中就有 `WORKSPACES_ROOT` —— 不配就是整个
- * 服务账号家目录,`~/.ssh` / `~/.aws` / `~/.claude` 全在边界内);
- * 反向还有一行**没注释掉的** `VITE_CONTEXT_WINDOW=160000` 全仓无人读,
- * 而它上一行就是真正生效的 `CONTEXT_WINDOW` —— 两行几乎一样并排放着,
- * 运维只改一个必然踩坑。
- *
- * 这两种漂移的共同点是:**在 diff 里完全看不出来**。加一个变量时忘了写文档,
- * 删一个变量时忘了删文档,都不会让任何东西变红。所以只能靠一条对账测试。
- *
- * ## 两个方向都要查
- *
- * - 代码读了、文档没写 → 运维不知道有这个旋钮,排查时也想不到它可能被设过;
- * - 文档写了、代码不读 → 运维配了以为生效,实际什么都没发生(比 1 更难查,
- *   因为它看起来是"配了但没用",人会去怀疑别的地方)。
+ * `.env.example` 承诺"只列代码真正读的变量"。漂移在 diff 里看不出来:加变量忘了写文档、删变量忘了删文档,
+ * 都不会让任何东西变红,只能靠对账测试。两个方向都要查:
+ * - 代码读了、文档没写:运维不知道有这个旋钮(例如 `WORKSPACES_ROOT` 不配就是整个服务账号家目录,
+ *   `~/.ssh` / `~/.aws` / `~/.claude` 全在边界内),排查时也想不到它可能被设过;
+ * - 文档写了、代码不读:运维配了以为生效,实际什么都没发生。这种更难查,看起来是"配了但没用",
+ *   人会去怀疑别的地方。
  */
 
 const ROOT = process.cwd();
 
 /**
- * 操作系统自己的变量,不是 Prism 的配置项 —— 不该出现在 `.env.example` 里。
- * 名单要短:每加一条都是在放弃一点对账能力,所以只放**明确不是 Prism 旋钮**的。
+ * 操作系统自己的变量,不是 Prism 的配置项,不该出现在 `.env.example` 里。
+ * 名单要短:每加一条都是在放弃一点对账能力,所以只放明确不是 Prism 旋钮的。
  */
 const OS_PROVIDED = new Set(['HOME', 'USERPROFILE', 'PATH', 'NODE_ENV', 'TMPDIR', 'TEMP']);
 
 /**
- * 文档里写了、但运行时**读不到**的变量。每一条必须写明为什么。
+ * 文档里写了、但 Prism 运行时读不到的变量。每一条都要写明理由,并且逐条核实过:
+ * 没核实的名单会把真问题一起放过去。
  *
- * 现在是空的 —— 我写第一版时凭印象往里塞了六个 `VITE_*`,以为它们都是 Vite
- * 构建期专用。逐个查过之后:`VITE_PORT` 和 `VITE_IS_PLATFORM` 服务端确实用
- * `process.env` 读;另外四个**早就不在 .env.example 里了**(前几轮清掉的)。
- * 也就是说那六条白名单全是我编的。删干净。
- *
- * 留着这个空 Map 是为了给下一个人一个明确的去处:往 .env.example 里加一行
- * 没人读的变量,测试会红,他要么删掉它,要么来这里写清楚理由。
- * **空名单比一份没核实过的名单有用得多** —— 后者会把真问题一起放过去。
+ * 往 .env.example 里加一行没人读的变量会让测试变红:要么删掉它,要么在这里写清楚理由。
  */
 const DOCUMENTED_BUT_NOT_READ = new Map([
   // ['SOME_VAR', '为什么它写在文档里却读不到'],
-  // ho:Prism 不读它,原样透传给 CLI 子进程(buildClaudeSdkEnv 拷整个 process.env);读它的是 CLI 2.1.273+。
+  // Prism 不读它,原样透传给 CLI 子进程(buildClaudeSdkEnv 拷整个 process.env);读它的是 CLI(需 ≥ 2.1.273)。
   ['CLAUDE_CODE_GATEWAY_HINT_HEADERS', 'CLI 读;Prism 透传'],
 ]);
 
@@ -59,8 +42,8 @@ const walk = (dir, out = []) => {
     if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === 'dist-server') continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) { walk(full, out); continue; }
-    // 测试文件不算:测试里设 process.env.X 是造夹具,不是"应用读这个配置"。
-    // (这条也防止本文件扫到自己注释里提到的变量名 —— 第一版就是这么红的。)
+    // 测试文件不算:测试里设 process.env.X 是造夹具,不是"应用读这个配置";
+    // 这也避免本文件扫到自己注释里提到的变量名。
     if (entry.name.includes('.test.') || full.includes(`${path.sep}tests${path.sep}`)) continue;
     if (/\.(ts|tsx|js|jsx)$/.test(entry.name)) out.push(full);
   }
@@ -82,8 +65,8 @@ const collectReadVariables = () => {
         const name = match[1];
         if (!found.has(name)) found.set(name, path.relative(ROOT, file));
       }
-      // hl:依赖注入写法 `env.PRISM_X`(skillwhet / ma-service / budget 都这么读)。只收 PRISM_ 前缀 ——
-      // `env` 这个名字太常见,别的前缀误报面太大。PRISM_SKILLWHET_MODEL_ALLOWLIST 就是这样漏过文档的。
+      // 依赖注入写法 `env.PRISM_X`(skillwhet / ma-service / budget 都这么读),不收就会漏过对账。
+      // 只收 PRISM_ 前缀:`env` 这个名字太常见,放开别的前缀误报面太大。
       for (const match of source.matchAll(/\benv\??\.(PRISM_[A-Z0-9_]*)/g)) {
         const name = match[1];
         if (!found.has(name)) found.set(name, path.relative(ROOT, file));
@@ -94,22 +77,19 @@ const collectReadVariables = () => {
 };
 
 /**
- * 「文档写了 → 代码要读」这一侧的扫描:变量名必须以**读环境变量的形状**出现过。
+ * 「文档写了 → 代码要读」这一侧的扫描:变量名必须以读环境变量的形状出现过。
  *
  * 这个仓库读环境变量有这几种写法,全部认:
  *   1. `process.env.X` / `process.env['X']`          —— 直接读
  *   2. `env.X` / `env['X']` / `env?.X`              —— 依赖注入,`env` 是个参数
- *   3. `envInt('X', 5)` 之类 —— 名字作为**字符串字面量**出现(引号包着)
+ *   3. `envInt('X', 5)` 之类 —— 名字作为字符串字面量出现(引号包着)
  *   4. `import.meta.env.X`                           —— Vite 前端
  *   5. shell:`read_env X`、`$X`、`${X}`、`${X:-默认}` —— prism.sh / deploy.sh / Dockerfile
  *
- * hl(静态 P3「死配置」):此前这一侧是**子串匹配** —— 名字在源码里任何地方出现过就算"有人读"。
- * 结果 `PRISM_CREDENTIAL_HEADERS`(其实是 proxy-kit.js 里一个**常量**的名字)和
- * `PRISM_DATA_DIR_EXPLICIT_GUARD`(只出现在一行**注释**里)都被放了过去,运维配了没有任何效果。
- * 现在只认上面五种形状(shell 文件先剥掉 `#` 注释行)。JS 注释**不剥**:按字符剥注释要
- * 同时懂字符串、模板串和正则字面量,字符串里的 glob(src 下两个星号那种)就会被误当成块注释开头、
- * 吞掉后面整段代码 —— 第一版就这样把三个真在读的变量报成了死配置。五种形状本身已经够严:
- * 注释里裸写的名字、同名常量都不匹配。
+ * 不能用子串匹配:同名常量(如 proxy-kit.js 里的 `PRISM_CREDENTIAL_HEADERS`)和只在注释里出现的名字
+ * 都会被当成"有人读",运维配了却没有任何效果。shell 文件先剥掉 `#` 注释行;JS 注释不剥:按字符剥注释
+ * 要同时懂字符串、模板串和正则字面量,否则字符串里的 glob(src 下两个星号那种)会被误当成块注释开头、
+ * 吞掉后面整段代码。五种形状本身已经够严,注释里裸写的名字、同名常量都不匹配。
  */
 const stripShellComments = (source) => source
   .split('\n')
@@ -200,16 +180,11 @@ describe('.env.example 与代码双向对账', () => {
 
   test('没注释掉的那几行,必须是运行时真的会生效的变量', () => {
     /*
-     * `.env.example` 里有意留了几行**没注释掉**的(`SERVER_PORT` / `HOST` /
-     * `PRISM_ROOT_USERS` 等)—— 那是新部署必须设的东西,直接抄成 .env 就能跑。
-     * 这条设计没问题,不该被这个测试判违规。
-     *
-     * 真正的陷阱是审计抓到的那一行:`VITE_CONTEXT_WINDOW=160000` 没注释掉,
-     * 看着像生效的默认值,而它是 **Vite 构建期**变量 —— 写在运行时的 .env 里
-     * 什么都不会发生。它上一行才是真正生效的 `CONTEXT_WINDOW`,两行几乎一样
-     * 并排放着,运维只改一个必然踩坑。
-     *
-     * 所以判据不是"不许有没注释的行",而是**没注释的行必须运行时真的读得到**。
+     * `.env.example` 有意留了几行没注释掉的(`SERVER_PORT` / `HOST` / `PRISM_ROOT_USERS` 等):
+     * 新部署必须设,直接抄成 .env 就能跑,不算违规。
+     * 要拦的是没注释掉、看着像生效的默认值、运行时却读不到的行(例如 Vite 构建期变量写进运行时 .env),
+     * 尤其是和一个真正生效的变量长得几乎一样、并排放着时,运维只改一个必然踩坑。
+     * 所以判据不是"不许有没注释的行",而是没注释的行必须运行时真的读得到。
      */
     const documentedButNotRuntime = DOCUMENTED_BUT_NOT_READ;
     const offenders = readEnvExample().split('\n')

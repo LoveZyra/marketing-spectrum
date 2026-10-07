@@ -54,8 +54,8 @@ export type SidebarProjectListProps = {
   /** 项目权限保存成功后刷新列表(徽标跟上)。 */
   onProjectsRefresh?: () => void;
   /**
-   * eo:多选态。为真时每行前面出现复选框,点行 = 勾选而不是打开项目。
-   * 只在显式点了「多选」之后才为真 —— 默认动作被偷偷改掉是删错东西的开始。
+   * 多选态。为真时每行前面出现复选框,点行 = 勾选而不是打开项目。
+   * 只在显式点了「多选」之后才为真:默认动作被悄悄改掉,容易删错东西。
    */
   selectionMode?: boolean;
   selectedProjectIds?: ReadonlySet<string>;

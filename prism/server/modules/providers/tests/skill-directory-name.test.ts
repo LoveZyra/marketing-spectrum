@@ -8,15 +8,11 @@ import { afterEach, describe, test } from 'vitest';
 import { ClaudeSkillsProvider } from '@/modules/providers/list/claude/claude-skills.provider.js';
 
 /**
- * F13:界面上的卸载入口。
+ * 界面上的卸载入口靠 `directoryName`。
  *
- * 服务端的 DELETE 一直都在,缺的是"哪些技能**可以**被卸载"这条信息 ——
- * 之前列表里的技能只有 sourcePath,前端要么从路径里猜目录名(猜错就是画出一个
- * 点了会失败、或者更糟、删错东西的按钮),要么干脆不给入口(于是装错只能登
- * 服务器删目录)。
- *
- * 现在服务端只给**能安全卸载的那些**带 `directoryName`:用户级、直接躺在受管
- * 根目录下一层。这个测试钉的就是这条判据。
+ * 服务端只给能安全卸载的技能带 `directoryName`:用户级、直接躺在受管根目录下一层。
+ * 前端不从 sourcePath 猜目录名 —— 猜错就是画出一个点了会失败、甚至删错东西的按钮。
+ * 这个测试钉的就是这条判据。
  */
 const previousHome = process.env.HOME;
 let tempHome: string | null = null;

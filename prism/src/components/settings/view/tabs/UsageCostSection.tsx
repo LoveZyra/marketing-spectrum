@@ -7,16 +7,12 @@ import { authenticatedFetch } from '../../../../utils/api';
 /**
  * 用量与费用。
  *
- * ## 这不是 `/cost` 弹窗里那个数
+ * 这不是 `/cost` 弹窗里那个数:弹窗里是当前上下文占用(读 transcript 最后一条 assistant 消息的
+ * usage),用来判断还能再聊几轮;这里是累计花销,来自 `usage_records` 台账,一轮一行逐条累加。
+ * 两个数天然不一样,差可以是一个数量级。
  *
- * 弹窗里那个是**当前上下文占用**(读 transcript 最后一条 assistant 消息的 usage),
- * 用来判断"还能再聊几轮"。这里是**累计花销**,来自 `usage_records` 台账,
- * 一轮一行逐条累加。两个数天然不一样,差可以是一个数量级。
- *
- * ## 为什么按"维度"切而不是画个大图
- *
- * 用这张表的人只有四个问题:这个月花了多少、谁花的、哪个项目花的、哪个模型花的。
- * 一个下拉切维度、一张排序好的表,四个问题都答得了;而一张堆叠面积图一个都答不利索。
+ * 按维度切而不画大图:用这张表的人只有四个问题 —— 这个月花了多少、谁花的、哪个项目花的、
+ * 哪个模型花的。一个下拉切维度、一张排序好的表都答得了;堆叠面积图一个都答不利索。
  */
 
 type SummaryRow = {
@@ -47,12 +43,16 @@ const DIMENSIONS = [
 
 const RANGES = [7, 30, 90] as const;
 
-/** 来源标签。`compact` 是自动压缩 —— 单列出来正是为了让它可见。 */
+/**
+ * 来源标签的中文兜底,译文在 `usage.sources.*`。`compact` 是自动压缩 —— 单列出来正是为了让它可见;
+ * `background` 是 CLI 自己发起的回合(比如后台任务回报),不对应任何一条用户输入。
+ */
 const SOURCE_LABEL: Record<string, string> = {
   chat: '对话',
   compact: '自动压缩',
   task: '定时任务',
   api: '外部接口',
+  background: '后台任务',
 };
 
 const formatTokens = (value: number): string => {
@@ -97,15 +97,18 @@ export default function UsageCostSection() {
 
   useEffect(() => { void load(by, days); }, [load, by, days]);
 
-  // hj:按日期看时按日期倒序(新的在上)。服务端 hj 起对日期维度已按日期排、且不截天;
-  // 这里再排一次只是保险 —— 其余维度保持服务端的「谁最贵」顺序。
+  // 按日期看时按日期倒序(新的在上)。服务端对日期维度已按日期排序且不截天,这里再排一次只是保险;
+  // 其余维度保持服务端的「谁最贵」顺序。
   const displayRows = by === 'day' ? [...rows].sort((a, b) => String(b.key).localeCompare(String(a.key))) : rows;
 
   const totalCost = rows.reduce((sum, row) => sum + (Number(row.cost_usd) || 0), 0);
   const totalRuns = rows.reduce((sum, row) => sum + (Number(row.runs) || 0), 0);
 
   const renderKey = (row: SummaryRow): string => {
-    if (by === 'source') return SOURCE_LABEL[row.key] ?? row.key;
+    if (by === 'source') {
+      const fallback = SOURCE_LABEL[row.key];
+      return fallback ? t(`usage.sources.${row.key}`, { defaultValue: fallback }) : row.key;
+    }
     // 项目路径按最后一段显示,完整路径进 title —— 一屏放不下绝对路径,
     // 但去掉它又分不清同名目录。
     if (by === 'project_path' && row.key.includes('/')) return row.key.split('/').filter(Boolean).pop() ?? row.key;
@@ -223,7 +226,7 @@ export default function UsageCostSection() {
 
       <p className="text-xs text-muted-foreground">
         {t('usage.footnote',
-          '费用取自模型返回的计费值,按轮记账。与对话页 /cost 里的数字不是一回事 —— 那个是当前上下文占用,这里是累计花销。「输入」不含缓存,命中缓存的部分记在「缓存读」里(按约一折计费)。升级到 hj 版本之前的 token 数记录不全 —— 网关把用量放在流的末尾,旧版本没读到;费用不受影响。')}
+          '费用取自模型返回的计费值,按轮记账。与对话页 /cost 里的数字不是一回事 —— 那个是当前上下文占用,这里是累计花销。「输入」不含缓存,命中缓存的部分记在「缓存读」里(按约一折计费)。较早的记录里 token 数可能不全 —— 网关把用量放在流的末尾,早期版本没读到;费用不受影响。')}
       </p>
     </div>
   );

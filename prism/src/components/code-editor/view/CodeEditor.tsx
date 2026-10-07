@@ -84,7 +84,7 @@ export default function CodeEditor({
 
   // 真正的"脏":用户改了、而且这份改动是能保存的。diff 视图与读失败缓冲不算
   // (那不是用户的编辑);只读文件不算(改不了也存不了,拦人没有意义)。
-  // hl(P3 文件组):beforeunload 原来只看 hasUnsavedChanges —— 读失败 / 只读文件也会弹「离开站点?」。
+  // 下面的 beforeunload 拦截看的是它,不是 hasUnsavedChanges。
   const isDirty = hasUnsavedChanges && !isDiffView && !loadError && !readOnlyReason;
 
   // 有未保存改动时,离开页面/刷新/关标签给浏览器原生拦截。编辑器不像聊天草稿
@@ -128,18 +128,13 @@ export default function CodeEditor({
   }, [file.name]);
 
   /**
-   * eh:**能渲染的文件,点开就是渲染后的样子**。
-   *
-   * notebook 早就是这个约定(上面的 notebookRaw),markdown 与 html 却还默认落在
-   * 源码上 —— 用户点开一份报告 / 一张网页,第一眼看到的是标签和井号,得再找一次
-   * 那枚眼睛。图片 / PDF / 音视频走的是另一条分支(CodeEditorMediaPreview),本来
-   * 就是渲染。现在三类文本渲染视图统一:进来先看结果,要改再切源码。
+   * 能渲染的文件,点开就是渲染后的样子:markdown / html 与 notebook(上面的 notebookRaw)
+   * 一样默认进渲染视图,要改再切源码;图片 / PDF / 音视频走 CodeEditorMediaPreview,本来就是渲染。
    *
    * 依赖里带 `file.path`:换文件时重置,不把上一份的"我切到源码了"粘过来。
    */
   useEffect(() => {
-    // 换文件时先归零再按类型给默认值,顺带兜掉"上一份的预览挂在新文件名下"
-    // 这件事(这也是原来那个 setHtmlPreview(false) 的职责,已合并到这里)。
+    // 换文件时按类型重给默认值,也保证上一份的预览不会挂在新文件名下。
     setMarkdownPreview(isMarkdownFile);
     setHtmlPreview(isHtmlPreviewFile);
   }, [file.path, isMarkdownFile, isHtmlPreviewFile]);
@@ -161,7 +156,7 @@ export default function CodeEditor({
     return normalizedFile.slice(normalizedRoot.length + 1);
   }, [file.path, projectPath]);
 
-  // hl 复核 P3-5:固定引用 —— 每次渲染新建对象会让 markdown 图片整批重挂载、重复下载。
+  // 固定引用:base 经 context 传给 markdown 图片,每次渲染新建对象会让所有图片跟着重渲。
   const markdownBase = useMemo(
     () => ({ projectId: fileProjectId, relPath: previewRelPath }),
     [fileProjectId, previewRelPath],
@@ -199,8 +194,8 @@ export default function CodeEditor({
         isExpanded,
         onToggleDiff: () => setShowDiff((previous) => !previous),
         onPopOut,
-        // ec:「最大化 / 还原」搬到了头部(所有文件形态共用),CodeMirror 工具条
-        // 上不再放第二个同款按钮;这里只剩 diff 与弹出。
+        // 「最大化 / 还原」在头部(所有文件形态共用),CodeMirror 工具条上不放第二个同款按钮;
+        // 这里只有 diff 与弹出。
         onToggleExpand: null,
         labels: {
           changes: t('toolbar.changes'),
@@ -216,7 +211,7 @@ export default function CodeEditor({
     [file, isExpanded, isSidebar, onPopOut, showDiff, t],
   );
 
-  // ec:最大化时第一次 Esc 只还原,第二次才关(见 utils/editorEscape.ts)。
+  // 最大化时第一次 Esc 只还原,第二次才关(见 utils/editorEscape.ts)。
   const escapeAction = resolveEditorEscapeAction({
     isSidebar,
     isExpanded,
@@ -354,8 +349,8 @@ export default function CodeEditor({
             saving={saving}
             saveSuccess={saveSuccess}
             dirty={isDirty}
-            // ei:会话产出通道是只读的(项目目录之外的产出),保存按钮不渲染。
-            // hl(动态 P2-11):读失败的标签页保存与下载按钮都不渲染 —— 缓冲区里是错误注释,不是文件。
+            // 会话产出通道是只读的(项目目录之外的产出),保存按钮不渲染。
+            // 读失败的标签页保存与下载按钮都不渲染:缓冲区里是错误注释,不是文件。
             canSave={!isDiffView && !file.outputSessionId && !readOnlyReason && !loadError}
             canDownload={!loadError}
             onToggleMarkdownPreview={() => setMarkdownPreview((previous) => !previous)}
@@ -391,7 +386,7 @@ export default function CodeEditor({
             }}
           />
 
-          {/* hl(P3 文件组):错误态横幅用警示色,与只读说明(中性)区分开 —— 深色下原来三条一个样。 */}
+          {/* 错误态横幅用警示色,与只读说明(中性)区分开 */}
           {loadError && (
             <div role="alert" className="border-b border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300">
               {t('loadFailedBanner', { error: loadError, defaultValue: `文件加载失败:${loadError} —— 已禁止保存以免覆盖原文件,请关闭后重新打开。` })}

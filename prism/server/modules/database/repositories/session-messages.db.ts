@@ -13,13 +13,13 @@ type DisplayMessageRow = {
 };
 
 /**
- * 会**留在对话里**的消息种类。
+ * 会留在对话里的消息种类。
  *
  * 这份清单要和前端 `useChatRealtimeHandlers` 的 `shouldPersist` 对齐 ——
  * 那边决定"什么进 store",这边决定"什么进日志"。两边一致,刷新页面看到的
  * 才和刷新前一模一样。
  *
- * 用**白名单**而不是黑名单:新增一种 kind 时,默认不写日志是安全的
+ * 用白名单而不是黑名单:新增一种 kind 时,默认不写日志是安全的
  * (顶多少显示一样东西);默认写进去则可能把 `stream_delta` 这种每 token 一条的
  * 洪流灌进库里。
  */
@@ -31,11 +31,11 @@ const DURABLE_KINDS: ReadonlySet<MessageKind> = new Set<MessageKind>([
   'error',
   'interactive_prompt',
   'task_notification',
-  // dr:回合末的 checkpoint 改动清单。它是"这轮盘上多了哪些文件"的唯一
-  // 权威事实(与写入手段无关 —— Bash/python 写的文件 Write 帧里没有),
-  // 工作面板的产出提取靠它才能认出非 Write 写盘。落库前剥 diff(见 append)。
+  // 回合末的 checkpoint 改动清单。它是"这轮盘上多了哪些文件"的唯一权威事实
+  // (与写入手段无关,Bash / python 写的文件 Write 帧里没有),工作面板的产出提取靠它
+  // 才能认出非 Write 写盘。落库前剥 diff(见 writeDisplayRow)。
   'changed_files',
-  // dt:回滚/单文件还原的反向帧 —— 不落它,产出面板就与磁盘永久漂移
+  // 回滚 / 单文件还原的反向帧。不落它,产出面板就与磁盘永久漂移
   // (文件已被回滚删掉,面板还列着,点开 404)。
   'files_reverted',
 ]);
@@ -64,9 +64,9 @@ type PreparedCache = {
   clearTrimmed: Statement | null;
   readTrimmed: Statement | null;
   sessionTranscript: Statement | null;
-  /** fy(F14):按显示日志顺序往回找最近一个 assistant 原生 uuid。 */
+  /** 按显示日志顺序往回找最近一个 assistant 原生 uuid(「编辑重跑」的分叉锚点)。 */
   forkAnchor: Statement | null;
-  /** fy(F14):目标消息在显示日志里的行号(自增 id,即写入顺序)。 */
+  /** 目标消息在显示日志里的行号(自增 id,即写入顺序)。 */
   rowOfMessage: Statement | null;
 };
 const prepared: PreparedCache = {
@@ -78,19 +78,12 @@ const prepared: PreparedCache = {
 /**
  * 每个会话最多留多少条显示日志。
  *
- * 这张表原来**只增不删**:没有 TTL、没有条数上限、没有孤儿清扫 —— 而 `audit_log`
- * 有 5000 行上限、`scheduled_task_runs` 有 50 条上限,唯独行数最大的这张什么都没有。
- * 实测 200 会话 × 400 条(payload 约 1.2 KB,tool_result 更大)= 8 万行 = **108 MB**;
- * 2000 会话按同密度约 1 GB,再乘每日备份保留 7 份 = 磁盘 ×8。
+ * 这是行数最大的一张表,必须有上限:200 会话 × 400 条(payload 约 1.2 KB,tool_result 更大)
+ * 就是 8 万行、约 108 MB,还要再乘上备份保留的份数。
  *
  * 2000 条是按"回放够用"定的:前端首屏只取尾页,再往前靠分页;真要看全量历史,
- * transcript 文件才是权威来源。
- *
- * ## fj:这条回落此前**只写在这段注释里,代码里并不存在**
- *
- * `fetchHistory` 的判据是 `countForSession > 0` 就一律读日志,全文件没有任何
- * "被裁过就回落"的分支 —— 于是超过 2048 条的会话,早期几百上千条从界面永久消失。
- * 现在裁剪会在 `sessions.display_log_trimmed` 上盖戳,`fetchHistory` 认那个戳。
+ * transcript 文件才是权威来源。裁剪会在 `session_display_log_state.trimmed` 上盖戳,
+ * `fetchHistory` 见到这个戳(且有 transcript)就回落到 transcript。
  *
  * 可以用 `PRISM_DISPLAY_LOG_MAX_PER_SESSION` 调,0 或负数表示不裁剪。
  */
@@ -109,8 +102,8 @@ function ensurePrepared() {
         (session_id, message_id, kind, timestamp, payload, provider_assistant_uuid)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
-    // fy(F14):分叉锚点查询。`id < ?` 走的是现有的 (session_id, id) 索引,
-    // 不需要给新列单独建索引 —— 一条会话里能有值的行本来就密。
+    // 分叉锚点查询。`id < ?` 走 (session_id, id) 索引,不需要给 provider_assistant_uuid
+    // 单独建索引:一条会话里有值的行本来就密。
     prepared.rowOfMessage = db.prepare(
       'SELECT id FROM session_display_messages WHERE session_id = ? AND message_id = ?',
     );
@@ -126,10 +119,10 @@ function ensurePrepared() {
     // dn-O1:尾页直接在 SQL 取(倒序 LIMIT/OFFSET 再反转),分页请求不再整段读出。
     prepared.tailPage = db.prepare('SELECT payload FROM session_display_messages WHERE session_id = ? ORDER BY id DESC LIMIT ? OFFSET ?');
     prepared.fingerprint = db.prepare('SELECT COUNT(*) AS c, MAX(id) AS m FROM session_display_messages WHERE session_id = ?');
-    // 就地裁剪:留最新的 N 条(按自增 id),更早的删掉。
-    // 与 scheduled_task_runs 的 finishRun 同一写法,索引 (session_id, id) 正好吃得到。
-    // fj:裁剪盖戳 / seed 成功后清戳。UPSERT 而不是 UPDATE —— 显示日志可以早于
-    // sessions 行存在,所以状态行也必须能凭空建出来,否则戳会写进空气里。
+    // 盖戳 / 清戳(裁剪后盖,seed 成功后清)。用 UPSERT 而不是 UPDATE:显示日志可以早于
+    // sessions 行存在,状态行也必须能凭空建出来。
+    // 最后的 `trim` 是就地裁剪:留最新的 N 条(按自增 id),更早的删掉;与 scheduled_task_runs
+    // 的 finishRun 同一写法,索引 (session_id, id) 正好吃得到。
     prepared.markTrimmed = db.prepare(
       `INSERT INTO session_display_log_state (session_id, trimmed) VALUES (?, 1)
        ON CONFLICT(session_id) DO UPDATE SET trimmed = 1`,
@@ -139,7 +132,7 @@ function ensurePrepared() {
        ON CONFLICT(session_id) DO UPDATE SET trimmed = 0`,
     );
     prepared.readTrimmed = db.prepare('SELECT trimmed FROM session_display_log_state WHERE session_id = ?');
-    // fj:守门判据要用 —— 这个会话在磁盘上有没有 transcript。
+    // 守门判据(wouldOrphanExistingHistory)要用:这个会话在磁盘上有没有 transcript。
     prepared.sessionTranscript = db.prepare('SELECT provider_session_id FROM sessions WHERE session_id = ?');
     prepared.trim = db.prepare(`
       DELETE FROM session_display_messages
@@ -161,7 +154,7 @@ function ensurePrepared() {
  * ## 为什么不是每条都裁
  *
  * 裁剪本身要跑一次带子查询的 DELETE。每条消息都跑一次,在长回合里就是几百次无用功
- * (绝大多数时候一条都不用删)。所以只在**条数是 64 的倍数时**才真的去裁 ——
+ * (绝大多数时候一条都不用删)。所以只在条数是 64 的倍数时才真的去裁 ——
  * 上限是 2000,64 的步长意味着最多超出 63 条,而检查成本降到 1/64。
  * `audit_log` 用的是同一个思路(每 100 次写触发一次 trim)。
  *
@@ -180,19 +173,15 @@ function trimSession(sessionId: string): void {
     const total = Number(row?.total || 0);
     if (total <= limit || total % 64 !== 0) return;
     /**
-     * fl:`OFFSET limit`,不是 `limit - 1`。
-     *
-     * 语句是"删掉 id <= 第 N 新的那条"。要保住最新的 `limit` 条,N 必须是
-     * **第 limit+1 新**的那条,也就是 `OFFSET limit`。原来传 `limit - 1`
-     * 把保留窗口里最老的那条一起删了 —— 上限 2000 实际只留 1999。
-     * 差一条本身不致命,但它让"上限"这个词对不上账。
+     * 传 `OFFSET limit`,不是 `limit - 1`:语句是"删掉 id <= 第 N 新的那条",要保住最新的
+     * `limit` 条,N 必须是第 limit+1 新的那条。
      */
     const result = cache.trim!.run(sessionId, sessionId, limit);
     if (result.changes > 0) {
       invalidateParsedList(sessionId);
       /**
-       * fj:盖戳。这一句是整条修复的关键 —— 删完不留痕迹,回放就无从知道
-       * "日志已经不是完整记录了",于是继续拿它当权威,早期历史静默消失。
+       * 盖戳:删完不留痕迹的话,回放无从知道日志已经不是完整记录,会继续拿它当权威,
+       * 早期历史静默消失。
        */
       cache.markTrimmed!.run(sessionId);
     }
@@ -202,25 +191,18 @@ function trimSession(sessionId: string): void {
 }
 
 /**
- * fj:写第一行之前的守门 —— 「要么日志完整,要么一行都没有」。
+ * 写第一行之前的守门:「要么日志完整,要么一行都没有」。
  *
- * `fetchHistory` 一看到日志有行就完全改读日志。所以**给一个已有 transcript、
- * 但日志还空着的会话写第一行**,等于把它几百条历史一次性从界面上抹掉,而且
- * `seedDisplayLogFromTranscript` 的 `countForSession > 0` 短路会让 seed 再也不
- * 重试 —— 从 UI 不可恢复。
+ * `fetchHistory` 一看到日志有行就完全改读日志。给一个已有 transcript、但日志还空着的会话
+ * 写第一行,等于把它的历史一次性从界面上抹掉,而且 `seedDisplayLogFromTranscript` 的
+ * `countForSession > 0` 短路会让 seed 再也不重试,从 UI 不可恢复。
  *
- * 此前这道门只写在 `chat-websocket.service.ts` 的 handler 里(先 seed 再写),
- * 而另外 6 个入口全都直接 `append`:定时任务的用户指令行与回执、外部 Agent API
- * 的同步/异步两条、优雅重启补的「回合被中断」、以及**检查点恢复**的
- * `files_reverted` 帧。任何一条先跑,那个会话的历史就没了。
+ * 直接 `append` 的入口很多(定时任务的指令行与回执、外部 Agent API、优雅重启补的「回合被中断」、
+ * 检查点恢复的 `files_reverted` 帧等),所以守门放在写入层,而不是靠每个调用方先 seed。
  *
- * 守门放在写入层而不是靠每个调用方自觉 —— 前者漏一次要改一处,后者已经漏了六次。
- *
- * ## 为什么是「拒绝」而不是「就地 seed」
- *
- * 就地 seed 要 await(读 transcript),而 `append` 是同步的、且被同步路径调用。
- * 更重要的是**不需要**:被拒的这一轮,CLI 自己会把它写进 jsonl,所以下一次
- * `chat.send` 正常 seed 时它照样会被抄进来。拒绝只是把落库推迟到能做对的那一刻。
+ * 拒绝而不是就地 seed:就地 seed 要 await(读 transcript),而 `append` 是同步的、且被同步路径
+ * 调用。也不需要:被拒的这一轮 CLI 自己会写进 jsonl,下一次 `chat.send` 正常 seed 时照样会被
+ * 抄进来,拒绝只是把落库推迟到能做对的那一刻。
  */
 function wouldOrphanExistingHistory(sessionId: string): boolean {
   try {
@@ -261,8 +243,8 @@ function invalidateParsedList(sessionId: string): void {
 }
 
 /**
- * fj:真正把一行写进表里 —— 不守门、不裁剪。`append`(带守门+裁剪)和
- * `appendForSeed`(两样都不要)共用它,避免两条路的去重键/剥 diff 逻辑分叉。
+ * writeDisplayRow:真正把一行写进表里,不守门、不裁剪。`append`(带守门 + 裁剪)和
+ * `appendForSeed`(两样都不要)共用它,避免两条路的去重键 / 剥 diff 逻辑分叉。
  */
 type WriteOutcome = 'inserted' | 'duplicate' | 'failed';
 
@@ -271,7 +253,7 @@ function writeDisplayRow(sessionId: string, message: NormalizedMessage): WriteOu
    * 去重键。
    *
    * 正常情况下每条规范化消息都带 `id`(transcript 行用 `uuid`,流式消息用
-   * `uuid_块序号`),重复推送靠唯一键幂等吞掉。极少数没有 id 的消息**不能**
+   * `uuid_块序号`),重复推送靠唯一键幂等吞掉。极少数没有 id 的消息不能
    * 一律记成空串 —— 那样第二条起会被唯一键当成重复丢掉,日志直接少内容。
    * 没 id 就临时造一个:失去幂等,但绝不丢行。丢行是真错,重复是小错。
    */
@@ -279,9 +261,8 @@ function writeDisplayRow(sessionId: string, message: NormalizedMessage): WriteOu
     ? message.id
     : generateMessageId('display');
 
-  // dr:changed_files 落库前剥 diff —— 单文件 diff 可达 20KB,一回合一帧,
-  // 留着会让日志白胖几个量级;产出提取只要 path/status/untracked 这几样。
-  // 发给前端的那份(forward 的原对象)不动,卡片照常有 diff。
+  // changed_files 落库前剥 diff:单文件 diff 可达 20KB,留着会让日志胖几个量级,产出提取
+  // 用不到它。发给前端的那份(forward 的原对象)不动,卡片照常有 diff。
   const rawFiles = (message as { files?: unknown }).files;
   const persisted = message.kind === 'changed_files' && Array.isArray(rawFiles)
     ? {
@@ -307,18 +288,15 @@ function writeDisplayRow(sessionId: string, message: NormalizedMessage): WriteOu
       String(persisted.kind),
       String(persisted.timestamp || new Date().toISOString()),
       JSON.stringify(persisted),
-      // fy(F14):assistant 侧的行顺手记下自己的原生 uuid —— 「编辑重跑」的
-      // 分叉锚点。判据收在 shared/fork-anchor.ts,落库与端点共用同一个。
+      // assistant 侧的行顺手记下自己的原生 uuid,作「编辑重跑」的分叉锚点。
+      // 判据在 shared/fork-anchor.ts,落库与端点共用同一个。
       forkAnchorUuid({ id: messageId, kind: persisted.kind, role: (persisted as { role?: unknown }).role }),
     );
     if (result.changes > 0) invalidateParsedList(sessionId);
     /**
-     * fl:**"重复"与"失败"要分得开。**
-     *
-     * 两者原来都返回 false。seed 那边据此判"抄成功没有",于是一次真正的写入
-     * 失败(磁盘满、SQLITE_BUSY)与"这条本来就抄过了"长得一模一样 ——
-     * 一份**部分成功**的日志会被判成 ready,而 `countForSession > 0` 让它
-     * 永远不再重抄。
+     * "重复"与"失败"要分得开:seed 据此判断抄成功没有。真正的写入失败(磁盘满、SQLITE_BUSY)
+     * 若与"这条本来就抄过了"混为一谈,部分成功的日志会被判成 ready,而 `countForSession > 0`
+     * 让它永远不再重抄。
      */
     return result.changes > 0 ? 'inserted' : 'duplicate';
   } catch (error) {
@@ -331,7 +309,7 @@ export const sessionMessagesDb = {
   /**
    * 追加一条显示日志。
    *
-   * **永不抛异常** —— 写日志失败绝不能把正在进行的回合带崩。同一条消息重复推送
+   * 永不抛异常 —— 写日志失败绝不能把正在进行的回合带崩。同一条消息重复推送
    * (重连补发之类)靠 `(session_id, message_id)` 唯一键幂等吞掉。
    */
   append(sessionId: string, message: NormalizedMessage): boolean {
@@ -340,8 +318,8 @@ export const sessionMessagesDb = {
     }
 
     /**
-     * fj:唯一的守门点(见 `wouldOrphanExistingHistory`)。
-     * seed 自己走 `appendMany`,那条路**刻意绕过**这道门 —— 它正是在补齐历史。
+     * 唯一的守门点(见 `wouldOrphanExistingHistory`)。seed 走 `appendMany`,刻意绕过这道门:
+     * 它正是在补齐历史。
      */
     if (wouldOrphanExistingHistory(sessionId)) {
       log.warn(
@@ -357,12 +335,11 @@ export const sessionMessagesDb = {
   },
 
   /**
-   * fj:seed 专用的写入 —— 绕过 `append` 的守门与逐条裁剪。
+   * seed 专用的写入:绕过 `append` 的守门与逐条裁剪。
    *
-   * 守门要绕开是显然的(seed 就是来补历史的)。**逐条裁剪必须绕开**才是这一条的
-   * 重点:`appendMany` 原来逐条调 `append`,每 64 条触发一次 `trimSession`,于是
-   * 一份 5000 条的老会话**在抄写过程中就把自己裁到了 2000**;而返回的 `seeded`
-   * 计的是插入次数(5000),不是活下来的行数,所以 seed 报成功、从此永不重抄。
+   * 守门要绕开是显然的(seed 就是来补历史的)。逐条裁剪也必须绕开:否则每 64 条触发一次
+   * `trimSession`,一份 5000 条的老会话在抄写过程中就会被裁掉一大半,而 `seeded` 计的是插入次数,
+   * 不是活下来的行数,seed 会报成功、从此永不重抄。
    */
   appendForSeed(sessionId: string, message: NormalizedMessage): WriteOutcome {
     if (!sessionId || !isDurableDisplayMessage(message)) return 'duplicate';
@@ -372,12 +349,12 @@ export const sessionMessagesDb = {
   /**
    * 批量追加(老会话首次 seed 用),整批一个事务。
    *
-   * 老会话第一条消息发送前要把几百上千条历史抄进日志,逐条 append 就是几百次
-   * 独立的隐式事务(每次都 fsync),明显卡顿。用 better-sqlite3 的 transaction
-   * 包起来,一次提交。返回真正写进去的行数(唯一键去重后)。永不抛。
+   * 老会话第一条消息发送前要把几百上千条历史抄进日志,逐条 append 就是几百次独立的隐式事务
+   * (每次都 fsync),明显卡顿。用 better-sqlite3 的 transaction 包起来,一次提交。
+   * 返回真正写进去的行数(唯一键去重后)。永不抛。
    *
-   * fj:走 `appendForSeed`(不守门、不逐条裁剪),整批结束后**才**裁一次;
-   * 抄完清掉 `display_log_trimmed` —— 这一份是完整的,可以当权威。
+   * 逐条走 `appendForSeed`(不守门、不逐条裁剪),整批结束后才交给 `trimSession`;
+   * 抄完清掉裁剪戳(`session_display_log_state`),这一份是完整的,可以当权威。
    */
   appendMany(sessionId: string, messages: NormalizedMessage[]): number {
     if (!sessionId || !Array.isArray(messages) || messages.length === 0) return 0;
@@ -392,15 +369,11 @@ export const sessionMessagesDb = {
           else if (outcome === 'failed') failed += 1;
         }
         /**
-         * fl:**一条都没失败**才清戳。
+         * 一条都没失败才清戳。`writeDisplayRow` 内部 catch 了异常,事务不会因为单行失败而回滚;
+         * 无条件清戳的话,部分成功的日志会被标成"完整",回放从此拿它当权威,缺掉的那些永远补不回来
+         * (`countForSession > 0` 让 seed 也不会再抄一次)。
          *
-         * fk 是无条件清 —— 而 `writeDisplayRow` 内部 catch 了异常、事务不会
-         * 因为单行失败而回滚,于是一份**部分成功**的日志照样被标成"完整",
-         * 回放从此拿它当权威,缺掉的那些永远补不回来(`countForSession > 0`
-         * 让 seed 也不会再抄一次)。
-         *
-         * 抛出去让事务回滚:整批要么都在,要么一行都不写 —— 那正是
-         * "要么日志完整、要么没有"这条不变式本身。
+         * 所以有失败就抛出去让事务回滚:整批要么都在,要么一行都不写,守住"要么日志完整、要么没有"。
          */
         if (failed > 0) {
           throw new Error(`display-log seed: ${failed} 行写入失败,整批回滚`);
@@ -417,9 +390,9 @@ export const sessionMessagesDb = {
   },
 
   /**
-   * fj:这个会话的显示日志**被裁剪过**吗 —— 决定它还能不能当回放的权威。
+   * 这个会话的显示日志被裁剪过吗:决定它还能不能当回放的权威。
    *
-   * 裁过 = 早期消息已经物理删除 = 拿它当权威就等于告诉用户"你的对话只有这么多"。
+   * 裁过 = 早期消息已经物理删除,拿它当权威就等于告诉用户"你的对话只有这么多"。
    * `fetchHistory` 据此回落到 transcript。
    */
   isTrimmed(sessionId: string): boolean {
@@ -451,9 +424,7 @@ export const sessionMessagesDb = {
    */
   listForSession(sessionId: string): NormalizedMessage[] {
     try {
-      // 指纹一致(行数 + 最大 id 都没变)→ 直接返回上次解析好的数组,免掉整段
-      // 读盘 + JSON.parse。注意返回缓存数组本体:上层只读不改(切片会自己拷),
-      // 若未来有改数组的调用方,应在这里改成返回浅拷贝。
+      // 指纹一致(行数 + 最大 id 都没变)→ 用上次解析好的数组,免掉整段读盘 + JSON.parse。
       const fingerprint = displayLogFingerprint(sessionId);
       const cached = parsedListCache.get(sessionId);
       if (cached && cached.fingerprint === fingerprint) {
@@ -490,16 +461,14 @@ export const sessionMessagesDb = {
   },
 
   /**
-   * dn-O1:尾页分页,直接在 SQL 里取。
+   * 尾页分页,直接在 SQL 里取。
    *
-   * 语义与 `sliceTailPage(listForSession(...), limit, offset)` 逐字节一致:
-   * `offset` 从**尾部**数(跳过最新 offset 条),再往前取 `limit` 条,按时间
-   * 正序返回;`hasMore` = 更早的行还有没有。此前分页请求也要整段读出 + 全量
-   * JSON.parse 再切片 —— 指纹缓存挡得住静止会话,挡不住活跃回合(每个 durable
-   * 帧 append 都使缓存失效,每轮 complete 刷新都是一次全量重读)。
+   * 语义与 `sliceTailPage(listForSession(...), limit, offset)` 逐字节一致:`offset` 从尾部数
+   * (跳过最新 offset 条),再往前取 `limit` 条,按时间正序返回;`hasMore` = 更早的行还有没有。
+   * 不整段读出再切:指纹缓存挡得住静止会话,挡不住活跃回合(每个 durable 帧 append 都使缓存失效)。
    *
-   * 指纹缓存命中时仍优先用它切片(纯内存,比 SQL 更便宜);未命中的分页请求
-   * 只取所需区间,**不**顺带构建全量缓存 —— 全量路径(limit=null)留给 listForSession。
+   * 指纹缓存命中时仍优先用它切片(纯内存,比 SQL 更便宜);未命中的分页请求只取所需区间,
+   * 不顺带构建全量缓存,全量路径(limit=null)留给 listForSession。
    */
   listTailPage(sessionId: string, limit: number, offset: number): {
     messages: NormalizedMessage[];
@@ -548,15 +517,15 @@ export const sessionMessagesDb = {
   },
 
   /**
-   * fy(F14):**「编辑重跑」的分叉锚点** —— 这条消息之前最后一个原生 assistant uuid。
+   * 「编辑重跑」的分叉锚点:这条消息之前最后一个原生 assistant uuid。
    *
    * 返回值三态,调用方要分得开:
-   * - `string` —— 找到了,直接拿去 SDK 的 `resumeSessionAt`;
-   * - `null` —— 日志里有这一行,但它**之前没有任何 assistant 行**(会话的第一句);
-   * - `undefined` —— 日志里**没有这一行**(老会话、或被 trim 掉了),
-   *   调用方应当退回扫 jsonl 的老路,而不是当成"没有锚点"。
+   * - `string`:找到了,直接拿去 SDK 的 `resumeSessionAt`;
+   * - `null`:日志里有这一行,但它之前没有任何 assistant 行(会话的第一句);
+   * - `undefined`:日志里没有这一行(老会话、或被 trim 掉了),调用方应当退回扫 jsonl,
+   *   而不是当成"没有锚点"。
    *
-   * 把这三种揉成一个 null 就是下一个"静默降级"——fp 刚拆掉一个。
+   * 不能把这三种揉成一个 null,那会让调用方静默降级。
    */
   forkAnchorFor(sessionId: string, messageId: string): string | null | undefined {
     if (!sessionId || !messageId) return undefined;
@@ -573,16 +542,15 @@ export const sessionMessagesDb = {
   },
 
   /**
-   * gk:让这条会话的解析缓存失效。回收站搬进 / 搬回是**绕过这个仓库**直接动表的
-   * (整体 INSERT … SELECT),缓存不知道;不失效的话,恢复出来的会话可能读到删除前
-   * 那份陈旧的解析结果。
+   * 让这条会话的解析缓存失效。回收站搬进 / 搬回是绕过这个仓库直接动表的(整体 INSERT … SELECT),
+   * 缓存不知道;不失效的话,恢复出来的会话可能读到删除前那份陈旧的解析结果。
    */
   invalidateCache(sessionId: string): void {
     invalidateParsedList(sessionId);
   },
 
   /**
-   * ho(ho-1):合流消息没执行就被撤掉了 —— 那一行标 `withdrawn: true`,刷新后照样画成置灰的"已撤回"。
+   * 合流消息没执行就被撤掉了:那一行标 `withdrawn: true`,刷新后照样画成置灰的"已撤回"。
    * 只改这一行的 payload,不动顺序与分叉锚点。永不抛。
    */
   markWithdrawn(sessionId: string, messageId: string): boolean {
@@ -604,8 +572,8 @@ export const sessionMessagesDb = {
     try {
       const db = getConnection();
       db.prepare('DELETE FROM session_display_messages WHERE session_id = ?').run(sessionId);
-      // fj:状态行跟着日志一起走。留着的话,这个会话下次重抄之后仍会被判成"裁过",
-      // 白白回落 transcript(终端接管释放时会故意清空日志等着重抄,就是这条路)。
+      // 状态行跟着日志一起删:日志清空后要等重抄(终端接管释放时就会这样做),
+      // 残留的"裁过"标记不能留给重抄出来的新日志,否则它会白白回落 transcript。
       db.prepare('DELETE FROM session_display_log_state WHERE session_id = ?').run(sessionId);
       invalidateParsedList(sessionId);
     } catch (error) {

@@ -14,25 +14,18 @@ import { createLogger } from '@/shared/logger.js';
 const log = createLogger('providers');
 
 /**
- * 会话产出文件的读取通道(ei)。
+ * 会话产出文件的读取通道。
  *
- * ## 为什么需要它
+ * 对话产出的文件不一定在项目目录里:agent 用的是这台机器上的真实文件系统,计划文件写进
+ * `~/.claude/plans/`、临时脚本写进 `/tmp` 都很常见;而项目文件接口(`/api/projects/:id/files/content`)
+ * 只服务项目根以内的路径,产出列表里的这类文件会列得出、打不开。
  *
- * 对话产出的文件**不一定落在项目目录里** —— agent 用的是这台机器上的真实文件系统,
- * 计划文件写进 `~/.claude/plans/`、临时脚本写进 `/tmp`,都很常见。而项目文件接口
- * (`/api/projects/:id/files/content`)只服务项目根以内的路径,于是"产出"列表里点开
- * 这类文件就是一句 `403 Forbidden`(用户截图)。列出来却打不开,是最差的一种状态。
- *
- * ## 为什么这样开放是安全的
- *
- * 这条路由**不接受任意路径**。它把请求路径和**这段会话自己的写入记录**对账:
- * 只有在该会话的显示日志里出现过、且执行成功的 `Write` 目标,才允许读。这不是
- * 放宽权限,而是把已经发生的事读回来 —— 那个文件正是这位用户的这段对话写出来的,
- * 内容本来就来自他自己;真想看,让 agent `cat` 一遍同样能拿到。所以这里给的不是
- * 新能力,只是省掉"再问一遍 agent"。
+ * 这条路由不接受任意路径,只放行该会话显示日志里出现过、且执行成功的 `Write` 目标。
+ * 这不是放宽权限:文件正是这位用户的这段对话写出来的,让 agent `cat` 一遍同样能拿到,
+ * 这里只是省掉"再问一遍 agent"。
  *
  * 三道闸依次是:登录态(authenticateToken,挂在装配处)→ 这段会话对当前视角可见
- * (canViewerSeeSession,和导出 / 删除同一套)→ 路径在该会话的写入集合里(下面)。
+ * (canViewerSeeSession,与导出 / 删除同一套)→ 路径在该会话的写入集合里(下面)。
  * 出参沿用项目文件接口那套加固:类型照实报、`nosniff`、非内联安全类型一律
  * `Content-Disposition: attachment`(防止同源内联渲染一份 agent 写出来的 HTML)。
  */
@@ -55,11 +48,11 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
- * 这段会话**成功写出**的文件集合(绝对路径,已 resolve)。
+ * 这段会话成功写出的文件集合(绝对路径,已 resolve)。
  *
  * 判据与前端的产出列表同源:`Write` 工具 + 结果帧存在且非错。子代理里的写入
  * (`subagentTools` / `childTools`)一并计入 —— 它们同样是这段对话的产出。
- * 注意这里读的是**服务端自己的显示日志**,不看客户端传了什么。
+ * 注意这里读的是服务端自己的显示日志,不看客户端传了什么。
  */
 export function collectSessionWritePaths(messages: readonly unknown[]): Set<string> {
   const writes: WriteRecord[] = [];
@@ -112,7 +105,7 @@ export function collectSessionWritePaths(messages: readonly unknown[]): Set<stri
 /**
  * 会话产出的三道闸:会话可见 → 路径在这段会话的写入集合里 → 是个真文件。
  *
- * 抽出来是因为**签票和直传要各跑一遍同一套判定**。两边各抄一份的结果必然是漂移,
+ * 抽出来是因为签票和直传要各跑一遍同一套判定。两边各抄一份的结果必然是漂移,
  * 而漂移的那一半正好是不带登录态的那条路由 —— 这个仓已经这么破过一次
  * (`usage.routes.ts` 迁出来时漏挂 `canViewerSeeSession`,邻居都有就它没有)。
  */
@@ -208,8 +201,8 @@ export function createSessionOutputsRouter({ authenticateToken }: Deps): Router 
         res.setHeader('Content-Disposition', 'attachment');
       }
       /**
-       * **必须给 source 挂 error**。`pipe()` 只给 dest 挂,ReadStream 自己的
-       * 'error' 无监听就是 EventEmitter 抛 → uncaughtException → **整个进程退出**,
+       * 必须给 source 挂 error。`pipe()` 只给 dest 挂,ReadStream 自己的
+       * 'error' 无监听就是 EventEmitter 抛 → uncaughtException → 整个进程退出,
        * 外层这圈 try/catch 抓不到异步流事件。
        *
        * 触发不需要攻击:`stat()` 成功之后、流 open 之前文件消失就够 —— agent 在
@@ -236,12 +229,12 @@ export function createSessionOutputsRouter({ authenticateToken }: Deps): Router 
    * ## 交给浏览器自己下:签票 + 直传
    *
    * 上面那条 `output` 是页面自己 fetch 用的:整份字节先进内存拼成 blob,没有进度条、
-   * 切页就断。想让浏览器自己下就得让它**导航**过去,而一次普通导航设不了
+   * 切页就断。想让浏览器自己下就得让它导航过去,而一次普通导航设不了
    * `Authorization` 头 —— 于是走短命票据。与项目文件那对完全同形,理由见
    * `server/shared/download-tickets.js`。
    *
-   * 关键一条:**票不是授权,只是身份**。直传口拿票里的 viewer 把上面那三道闸
-   * (可见性 → 写入集合 → 文件存在)**原样重跑一遍**。会话可能在这 5 分钟里被删,
+   * 关键一条:票不是授权,只是身份。直传口拿票里的 viewer 把上面那三道闸
+   * (可见性 → 写入集合 → 文件存在)原样重跑一遍。会话可能在这 5 分钟里被删,
    * 产出文件可能被 agent 重写掉。
    */
 
@@ -261,7 +254,7 @@ export function createSessionOutputsRouter({ authenticateToken }: Deps): Router 
       return res.status(gate.status).json({ error: gate.error });
     }
 
-    // hj:票里记下签发时的 token_version,直传口比对。
+    // 票里记下签发时的 token_version,直传口据此比对。
     const tokenVersion = (req as { user?: { token_version?: number | null } }).user?.token_version ?? 0;
     const ticket = issueSessionOutputTicket({ viewer: { ...viewer, tokenVersion }, sessionId, filePath: gate.resolved });
     return res.json({
@@ -276,9 +269,9 @@ export function createSessionOutputsRouter({ authenticateToken }: Deps): Router 
 }
 
 /**
- * 会话产出的**直传**路由:`/api/downloads/session-output`。
+ * 会话产出的直传路由:`/api/downloads/session-output`。
  *
- * 与项目文件那对同形,单独成一个**不接受 `authenticateToken`** 的工厂 ——
+ * 与项目文件那对同形,单独成一个不接受 `authenticateToken` 的工厂 ——
  * 不带登录态的接口面全部收在 `/api/downloads` 这一个前缀下,审计时一眼能数清。
  */
 export function createSessionOutputDownloadRouter(): Router {
@@ -290,7 +283,7 @@ export function createSessionOutputDownloadRouter(): Router {
     if (!payload) {
       return res.status(401).json({ error: '下载链接已过期,请重新点一次下载。' });
     }
-    // hj(审计 P1-2):票里的人现在还能不能用。
+    // 票里的人现在是否仍可用(账号启用、已审批、token_version 未变)。
     if (!userDb.getUsableUser(payload.viewer.userId, payload.viewer.tokenVersion ?? null)) {
       return res.status(401).json({ error: '下载链接已失效,请重新登录后再下载。' });
     }
@@ -300,7 +293,7 @@ export function createSessionOutputDownloadRouter(): Router {
       return res.status(gate.status).json({ error: gate.error });
     }
 
-    // 这条口**永远是附件** —— 上面那条口要服务媒体预览所以有 inline 白名单,
+    // 这条口永远是附件 —— 上面那条口要服务媒体预览所以有 inline 白名单,
     // 这条口的存在理由就是"存到硬盘"。
     setDownloadHeaders(res, {
       fileName: path.basename(gate.resolved),

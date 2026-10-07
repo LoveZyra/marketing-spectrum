@@ -13,16 +13,13 @@ import MainContentTitle from './MainContentTitle';
 import SessionActionsMenu from './SessionActionsMenu';
 
 /**
- * 主区顶栏(设计稿 2a / 2b)。桌面端的标签切换已移到左侧图标轨(AppRail),
- * 移动端保留顶部标签栏。
+ * 主区顶栏(设计稿 2a / 2b)。桌面端的标签切换在左侧图标轨(AppRail),移动端在这里显示顶部标签栏。
  *
- * ef:整条顶栏收成**一行 44px** —— 左边标题(带就地改名的铅笔)+ 项目芯片
- * (路径 / 会话 id / 常驻状态进标题的悬停提示),右边一枚「…」:导出对话、
- * 常驻会话开关、复制项目路径、删除会话。原来的「常驻会话」胶囊和「导出」按钮撤掉。
+ * 一行 44px:左边标题(带就地改名的铅笔)+ 芯片(路径 / 会话 id / 常驻状态进标题的悬停提示),
+ * 右边一枚「…」:导出对话、常驻会话开关、复制项目路径、删除会话。
  *
- * 「常驻会话」这一行是**真状态**:挂载时问一次 `/runtime`,开 = prewarm、
- * 关 = release(见 server/index.js 的两个 runtime 路由)。之前那个胶囊只认
- * "本页见过它在跑",刷新即忘、也关不掉。
+ * 「常驻会话」开关反映服务端真实状态:切会话和打开菜单时查 `/runtime`,开 = prewarm、
+ * 关 = release(见 server/index.js 的 prewarm 与 runtime 路由)。
  */
 export default function MainContentHeader({
   activeTab,
@@ -63,7 +60,7 @@ export default function MainContentHeader({
     void refreshResident(sessionId);
   }, [sessionId, activeTab, refreshResident]);
 
-  // 本页见过它在跑 = 服务端一定给它建了运行时(MainContent 的老判据),
+  // 本页见过它在跑 = 服务端一定给它建了运行时(MainContent 的判据),
   // 拿来做乐观更新:回合一开跑就把开关点亮,不用等下一次查询。
   useEffect(() => {
     if (isPersistentSession) setResident(true);
@@ -79,7 +76,7 @@ export default function MainContentHeader({
         options,
       );
     } catch {
-      // 失败给提示,不再静默(点了没反应最困惑);当前会话不受影响。
+      // 失败要提示(点了没反应最让人困惑);当前会话不受影响。
       toast({ message: t('tooltips.exportSessionFailed', { defaultValue: '导出会话失败,请重试。' }), variant: 'error' });
     } finally {
       setIsExporting(false);
@@ -117,7 +114,7 @@ export default function MainContentHeader({
 
   const copyProjectPath = async () => {
     if (!projectPath) return;
-    // 生产走 HTTP(127.0.0.1:8080 反代),navigator.clipboard 不可用 —— 走带 execCommand 回退的封装。
+    // 生产走 HTTP(127.0.0.1:8080 反代),非安全上下文里 navigator.clipboard 不可用,所以用带 execCommand 回退的封装。
     const copied = await copyTextToClipboard(projectPath);
     toast(copied
       ? { message: t('mainContent.pathCopied', { defaultValue: '已复制项目路径' }), variant: 'success' }

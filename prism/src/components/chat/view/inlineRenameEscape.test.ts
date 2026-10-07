@@ -1,14 +1,12 @@
 /**
- * 行内改名时按 Esc,**不能顺带把正在跑的那一轮也中止掉**。
+ * 行内改名时按 Esc,不能顺带把正在跑的那一轮也中止掉。
  *
- * gq:`ChatInterface` 的全局 Esc 挂在 document 的 **capture 阶段**,比输入框自己的
- * `onKeyDown`(React 的冒泡阶段)先跑。它原本只放行 dialog / 交互面板 / 查找条 ——
- * 侧栏改项目名、改会话名、文件树改文件名这三处都不在其中,于是 `canAbortSession`
- * 为真时,按 Esc 取消改名会**同时**把这一轮 run 中止掉。
+ * `ChatInterface` 的全局 Esc 挂在 document 的 capture 阶段,比输入框自己的
+ * `onKeyDown`(React 的冒泡阶段)先跑。侧栏改项目名、改会话名、文件树改文件名这三处
+ * 不是 dialog,必须单独放行,否则 `canAbortSession` 为真时按 Esc 取消改名会同时中止这一轮。
  *
- * 判据钉两头:放行的判据是**事件源**(closest,不是 querySelector ——
- * 别处开着改名框不该影响你在输入框外按 Esc 中止本轮),
- * 以及全仓每一个行内改名输入框都真的带上了这个标记。
+ * 钉两头:放行的判据是事件源(closest,不是 querySelector —— 别处开着改名框
+ * 不该影响在输入框外按 Esc 中止本轮),以及全仓每一个行内改名输入框都带上了这个标记。
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

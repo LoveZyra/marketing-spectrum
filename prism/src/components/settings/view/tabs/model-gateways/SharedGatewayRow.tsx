@@ -10,7 +10,7 @@ import { authTypeBadge, describeDefaultKey, maskKey } from './gatewayLogic';
 import { errorMessage, gatewaysAdminApi, type BasicUser, type GatewayTestResult, type GatewayView } from './gatewaysApi';
 
 /**
- * hq:root 的共享网关一行 —— 名字 / 地址 / 鉴权方式 / 默认 key 状态 / 启用开关 / 模型数,
+ * root 的共享网关一行:名字 / 地址 / 鉴权方式 / 默认 key 状态 / 启用开关 / 模型数,
  * 行内展开:编辑、设置 / 更换 / 清除默认 key、成员 key;测试连接的结果挂在行上。
  * 删除:还有目录模型挂着时服务端回 409(GATEWAY_IN_USE),把它的原话显示在行上。
  */

@@ -28,6 +28,8 @@ import {
   type ServerQueueMap,
 } from '../utils/serverQueue';
 import { carryDraftKey, type SessionRemovedInfo } from '../utils/sessionRemoved';
+import { resubscribeAfterReconnect } from '../utils/reconnectSubscribe';
+import { resolveAliasReal } from '../utils/modelAliasReal';
 import { safeLocalStorage } from '../utils/chatStorage';
 import { fileRewindTurns } from '../utils/fileRewind';
 
@@ -40,13 +42,12 @@ import CheckpointHistoryPanel from './subcomponents/CheckpointHistoryPanel';
 import ChatWorkPanel from './subcomponents/ChatWorkPanel';
 import SessionRemovedNotice from './subcomponents/SessionRemovedNotice';
 /**
- * G3:斜杠命令的结果弹窗(/models、/cost 这类)带着模型卡片、实测按钮、一整套
- * 表格渲染,而它只在用户真的敲了斜杠命令时才出现 —— 打包进聊天主块等于让每个人
- * 在首屏为一个多数会话里根本不会打开的弹窗付费。
+ * 斜杠命令的结果弹窗(/models、/cost 这类)带着模型卡片、实测按钮和整套表格渲染,
+ * 只在用户敲了斜杠命令时才出现,所以懒加载,不进聊天主包、不拖慢首屏。
  */
 const CommandResultModal = lazy(() => import('./subcomponents/CommandResultModal'));
 
-/** hq:设置页「模型网关」标签(SETTINGS_MAIN_TABS 里那一行;类型钉住,改名会编译失败)。 */
+/** 设置页「模型网关」标签(SETTINGS_MAIN_TABS 里那一项;用类型钉住,改名会编译失败)。 */
 const GATEWAY_SETTINGS_TAB: SettingsMainTab = 'gateways';
 
 function ChatInterface({
@@ -71,20 +72,19 @@ function ChatInterface({
   newSessionTrigger,
   onStartNewSession,
 }: ChatInterfaceProps) {
-  const { subscribe } = useWebSocket();
+  const { subscribe, wasSentHere } = useWebSocket();
   const { t } = useTranslation('chat');
 
   const sessionStore = useSessionStore();
-  // 流式缓冲与定时器都**按会话分桶**。此前是单个共享缓冲 + 单个定时器,
-  // 两条 run 同时向本浏览器推流时 token 会交错进同一个缓冲,当前会话气泡
-  // 就会短暂显示另一段对话的字(complete 后才自愈)。分桶后各刷各的。
+  // 流式缓冲与定时器按会话分桶:多条 run 可能同时向本浏览器推流,共用一个缓冲会让
+  // token 交错,当前会话的气泡里短暂出现另一段对话的字。
   const streamTimerRef = useRef<Map<string, number>>(new Map());
   const accumulatedStreamRef = useRef<Map<string, string>>(new Map());
-  // prism: latest post-turn changed-files summary (git checkpoint feature).
+  // Latest post-turn changed-files summary (from the turn's git checkpoint).
   const [changedFiles, setChangedFiles] = useState<ChangedFilesState | null>(null);
-  // Prism: checkpoint history drawer visibility.
+  // Checkpoint history drawer.
   const [showCheckpoints, setShowCheckpoints] = useState(false);
-  // F1:会话内查找条(Ctrl+F)。
+  // 会话内查找条(Ctrl+F)。
   const [findBarOpen, setFindBarOpen] = useState(false);
   // When each session's `chat.subscribe` was last sent; idle acks older than
   // a later local request are discarded as stale.
@@ -94,26 +94,19 @@ function ChatInterface({
   // server replays only the events this client actually missed.
   const lastSeqRef = useRef(new Map<string, { runId: string | null; seq: number }>());
   /**
-   * fj:重连补订要读"哪些会话在跑",但这个值不该让 `handleWebSocketReconnect`
-   * 每轮换一次身份(它是 WebSocketContext 的 onReconnect 依赖)。
+   * 重连补订要读"哪些会话在跑",但这个值不该让 `handleWebSocketReconnect`
+   * 每次都换身份(它是 WebSocketContext 的 onReconnect 依赖),所以经 ref 读。
    */
   const processingSessionsRef = useRef(processingSessions);
   processingSessionsRef.current = processingSessions;
 
   /**
-   * 清流式缓冲。**不传 sessionId 就是全清** —— 只有整体卸载才该那样。
+   * 清流式缓冲。传 sessionId 只清那一条;不传是全清,只该在整体卸载时调用。
    *
-   * fj:此前只有全清一种。而 `updateStreaming` 是**整体替换**语义,它依赖累积
-   * 缓冲一直是"从头到现在的全文";缓冲被清空后,后台会话的下一批 delta 从空串
-   * 开始累积,`stream_end` 时那一小段残片就被当成完整回答提交进 realtime。
-   *
-   * 触发路径很日常:A 正在流式输出时点侧栏的**项目行**(或「新建会话」、
-   * 或删掉当前查看的另一条会话)—— 都会让 `selectedSession` 变 null,走进
-   * `useChatSessionState` 那个通用分支。同一文件的注释早就写明"全清只该发生在
-   * 整体卸载 / 新建会话",但那个调用点并不是新建会话。
-   *
-   * 切回 A 看到的是一条**残缺的**助手气泡;而服务端那份完整的随后又被拉回来,
-   * 两份并排,且因为正文不一致,`pruneRealtimeSupersededByServer` 也清不掉它。
+   * 缓冲的生命周期由流自己管(`stream_end` / `complete` 各自删掉自己的桶,见
+   * useChatRealtimeHandlers),切换视图不清。`updateStreaming` 是整体替换语义,依赖累积缓冲
+   * 一直是"从头到现在的全文":流没结束就清掉,后续 delta 从空串累积,`stream_end` 时残片
+   * 被当成完整回答提交,与随后拉回的服务端完整版并排,`pruneRealtimeSupersededByServer` 也清不掉。
    */
   const resetStreamingState = useCallback((sessionId?: string | null) => {
     if (sessionId) {
@@ -200,7 +193,6 @@ function ChatInterface({
     newSessionTrigger,
     processingSessions,
     onSessionIdle,
-    resetStreamingState,
     statusCheckSentAtRef,
     lastSeqRef,
     sessionStore,
@@ -210,8 +202,8 @@ function ChatInterface({
   // the session gateway before the first send. Record it locally and put it
   // in the URL — this id never changes again, so there is no later handoff.
   const handleSessionEstablished = useCallback<NonNullable<ChatInterfaceProps['onSessionEstablished']>>((sessionId, context) => {
-    // fi:用 markSessionEstablished 而不是裸 setCurrentSessionId —— 要记下
-    // "这个 id 是本视图建立的",路由跟上之前才有资格撑着正文(见 useChatSessionState)。
+    // 用 markSessionEstablished 而不是裸 setCurrentSessionId:要记下"这个 id 是本视图建立的",
+    // 路由跟上之前才有资格撑着正文(见 useChatSessionState)。
     markSessionEstablished(sessionId);
     onSessionEstablished?.(sessionId, context);
     onNavigateToSession?.(sessionId);
@@ -327,7 +319,7 @@ function ChatInterface({
   }, [resendUserMessage]);
 
   /**
-   * gk:「这条会话已被删除」态,按会话分键。
+   * 「这条会话已被删除」态,按会话分键。
    *
    * 两条路进来:服务端推的 `session_removed`(别处永久删除)、`chat.send` 撞到
    * `SESSION_NOT_FOUND`(页面开着的时候行没了)。恢复后的 `session_upserted` 撤掉它。
@@ -361,9 +353,9 @@ function ChatInterface({
   const handleStartNewSessionFromRemoved = useCallback(() => {
     if (!selectedProject || !onStartNewSession) return;
     /**
-     * 要带走的可能是两段:输入框里正在打的,和**切态时排队卡上那条**
+     * 要带走的可能是两段:输入框里正在打的,和切态时排队卡上那条
      * (回合跑着时回车排进去的那句;切态会把它从盘上清掉,所以由 info 带过来)。
-     * 两段都有就都带上 —— 丢掉任何一段都是"我明明打了字"。
+     * 两段都有就都带上,丢掉任何一段都是"我明明打了字"。
      */
     const parts = [viewedRemovedInfo?.queuedText ?? '', input].map((part) => part.trim()).filter(Boolean);
     const draft = parts.join('\n\n');
@@ -372,74 +364,39 @@ function ChatInterface({
     onStartNewSession(selectedProject);
   }, [input, onStartNewSession, selectedProject, viewedRemovedInfo?.queuedText]);
 
-  // On WebSocket reconnect, re-fetch the current session's messages from the
-  // server so missed streaming events are shown, then re-subscribe — the
-  // `chat_subscribed` ack restores or clears the activity indicator, replays
-  // missed live events, and re-attaches a still-running stream to this socket.
-  const handleWebSocketReconnect = useCallback(async () => {
-    if (!selectedProject || !selectedSession) return;
-    await sessionStore.refreshFromServer(selectedSession.id);
+  // On WebSocket reconnect, re-subscribe every session this client knows is
+  // running (plus the one being viewed) — the `chat_subscribed` ack restores
+  // or clears the activity indicator, replays missed live events, and
+  // re-attaches a still-running stream to this socket — then re-fetch the
+  // viewed session's messages so missed streaming events are shown.
+  // 顺序与补订范围见 resubscribeAfterReconnect:停在项目首页 / 新会话页时也要补订后台在跑的会话。
+  const handleWebSocketReconnect = useCallback(() => resubscribeAfterReconnect({
+    viewedSessionId: selectedSession?.id ?? currentSessionId ?? null,
+    processingSessionIds: processingSessionsRef.current?.keys() ?? [],
+    cursorOf: (sessionId) => lastSeqRef.current.get(sessionId),
+    sendMessage,
+    markSubscribed: (sessionId, at) => statusCheckSentAtRef.current.set(sessionId, at),
+    refresh: (sessionId) => sessionStore.refreshFromServer(sessionId),
+  }), [currentSessionId, selectedSession?.id, sendMessage, sessionStore]);
 
-    /**
-     * fj:补订**所有本客户端知道在跑的会话**,不只是当前查看的那条。
-     *
-     * 服务端的推流集合是按 socket 记的(`sessionViewers`,socket 一关就摘除),
-     * 所以新 socket 对后台正在跑的会话**不再是 viewer** —— 那条会话的实时帧从此
-     * 收不到,一直到用户切进去时主 effect 才重新订阅并靠 `lastSeq` 补发。
-     * 表现是"在跑但没输出"(转圈全靠 5 秒轮询撑着)。
-     *
-     * `chat.subscribe` 的 `sessions` 本来就是数组,一并带上即可。
-     */
-    const targets = new Map<string, { sessionId: string; lastSeq: number; lastRunId: string | null }>();
-    const track = (sessionId: string) => {
-      if (!sessionId || targets.has(sessionId)) return;
-      targets.set(sessionId, {
-        sessionId,
-        lastSeq: lastSeqRef.current.get(sessionId)?.seq ?? 0,
-        lastRunId: lastSeqRef.current.get(sessionId)?.runId ?? null,
-      });
-    };
-    track(selectedSession.id);
-    for (const sessionId of processingSessionsRef.current?.keys() ?? []) track(sessionId);
-
-    /**
-     * fj:只在**确认送达**之后才记发送时刻。
-     *
-     * `statusCheckSentAtRef` 的用途是"丢弃比这次请求更早的 idle ack";无条件记
-     * 就等于在等一个不会来的 ack。同一件事在 `useChatSessionState` 里专门写了
-     * `if (sent)` 并附了注释,这里破坏了同一个不变量 —— 而且这行在
-     * `await refreshFromServer` 之后执行,那段 await 期间 socket 完全可能又断了。
-     */
-    const sent = sendMessage({ type: 'chat.subscribe', sessions: [...targets.values()] });
-    if (sent) {
-      const now = Date.now();
-      for (const sessionId of targets.keys()) statusCheckSentAtRef.current.set(sessionId, now);
-    }
-  }, [selectedProject, selectedSession, sendMessage, sessionStore]);
-
-  // dr:实时 changed_files 帧转的伪 Write 消息(本轮 Bash/python 写盘的文件
-  // 即刻进工作面板,不等落库基线 refetch)。会话切换清空;刷新后由基线接管。
+  // 实时 changed_files 帧转成的伪 Write 消息:本轮 Bash / python 写盘的文件即刻进工作面板,
+  // 不等落库基线 refetch。会话切换清空;刷新后由基线接管。
   const [liveChangedMessages, setLiveChangedMessages] = useState<ChatMessage[]>([]);
 
-  // prism: reset the changed-files card when switching conversations.
+  // Reset the changed-files card and the live frames when switching conversations.
   useEffect(() => {
     setChangedFiles(null);
     setLiveChangedMessages([]);
-    // fj:依赖要含 currentSessionId —— 新会话页上 `selectedSession?.id` 恒为
-    // undefined,只靠它这个 effect 永远不会重跑。
+    // 依赖要含 currentSessionId:新会话页上 `selectedSession?.id` 恒为 undefined,
+    // 只靠它这个 effect 永远不会重跑。
   }, [selectedSession?.id, currentSessionId]);
 
   const handleChangedFiles = useCallback((payload: { sessionId: string | null; checkpointId: string | null; files: unknown[]; truncated?: boolean; cwd?: string | null }) => {
     const activeId = selectedSession?.id || currentSessionId || null;
     /**
-     * fj:归属不明或不匹配**一律丢弃**。
-     *
-     * 原来是 `payload.sessionId && activeId && payload.sessionId !== activeId` ——
-     * `activeId` 为 null(新会话页)时整个条件短路成假,**帧被放行**。于是停在
-     * 空白的新会话页上,后台某条会话跑完一轮,这里就冒出「本轮改动的文件」卡片,
-     * 右侧工作面板的产出里列着另一条对话写的文件,点进去还能直接打开。
-     * 而下面那个清空 effect 只依赖 `selectedSession?.id`(此时恒为 undefined),
-     * 也不会把它清掉。
+     * 归属不明或不匹配的帧一律丢弃,包括 activeId 为 null(新会话页)的情况:
+     * 否则停在空白新会话页上时,后台别的会话跑完一轮,这里就会冒出「本轮改动的文件」卡,
+     * 工作面板的产出里列着另一条对话写的文件。
      */
     if (!activeId || (payload.sessionId && payload.sessionId !== activeId)) return;
     setChangedFiles({
@@ -454,7 +411,7 @@ function ChatInterface({
   }, [selectedSession?.id, currentSessionId]);
 
   /**
-   * F7:服务端排队中的那条消息(每会话至多一条)。
+   * 服务端排队中的那条消息(每会话至多一条,按会话分键,见 utils/serverQueue)。
    *
    * 与 composer 自己那份浏览器内排队是两回事:这一份存在服务端,刷新页面、
    * 换设备、关掉标签页之后都还在,所以只能由服务端的帧驱动,不能靠本地推断。
@@ -472,26 +429,20 @@ function ChatInterface({
   const serverQueued = queuedForSession(serverQueue, viewedSessionId);
 
   const handleCancelServerQueued = useCallback(() => {
-    /**
-     * B4:取消的是**正在看的**这条会话的排队,不是"状态里存着的那条"。
-     *
-     * 原来读的是 `serverQueued.sessionId` —— 卡片渲染出来之后、点下去之前
-     * 若有一帧别的会话的 queued 落地,状态就换成了那一条,这一点取消的是
-     * 另一条会话排队中的消息。
-     */
+    // 取消的是正在看的这条会话的排队,按 viewedSessionId 发。
     if (!viewedSessionId) return;
     sendMessage({ type: 'chat.cancel-queued', sessionId: viewedSessionId });
   }, [viewedSessionId, sendMessage]);
 
   /**
-   * ho(ho-1):**插话(合流进 CLI 队列的消息)的状态**,按 clientMessageId 记。
+   * 插话(合流进 CLI 队列的消息)的状态,按 clientMessageId 记。
    * ACK 带着 mergedUuid 时记 pending(气泡上「模型读到前可撤回」);送达就删;撤回记 withdrawn(气泡置灰)。
    */
   const [mergedMessages, setMergedMessages] = useState<Map<string, { sessionId: string; mergedUuid: string; state: MergedMessageState }>>(() => new Map());
   const handleSendAckedWithMerge = useCallback((ackSessionId: string, clientMessageId: string, mergedUuid?: string | null) => {
     handleSendAcked(ackSessionId, clientMessageId);
     if (!mergedUuid) return;
-    // ho(复审):合流进了正在跑的这一轮 —— 本地回声不是回合边界(时间轴 / 产出卡别把这一轮切断)
+    // 合流进了正在跑的这一轮:本地回声不是回合边界,时间轴 / 产出卡不能在这里把这一轮切断。
     sessionStore.markInterjection(ackSessionId, clientMessageId);
     setMergedMessages((current) => {
       const next = new Map(current);
@@ -525,7 +476,7 @@ function ChatInterface({
   }), [mergedMessages, sendMessage]);
 
   /**
-   * ho(hq-1):**后台任务条** —— 服务端每次 `background_tasks` 都是全量,按会话替换。
+   * 后台任务条:服务端每次推的 `background_tasks` 都是全量,按会话整体替换。
    */
   const [backgroundTasksBySession, setBackgroundTasksBySession] = useState<Record<string, Array<{ taskId: string; taskType: string; description: string }>>>({});
   const handleBackgroundTasks = useCallback((sessionId: string, tasks: Array<{ taskId: string; taskType: string; description: string }>) => {
@@ -552,18 +503,18 @@ function ChatInterface({
     }
   }, [viewedSessionId, t]);
   /**
-   * ho(hq-1):**「转到后台」只对前台子代理出现。**
+   * 「转到后台」只对前台子代理出现。
    *
-   * 容器内实测(2.1.285,无头模式):`backgroundTasks()` 对前台子代理立刻生效 —— Agent 调用当场返回
-   * "Async agent launched",这一轮接着往下走;对前台 Bash 却只是登记成后台任务(task_started),
-   * 工具调用照样卡到命令跑完才返回,这一轮并没有往下走。按钮出在 Bash 上就是一个点了没用的按钮,
-   * 所以只在有前台子代理在跑时给,并按它的 tool_use id 定点转(不顺手把同时在跑的 Bash 也登记成后台)。
+   * 无头模式下 CLI 的 `backgroundTasks()` 对前台子代理立刻生效:Agent 调用当场返回
+   * "Async agent launched",这一轮接着往下走;对前台 Bash 只登记成后台任务(task_started),
+   * 工具调用照样等到命令跑完才返回,按钮出在 Bash 上点了也没用。所以只在有前台子代理在跑时给,
+   * 并按它的 tool_use id 定点转(不顺带把同时在跑的 Bash 也登记成后台)。
    */
   const foregroundSubagentId = useMemo(() => {
     if (!isProcessing) return null;
     for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
       const message = chatMessages[index];
-      // 只看这一轮(复审:被停掉的子代理永远拿不到 toolResult,扫全量会让之后每一轮都冒出这个按钮)
+      // 只看这一轮:被停掉的子代理永远拿不到 toolResult,扫全量会让之后每一轮都冒出这个按钮。
       if (message?.type === 'user' && !message.interjection) break;
       if (!message?.isToolUse || (message.toolName !== 'Agent' && message.toolName !== 'Task') || message.toolResult) continue;
       const input = (message.toolInput && typeof message.toolInput === 'object' ? message.toolInput : {}) as { run_in_background?: unknown };
@@ -613,13 +564,15 @@ function ChatInterface({
     // 排队被中止带走时,正文退回输入框(只在当前正看着这条会话、且输入框为空时)。
     onServerQueueReturned: (sid, content) =>
       sid === (selectedSession?.id ?? currentSessionId) && restoreQueuedContent(content),
+    // 退回的正文只给发出这条消息的标签页(见 planQueueCancelled)
+    wasSentHere,
     onSessionRemoved: handleSessionRemoved,
     onSessionRestored: handleSessionRestored,
   });
 
   /**
-   * hl(09-24 P1-12):全局 Esc 的根容器 —— 判"聊天页签此刻看得见"用它。
-   * ChatInterface 在 Shell / 文件 / 任务页签下只是 `hidden`,不卸载;监听器还挂着。
+   * 全局 Esc 的根容器,用来判断"聊天页签此刻看得见"。
+   * ChatInterface 在 Shell / 文件 / 任务页签下只是 `hidden`,不卸载,监听器还挂着。
    */
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -649,21 +602,16 @@ function ChatInterface({
         return;
       }
 
-      // 这个监听挂在 document 的 capture 阶段、且注册得早,所以它比弹层/面板自己
-      // 的 Esc(冒泡阶段)先跑,`defaultPrevented` 这时还是 false —— 于是在"Skip·Esc"
-      // 的问答面板里、或 /models 这类弹窗里按 Esc,会直接把整轮 run 中止掉。
-      // 有它们在场就放行,让各自的 Esc 生效,不抢。查找条同理。
-      // hl:斜杠菜单 / @ 下拉(role=listbox / menu)在场时 Esc 是"关掉它们"。
+      // 这个监听挂在 document 的 capture 阶段,比弹层 / 面板自己的 Esc(冒泡阶段)先跑,
+      // `defaultPrevented` 这时还是 false。所以对话框、问答面板、查找条、斜杠菜单 / @ 下拉
+      // (role=listbox / menu)在场时直接放行,让它们各自的 Esc 生效。
       if (document.querySelector('[role="dialog"], [data-interactive-prompt="true"], [data-find-bar-open="true"], [role="listbox"], [role="menu"]')) {
         return;
       }
 
-      // gq:**行内改名的输入框同理,但判据是事件源不是"在不在场"。**
-      // 侧栏改项目名/会话名、文件树改文件名时按 Esc,本意是"取消这次改名";
-      // 而它们既不是 dialog 也没有遮罩,上面那条拦不住 —— 于是一边取消了改名,
-      // 一边把正在跑的那一轮也中止了(`canAbortSession` 为真时必然发生)。
-      // 用 closest 而不是 querySelector:别的地方开着改名框,不该影响你在
-      // 输入框外按 Esc 中止本轮。
+      // 行内改名框(侧栏改项目名 / 会话名、文件树改文件名)同样放行,但判据是事件源:
+      // 那里按 Esc 是取消改名,它们既不是 dialog 也没有遮罩,上一条拦不住。
+      // 用 closest 而不是 querySelector:别处开着改名框,不该影响在框外按 Esc 中止本轮。
       if (from?.closest?.('[data-inline-rename="true"]')) {
         return;
       }
@@ -718,8 +666,8 @@ function ChatInterface({
     handlePermissionDecision,
   }), [pendingPermissionRequests, handlePermissionDecision]);
 
-  // ChatComposer 做了 memo,下面这些原本写成内联箭头/内联表达式的 props 得
-  // 收敛成稳定引用,否则每次流式 tick 都会击穿浅比较,memo 白做。
+  // ChatComposer 做了 memo,下面这些 props 要收敛成稳定引用(不能写成内联箭头 / 内联表达式),
+  // 否则每次流式 tick 都会击穿浅比较。
   const handleRemoveImage = useCallback((index: number) => {
     setAttachedImages((previous) => previous.filter((_, currentIndex) => currentIndex !== index));
   }, [setAttachedImages]);
@@ -731,8 +679,8 @@ function ChatInterface({
   const handleShowCheckpoints = useCallback(() => setShowCheckpoints(true), []);
 
   /**
-   * hn(B4):当前模型在目录里的那一条(输入框 chip 显示它的名字与厂商图标)。
-   * 别名组的条目也在 OPTIONS 里,但它们没有厂商 —— chip 仍走下面的"别名 → 真实模型"。
+   * 当前模型在目录里的那一条(输入框 chip 显示它的名字与厂商图标)。
+   * 别名组的条目也在 OPTIONS 里,但没有厂商,chip 仍走下面的"别名 → 真实模型"。
    */
   const activeModelOption = useMemo(() => {
     const value = activeSessionModel ?? claudeModel;
@@ -745,24 +693,25 @@ function ChatInterface({
     return Number.isFinite(used) && used > 0 ? used : null;
   }, [tokenBudget]);
 
-  const activeModelReal = useMemo(() => {
-    // 优先级:新鲜的实测(端到端真相)> 配置映射(读 settings,随改随新)。
-    // 实测过期时不用它 —— 但配置映射恰恰在这时是新值,正好补位。
-    const alias = activeSessionModel ?? claudeModel;
-    const probed = modelMappingsStale ? null : (modelMappings[alias]?.actualModel ?? null);
-    return probed ?? modelConfigMappings[alias]?.configuredModel ?? null;
-  }, [activeSessionModel, claudeModel, modelMappingsStale, modelMappings, modelConfigMappings]);
+  // 别名此刻实际打到哪个模型(新鲜实测 > 配置映射),判据见 resolveAliasReal。
+  const aliasSources = useMemo(
+    () => ({ probed: modelMappings, configured: modelConfigMappings, stale: modelMappingsStale }),
+    [modelMappings, modelConfigMappings, modelMappingsStale],
+  );
+  const activeModelReal = useMemo(
+    () => resolveAliasReal(activeSessionModel ?? claudeModel, aliasSources),
+    [activeSessionModel, claudeModel, aliasSources],
+  );
 
-  /** ho:下拉里别名行的「→ 真实模型」—— 与芯片同一套优先级(新鲜实测 > 配置映射)。 */
+  /** 下拉里别名行的「→ 真实模型」,与芯片同一套判据。 */
   const modelAliasTargets = useMemo(() => {
     const out: Record<string, string | null> = {};
     for (const option of providerModelCatalog.claude?.OPTIONS ?? []) {
       if (option.group === 'catalog') continue;
-      const probed = modelMappingsStale ? null : (modelMappings[option.value]?.actualModel ?? null);
-      out[option.value] = probed ?? modelConfigMappings[option.value]?.configuredModel ?? null;
+      out[option.value] = resolveAliasReal(option.value, aliasSources);
     }
     return out;
-  }, [providerModelCatalog, modelMappingsStale, modelMappings, modelConfigMappings]);
+  }, [providerModelCatalog, aliasSources]);
 
   const pickerSessionId = currentSessionId || selectedSession?.id || null;
   const handleSelectModelFromDropdown = useCallback(
@@ -770,7 +719,7 @@ function ChatInterface({
     [selectProviderModel, pickerSessionId],
   );
   /**
-   * hq:模型菜单 / `/models` 里不能用的模型旁「去填 key」—— 开 设置 → 模型网关。
+   * 模型菜单 / `/models` 里不能用的模型旁的「去填 key」:打开 设置 → 模型网关。
    * 走 AppContent 的 openSettings(tab)(命令面板、代码编辑器开指定标签也是这条路);没有设置入口就不出这个链接。
    */
   const handleOpenGatewaySettings = useMemo(
@@ -783,14 +732,13 @@ function ChatInterface({
     [commandQuery, frequentCommands],
   );
 
-  // Mirrors ChatComposer's own visibility check so the message pane can
-  // reserve enough bottom space to keep the floating status tab from
-  // overlapping the last message.
+  // The activity indicator yields while a permission request is pending: the composer's
+  // approval banner is the status then.
   const hasActivityIndicator = Boolean(sessionActivity && pendingPermissionRequests.length === 0);
 
-  // do/dq:右侧工作面板的数据。基线 = 服务端从**全量历史**滤出的工具帧
-  // (修长会话刷新后首屏只有尾 20 条、清单与产出凭空变少的问题);实时增量 =
-  // 已加载消息窗口。两段直接拼接 —— 折叠函数对重放幂等,重叠段不会算错。
+  // 右侧工作面板的数据。基线 = 服务端从全量历史滤出的工具帧(长会话刷新后首屏只加载尾部一段,
+  // 只靠消息窗口的话清单与产出会凭空变少);实时增量 = 已加载的消息窗口。
+  // 两段直接拼接:折叠函数对重放幂等,重叠段不会算错。
   const {
     baseMessages: workBaseMessages,
     revertedPaths: workRevertedPaths,
@@ -802,15 +750,15 @@ function ChatInterface({
     selectedSession?.id || currentSessionId || null,
     isProcessing,
   );
-  // gy:我对本会话各条回答的反馈(👍/👎 与效果调查卡);会话切换整表重拉。
+  // 当前用户对本会话各条回答的反馈(赞 / 踩与效果调查卡);切换会话时整表重拉。
   const {
     byMessageId: feedbackByMessageId,
     submit: submitFeedback,
     remove: removeFeedback,
   } = useMessageFeedback(selectedSession?.id || currentSessionId || null);
   /**
-   * ej:对话正文下面那张「产出」卡的数据,来自**服务端按全量历史算好的**回合
-   * 映射(不是从当前消息窗口现推)。展示名要项目根,所以在这里落地成卡片形状。
+   * 对话正文下面那张「产出」卡的数据,来自服务端按全量历史算好的回合映射
+   * (不是从当前消息窗口现推)。展示名要项目根,所以在这里落地成卡片形状。
    */
   const serverTurnOutputs = useMemo(
     () => turnOutputsFromServer(serverTurnOutputsRaw, selectedProject?.fullPath || selectedProject?.path),
@@ -824,8 +772,8 @@ function ChatInterface({
   );
   const sessionChecklist = useMemo(() => extractSessionChecklistWithTurn(workMessages), [workMessages]);
   const latestTodos = sessionChecklist.items;
-  // dt:折叠完再按"已回滚"集合做减法 —— 窗口里的旧 Write 帧会把已回滚的
-  // 文件加回来,基线单删不够;回滚后重写的文件不在集合里,照常显示。
+  // 折叠完再按"已回滚"集合做减法:窗口里的旧 Write 帧会把已回滚的文件加回来,
+  // 只删基线不够;回滚后重写的文件不在集合里,照常显示。
   const sessionOutputs = useMemo(() => {
     const outputs = extractSessionOutputs(workMessages);
     return workRevertedPaths.size > 0
@@ -834,8 +782,6 @@ function ChatInterface({
   }, [workMessages, workRevertedPaths]);
 
   if (!selectedProject) {
-    // This used to be a four-way ternary over `provider`. Claude is the only
-    // provider left, so the label is a single lookup.
     const selectedProviderLabel = t('messageTypes.claude');
 
     return (
@@ -853,8 +799,7 @@ function ChatInterface({
   }
 
   /**
-   * 首页空态判定。ef 曾用它把输入框搬进空态(composerSlot);ex 还原版式后
-   * 输入框始终在消息流下方,这里只剩下"给滚动容器铺点阵画布 + 居中"这一个用途。
+   * 首页空态判定:只用于给滚动容器铺点阵画布并居中(输入框始终在消息流下方)。
    */
   const isHome =
     chatMessages.length === 0
@@ -947,13 +892,12 @@ function ChatInterface({
   return (
     <PermissionContext.Provider value={permissionContextValue}>
     <MergedMessagesContext.Provider value={mergedMessagesValue}>
-      {/* do:对话区分两栏 —— 左边消息流 + 输入框,右边 Cowork 式工作面板
-          (上任务清单、下产出文件)。面板两块都空时自己不渲染,布局即回到单栏。 */}
+      {/* 对话区分两栏:左边消息流 + 输入框,右边工作面板(上任务清单、下产出文件)。
+          面板两块都空时自己不渲染,布局即回到单栏。 */}
       <div ref={rootRef} className="flex h-full min-h-0">
-      {/* dy:正文自己的下限 —— 低于这个数输入框就没法用了。
-          这 280 和 EditorSidebar 的 MIN_CHAT_BODY_WIDTH 是**同一个数**,必须
-          一起改:那边按它给预览栏发宽度,这边是硬约束。以前这里是 min-w-0,
-          预览栏一开正文就被压到 0(输入框塌成一条竖着堆芯片的窄条)。 */}
+      {/* 正文宽度下限,低于它输入框就没法用了。这 280 和 EditorSidebar 的 MIN_CHAT_BODY_WIDTH
+          是同一个数,必须一起改:那边按它给预览栏分宽度,这边是硬约束。不设下限的话,
+          预览栏一开正文就被压到 0。 */}
       <div className="flex h-full min-h-0 min-w-[280px] flex-1 flex-col">
         <div className="relative flex min-h-0 flex-1 flex-col">
           <ChatFindBar
@@ -1022,7 +966,7 @@ function ChatInterface({
               onReverted={() => {
                 const activeId = selectedSession?.id || currentSessionId;
                 if (activeId) void sessionStore.refreshFromServer(activeId);
-                // dt:回滚/还原落了 files_reverted 反向帧 —— 重拉基线,
+                // 回滚 / 还原落了 files_reverted 反向帧:重拉基线,
                 // 产出面板立刻与磁盘对齐(已回滚文件撤下)。
                 refreshWorkFrames();
               }}
@@ -1077,7 +1021,7 @@ function ChatInterface({
           onReverted={() => {
             const activeId = selectedSession?.id || currentSessionId;
             if (activeId) void sessionStore.refreshFromServer(activeId);
-            // dt:历史抽屉回滚同样落了反向帧 —— 面板一并对齐。
+            // 历史抽屉的回滚同样落了反向帧,面板一并对齐。
             refreshWorkFrames();
           }}
         />

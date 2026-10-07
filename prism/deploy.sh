@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prism 新服务器部署脚本。在解包后的 prism 目录里运行:bash deploy.sh
 #
-# 做四件事:环境体检 → 装依赖 → 生成 .env → 构建。**不会**自动起服务,
+# 做四件事:环境体检 → 装依赖 → 生成 .env → 构建。不会自动起服务,
 # 因为端口、反代、密钥这些得你确认过再启。
 #
 # 幂等:重复跑不会覆盖已有的 .env(会提示),依赖与构建照常刷新。
@@ -41,7 +41,7 @@ else
   echo "     PRISM_APPROVAL_REQUIRED=0   逃生开关:先设 0 验证零破坏,再去掉开审批"
   echo "   可选(要一起跑营销诊断服务时才需要):"
   echo "     PRISM_MA_API_TARGET / PRISM_MA_API_AUTOSTART / PRISM_MA_API_PYTHON"
-  echo "     PRISM_ALLOW_QUERY_TOKEN=1   浏览器 WebSocket 只能用 ?token= 传凭据,不开则对话/shell 全挂"
+  echo "   另外要配好 ~/.claude/settings.json(网关地址与令牌、模型映射等),见 新服务器部署说明.md"
 fi
 
 echo "=== 4. 构建(前后端)==="

@@ -1,11 +1,10 @@
 /**
- * ha(P3-01):反馈原文出 Prism 之前先过一遍脱敏 —— 与 SkillWhet `harvest.redact()` 同一套规则
- * (那边在 harvest 时还会再过一遍;两道都在,任何一边漏了另一边兜着)。
- *
- * hl(动态 P2-18 / 静态 P3):与 SkillWhet 0.5.2 的规则对齐 —— URL 内嵌凭据、口令门槛 8 → 4、
- * JSON 引号形式、`ticket`、中文键名(密码 / 口令 / 密钥 / 秘钥 / 令牌 / 凭证)、全角冒号。
+ * 反馈原文离开 Prism 之前先脱敏,规则与 SkillWhet `harvest.redact()` 一致
+ * (那边 harvest 时还会再过一遍;两道都在,任一边漏了另一边兜底)。
+ * 覆盖 URL 内嵌凭据、`key=value` 与 JSON 引号形式、`ticket`、中文键名(密码 / 口令 / 密钥 / 秘钥 / 令牌 / 凭证)、
+ * 全角冒号;键值形式的取值至少 4 个字符才脱敏。
  */
-// hl(复核 P3):键名像密钥、取值却显然不是密钥的(`max_tokens: 4096`、`credential_type: oauth`)不脱敏;
+// 键名像密钥、取值却显然不是密钥的(`max_tokens: 4096`、`credential_type: oauth`)不脱敏;
 // 口令类的键(password / 密码 / 口令)取值是纯数字仍脱敏(可能就是 PIN)。与 SkillWhet harvest._keep_or_redact 同一口径。
 const NON_SECRET_VALUES = new Set([
   'oauth', 'oauth2', 'bearer', 'basic', 'digest', 'jwt', 'hmac', 'none', 'null', 'true', 'false',

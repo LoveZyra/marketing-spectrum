@@ -13,22 +13,15 @@ import {
 } from '@/modules/database/index.js';
 
 /**
- * 用户名必须是**大小写不敏感**的,而且这是安全属性,不是便利属性。
- *
- * ## 它挡的是什么
+ * 用户名必须大小写不敏感,这是安全属性,不是便利属性。
  *
  * `isRootUser()` 拿 `username.trim().toLowerCase()` 与 `PRISM_ROOT_USERS` 比对。
- * 只要 `users.username` 还是默认的 BINARY 排序,`Alice` 与 `alice` 就能共存 ——
- * 于是任何人(**不需要任何凭据**)注册一个大小写变体就能:绕过注册审批、当场拿到
- * JWT、并且每个请求都被判定为 root(重置任意账号密码、读全站审计日志、改项目属主)。
+ * `users.username` 若是默认的 BINARY 排序,`Alice` 与 `alice` 就能共存:任何人不需要凭据,
+ * 注册一个 root 用户名的大小写变体,就能绕过注册审批、当场拿到 JWT,并且每个请求都被
+ * 判定为 root。
  *
- * 实测打穿过:`Alice` 打 `/api/admin/users` 返回 200,而正常非 root 账号是 403。
- *
- * ## 为什么钉在「列的排序规则」上而不是「注册处 lower 了没有」
- *
- * 注册只是入口之一,而且库里的口径本来就不一致:`findIdByUsername` 是大小写不敏感的,
- * 登录走的 `getUserByUsername` 是敏感的。钉某一个调用点等于钉一份会漂的判据 ——
- * 下一个新增的 `WHERE username = ?` 照样会漏。钉列,所有查询一起被覆盖。
+ * 钉的是列的排序规则,而不是注册处有没有 lower:注册只是入口之一,
+ * 新增的任何 `WHERE username = ?` 都由列一起覆盖。
  */
 
 async function withIsolatedDatabase(run: () => void | Promise<void>): Promise<void> {

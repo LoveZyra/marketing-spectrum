@@ -39,7 +39,6 @@ export default function QuickSettingsContent({
   return (
     <div className="flex-1 space-y-6 overflow-y-auto overflow-x-hidden bg-background p-4">
       <QuickSettingsSection title={t('quickSettings.sections.appearance')}>
-        {/* 原来是一枚「深色模式」开关。浅色分成两种材质之后布尔表达不了三个值。 */}
         <QuickThemeSwitch />
         <LanguageSelector compact />
       </QuickSettingsSection>

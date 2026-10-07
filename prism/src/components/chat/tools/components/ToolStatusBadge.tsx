@@ -5,8 +5,7 @@ import { cn } from '../../../../lib/utils';
 export type ToolStatus = 'running' | 'completed' | 'error' | 'denied';
 
 /**
- * dv:标签走 i18n。这四个词此前写死英文,在全中文界面里就是四块英文补丁 ——
- * 而同一张工具卡上其余文案都是中文的。defaultValue 保留英文原文,漏译时行为不变。
+ * 状态标签走 i18n(chat 命名空间的 `toolStatus.*`),与工具卡上其余文案同语言;缺译文时回落到英文 fallback。
  */
 const STATUS_CONFIG: Record<ToolStatus, { i18nKey: string; fallback: string; className: string }> = {
   running: {

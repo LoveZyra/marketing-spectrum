@@ -44,18 +44,18 @@ type MessageComponentProps = {
   selectedProject?: Project | null;
   /** Prism: fork the conversation at this user message and re-run an edit. */
   onEditRerun?: (message: ChatMessage) => void;
-  /** F2:这条错误消息是对话末尾且当前空闲 —— 显示「重发上一条」。 */
+  /** 这条错误消息在对话末尾且当前空闲:显示「重发上一条」。 */
   showRetry?: boolean;
   onRetry?: () => void;
-  /** ef:这条是对话收尾的助手回答 —— 悬停操作里给一枚「重跑」。 */
+  /** 这条是对话收尾的助手回答:悬停操作里给一枚「重跑」。 */
   canRerun?: boolean;
   /**
-   * eh:这一轮产出的文件。渲染在**正文最下方、复制/重跑那一行之上** ——
-   * 和 Cowork 一样:读完结论,产出就在同一块内容的末尾,不是另起一张卡浮在外面。
+   * 这一轮产出的文件,渲染在正文最下方、复制 / 重跑那一行之上:读完结论,
+   * 产出就在同一块内容的末尾,不另起一张卡浮在外面。
    */
   turnOutputs?: TurnOutputFile[];
   onFileOpenPath?: (filePath: string) => void;
-  /** ei:产出下载走会话产出通道 —— 项目目录之外的产出也能下。 */
+  /** 会话产出通道的会话 id:项目目录之外的产出也能经它下载。 */
   outputsSessionId?: string | null;
   /**
    * 活动时间轴的展开区用:只要消息主体,不要头像 / 角色名 / 时间戳那圈外壳 ——
@@ -63,15 +63,14 @@ type MessageComponentProps = {
    */
   bare?: boolean;
   /**
-   * ga:滚动位置锚点用的稳定行标识。**只有顶层行才传** —— 展开区里嵌套的那些
-   * MessageComponent 不传,于是自然被排除在锚点集合之外(它们的出现/消失
-   * 此前会让"倒数第几行"整体错位)。
+   * 滚动位置锚点用的稳定行标识,只有顶层行才传:展开区里嵌套的 MessageComponent 不传,
+   * 于是不进锚点集合,它们的出现 / 消失不会让"倒数第几行"整体错位。
    */
   rowKey?: string;
   /**
-   * gy:反馈。`feedback` 是我对这条回答已有的意见(点亮 👍/👎);`feedbackSkillHint`
-   * 是本轮调用的 skill(👎 表单预填);`skillSurvey` 非空 = 服务端抽中了这一轮,
-   * 在产出卡下面画「效果如何」卡。三个回调都没传时(时间轴展开区、首页)一律不画。
+   * 反馈:`feedback` 是当前用户对这条回答已有的意见(点亮赞 / 踩);`feedbackSkillHint`
+   * 是本轮调用的 skill(点踩表单预填);`skillSurvey` 非空 = 服务端抽中了这一轮,
+   * 在产出卡下面画「效果如何」卡。回调没传时(时间轴展开区、首页)一律不画。
    */
   feedback?: MessageFeedbackRow | null;
   feedbackSkillHint?: string | null;
@@ -97,7 +96,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
       (prevMessage.type === 'error')));
   const messageRef = useRef<HTMLDivElement | null>(null);
   const userCopyContent = String(message.content || '');
-  // do:显式技能调用徽标。用户消息首词命中技能命令(`/echo-probe …`)时,气泡上方
+  // 显式技能调用徽标。用户消息首词命中技能命令(`/echo-probe …`)时,气泡上方
   // 标出「技能 · 名称」,悬停给描述 —— 不然斜杠原文对旁人是一串黑话。
   const skillsCatalog = useSkillsCatalog();
   const skillInvocation = useMemo(
@@ -115,7 +114,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
     message.isToolUse && COPY_HIDDEN_TOOL_NAMES.has(String(message.toolName || ''))
   );
   const shouldShowUserCopyControl = message.type === 'user' && userCopyContent.trim().length > 0;
-  // ho(ho-1):插话的状态(只对用户气泡有意义)
+  // 插话的状态(只对用户气泡有意义)
   const mergedMessages = useMergedMessages();
   const mergedState = message.type === 'user' ? mergedMessages?.stateFor(message.clientMessageId) : undefined;
   const userWithdrawn = message.type === 'user' && (message.withdrawn === true || mergedState === 'withdrawn');
@@ -126,9 +125,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
 
 
   /**
-   * du:流式那条消息的 timestamp 是**哨兵 0**(ChatMessagesPane 为稳住下游
-   * memo 特意固定的),直接格式化会显示 1970 纪元时间 —— 正在生成的气泡底下
-   * 挂一个「08:00:00」。窄屏没有 hover 遮掩,常驻可见。哨兵一律不显示时间。
+   * 流式那条消息的 timestamp 是哨兵 0(ChatMessagesPane 为稳住下游 memo 特意固定的),
+   * 直接格式化会显示 1970 纪元时间(如「08:00:00」);哨兵一律不显示时间。
    */
   const formattedTime = useMemo(() => {
     const raw = message.timestamp;
@@ -151,7 +149,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
    * 而且没法收。
    *
    * 它该留着:这是"这里发生过一次压缩、带过来的是这些"的唯一凭据,删了就断片。
-   * 但**默认收起**:平时只占一行,想追溯再展开。
+   * 但默认收起:平时只占一行,想追溯再展开。
    */
   if (message.isCompactSummary) {
     const summaryText = String(message.content || '');
@@ -197,9 +195,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
     <div
       ref={messageRef}
       data-message-timestamp={message.timestamp || undefined}
-      /* ga:滚动位置锚点只认带这个标识的顶层行(见 useChatSessionState 的行选择器)。
-         **两处 return 都要带** —— 压缩摘要那一支漏掉的话,一条会话里只要出现过
-         一次上下文压缩,它前后的行数就与锚点集合对不上。 */
+      /* 滚动位置锚点只认带这个标识的顶层行(见 useChatSessionState 的行选择器)。
+         两处 return 都要带:压缩摘要那一支漏掉的话,会话里只要压缩过一次,
+         它前后的行数就与锚点集合对不上。 */
       data-row-key={rowKey}
       className={`chat-message group/msg ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
     >
@@ -232,7 +230,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                 <div className={`prism-panel max-w-full rounded-bubble bg-card px-4 py-2.5 text-sm leading-6 text-foreground ${userWithdrawn ? 'opacity-55' : ''}`}>
                   <UserMessageBody content={userCopyContent} />
                 </div>
-                {/* ho(ho-1):插话 —— 模型读到前可撤回;撤掉了就标"已撤回,没有执行" */}
+                {/* 插话:模型读到前可撤回;撤掉了就标"已撤回,没有执行" */}
                 {userWithdrawn ? (
                   <div className="flex items-center gap-1 text-[11px] text-muted-foreground" data-merged-state="withdrawn">
                     <Undo2 className="h-3 w-3" aria-hidden />
@@ -287,13 +285,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
       ) : (
         /* Claude/Error/Tool messages on the left */
         <div className="w-full">
-          {/* 助手回复不再挂署名头部。
-              原来这里给"另起一组"的第一条渲染一个头像+名字,助手那档写死是
-              Anthropic 的星芒 + "Claude" —— 与实际回答的模型无关。这台上面跑的是
-              glm / deepseek 这些,署名 "Claude" 是**事实错误**;而且它只在
-              `!isGrouped` 时出现(上一条是用户消息才另起一组),所以表现成
-              "有时冒出来一下",更像故障。
-              错误和工具这两档保留:它们说明的是"这一块是什么",是真信息。 */}
+          {/* 只有错误和工具两档挂头部(说明这一块是什么);助手回复不挂署名,实际回答的模型未必是 Claude */}
           {!isGrouped && (message.type === 'error' || message.type === 'tool') && (
             <div className="mb-2 flex items-center space-x-3">
               {message.type === 'error' ? (
@@ -554,14 +546,14 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                   </button>
                 )}
 
-                {/* eh:本轮产出 —— 正文的最后一块,压在复制/重跑那一行之上。 */}
+                {/* 本轮产出:正文的最后一块,压在复制 / 重跑那一行之上 */}
                 {turnOutputs && turnOutputs.length > 0 && (
                   <div className="mt-3">
                     <TurnOutputsCard files={turnOutputs} onFileOpen={onFileOpenPath} sessionId={outputsSessionId} />
                   </div>
                 )}
 
-                {/* gy:调过 skill 的回合结束后的「效果如何」卡 —— 服务端抽中才有,产出卡同一位置。 */}
+                {/* 调过 skill 的回合结束后的「效果如何」卡:服务端抽中才有,与产出卡同一位置 */}
                 {!bare && skillSurvey && onFeedbackSubmit && typeof message.id === 'string' && (
                   <div className="mt-3">
                     <SkillSurveyCard messageId={String(message.id).split('#')[0]} skill={skillSurvey.skill} onSubmit={onFeedbackSubmit} />
@@ -575,7 +567,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                 {shouldShowAssistantCopyControl && (
                   <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
                 )}
-                {/* gy:👍/👎 —— 与复制同一行;只在真正的回答(能复制的那条)上画。 */}
+                {/* 赞 / 踩:与复制同一行,只在真正的回答(能复制的那条)上画 */}
                 {shouldShowAssistantCopyControl && onFeedbackSubmit && onFeedbackRemove && typeof message.id === 'string' && (
                   <MessageFeedbackControl
                     messageId={String(message.id).split('#')[0]}
@@ -585,9 +577,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                     onRemove={onFeedbackRemove}
                   />
                 )}
-                {/* ef:设计稿的回答下方是「复制 + 重跑」两枚图标。重跑只挂在
-                    收尾那条上(由 ChatMessagesPane 判定),它重发的是上一条用户
-                    消息 —— 挂在历史中段没有意义,那是「编辑重跑」的分叉语义。 */}
+                {/* 重跑只挂在收尾那条上(由 ChatMessagesPane 判定):它重发的是上一条用户消息,挂在历史中段就成了「编辑重跑」的分叉语义 */}
                 {canRerun && onRetry && (
                   <button
                     type="button"
@@ -607,7 +597,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                 {typeof message.model === 'string' && message.model && (
                   <span
                     className="rounded-sm border border-border px-1 py-px font-mono text-[10px] text-muted-foreground"
-                    title="这一轮实际服务的模型（来自响应元数据，非模型自述）"
+                    title={t('messageTypes.servedModelTitle', { defaultValue: '这一轮实际服务的模型（来自响应元数据，非模型自述）' })}
                   >
                     {message.model}
                   </span>

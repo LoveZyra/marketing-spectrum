@@ -30,18 +30,15 @@ type AuditResponse = {
 const PAGE_SIZE = 20;
 
 /**
- * 事件按**排查时会一起看的东西**分组,不按代码里的定义顺序。
+ * 事件按排查时会一起看的东西分组,不按代码里的定义顺序:几十个事件平铺成一个下拉等于没筛,
+ * 没人记得住哪几个是一伙的。分组的判据是「用户带着什么问题来」:
+ *   - 账号出事了 → 登录 / 锁定 / 改密 / 停用 / 审批
+ *   - 东西没了 → 项目变更,会话与项目的删除 / 归档 / 恢复
+ *   - 行为变了 → 技能装卸(共用技能库,别人卸掉会静默改变你的会话),模型 / 网关 / key
+ *   - 凭据 → API key / 凭据 / 票据
  *
- * 27 个事件平铺成一个下拉,等于没筛 —— 没人记得住哪几个是一伙的。
- * 分组的判据是"用户带着什么问题来":
- *   - 账号出事了 → 登录/锁定/改密/停用
- *   - 东西没了 → 项目删除/归档/改属主
- *   - 行为变了 → 技能装卸(共用技能库,别人卸掉会静默改变你的会话)
- *   - 凭据 → API key / 网关凭据 / 票据
- *
- * `events` 里的字符串必须和服务端 `AuditEvent` 联合类型对得上;
- * 对不上的话筛出来是空,不会报错 —— 所以 audit-filter 那组测试里
- * 有一条专门钉住"空数组 = 不筛",免得把拼错当成没结果。
+ * `events` 里的字符串必须和服务端 `AuditEvent` 联合类型对得上;对不上的话筛出来是空、不会报错 ——
+ * 所以 audit-filter 那组测试里有一条专门钉住「空数组 = 不筛」,免得把拼错当成没结果。
  */
 const EVENT_GROUPS: ReadonlyArray<{ key: string; labelZh: string; events: readonly string[] }> = [
   {
@@ -58,7 +55,7 @@ const EVENT_GROUPS: ReadonlyArray<{ key: string; labelZh: string; events: readon
       'attachment_quota_changed'],
   },
   {
-    // gk:会话与项目的删除 / 归档 / 恢复 —— "我的会话怎么没了、谁删的"从这里查。
+    // 会话与项目的删除 / 归档 / 恢复:「我的会话怎么没了、谁删的」从这里查。
     key: 'deletions',
     labelZh: '会话与项目删除',
     events: [...DELETION_AUDIT_EVENTS],
@@ -69,8 +66,8 @@ const EVENT_GROUPS: ReadonlyArray<{ key: string; labelZh: string; events: readon
     events: ['skill_installed', 'skill_removed'],
   },
   {
-    // hn:模型目录的增删改 + settings.json 别名映射的保存(root 管理动作)
-    // hq:再加网关与 key —— 共享网关 / 默认 key / 替人填 key / 私有网关开关(root),个人 key / 私有网关 / 私有模型(本人)
+    // 模型目录的增删改、settings.json 别名映射与子代理模型的保存(root),以及网关与 key:
+    // 共享网关 / 默认 key / 替人填 key / 私有网关开关(root),个人 key / 私有网关 / 私有模型(本人)。
     key: 'models',
     labelZh: '模型、网关与 key',
     events: ['model_catalog_created', 'model_catalog_updated', 'model_catalog_deleted', 'model_config_updated', 'subagent_model_updated',
@@ -89,19 +86,19 @@ const formatTime = (value: string): string => {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 };
 
-/**
- * 审计日志列表(登录/登出/审批/改密/停用等安全事件)。
- * 服务端裁剪可见范围:root 全量,普通用户只有自己的行 —— 组件两处通用。
- */
 type AuditLogListProps = {
-  /** gk:个人账号页上叫「与我有关的操作记录」—— 非 root 看到的是"我做的 + 对我做的"。 */
+  /** 个人账号页上叫「与我有关的操作记录」:非 root 看到的是「我做的 + 对我做的」。 */
   title?: string;
 };
 
+/**
+ * 审计日志列表(登录/登出/审批/改密/停用等安全事件)。
+ * 服务端裁剪可见范围:root 全量,普通用户只有我做的 + 对我做的;账号管理页与我的账号页共用。
+ */
 export default function AuditLogList({ title }: AuditLogListProps = {}) {
   const { t } = useTranslation('settings');
   /**
-   * gk:审计文案的适配器。auditDetail 是纯函数模块(单测里喂得进假翻译器),
+   * 审计文案的适配器。auditDetail 是纯函数模块(单测里喂得进假翻译器),
    * 所以它要的是 `(键, 中文兜底, 插值)` 这个最小形状,这里把 i18next 的 t 折过去。
    */
   const translateAudit = useCallback<AuditTranslator>(
@@ -122,7 +119,7 @@ export default function AuditLogList({ title }: AuditLogListProps = {}) {
    *
    * 进依赖的话 `load` 每次改筛选都换新引用,而下面那个 `useEffect([load])`
    * 会跟着重跑 —— 在用户名输入框里每敲一个字都发一次请求。
-   * 这里要的是"改了条件之后**点一下**才查",所以取值放到调用的那一刻。
+   * 这里要的是「改了条件之后点一下才查」,所以取值放到调用的那一刻。
    */
   const filtersRef = useRef({ groupKey: '', outcome: '', username: '' });
   filtersRef.current = { groupKey, outcome, username };
@@ -210,11 +207,10 @@ export default function AuditLogList({ title }: AuditLogListProps = {}) {
         </select>
 
         {/*
-          用户名框对**所有人**都显示,不只 root。
-          非 root 在这里输别人的名字得到的是空结果(服务端的可见范围闸门在筛选之前),
-          所以它不是一个泄漏入口;而普通用户用自己的名字筛没有意义、也不碍事。
-          按角色藏这个框反而要在前端复述一遍权限规则 —— 那正是这个仓库
-          在 A-2 上栽过的"同一条判据写两遍"。
+          用户名框对所有人都显示,不只 root。
+          非 root 输别人的名字也只能在自己的可见范围内筛(服务端的可见范围闸门在筛选之前),
+          所以它不是泄漏入口;普通用户用自己的名字筛没有意义,但也不碍事。
+          按角色藏这个框反而要在前端复述一遍权限规则,同一条判据写两遍。
         */}
         <input
           type="text"
@@ -303,7 +299,7 @@ export default function AuditLogList({ title }: AuditLogListProps = {}) {
                 <td className="hidden whitespace-nowrap px-3 py-1.5 font-mono text-[11px] text-muted-foreground lg:table-cell">
                   {entry.ip ?? '—'}
                 </td>
-                {/* gk:删除类记录的 detail 是 JSON,翻成人话;其余原样。悬停仍能看到原文。 */}
+                {/* 删除类记录的 detail 是 JSON,翻成人话;其余原样。悬停能看到原文。 */}
                 <td
                   className={`px-3 py-1.5 text-xs text-muted-foreground ${isDeletionAuditEvent(entry.event) ? 'whitespace-normal break-words' : 'max-w-64 truncate'}`}
                   title={entry.detail ?? ''}

@@ -1,29 +1,18 @@
 /**
  * 分级日志。
  *
- * ## 为什么需要它
- *
- * `prism.log` 是生产上唯一的排障入口,而它此前是**一条不分级、不带时间、不带来源
- * 的流** —— 453 处 `console.*` 直接往里写。三个后果:
- *
- * 1. **关不掉噪音。** 浏览一次文件树会打两行 `[API] Browse filesystem request` +
- *    `WORKSPACES_ROOT is: ...`;git clone 每收到一块 stderr 打一行。真正的报错就
- *    埋在这些里面。想安静下来只能改代码重新部署。
- * 2. **没有时间。** 绝大多数行不带时间戳。用户报"下午三点左右出问题了",
- *    grep 出来的行根本对不上时刻。
- * 3. **没有来源。** 分不清一行是数据库、WebSocket 还是文件路由打的,
- *    没法按子系统缩小范围。
+ * `prism.log` 是生产上唯一的排障入口。每行带本地时间、级别和来源标签:噪音可以用
+ * `PRISM_LOG_LEVEL` 关掉而不必改代码重新部署,排障时能按时刻和子系统缩小范围。
  *
  * ## 设计上刻意保守的几点
  *
- * - **默认档位 `info`,行为与升级前一致。** 这不是一次"顺便让日志变少"的改动 ——
- *   降级到 `debug` 的那些是逐条挑的(见各调用点),其余原样。
- * - **底层仍然走 `console.*`。** 不接管 stdout、不自己写文件。`prism.sh` 的
- *   `nohup ... > prism.log 2>&1` 因此完全不用改,测试里的 spy 也照常有效。
- * - **warn/error 走 stderr,info/debug 走 stdout。** 这样 `2> err.log` 能把
- *   两类分开收,而合并重定向(现在这样)行为不变。
- * - **CLI 的横幅输出不归它管。** `server/cli.js` 打的是 `prism status` 给人看的
- *   对齐表格,给每行加时间戳只会把它毁掉。那 32 处刻意保留 `console.log`。
+ * - 默认档位 `info`;降到 `debug` 的调用点是逐条挑过的(见各调用点)。
+ * - 底层仍然走 `console.*`:不接管 stdout、不自己写文件。`prism.sh` 的
+ *   `nohup ... > prism.log 2>&1` 因此不用改,测试里的 spy 也照常有效。
+ * - warn/error 走 stderr,info/debug 走 stdout:`2> err.log` 能把两类分开收,
+ *   合并重定向时行为不变。
+ * - CLI 的横幅输出不归它管:`server/cli.js` 打的是 `prism status` 给人看的
+ *   对齐表格,给每行加时间戳只会把它毁掉,那里刻意保留 `console.log`。
  *
  * ## 用法
  *
@@ -45,9 +34,10 @@ const LEVEL_RANK: Record<LogLevel, number> = {
 export const DEFAULT_LOG_LEVEL: LogLevel = 'info';
 
 /**
- * 解析档位。**认不出来的值不静默吞掉** —— 把 `PRISM_LOG_LEVEL=verbose` 当成
- * "那就默认吧"意味着部署方以为自己开了详细日志、实际没开,而且没有任何提示。
- * 所以退回默认的同时往 stderr 说一声。
+ * 解析档位;空值或认不出来的值返回 null。
+ *
+ * 认不出来的值不能静默吞掉:把 `PRISM_LOG_LEVEL=verbose` 当成"那就默认吧",部署方会
+ * 以为自己开了详细日志、实际没开。所以 resolveLevel 退回默认的同时往 stderr 说一声。
  */
 export const parseLogLevel = (raw: string | undefined | null): LogLevel | null => {
   if (raw === undefined || raw === null) return null;
@@ -78,7 +68,7 @@ const resolveLevel = (): LogLevel => {
 export const getLogLevel = (): LogLevel => resolveLevel();
 
 /**
- * 改档位。**只给测试和启动早期用** —— 运行中途改会让同一份日志前后两种详细度,
+ * 改档位。只给测试和启动早期用 —— 运行中途改会让同一份日志前后两种详细度,
  * 事后读的人对不上。传 `null` 表示"忘掉缓存,下次重新读环境变量"。
  */
 export const setLogLevel = (level: LogLevel | null): void => {
@@ -114,7 +104,7 @@ export type Logger = {
 /**
  * 建一个带来源标签的 logger。
  *
- * `tag` 会原样出现在每行里(`[files]`),所以取名按**能 grep 的子系统**来,
+ * `tag` 会原样出现在每行里(`[files]`),所以取名按能 grep 的子系统来,
  * 不要按文件名 —— 文件会改名,子系统不会。
  */
 export const createLogger = (tag: string): Logger => {

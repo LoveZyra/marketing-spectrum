@@ -5,14 +5,14 @@ import { describe, test } from 'vitest';
 import { interruptWithTimeout } from '../claude-sdk.js';
 
 // 测试用短超时:核心行为(竞速 + 迟到 reject 吞掉)与生产的 5s 默认一致,
-// 只是不必真等 5s。生产默认值另有其人(INTERRUPT_TIMEOUT_MS)保证。
+// 只是不必真等 5s。生产默认值由 INTERRUPT_TIMEOUT_MS 决定。
 const TEST_TIMEOUT_MS = 200;
 
 /**
- * B4 回归:interrupt() 加超时竞速。
+ * interrupt() 要和超时竞速。
  *
  * "停止"按钮最常按在子进程僵死时,而那正是 interrupt()(与子进程的协商)永不
- * 返回的场景。旧代码直接 await,处理器挂死、终止帧发不出。interruptWithTimeout
+ * 返回的场景。直接 await 会让处理器挂死、终止帧发不出;interruptWithTimeout
  * 到点即放弃,交由调用方升级到硬撕(abortController)。
  */
 describe('interruptWithTimeout', () => {

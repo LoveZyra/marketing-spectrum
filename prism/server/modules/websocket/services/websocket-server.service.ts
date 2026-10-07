@@ -23,13 +23,13 @@ type WebSocketServerDependencies = {
 };
 
 /**
- * Creates and wires the server-wide websocket gateway used for chat, shell, and
- * plugin proxy routes.
+ * Creates and wires the server-wide websocket gateway: `/ws` (chat) and `/shell`,
+ * with `/jupyter/*` upgrades handed to the injected tunnel.
  *
- * noServer 模式 + 自己的 upgrade 路由:ws 的 {server} 模式会接管 HTTP 服务器上
- * 【所有】升级请求,/jupyter 的 kernel WebSocket 会被它的 verifyClient 先拒掉。
- * 改为手动分发:/jupyter 前缀交给注入的隧道,其余路径保持原有的
- * verifyClient → handleUpgrade 语义,行为与 {server} 模式一致。
+ * 用 noServer 模式 + 自己的 upgrade 路由:ws 的 {server} 模式会接管 HTTP 服务器上
+ * 所有的升级请求,/jupyter 的 kernel WebSocket 会先被它的 verifyClient 拒掉。
+ * /jupyter 前缀交给注入的隧道,其余路径走 verifyClient → handleUpgrade,
+ * 行为与 {server} 模式一致。
  */
 export function createWebSocketServer(
   server: HttpServer,
@@ -75,9 +75,8 @@ export function createWebSocketServer(
     // TCP still appears up but the peer has stopped responding. Uses the ws
     // library standard heartbeat: mark alive on each pong, and terminate any
     // connection that did not pong since the previous ping. Terminating forces
-    // the frontend to reconnect, so messages no longer vanish into a dead
-    // socket — the prior ping-only heartbeat left such zombies lingering, which
-    // caused prompts to be silently dropped with no backend activity.
+    // the frontend to reconnect instead of silently sending prompts into a dead
+    // socket.
     const heartbeatState = { isAlive: true };
     ws.on('pong', () => {
       heartbeatState.isAlive = true;
@@ -92,15 +91,12 @@ export function createWebSocketServer(
         return;
       }
       /**
-       * fj:顺带复检身份 —— 吊销/停用/删除要真的把人踢下线。
+       * 顺带复检身份:吊销 / 停用 / 删除要真的把人踢下线。
        *
-       * 身份只在握手时判一次,之后 `prismUserId` 盖在 socket 上就一直有效,
-       * 连接生命周期内没有任何复检。于是管理员停用一个账号、或用户自己
-       * 「退出所有设备」之后,只要那个标签页没关,聊天连接就一直可用 ——
-       * `canViewerSeeSession` 只按 `prismUserId` 比对项目 owner,用户行没了
-       * 也照样匹配得上。多用户部署里这就是「已经被踢掉的人还在往项目里发指令」。
+       * 握手时盖在 socket 上的 `prismUserId` 之后一直有效,而 `canViewerSeeSession` 只按它比对
+       * 项目 owner,用户行没了也照样匹配;不复检的话,账号被停用后只要标签页没关,连接就一直能发指令。
        *
-       * 放在已有的心跳 interval 里:30 秒一次、每连接一次主键查询,成本可忽略。
+       * 放在心跳 interval 里:30 秒一次、每连接一次主键查询,成本可忽略。
        */
       const viewerId = (ws as { prismUserId?: string | number | null }).prismUserId;
       if (viewerId !== null && viewerId !== undefined) {
@@ -111,11 +107,8 @@ export function createWebSocketServer(
           return;
         }
         /**
-         * fl:**还要比对 `token_version`。**
-         *
-         * fj 这里只问"用户行还在不在" —— 而「退出所有设备」/ 改密码是**旋转
-         * token_version**,用户行一直都在。于是这道复检对最常见的那种撤销
-         * 完全无效:标签页不关,旧连接就一直能发指令。
+         * 还要比对 `token_version`:「退出所有设备」/ 改密码是旋转 token_version,
+         * 用户行一直都在,只查用户行挡不住这类最常见的撤销。
          *
          * 握手时盖的版本号(prismTokenVersion)与当前值不一致 = 这条连接背后的
          * 凭据已经被吊销,断开它,让前端拿新票据重连(拿不到就是真的登出了)。

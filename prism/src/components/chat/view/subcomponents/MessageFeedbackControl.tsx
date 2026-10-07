@@ -6,10 +6,10 @@ import { useToast } from '../../../../shared/view/ui';
 import type { FeedbackCategory, FeedbackPayload, MessageFeedbackRow } from '../../hooks/useMessageFeedback';
 
 /**
- * gy:回答下方的 👍/👎 —— 技能优化的**被动**数据入口。
+ * 回答下方的赞 / 踩:技能优化的被动数据入口。
  *
- * 与复制按钮同一行、同一种 24×24 幽灵图标钮;👎 就地展开三行小表单(类别 / 说明 /
- * 期望结果),不弹窗。一人一条回答一票,改票 / 撤回都走同一个 upsert / delete。
+ * 与复制按钮同一行、同一种 24×24 幽灵图标钮;点踩就地展开小表单(类别 / 说明 /
+ * 期望结果 / 技能),不弹窗。一人一条回答一票,改票 / 撤回都走同一个 upsert / delete。
  * 这轮用的 skill 由 ChatMessagesPane 从本轮的 Skill 工具帧算好传进来,用户可改。
  * 同一条回答一人只有一行:调查卡先答过的,这里改票沿用 source='survey',统计里不丢一条答复。
  */
@@ -55,9 +55,8 @@ export default function MessageFeedbackControl({ messageId, feedback, skillHint,
   });
 
   /**
-   * hl(09-24 P2-20):**打开表单时用最新的 `feedback` 重填。**
-   * 四个字段的初值只在首渲染取,而反馈列表是后到的 —— 已经 👎 过的回答,表单打开是空的,
-   * 改个类别再提交就把之前写的说明和期望结果清掉了(upsert 整行覆盖)。
+   * 打开表单时用最新的 feedback 重填:四个字段的初值只在首渲染取,而反馈列表是后到的;
+   * 不重填的话,已点踩过的回答打开是空表单,再提交会把之前写的说明和期望结果清掉(upsert 整行覆盖)。
    */
   const openForm = () => {
     setCategory((feedback?.category as FeedbackCategory | null) ?? null);

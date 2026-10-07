@@ -1,20 +1,27 @@
 import assert from 'node:assert/strict';
 
-import { describe, expect, test, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 
 /**
- * E11:通知编排现在是**零通道**的。
+ * 没有启用的投递通道时,通知编排不做任何工作。
  *
- * 服务端推送通道(Web Push / Electron)随 web-only 重构一起去掉了,在应用内的
- * 提示改成前端从 chat websocket 自己驱动。留下来的编排代码于是变成一根死管道:
- * 每个 permission_request / run.stopped / run.failed 都照样归一化会话 id、读用户
- * 偏好、算 payload —— 最多五次查询,然后交给一个空数组。权限请求在一轮里能出现
- * 几十次,这些查询全是白扔。
+ * 应用内提示由前端从 chat websocket 自己驱动;服务端唯一的通道是 webhook,只在配了
+ * PRISM_NOTIFY_WEBHOOK_URL 时启用。没启用时,每个 permission_request / run.stopped /
+ * run.failed 若照样归一化会话 id、读用户偏好、算 payload,就是最多五次白扔的查询,
+ * 而权限请求在一轮里能出现几十次。
  *
- * 这个测试钉的就是"零通道时一次库都不查"。哪天真接上通道(F6 那批),把它 push
- * 进 notificationChannels 之后这条会红 —— 那时候把它改成"接了通道就该查库"的
- * 断言,而不是悄悄删掉。
+ * 这个测试钉的就是"没有启用的通道时一次库都不查"。webhook 通道每次调用时读环境变量,
+ * 所以测试期间自己清掉 PRISM_NOTIFY_WEBHOOK_URL、结束后恢复,不受外部环境影响。
  */
+const PREV_WEBHOOK_URL = process.env.PRISM_NOTIFY_WEBHOOK_URL;
+beforeAll(() => {
+  delete process.env.PRISM_NOTIFY_WEBHOOK_URL;
+});
+afterAll(() => {
+  if (PREV_WEBHOOK_URL === undefined) delete process.env.PRISM_NOTIFY_WEBHOOK_URL;
+  else process.env.PRISM_NOTIFY_WEBHOOK_URL = PREV_WEBHOOK_URL;
+});
+
 const getPreferences = vi.fn(() => ({ events: { actionRequired: true, stop: true, error: true } }));
 const getSessionById = vi.fn(() => null);
 const getSessionByProviderSessionId = vi.fn(() => null);

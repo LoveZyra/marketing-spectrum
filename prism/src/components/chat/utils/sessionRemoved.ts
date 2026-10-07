@@ -1,10 +1,10 @@
 /**
- * gk:「这条会话已被删除」态的判据与信息。
+ * 「这条会话已被删除」态的判据与信息。
  *
  * 两条路会把一条会话变成这个态:
  *   1. 服务端推的 `session_removed`(别处永久删除了它,已进最近删除);
- *   2. `chat.send` 收到 `SESSION_NOT_FOUND` —— 页面开着的时候行没了(2026-09-14 生产的
- *      那张截图:同一句英文报错出现两次,还给了一个只会再撞一次的「重发上一条」)。
+ *   2. `chat.send` 收到 `SESSION_NOT_FOUND` —— 页面开着的时候行没了;这时只给一句报错
+ *      和一个只会再撞一次的「重发上一条」是不够的。
  *
  * 只对 `request === 'chat.send'` 的 `SESSION_NOT_FOUND` 切态:同一个 code 在
  * permission-response 上的意思是"没这条待批",不是会话没了。
@@ -19,12 +19,12 @@ export type SessionRemovedInfo = {
   restorable: boolean;
   at: string;
   /**
-   * 切态时挂在这条会话上的**排队消息正文**(有的话)。
+   * 切态时挂在这条会话上的排队消息正文(有的话)。
    *
    * 切态会把排队记录清掉(否则后台续发会一直给一条不存在的会话起新轮),
    * 而那句话是用户亲手打的:回合跑着的时候打一句回车 → 进排队卡 → 这时别人把会话删了。
-   * 不带出来的话它在盘上和内存里同时消失,「新建会话继续」也带不走 ——
-   * 说明卡上那句"你刚才输入的内容还在"只对输入框里的字成立,对排队的那条是假的。
+   * 不带出来的话它在盘上和内存里同时消失,「新建会话继续」也带不走,
+   * 说明卡上那句"你刚才输入的内容还在"对排队的那条就不成立。
    */
   queuedText: string | null;
 };
@@ -63,7 +63,7 @@ export function removedInfoFromNotFound(queuedText: string | null = null): Sessi
     reason: 'not_found',
     deletedBy: null,
     sessionName: null,
-    // 行没了但很可能在最近删除里(gk 起永久删除都进回收站);拿不准就说"可能"。
+    // 行没了但很可能在最近删除里(永久删除都会进回收站);拿不准就说"可能"。
     restorable: true,
     at: new Date().toISOString(),
     queuedText: queuedText?.trim() ? queuedText : null,

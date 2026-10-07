@@ -16,7 +16,7 @@ import {
 
 import { claudeModelCatalog } from './claude-model-catalog.service.js';
 
-// hn:别名表挪到 claude-model-aliases.ts(模型目录服务也要它,放这里会成环);这里照旧导出。
+// 别名表定义在 claude-model-aliases.ts(模型目录服务也要它,放这里会成环),这里转导出给 claude-sdk.js 用。
 export { CLAUDE_FALLBACK_MODELS } from './claude-model-aliases.js';
 
 type ClaudeInitEvent = {
@@ -162,11 +162,11 @@ const readClaudeSessionModelFromJsonl = async (
 
 export class ClaudeProviderModels implements IProviderModels {
   /**
-   * hn(B2):**全量** —— 上架的目录条目 + 别名组(`group: 'alias'`)。
+   * 全量:上架的目录条目 + 别名组(`group: 'alias'`),不按人过滤。
    *
-   * 不在这里按用户过滤:claude 在 `UNCACHED_PROVIDERS` 里,同一时刻的并发请求共用一个在途 promise
-   * (按 provider 去重),接口本身也不带用户。(v3 起目录本来就不按人分,见 claude-model-catalog.service。)
-   * CLI 的 `supportedModels()` 仍然不用:它只认 claude-*,而且每次会留一个幽灵会话。
+   * claude 在 `UNCACHED_PROVIDERS` 里,同一时刻的并发请求共用一个在途 promise(按 provider 去重),
+   * 接口本身也不带用户;按人过滤的定义由 claude-gateways.service 的 modelsDefinitionFor 给出。
+   * CLI 的 `supportedModels()` 不用:它只认 claude-*,而且每次会留一个幽灵会话。
    */
   async getSupportedModels(): Promise<ProviderModelsDefinition> {
     return claudeModelCatalog.buildModelsDefinition();
@@ -192,14 +192,10 @@ export class ClaudeProviderModels implements IProviderModels {
     try {
       const session = sessionsDb.getSessionById(sessionId);
       const jsonlPath = session?.jsonl_path;
-      // The transcript is Claude's own file and every event in it carries
-      // CLAUDE's session id, never the app-side id Prism allocates before the
-      // run starts. Reading it with the app id made the per-event guard in
-      // extractClaudeEventModel reject every line, so this always fell through
-      // to the default and /models reported "default" for every session started
-      // inside Prism. Sessions discovered on disk happened to work because for
-      // those the two ids are equal — which is why it looked intermittent.
-      // Falling back to the given id preserves that case.
+      // Every event in the transcript carries Claude's own session id, never the
+      // app-side id Prism allocates before the run starts; reading with the app id
+      // would make the per-event guard in extractClaudeEventModel reject every line.
+      // Fall back to the given id for sessions discovered on disk, where both ids match.
       const transcriptSessionId = session?.provider_session_id?.trim() || sessionId;
       const activeModel = jsonlPath
         ? await readClaudeSessionModelFromJsonl(transcriptSessionId, jsonlPath)

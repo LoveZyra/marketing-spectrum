@@ -24,8 +24,6 @@ export default function AuthScreenLayout({
 }: AuthScreenLayoutProps) {
   return (
     <div className="relative h-screen overflow-y-auto bg-background">
-      {/* 光晕/极光背景退役:近黑(或纯白)画布 + 发丝线,层级不靠模糊表达。 */}
-
       <div className="relative mx-auto flex min-h-full w-full max-w-md items-center justify-center p-4 py-8">
         <div className="w-full rounded-lg border border-border p-8 sm:p-10">
           <div className="text-center">
@@ -38,12 +36,10 @@ export default function AuthScreenLayout({
 
           <div className="mt-8">{children}</div>
 
-          {/* The upstream-attribution link that used to sit here was removed on
-              request. The attribution term in LICENSE (AGPL-3.0 §7(b)) is
-              satisfiable through documentation, the README *or* Appropriate
-              Legal Notices, and LICENSE, NOTICE and README.md all carry it —
-              which is what makes removing it from this screen fine, and what
-              makes deleting those files not fine. */}
+          {/* No attribution link on this screen: the attribution term in LICENSE
+              (AGPL-3.0 §7(b)) can be met through documentation, the README or
+              Appropriate Legal Notices, and LICENSE, NOTICE and README.md carry it.
+              Those files must therefore stay. */}
           {footerText && (
             <div className="mt-6 border-t border-border pt-5 text-center">
               <p className="text-xs leading-relaxed text-muted-foreground">{footerText}</p>

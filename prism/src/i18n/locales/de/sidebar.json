@@ -18,8 +18,7 @@
     "newSession": "Neue Sitzung",
     "noSessions": "Noch keine Sitzungen",
     "loadingSessions": "Sitzungen werden geladen...",
-    "unnamed": "Unbenannt",
-    "loading": "Lädt..."
+    "unnamed": "Unbenannt"
   },
   "tooltips": {
     "hideSidebar": "Seitenleiste ausblenden",

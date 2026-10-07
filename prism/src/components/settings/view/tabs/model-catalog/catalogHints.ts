@@ -1,11 +1,11 @@
 /**
- * ho:设置 → 模型目录每一行上的提示 —— 纯函数,单测在 catalogHints.test.ts(客户端测试跑 node 环境,挂不起组件)。
+ * 设置 → 模型目录每一行上的提示。纯函数,单测在 catalogHints.test.ts(客户端测试跑 node 环境,挂不起组件)。
  *
  * 两类:
- * 1. **没填窗口的新 Claude 模型**:CLI 2.1.285 走自定义网关(ANTHROPIC_BASE_URL)时,
- *    认这几族名字就按 1M 窗口算(压缩线 967000)。目录里不填窗口 = CLI 自己按 1M 算,
- *    网关真实上限到不了 1M 的话,会在压缩之前就被网关拒掉 —— 所以要在目录行上提醒 root 填真实上限;
- * 2. **近 N 天健康度**:回合数 / 失败率 / 首字延迟的格式化与"失败率偏高"的判定。
+ * 1. 没填窗口的新 Claude 模型:CLI 走自定义网关(ANTHROPIC_BASE_URL)时,认这几族名字就按 1M 窗口算
+ *    (压缩线 967000)。目录里不填窗口而网关真实上限到不了 1M,请求会在压缩之前就被网关拒掉,
+ *    所以要在目录行上提醒 root 填真实上限;
+ * 2. 近 N 天健康度:回合数 / 失败率 / 首字延迟的格式化与"失败率偏高"的判定。
  */
 
 /** CLI 按 1M 窗口算的那几族:claude-sonnet-5*、claude-opus-4-7 及更新的 opus、claude-fable-*。 */
@@ -92,7 +92,7 @@ export function topFailureReasons<T extends { reason: string; count: number }>(r
 
 /* ------------------------------ 实测 ------------------------------ */
 
-/** 实测是多久以前做的:`<1m` / `5m` / `3h` / `2d`;时间认不出或在将来 → 空串。hq 起私有模型的实测也用它。 */
+/** 实测是多久以前做的:`<1m` / `5m` / `3h` / `2d`;时间认不出或在将来 → 空串。目录与私有模型的实测共用。 */
 export function probeAgo(iso: string, now: number = Date.now()): string {
   const ms = now - new Date(iso).getTime();
   if (!Number.isFinite(ms) || ms < 0) return '';

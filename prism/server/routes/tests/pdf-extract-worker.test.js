@@ -1,13 +1,10 @@
 /**
  * PDF 抽文本 worker 里的两个纯函数。
  *
- * 背景:原先用的 `pdf-parse@1.1.4` 打包的是 2018 年的 pdf.js v1.10.100,实测读不了
- * reportlab 生成的 PDF(一律 `bad XRef entry`)。换成维护中的 pdfjs-dist 之后,
- * 同一批样本(reportlab 四种变体、手写残缺 PDF、LibreOffice、Chromium)全部能读。
- *
- * 这里钉住的是两件容易回退的事:
- *   1. 报错要说人话 —— `bad XRef entry` 对用户毫无意义,也不提示能怎么办;
- *   2. 换行要保住 —— 不看 `hasEOL` 就会把整页文字拼成没有空格的一长条。
+ * 用维护中的 pdfjs-dist,不用 pdf-parse:后者打包的 pdf.js 太旧,读不了 reportlab 生成的 PDF
+ * (一律 `bad XRef entry`)。这里钉住的是两件容易回退的事:
+ *   1. 报错要说人话:`bad XRef entry` 这类原始报错对用户毫无意义,也不提示能怎么办;
+ *   2. 换行要保住:不看 `hasEOL` 就会把整页文字拼成没有空格的一长条。
  */
 
 import { describe, it, expect } from 'vitest';

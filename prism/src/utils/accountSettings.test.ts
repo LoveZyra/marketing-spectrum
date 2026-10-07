@@ -1,6 +1,6 @@
 /**
- * hl(动态 P1-7 / 09-24 P1-5):同一浏览器换账号,前一个人的设置与草稿不得推成后一个人的。
- * 对着改前的写法(不记主人、草稿参与同步、登出只清令牌)这几条都会红。
+ * 同一浏览器换账号,前一个人的设置与草稿不得推成后一个人的。
+ * 不记主人、草稿参与同步、登出只清令牌,这几种写法都会让下面的用例变红。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -115,7 +115,7 @@ describe('accountSettings · 换账号', () => {
     expect(storage.getItem('accountSettingsOwner')).toBeNull();
   });
 
-  it('hl 复核 P3-7:登出只清草稿与时间戳;同一个人再登录内容一致 → 不报变化(不整页重载)', async () => {
+  it('登出只清草稿与时间戳;同一个人再登录内容一致 → 不报变化(不整页重载)', async () => {
     const { clearLocalAccountStateOnLogout, pullAccountSettings, pushAccountSettings } = await load();
     storage.setItem('auth-token', tokenFor(1));
     storage.setItem('codeEditorFontSize', '18');
@@ -136,7 +136,7 @@ describe('accountSettings · 换账号', () => {
     expect(puts().length).toBe(0);
   });
 
-  it('hl 复核 P3-7:登出后换人登录,上一个人的同步键仍被清掉且不会推上去', async () => {
+  it('登出后换人登录,上一个人的同步键仍被清掉且不会推上去', async () => {
     const { clearLocalAccountStateOnLogout, pullAccountSettings } = await load();
     storage.setItem('auth-token', tokenFor(1));
     storage.setItem('accountSettingsOwner', '1');
@@ -149,18 +149,5 @@ describe('accountSettings · 换账号', () => {
     expect(puts().length).toBe(0);
     expect(storage.getItem('claude-settings')).toBeNull();
     expect(storage.getItem('accountSettingsOwner')).toBe('2');
-  });
-
-  it('schedulePushAccountSettings 默认空转(草稿不再同步)', async () => {
-    vi.useFakeTimers();
-    try {
-      const { schedulePushAccountSettings } = await load();
-      storage.setItem('auth-token', tokenFor(1));
-      schedulePushAccountSettings(10);
-      await vi.advanceTimersByTimeAsync(50);
-      expect(puts().length).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

@@ -9,10 +9,9 @@ import { Shimmer } from './ui/Shimmer';
  * Each of those panels is already conditionally rendered — the Git tab only
  * mounts when the Git tab is open — so making them `React.lazy` costs nothing
  * at runtime and keeps their dependencies out of the initial bundle. That
- * matters here specifically: the terminal (xterm, ~400 kB) and the code editor
- * (CodeMirror, ~660 kB) together were most of a 2.3 MB entry chunk that every
- * visitor downloaded before the chat view could paint, including over LAN on a
- * phone, which is a supported way to use this app.
+ * matters here: the terminal (xterm, ~400 kB) and the code editor (CodeMirror,
+ * ~660 kB) would otherwise be downloaded before the chat view could paint,
+ * including on a phone over the LAN, which is a supported way to use this app.
  *
  * `React.lazy` throws a promise on first render (handled by Suspense) and
  * throws a real error if the chunk fetch fails (handled by ErrorBoundary), so

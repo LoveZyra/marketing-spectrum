@@ -30,13 +30,13 @@ export type RuntimeStats = {
   caches: { history: { entries: number; bytes: number } };
 };
 
-// 口径见 utils/formatBytes(这份原本与父组件 ServerStatusTab 的那份不一致)。
+// 字节数统一用 utils/formatBytes 格式化,与并排渲染的 ServerStatusTab 同一口径。
 
 const ownerLabel = (owner: OwnerUsage, anonymous: string): string =>
   owner.username ?? (owner.userId == null ? anonymous : `#${owner.userId}`);
 
 /**
- * 进程内资源(F6,root 只读):常驻池 / 在飞回合 / 待审批 / PTY / 历史缓存。
+ * 进程内资源(root 只读):常驻池 / 在飞回合 / 待审批 / PTY / 历史缓存。
  *
  * 与上面那组「这台机器怎么样」的指标是两回事:机器很闲而 Prism 很慢,原因通常
  * 就在这里 —— 名额被占满、某人挂了一堆 PTY、缓存把内存吃了。按账号切一份,

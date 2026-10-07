@@ -96,7 +96,7 @@ export default function FolderBrowserModal({
 
   const parentPath = getParentPath(currentPath);
 
-  // hl 复核 P2-2:接入弹层栈 —— 它叠在新建项目向导上面,Esc 只关它自己。
+  // 接入弹层栈:它叠在新建项目向导上面,Esc 只关它自己。
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalKeyboard(dialogRef, { open: isOpen, onClose: handleClose, lockScroll: false });
 

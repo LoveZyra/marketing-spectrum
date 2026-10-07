@@ -1,22 +1,17 @@
 /**
- * 实时帧的会话归属(dk)。
+ * 实时帧的会话归属:归属不明的帧一律不落盘。
  *
- * 症状(线上截图):别的会话的折叠时间轴钉在**每个**页面顶端,F5 才消失。
- * 根因:没带 `sessionId` 的帧一律被记到"当前正在看的那个会话"头上
- * (`sid = msg.sessionId || activeViewSessionId`),然后 `appendRealtime`
- * 落进本地列表;服务端 transcript 不认它,`pruneRealtimeSupersededByServer`
- * 永远清不掉。后台会话 / 定时任务 / 外部 API 触发的回合里,凡是绕过
- * ChatSessionWriter 装饰的边角帧都可能不带会话 id,于是全被焊死在你正看的页面上。
+ * 后台会话 / 定时任务 / 外部 API 触发的回合里,绕过 ChatSessionWriter 装饰的边角帧可能不带会话 id。
+ * 若把它记到"当前正在看的会话"头上,它会经 `appendRealtime` 进入本地列表,而服务端 transcript
+ * 不认它,`pruneRealtimeSupersededByServer` 永远清不掉,别的会话的内容就一直钉在当前页面上。
  *
- * 修法:**归属不明的帧一律不落盘**。
- * 1. 服务端每帧都带 `runId`(dc 起),凡是同时带 runId 和 sessionId 的帧,
- *    先把映射记下来;
+ * 1. 服务端每帧都带 `runId`,凡是同时带 runId 和 sessionId 的帧,先把映射记下来;
  * 2. 没带 sessionId 的帧按 runId 查映射;
  * 3. 还查不到 → 返回 null,调用方只把它当控制帧,并打一条 warn ——
- *    宁可少一行,也不要把别的会话的内容焊死在这里。
+ *    宁可少一行,也不要把别的会话的内容留在这里。
  *
- * 唯一保留兜底的是 `protocol_error`:它是对**本客户端刚发出的动作**的直接回话,
- * 归到正在看的会话展示是合理的(也只用于展示,不参与游标)。
+ * 唯一保留兜底的是 `protocol_error`:它是对本客户端刚发出的动作的直接回话,
+ * 归到正在看的会话展示是合理的(只用于展示,不参与游标)。
  */
 
 /** runId → sessionId 映射的容量上限。超限丢最老的(Map 按插入序迭代)。 */

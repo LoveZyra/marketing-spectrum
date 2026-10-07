@@ -8,13 +8,13 @@ import {
 } from '../model-catalog/modelCatalogApi';
 
 /**
- * hq:模型网关与 key 的前端接口 —— 与服务端 `claude-gateways.routes.ts` 一一对应。
+ * 模型网关与 key 的前端接口,与服务端 `claude-gateways.routes.ts` 一一对应。
  *
  * - `gatewaysAdminApi`(root):共享网关增删改、默认 key、替人填 key、私有网关总开关;
  * - `myGatewaysApi`(任何登录用户):自己的个人 key、私有网关、私有模型。
  *
- * **key 只进不出**:请求里会带明文 key(PUT / 测试),响应里最多是末四位。
- * 任何改动都广播 `MODEL_CATALOG_CHANGED_EVENT` —— 对话页的模型选择器据此重拉(哪些模型能用变了);
+ * key 只进不出:请求里会带明文 key(PUT / 测试),响应里最多是末四位。
+ * 任何改动都广播 `MODEL_CATALOG_CHANGED_EVENT`,对话页的模型选择器据此重拉(哪些模型能用变了);
  * root 的网关改动另外广播 `MODEL_GATEWAYS_CHANGED_EVENT`,让模型目录里的「网关」下拉跟着刷新。
  */
 

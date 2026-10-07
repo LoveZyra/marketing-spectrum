@@ -49,7 +49,7 @@ export default function ShellHeader({
 }: ShellHeaderProps) {
   return (
     <div className="flex-shrink-0 border-b border-border bg-muted px-4 py-2">
-      {/* hl(动态 P2-21):手机端按钮原来被挤成竖排 —— 左侧状态区可收缩、会话名截断,按钮区不收缩不换行。 */}
+      {/* 左侧状态区可收缩、会话名截断,按钮区不收缩不换行,免得手机上按钮被挤成竖排。 */}
       <div className="flex min-w-0 items-center justify-between gap-2">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <div className={`h-2 w-2 shrink-0 rounded-full ${isConnected ? 'bg-primary' : 'bg-muted-foreground'}`} />

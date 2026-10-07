@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { advancesReplayCursor } from './useChatRealtimeHandlers';
 
 /**
- * dv:丢帧判定与补发游标是**两条水位**。
+ * 丢帧判定与补发游标是两条水位。
  *
- * 服务端给每一帧都分配 seq(含 permission),而补发游标故意不为审批帧推进 ——
- * 用同一个水位判丢帧的话,每弹一次审批就误判一次并触发全量 refresh。
+ * 服务端给每一帧都分配 seq(含 permission),而补发游标故意不为审批帧推进;
+ * 用同一个水位判丢帧,每弹一次审批就会误判一次并触发全量 refresh。
  */
 type Frame = { kind: string; seq: number; runId: string };
 
@@ -36,9 +36,9 @@ describe('seq 空洞判定', () => {
       { kind: 'permission_request', seq: 2, runId: 'r1' },
       { kind: 'tool_use', seq: 3, runId: 'r1' },
     ]);
-    // 修前:tool_use 的 seq 3 对上游标 1 → 误判丢帧
+    // 若拿补发游标判丢帧:tool_use 的 seq 3 对上游标 1,会被误判为丢帧
     expect(result.gapsDetected).toBe(0);
-    // 补发游标仍然只停在最后一条**留下来的**帧上
+    // 补发游标仍然只停在最后一条留下来的帧上
     expect(result.cursorSeq).toBe(3);
   });
 

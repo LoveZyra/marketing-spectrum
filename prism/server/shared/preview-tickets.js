@@ -13,7 +13,7 @@
 //   issuePreviewTicket({ projectId, relDir, viewer? }) -> 64 位十六进制串
 //   readPreviewTicket(ticket) -> { projectId, relDir, viewer? } | null
 //
-// **和 WS 票据不同,这些不是一次性的**:一次预览要加载文档本身,外加它引用的
+// 和 WS 票据不同,这些不是一次性的:一次预览要加载文档本身,外加它引用的
 // 每一个资源。取出即删会让第一张图之后的所有请求全部失败。
 
 import { createTicketStore } from './ticket-store.js';
@@ -37,8 +37,8 @@ export function issuePreviewTicket({ projectId, relDir, viewer = null }) {
   return store.issue({
     projectId: String(projectId),
     relDir: String(relDir ?? ''),
-    // hj(审计 P1-2):记下是谁、签票时的 token_version。公开口据此重跑「这个人现在还能不能用、
-    // 还能不能看这个项目」—— 原来票里只有项目和目录,5 分钟内停用 / 取消共享都拦不住。
+    // 记下签票人与签票时的 token_version:公开入口据此重新判定「这个人现在还能不能用、
+    // 还能不能看这个项目」,票据有效期内停用账号或取消共享也能立即生效。
     ...(viewer && viewer.userId != null ? {
       viewer: {
         userId: viewer.userId,

@@ -25,3 +25,20 @@ export function sendSocketMessage(ws: WebSocket | null, message: ShellOutgoingMe
     ws.send(JSON.stringify(message));
   }
 }
+
+/**
+ * 主动关掉一条终端 socket,关之前先摘掉它的回调。
+ *
+ * close() 只是发起关闭握手,onclose 要一个往返之后才到。那时下一次连接往往已经开始,
+ * 旧回调再来复位「连接中」标志,自动连接就会再开一条,前一条成了没人持有的孤儿。
+ * 回调摘掉之后,连接状态由调用方自己同步复位。
+ */
+export function detachAndCloseSocket(ws: WebSocket): void {
+  ws.onopen = null;
+  ws.onmessage = null;
+  ws.onerror = null;
+  ws.onclose = null;
+  if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+    ws.close();
+  }
+}

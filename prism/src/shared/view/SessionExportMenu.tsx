@@ -15,7 +15,7 @@ type Props = {
   children: (props: { onClick: (event: React.MouseEvent) => void; ref: React.Ref<HTMLButtonElement> }) => React.ReactNode;
   onExport: (options: { format: SessionExportFormat; includeTools: boolean }) => void;
   /**
-   * ef:顶栏的「…」把导出和其它会话动作(复制项目路径)放进同一个面板 ——
+   * 顶栏的「…」把导出和其它会话动作(复制项目路径)放进同一个面板:
    * 这些附加项排在格式与开关之后,隔一条发丝线。侧栏的导出按钮不传。
    */
   extraActions?: SessionMenuAction[];
@@ -30,11 +30,8 @@ const FORMATS: Array<{ value: SessionExportFormat; labelKey: string; fallback: s
 ];
 
 /**
- * 导出格式选单(F12)。
- *
- * 导出按钮原来是"点了就下 Markdown"。加了 JSON 与「含工具过程」之后,再把它藏进
- * 一个固定行为里就说不过去了 —— 但也不该为此弹出一个模态框:选个格式而已。
- * 一枚贴着按钮的小面板,三个格式 + 一个开关,点哪个下哪个。
+ * 导出格式选单:一枚贴着按钮的小面板,三个格式 + 「含工具过程」开关,点哪个下哪个。
+ * 选个格式而已,不值得弹模态框。
  *
  * 面板 portal 到 body:侧栏那颗按钮在 overflow-hidden 的滚动容器里,不 portal 会被裁掉。
  */

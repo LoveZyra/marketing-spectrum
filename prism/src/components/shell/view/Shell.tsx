@@ -31,7 +31,7 @@ type ShellProps = {
   onProcessComplete?: ((exitCode: number) => void) | null;
   minimal?: boolean;
   autoConnect?: boolean;
-  /** F10:多标签时每个终端一个 id。 */
+  /** 多标签时每个终端一个 id。 */
   terminalId?: string | null;
   isActive?: boolean;
 };

@@ -1,10 +1,10 @@
 /**
  * User repository.
  *
- * Prism used to be single-user; it now holds one account per colleague, each
- * gated by an approval status a root account sets. Root itself is never stored
- * here — it is computed from `PRISM_ROOT_USERS` (see server/shared/root-users.js)
- * so there is one source of truth and no drift between env and database.
+ * One account per colleague, each gated by an approval status that a root
+ * account sets. Root status is never stored here: it is computed from
+ * `PRISM_ROOT_USERS` (see server/shared/root-users.js), so env and database
+ * cannot drift apart.
  */
 
 import { getConnection } from '@/modules/database/connection.js';
@@ -41,7 +41,7 @@ export type UserAdminRow = {
   approved_at: string | null;
   reviewed_by: number | null;
   reviewed_by_username: string | null;
-  /** F6:附件配额的每用户覆盖(MB)。null = 跟随全局默认。 */
+  /** 附件配额的每用户覆盖(MB)。null = 跟随全局默认。 */
   attachment_quota_mb: number | null;
 };
 
@@ -107,10 +107,9 @@ export const userDb = {
   },
 
   /**
-   * hl(动态 P3):**含已停用账号**的用户名查找 —— 只给登录失败的审计分类用。
-   * `getUserByUsername` 带 is_active=1,停用账号登录时查不到,审计就记成了
-   * `unknown user`(误导:管理员翻记录会以为有人在猜用户名)。只回 id / username / is_active,
-   * 鉴权路径仍走上面那条,停用账号照样登不进去。
+   * 含已停用账号的用户名查找,只给登录失败的审计分类用。`getUserByUsername` 只查
+   * is_active=1,停用账号登录失败会被记成 `unknown user`,让管理员误以为有人在猜用户名。
+   * 只回 id / username / is_active;鉴权仍走 `getUserByUsername`,停用账号照样登不进去。
    */
   findUserByUsernameIncludingInactive(username: string): Pick<UserRow, 'id' | 'username' | 'is_active'> | undefined {
     const db = getConnection();
@@ -143,7 +142,7 @@ export const userDb = {
   },
 
   /**
-   * hj(审计 P1-2):凭据(票据、cookie、API key)背后的那个人**现在**还能不能用。
+   * 凭据(票据、cookie、API key)背后的那个人现在还能不能用。
    * 在 `getUserById`(只返回 is_active=1)之上再过 `isAccountUsable`:审批状态 + 可选的 token_version。
    * 下载票 / 预览票 / 任务票 / Jupyter 会话都走这一个判定。
    */
@@ -192,9 +191,9 @@ export const userDb = {
   },
 
   /**
-   * F6:读一个账号的附件配额覆盖(MB)。null = 没设过,跟随全局默认。
+   * 读一个账号的附件配额覆盖(MB)。null = 没设过,跟随全局默认。
    *
-   * 单独一条查询而不是塞进 listUsersForAdmin —— 这条在**每次附件提交**的热路径上
+   * 单独一条查询而不是塞进 listUsersForAdmin —— 这条在每次附件提交的热路径上
    * 被调用(见 attachment-storage.ts),不能顺带把全表用户捞回来。
    */
   getAttachmentQuotaMb(userId: number): number | null {
@@ -207,11 +206,11 @@ export const userDb = {
   },
 
   /**
-   * F6:设置/清除某账号的附件配额覆盖。传 null 即回到全局默认。
+   * 设置/清除某账号的附件配额覆盖。传 null 即回到全局默认。
    *
-   * **0 和负数一律当成"清除覆盖"**,不是"覆盖成 0"。把某人的配额设成 0 意味着
-   * 他一个字节都传不了,那应该是另一个开关(停用附件),不该是配额输入框手滑
-   * 的后果。路由那层已经把 <1 挡成 400,这里是第二道。
+   * 小于 1 的值(含 0 和负数)一律当成"清除覆盖",不是"覆盖成 0"。配额为 0 等于
+   * 一个字节都传不了,那应该是另一个开关(停用附件),不该是配额输入框手滑的后果。
+   * 路由那层已经把 <1 挡成 400,这里是第二道。
    *
    * 返回 false 表示 id 不存在 —— 路由据此答 404,而不是对着打错的 id 报成功。
    */
@@ -240,7 +239,7 @@ export const userDb = {
     const db = getConnection();
     // 不再是 approved 时必须顶掉已签发的 token。
     //
-    // 鉴权中间件查的是账号存在性和 token_version,**从不查 approval_status**
+    // 鉴权中间件查的是账号存在性和 token_version,从不查 approval_status
     // (它甚至被 select 出来然后丢掉了)。审批闸门只拦登录接口,所以 root 拒绝
     // 一个正在线上的用户之后,那个人手里 7 天有效期的 JWT 会一直好用到过期 ——
     // "拒绝"在界面上生效了,在会话层面没有。

@@ -11,11 +11,11 @@ import { useWebSocket } from '../contexts/WebSocketContext';
  * 连请求都不发。
  *
  * 三路更新,谁先到听谁的:
- * 1. **服务端推送**(admin_pending_approvals 帧):有人注册、root 批准/驳回时
+ * 1. 服务端推送(admin_pending_approvals 帧):有人注册、root 批准/驳回时
  *    服务端立即广播最新数 —— 红点实时出现、审批完实时消失;
- * 2. **本地事件** `prism:approvals-changed`:本浏览器里自己点了批准/驳回,
+ * 2. 本地事件 `prism:approvals-changed`:本浏览器里自己点了批准/驳回,
  *    不等推送直接刷一次(推送丢了也兜得住);
- * 3. **轮询 60s + 窗口聚焦**:掉线期间发生的注册靠它补。
+ * 3. 轮询 60s + 窗口聚焦:掉线期间发生的注册靠它补。
  */
 
 const POLL_INTERVAL_MS = 60_000;

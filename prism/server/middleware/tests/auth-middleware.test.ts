@@ -6,14 +6,12 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, test } from 'vitest';
 
 /**
- * G1:鉴权中间件的行为矩阵。
+ * 鉴权中间件的行为矩阵。
  *
- * 这个文件此前**一个测试都没有**,而它是整个服务里唯一决定"你是谁、你能不能进"
- * 的地方:JWT 校验、令牌吊销(token_version)、半衰期续签、root 判定、API key 闸、
- * WebSocket 升级鉴权。任何一条错掉都是越权,而越权是这类系统里最贵的错。
+ * 中间件是整个服务里唯一决定"你是谁、你能不能进"的地方:JWT 校验、令牌吊销(token_version)、
+ * 半衰期续签、root 判定、API key 闸、WebSocket 升级鉴权。任何一条错掉都是越权。
  *
- * 每条用例钉的都是**行为**(响应码 / req.user / 返回值),不是实现 —— 中间件重写
- * 一遍也该照样通过。
+ * 每条用例钉的都是行为(响应码 / req.user / 返回值),不是实现,中间件重写一遍也该照样通过。
  */
 type FakeResponse = {
   statusCode: number | null;
@@ -48,10 +46,10 @@ let auth: typeof import('@/middleware/auth.js');
 let userDb: typeof import('@/modules/database/index.js')['userDb'];
 
 /**
- * auth.js 在**模块加载时**读 JWT_SECRET,所以密钥必须在 import 之前就位 ——
+ * auth.js 在模块加载时读 JWT_SECRET,所以密钥必须在 import 之前就位 ——
  * 于是整个文件共用一次导入(beforeAll),而不是每个用例重载。
  *
- * 这样做是安全的:PRISM_API_KEY 与 PRISM_ALLOW_QUERY_TOKEN 都是**每次请求**现读的,
+ * 这样做是安全的:PRISM_API_KEY 与 PRISM_ALLOW_QUERY_TOKEN 都是每次请求现读的,
  * 需要它们变化的用例直接改 env 即可,不需要新的模块实例。
  */
 beforeAll(async () => {
@@ -144,7 +142,7 @@ describe('authenticateToken', () => {
 
   test('token 指向的用户不存在时 401(而不是当成匿名放行)', async () => {
     const alice = createUser('alice');
-    // 用一个库里没有的 id 签一个**签名合法**的 token —— 这正是"删号后旧 token"
+    // 用一个库里没有的 id 签一个签名合法的 token —— 这正是"删号后旧 token"
     // 和"跨库复用 token"两种情况的形状。
     const orphan = auth.generateToken({ id: alice.id + 9999, username: 'ghost', token_version: 0 });
 
@@ -189,7 +187,7 @@ describe('authenticateToken', () => {
     assert.equal(res.statusCode, 401);
   });
 
-  test('默认**不接受** ?token= —— 那正是要消灭的泄漏面(URL 会进日志和浏览器历史)', async () => {
+  test('默认不接受 ?token= —— 那正是要消灭的泄漏面(URL 会进日志和浏览器历史)', async () => {
     const alice = createUser('alice');
     const token = auth.generateToken(alice);
 
@@ -280,7 +278,7 @@ describe('generateToken', () => {
     userDb.bumpTokenVersion(alice.id);
     const fresh = userDb.getUserById(alice.id)!;
 
-    // 用**旧行**(version 0)签出来的 token 应该已经不被接受
+    // 用旧行(version 0)签出来的 token 应该已经不被接受
     const stale = auth.generateToken({ ...alice, token_version: 0 });
     assert.equal(auth.authenticateWebSocket(stale), null);
 

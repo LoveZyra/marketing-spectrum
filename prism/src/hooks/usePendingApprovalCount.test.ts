@@ -7,8 +7,8 @@ import { describe, test } from 'vitest';
  *
  * 逻辑本身在 hook 里(依赖 React 与 fetch,不便在 node 环境直接跑),这里钉的是
  * 它赖以成立的那条契约:`/api/admin/users` 返回的行里,只有 approval_status
- * 恰好为 'pending' 的才计数。approved / rejected 都不算 —— 曾经有一版把
- * "非 approved" 当待办,于是被拒的账号会永远挂在红点里。
+ * 恰好为 'pending' 的才计数。approved / rejected 都不算 —— 把"非 approved"
+ * 当待办的话,被拒的账号会永远挂在红点里。
  */
 const countPending = (users: Array<{ approval_status?: string }>) =>
   users.filter((user) => user.approval_status === 'pending').length;

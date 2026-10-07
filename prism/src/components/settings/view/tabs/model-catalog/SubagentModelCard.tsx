@@ -14,10 +14,10 @@ import {
 } from './modelCatalogApi';
 
 /**
- * ho:设置 → 模型里的「子代理模型」(root,全局一份)。
+ * 设置 → 模型里的「子代理模型」(root,全局一份)。
  *
  * - 跟随主模型(model = null,默认):不写任何 env,内置子代理沿用主会话的模型;
- *   主模型点名 sonnet / opus / haiku / fable 时走下方的别名映射 —— 与改动前一致;
+ *   主模型在 Agent 工具里点名 sonnet / opus / haiku / fable 时走下方的别名映射;
  * - 指定一个模型:写 `CLAUDE_CODE_SUBAGENT_MODEL`,成为子代理的默认模型;
  * - 强制(只在选了模型时可勾):再写 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`,主模型点名别名也一律用它。
  *

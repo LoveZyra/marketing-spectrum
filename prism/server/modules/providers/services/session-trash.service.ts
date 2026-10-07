@@ -1,28 +1,22 @@
 /**
- * gk:最近删除(会话回收站)—— 文件搬运、清扫与恢复。
+ * 最近删除(会话回收站):文件搬运、清扫与恢复。
  *
- * 永久删除不再 unlink transcript:它和旁边的 `<provider id>/` 目录(子代理 transcript、
+ * 永久删除不 unlink transcript:它和旁边的 `<provider id>/` 目录(子代理 transcript、
  * 大工具输出)一起搬到 `<数据目录>/trash/<YYYY-MM-DD>/<app session id>/` 下;
  * 库里的行与显示日志搬进 `session_trash` 两张表(见 session-trash.db.ts)。
  * `PRISM_TRASH_RETENTION_DAYS`(默认 30,0 = 永不自动清)之后由清扫器真删。
  *
- * ## 为什么搬走而不是留在原地
+ * 搬走而不是留在原地:transcript 留在 `~/.claude/projects` 里,监视器下一次扫到它就会
+ * 重新索引成一条新会话,删了又冒出来。监视器另有一道门:provider id 在回收站里的
+ * transcript 一律不索引(见 createSession),两道门少一道都会在某个时序下漏。
  *
- * transcript 留在 `~/.claude/projects` 里,监视器下一次扫到它就会重新索引成一条
- * "CLI 自己开的"新会话 —— 删了又冒出来。搬走之后原目录里就没有它了。
- * 监视器另有一道门:provider id 在回收站里的 transcript 一律不索引(见 createSession),
- * 两道门一起挡,少一道都会在某个时序下漏。
- *
- * ## 空壳复活
- *
- * 2026-09-14 那次事故里,transcript 删掉之后半小时,常驻 CLI 进程被回收,退出时按
- * 老路径写了两行收尾记录(`last-prompt` / `mode`),同名文件"复活"成 362 字节的空壳。
- * 所以删除路径先收 runtime(sessions.service),搬完文件再**晚几秒回头看一眼**
- * (`scheduleStrayCheck`):老路径上又冒出来的、没有 `cwd` 行的小文件一律收进回收站目录。
+ * 空壳复活:常驻 CLI 进程被回收时,会按原路径写几行收尾记录(`last-prompt` / `mode`),
+ * 把已删的 transcript 重新建成一个小空壳。所以删除路径先收 runtime(sessions.service),
+ * 搬完文件再晚几秒回头看一眼(`scheduleStrayCheck`):原路径上又冒出来的、没有 `cwd` 行的
+ * 小文件一律收进回收站目录。
  */
 
 import { createHash } from 'node:crypto';
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
@@ -44,10 +38,9 @@ export const DEFAULT_TRASH_RETENTION_DAYS = 30;
 /**
  * 保留天数。未配置 = 30;显式 `0` = 永不自动清扫。
  *
- * **写不成数的值按默认 30 处理,并喊一声。** 上一版把它和显式 0 归成一类,
- * 于是 `PRISM_TRASH_RETENTION_DAYS=30d` 这种手滑会静默关掉整个清扫器
- * (`startTrashSweeper` 在 `<= 0` 时连定时器都不建),回收站无声无息地长到满盘 ——
- * 而配置看上去是"设了 30 天"的。关掉自动清扫是一个需要明写 `0` 的决定。
+ * 写不成非负整数的值按默认 30 处理并打 warn,不能当成 0:`PRISM_TRASH_RETENTION_DAYS=30d`
+ * 这种手滑若静默关掉清扫器(`startTrashSweeper` 在 `<= 0` 时连定时器都不建),回收站会
+ * 无声地长到满盘。关掉自动清扫必须明写 `0`。
  */
 export function getTrashRetentionDays(): number {
   const raw = process.env.PRISM_TRASH_RETENTION_DAYS;
@@ -69,13 +62,12 @@ export function trashRootDir(): string {
 }
 
 /**
- * 回收站桶名里那一段 session id —— **不能直接拿 id 当路径段**。
+ * 回收站桶名里那一段 session id:不能直接拿 id 当路径段。
  *
- * `session_id` 不全是我们自己生成的:监视器索引磁盘上的 transcript 时,
- * 这个值是从 jsonl 里读出来的(`data.sessionId`),而路由的校验正则允许点号
- * (`/^[a-zA-Z0-9._-]{1,120}$/`)。也就是说 `".."` 是一个能走完全程的合法 id:
- * `path.join(trash, '2026-09-15', '..')` = `trash`,随后 `purgeTrashFiles` 的
- * `rm -rf` 就会端掉**所有人**的回收站。
+ * `session_id` 不全是我们自己生成的:监视器索引磁盘上的 transcript 时,这个值是从 jsonl 里
+ * 读出来的(`data.sessionId`),而路由的校验正则允许点号(`/^[a-zA-Z0-9._-]{1,120}$/`)。
+ * 于是 `".."` 是一个能走完全程的合法 id:`path.join(trash, <日期>, '..')` = `trash`,
+ * 随后 `purgeTrashFiles` 的 `rm -rf` 就会端掉所有人的回收站。
  *
  * 所以这里只放 `[A-Za-z0-9_-]`,其余一律换成 `_`;换过字符的再缀一段原 id 的
  * 短哈希,免得 `a.b` 与 `a_b` 这类不同 id 落进同一个桶。
@@ -88,9 +80,9 @@ export function trashBucketSegment(sessionId: string): string {
 }
 
 /**
- * 这个路径是不是一个**货真价实的回收站桶**(`<trash>/<日期>/<段>`)。
+ * 这个路径是不是一个货真价实的回收站桶(`<trash>/<日期>/<段>`)。
  *
- * 判两件事:在 trash 根目录**之内**(用 `path.relative` 而不是 `startsWith` ——
+ * 判两件事:在 trash 根目录之内(用 `path.relative` 而不是 `startsWith` ——
  * 后者会把 `<dataDir>/trash-old` 也算进来),且深度正好两级 ——
  * 根目录本身和单独一个日期目录都不许删。
  */
@@ -123,8 +115,8 @@ async function pathExists(target: string): Promise<boolean> {
 
 /**
  * 搬一个文件或目录。同一文件系统上是一次 rename;跨设备(EXDEV)退回复制 + 删除。
- * 目标已存在的**文件**会被 rename 原子覆盖(那正是"空壳复活"要覆盖掉的东西);
- * 目标已存在的**目录**rename 会失败(ENOTEMPTY/EEXIST),退回合并复制。
+ * 目标已存在的文件会被 rename 原子覆盖(那正是"空壳复活"要覆盖掉的东西);
+ * 目标已存在的目录 rename 会失败(ENOTEMPTY/EEXIST),退回合并复制。
  */
 async function movePath(source: string, destination: string): Promise<void> {
   await fsp.mkdir(path.dirname(destination), { recursive: true });
@@ -228,11 +220,11 @@ export function scheduleStrayCheck(
     pendingStrayChecks.delete(row.session_id);
     void (async () => {
       /**
-       * **这八秒里会话可能已经被恢复了。** 那时老路径上的文件是刚搬回去的真
+       * 这八秒里会话可能已经被恢复了。 那时老路径上的文件是刚搬回去的真
        * transcript(或它上面正在续写),不是空壳;`isStrayShellTranscript` 对
        * 正常 transcript 会返回 false,但"刚恢复的一条本来就只剩壳"这种情况
        * 判不出来 —— 于是把刚恢复的东西又搬进一个没有回收站行指向的桶里,
-       * 那才是真的找不回来。所以先确认这条**还在回收站里**。
+       * 那才是真的找不回来。所以先确认这条还在回收站里。
        */
       if (!sessionTrashDb.get(row.session_id)) return;
       if (!(await isStrayShellTranscript(jsonlPath))) return;
@@ -261,7 +253,7 @@ export function cancelStrayCheck(sessionId: string): void {
  * 恢复:把 transcript 与目录搬回原路径。老路径上若有空壳,rename 直接覆盖。
  *
  * `failed` 区分"回收站里本来就没有文件"(搬不搬都对)与"有文件但搬不动"
- * (原目录被删了、只读盘、权限)。调用方**必须先看 `failed`**:库里的行一旦搬回
+ * (原目录被删了、只读盘、权限)。调用方必须先看 `failed`:库里的行一旦搬回
  * 活表,回收站行就没了,那份文件也就再没有任何东西指向它 —— 连清扫器都找不到。
  */
 export async function restoreTranscriptFromTrash(
@@ -318,7 +310,7 @@ export async function purgeTrashFiles(row: SessionTrashRow): Promise<void> {
     }
   } else if (jsonlPath && !row.trash_jsonl_path && await pathExists(jsonlPath)) {
     /**
-     * 删除时 transcript **没搬成**(只读盘 / 权限 / 满盘),文件还在原地。
+     * 删除时 transcript 没搬成(只读盘 / 权限 / 满盘),文件还在原地。
      * 清扫把回收站行删掉之后,监视器那道"在回收站里就不索引"的门也跟着没了 ——
      * 下一次扫到这个文件,这段已经永久删除的对话会作为一条新会话重新出现。
      * 这里不代替运维做删除决定(判错就没了),但必须留下一行指名文件的日志。
@@ -365,8 +357,8 @@ export async function sweepExpiredTrash(now = new Date()): Promise<number> {
 /**
  * 启动跑一次,之后每 6 小时一轮。
  *
- * **必须在库初始化之后调用** —— 它第一件事就是查 `session_trash`。
- * 失败不再静默吞掉:清扫是"到点真删",它一直失败而没人知道,回收站就会
+ * 必须在库初始化之后调用 —— 它第一件事就是查 `session_trash`。
+ * 失败要打日志,不能静默吞掉:清扫是"到点真删",它一直失败而没人知道,回收站就会
  * 一边长一边看着像在工作。
  */
 export function startTrashSweeper(): NodeJS.Timeout | null {
@@ -380,9 +372,4 @@ export function startTrashSweeper(): NodeJS.Timeout | null {
   const timer = setInterval(runOnce, SWEEP_INTERVAL_MS);
   if (typeof timer.unref === 'function') timer.unref();
   return timer;
-}
-
-/** 测试用:回收站根目录存不存在(不建)。 */
-export function trashRootExistsSync(): boolean {
-  return fs.existsSync(trashRootDir());
 }

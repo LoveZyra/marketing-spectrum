@@ -5,22 +5,19 @@ import { describe, expect, it } from 'vitest';
 import { subagentTranscriptCandidates } from '@/modules/providers/list/claude/claude-sessions.provider.js';
 
 /**
- * F35:子代理 transcript 到底在哪儿。
+ * 子代理 transcript 到底在哪儿。
  *
- * **同一个仓库里的两处对这件事的认知不一致**:
- *   - 同步器(`claude-session-synchronizer.provider.ts`)白纸黑字写着当前形状是
- *     `<projectDir>/<session-id>/subagents/agent-<id>.jsonl`,还专门写了一个
- *     `isSubagentTranscript()` 来跳过那些文件;
- *   - 读取那一侧只找扁平的 `<projectDir>/agent-<id>.jsonl`。
- *
- * 于是新版本上**子代理的工具细节永远读不到**(Task 工具在界面上没有内层),
- * 而且找不到时一声不吭 —— 连"它去哪儿找过"都没有记录。
+ * 当前形状是 `<projectDir>/<session-id>/subagents/agent-<id>.jsonl`(同步器
+ * `claude-session-synchronizer.provider.ts` 的 `isSubagentTranscript()` 也按这个形状跳过它们),
+ * 旧形状是扁平的 `<projectDir>/agent-<id>.jsonl`。读取一侧必须和同步器认同一个形状,否则子代理的
+ * 工具细节读不到(Task 工具在界面上没有内层),而且找不到时一声不吭。
+ * 所以按候选顺序找:当前形状在前,旧形状留作兼容放在最后。
  */
 const DIR = path.join('/home/u/.claude/projects', '-home-u-proj');
 const SESSION = 'b93db2bb-f99c-4ea6-ae64-f21c98992e35';
 
 describe('subagentTranscriptCandidates', () => {
-  it('**当前形状排第一**:<projectDir>/<session-id>/subagents/agent-<id>.jsonl', () => {
+  it('当前形状排第一:<projectDir>/<session-id>/subagents/agent-<id>.jsonl', () => {
     const candidates = subagentTranscriptCandidates(DIR, SESSION, 'a1');
     expect(candidates[0]).toBe(path.join(DIR, SESSION, 'subagents', 'agent-a1.jsonl'));
   });

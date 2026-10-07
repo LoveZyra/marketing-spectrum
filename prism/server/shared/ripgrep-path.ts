@@ -3,16 +3,13 @@ import { existsSync } from 'node:fs';
 import { rgPath as bundledRgPath } from '@vscode/ripgrep';
 
 /**
- * 找到一个**真实存在**的 ripgrep 可执行文件。
+ * 找到一个真实存在的 ripgrep 可执行文件。
  *
- * `@vscode/ripgrep` 导出的路径指向它 postinstall 阶段下载的二进制。而
- * postinstall 会在两种常见情况下不跑:安装机器没有外网(内网部署),或者用了
- * `npm ci --ignore-scripts`(不少安全基线要求这么做)。这时 `rgPath` 是一个
- * 指向**不存在的文件**的路径,spawn 抛 ENOENT —— 用户看到的是"搜索启动失败:
- * spawn …/rg ENOENT",既看不懂也不知道该装什么。
+ * `@vscode/ripgrep` 导出的路径指向它 postinstall 阶段下载的二进制;安装机器没有外网(内网部署)
+ * 或用了 `npm ci --ignore-scripts` 时 postinstall 不会执行,`rgPath` 指向不存在的文件,
+ * spawn 抛出用户看不懂的「spawn …/rg ENOENT」。
  *
- * 所以:先用自带的,不在就回落到 PATH 里的 `rg`(多数 Linux 发行版一条命令就能
- * 装上),两者都没有时由调用方给一句人话。
+ * 所以先用自带的,不在就回落到 PATH 里的 `rg`;两者都没有时由调用方给出 RIPGREP_MISSING_MESSAGE。
  */
 export function resolveRipgrepPath(): string | null {
   try {

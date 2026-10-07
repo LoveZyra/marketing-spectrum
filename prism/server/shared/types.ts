@@ -70,8 +70,8 @@ export type AuthenticatedWebSocketRequest = IncomingMessage & {
  * Deliberately just these two fields. `username` is here because root is
  * decided by name against `PRISM_ROOT_USERS` and never stored on the row, so a
  * numeric id alone cannot answer "is this root". Anything richer would invite
- * each call site to invent its own shape, which is how the archived-sessions
- * endpoint ended up with no filter at all.
+ * each call site to invent its own shape, and a call site that reads the wrong
+ * shape ends up filtering nothing.
  */
 export type Viewer = {
   userId: number | string | null;
@@ -103,7 +103,7 @@ export type ProviderModelOption = {
     }[];
   };
   /**
-   * hn(B2):`catalog` = 模型目录里的网关模型;`alias` = 内置别名组(子代理与 CLI 内部任务用,
+   * `catalog` = 模型目录里的网关模型;`alias` = 内置别名组(子代理与 CLI 内部任务用,
    * 选择器里默认收起)。老数据没有这个字段,当 alias 看。
    */
   group?: 'catalog' | 'alias';
@@ -115,17 +115,17 @@ export type ProviderModelOption = {
   contextWindow?: number | null;
   /** 真实的网关模型名 —— 目录条目就是 value 本身;别名组靠 configMappings 另查。 */
   realModel?: string;
-  /** hq:走哪个网关(0 = settings.json 那一套)。 */
+  /** 走哪个网关(0 = settings.json 那一套)。 */
   gatewayId?: number;
-  /** hq:网关名(只在不是默认网关时给,选择器里小字显示)。 */
+  /** 网关名(只在不是默认网关时给,选择器里小字显示)。 */
   gatewayName?: string;
-  /** hq:本人的私有模型。 */
+  /** 本人的私有模型。 */
   private?: boolean;
-  /** hq:这个人现在能不能用(网关没有默认 key、他也没填自己的 key → false)。缺省 = 能用。 */
+  /** 这个人现在能不能用(网关没有默认 key、他也没填自己的 key → false)。缺省 = 能用。 */
   available?: boolean;
-  /** hq:不能用的原因(给人看的一句话)。 */
+  /** 不能用的原因(给人看的一句话)。 */
   unavailableReason?: string;
-  /** hq:不能用的原因(给程序判):no_key → 前端给「去填 key」;gateway_disabled / gateway_missing → 只能找管理员。 */
+  /** 不能用的原因(给程序判):no_key → 前端给「去填 key」;gateway_disabled / gateway_missing → 只能找管理员。 */
   unavailableCode?: 'no_key' | 'gateway_disabled' | 'gateway_missing';
 };
 
@@ -175,7 +175,7 @@ export type ProviderModelsResult = {
 export type ProviderCurrentActiveModel = {
   model: string;
   /**
-   * hn:这个值从哪来 —— `pending`(/models 刚切、下一轮生效)/ `transcript`(transcript 里最近一次回复的模型)/
+   * 这个值从哪来 —— `pending`(/models 刚切、下一轮生效)/ `transcript`(transcript 里最近一次回复的模型)/
    * `default`(都没有,报的是服务端默认)。新会话刚建、transcript 还没落盘时是 `default`,
    * 而那一轮实际用的是客户端带过去的模型 —— 前端据此不拿默认值盖掉自己的选择。
    */
@@ -234,18 +234,18 @@ export type MessageKind =
   | 'interactive_prompt'
   | 'task_notification'
   /**
-   * gd:后台任务的**进展**(SDK 的 `system/task_progress`)。
+   * 后台任务的进展(SDK 的 `system/task_progress`)。
    *
-   * 与 `task_notification` 分成两种 kind,不是洁癖:进展**每几秒一条**,
-   * 而 `task_notification` 在 durable 白名单里 —— 混成一种就等于把一条几秒一次的
-   * 洪流灌进显示日志。这一种**故意不进白名单**:直播看得见,刷新之后由最终那条
-   * `task_notification` 里的 usage 说明总量。
+   * 与 `task_notification` 分成两种 kind:进展每几秒一条,而 `task_notification`
+   * 在 durable 白名单里 —— 混成一种就等于把一条几秒一次的洪流灌进显示日志。
+   * 这一种故意不进白名单:直播看得见,刷新之后由最终那条 `task_notification`
+   * 里的 usage 说明总量。
    */
   | 'task_progress'
-  // prism additions: per-turn git checkpoints + changed-files summaries
+  // per-turn git checkpoints + changed-files summaries
   | 'checkpoint_created'
   | 'changed_files'
-  // dt:回滚/单文件还原成功后落的反向帧 —— 工作面板据此把已不在盘上的
+  // 回滚/单文件还原成功后落的反向帧 —— 工作面板据此把已不在盘上的
   // "产出"撤下来(paths 为 checkpoint cwd 下的相对路径)。
   | 'files_reverted';
 
@@ -261,19 +261,18 @@ export type MessageKind =
 export type GatewayEventKind =
   | 'chat_subscribed'
   | 'session_upserted'
-  // gk:会话被永久删除(进了最近删除)—— 发给所有还看得见它的 socket
+  // 会话被永久删除(进了最近删除)—— 发给所有还看得见它的 socket
   | 'session_removed'
   /**
-   * gl:会话从最近删除里恢复了 —— 撤掉前端的「已被删除」态。
+   * 会话从最近删除里恢复了 —— 撤掉前端的「已被删除」态。
    *
-   * **不能用 `session_upserted` 代劳**。那一条是侧栏的"会话出现/更新"事件,
-   * 它带着一道 `if (row.isArchived) return` 的闸门(归档会话不该弹回活跃列表)。
-   * gk 把它借来当"恢复了"的信号,于是恢复一条**归档态**的会话时一帧都不发,
-   * 页面永远停在「这条会话已被删除」,只能刷新。一条广播扛两个语义,
+   * 不能用 `session_upserted` 代劳:那一条是侧栏的"会话出现/更新"事件,带着
+   * `if (row.isArchived) return` 的闸门(归档会话不该弹回活跃列表),恢复一条归档态的
+   * 会话时一帧都不会发,页面会停在「这条会话已被删除」。一条广播扛两个语义,
    * 其中一个的过滤条件就会把另一个需要的场景挡死。
    */
   | 'session_restored'
-  // hl(动态 P2-4):项目级变更(新建 / 改名 / 权限 / 归档 / 还原 / 转移属主 / 删除)
+  // 项目级变更(新建 / 改名 / 权限 / 归档 / 还原 / 转移属主 / 删除)
   | 'project_upserted'
   | 'project_removed'
   | 'loading_progress'
@@ -311,17 +310,23 @@ export type NormalizedMessage = {
   runId?: string;
   role?: 'user' | 'assistant';
   /**
-   * gy:用户气泡落库时记下发起人与来源(网页 / 定时任务)。效果调查卡只弹给发起这一轮
+   * 用户气泡落库时记下发起人与来源(网页 / 定时任务)。效果调查卡只弹给发起这一轮
    * 的人,而且只对网页回合弹;历史行没有这两个字段 —— 一律当"不弹"。
    */
   senderUserId?: string | number;
   origin?: 'web' | 'scheduled' | 'api';
-  /** ho(ho-1):合流进 CLI 队列的用户消息没执行就被撤掉了(停止 / 用户撤回)—— 画成置灰的"已撤回"。 */
+  /** 合流进 CLI 队列的用户消息没执行就被撤掉了(停止 / 用户撤回)—— 画成置灰的"已撤回"。 */
   withdrawn?: boolean;
-  /** ho(复审):插话 —— 合流进正在跑的这一轮的用户消息。它不开新的一轮,时间轴 / 产出卡不把它当回合边界。 */
+  /** 插话 —— 合流进正在跑的这一轮的用户消息。它不开新的一轮,时间轴 / 产出卡不把它当回合边界。 */
   interjection?: boolean;
-  /** ho(hq-2):用户这一轮推进 CLI 时带的 uuid —— 非 git 目录「撤销这一轮的文件改动」按它找 CLI 的文件检查点。 */
+  /** 用户这一轮推进 CLI 时带的 uuid —— 非 git 目录「撤销这一轮的文件改动」按它找 CLI 的文件检查点。 */
   turnUuid?: string;
+  /**
+   * 用户行:发这条消息的 `chat.send` 带的幂等键,原样记下。
+   * 前端据此把本地乐观回显与服务端这一行精确配对;客户端没带就没有这个字段
+   * (老行、定时任务和外部 API 写的行也没有)。
+   */
+  clientMessageId?: string;
   /**
    * 这一轮实际服务的模型(assistant 文本消息携带;取自响应元数据的 message.model)。
    * 前端在每条回答的时间戳旁显示 —— 模型的自我介绍会顺着上下文复述历史,不可信,
@@ -361,7 +366,7 @@ export type NormalizedMessage = {
       而不是把英文状态原文摆到界面上。 */
   statusKind?: 'compacting';
   /**
-   * 一次压缩的实况。压缩是**一次模型调用**,没有完成度可言 —— 这里带的是能诚实
+   * 一次压缩的实况。压缩是一次模型调用,没有完成度可言 —— 这里带的是能诚实
    * 给出的三件事:阶段(running/done/failed)、心跳(beat,只在 CLI 真的吐东西时
    * 递增)、以及结束后的硬数据(pre/post token 与耗时,来自 compact_metadata)。
    * `blocking` 说明这次压缩占不占用户的等待时间;`lastDurationMs` 是本会话上次
@@ -392,8 +397,8 @@ export type NormalizedMessage = {
   status?: string;
   summary?: string;
   /**
-   * gd:后台任务(SDK 的 task 生命周期通道)。`toolId` 复用既有字段 ——
-   * 它就是那次 Task/Agent 调用的 `tool_use_id`,也就是**子代理卡的身份**,
+   * 后台任务(SDK 的 task 生命周期通道)。`toolId` 复用既有字段 ——
+   * 它就是那次 Task/Agent 调用的 `tool_use_id`,也就是子代理卡的身份,
    * 前端据此把进展与汇报归到卡上,而不是在主对话流里另起一行。
    */
   taskId?: string;
@@ -455,11 +460,8 @@ export type FetchHistoryResult = {
  * `~/.claude/skills`, `project` is `<workspace>/.claude/skills`, and `plugin`
  * is an enabled plugin install.
  *
- * Upstream also had `repo`, `admin` and `system` here, for Codex repository
- * lookup locations and OpenCode's system skill roots. Those providers were
- * removed, so no adapter can emit them any more and they are gone from the
- * union; the frontend coerces an unrecognized scope to `user` rather than
- * dropping the skill, so an old row cannot break the list.
+ * The frontend coerces an unrecognized scope to `user` rather than dropping
+ * the skill, so an unexpected value cannot break the list.
  */
 export type ProviderSkillScope = 'user' | 'project' | 'plugin';
 
@@ -538,7 +540,7 @@ export type ProviderSkill = {
   pluginName?: string;
   pluginId?: string;
   /**
-   * F13:这个技能的目录名 —— **只有能被卸载的那些才有**(用户级、直接躺在受管
+   * 这个技能的目录名 —— 只有能被卸载的那些才有(用户级、直接躺在受管
    * 技能根目录下的那一层)。
    *
    * 由服务端给,而不是让前端从 sourcePath 里猜:哪些路径算"受管根目录之下"
@@ -604,9 +606,6 @@ export type McpTransport = 'stdio' | 'http' | 'sse';
  *
  * `command`/`args`/`env` describe a stdio server and `url`/`headers` an http or
  * sse one; between them they cover everything `ClaudeMcpProvider` can persist.
- * A `cwd`, an `envVars` list, a `bearerTokenEnvVar` and `envHttpHeaders` were
- * carried here too for Codex's config format — the route validated them and the
- * adapter then discarded them, so they are gone along with Codex.
  */
 export type ProviderMcpServer = {
   provider: LLMProvider;

@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { authenticatedFetch } from '../../../utils/api';
-import { turnMarkerMessage, workFramesToMessages, type SessionWorkFrame } from '../utils/workFrames';
+import {
+  turnMarkerMessage,
+  workFramesRequestHeaders,
+  workFramesToMessages,
+  type SessionWorkFrame,
+  type WorkFramesValidator,
+} from '../utils/workFrames';
 import type { ServerTurnOutputFile } from '../utils/turnOutputs';
 import { readCachedTurnOutputs, writeCachedTurnOutputs } from '../utils/turnOutputsCache';
 import type { ChatMessage } from '../types/types';
@@ -10,26 +16,25 @@ export type SessionWorkFramesState = {
   /** 服务端全量历史滤出的工具帧,已转成伪 ChatMessage(工作面板基线)。 */
   baseMessages: ChatMessage[];
   /**
-   * dt:至今仍处于"已回滚"状态的绝对路径。基线里的产出帧服务端已删,
-   * 但前端窗口里的旧 Write 工具帧会把文件加回来 —— 产出折叠完要用它做
-   * 最终减法;回滚后重写的文件不在此集合(服务端时序折叠已处理)。
+   * 仍处于"已回滚"状态的绝对路径。基线里的产出帧服务端已删,
+   * 但前端窗口里的旧 Write 工具帧会把文件加回来,产出折叠完要用它做最终减法;
+   * 回滚后重写的文件不在此集合(服务端时序折叠已处理)。
    */
   revertedPaths: ReadonlySet<string>;
   /**
-   * ej:助手回答的消息 id → **这一轮**写出来的文件。服务端按**全量历史**算好,
-   * 随消息一起到达,此后不再变 —— 对话正文下面那张「产出」卡的正本。
+   * 助手回答的消息 id → 这一轮写出来的文件。服务端按全量历史算好,随消息一起到达,
+   * 此后不再变,是对话正文下面那张「产出」卡的正本。
    *
-   * 之前这张卡是前端从"当前加载到的消息窗口"现推的,窗口起点常落在某一轮
-   * 工具流中间,于是"先产出 2、过一会儿变产出 5",加了截断保护之后变成
-   * "先没有、过一会儿才出现"(用户两次实测)。数据源换成服务端,病根才断。
+   * 不能由前端从当前加载到的消息窗口现推:窗口起点常落在某一轮工具流中间,
+   * 推出来的结果会随加载进度变化。
    */
   turnOutputs: Record<string, ServerTurnOutputFile[]>;
   /**
-   * dw:服务端帧数触顶,较早的工作帧没随本次响应下发 —— 面板要如实说明
+   * 服务端帧数触顶,较早的工作帧没随本次响应下发:面板要如实说明
    * "更早的记录未载入",而不是装作这就是全部。
    */
   truncated: boolean;
-  /** gy:服务端抽中的「效果如何」卡:助手回答 id → 本轮调用的 skill。 */
+  /** 服务端抽中的「效果如何」卡:助手回答 id → 本轮调用的 skill。 */
   skillSurveys: ReadonlyMap<string, string>;
   /** 手动重拉基线(回滚/还原成功后调,拿到含反向帧的新快照)。 */
   refresh: () => void;
@@ -40,11 +45,14 @@ const EMPTY_TURN_OUTPUTS: Record<string, ServerTurnOutputFile[]> = {};
 const EMPTY_SURVEYS: ReadonlyMap<string, string> = new Map();
 
 /**
- * dq/dt:工作面板的服务端基线。
+ * 工作面板的服务端基线。
  *
  * 拉取时机:会话切换、回合结束(isProcessing true→false)、以及调用方显式
  * refresh(回滚/还原后)。回合进行中的增量走前端实时消息,不在这里轮询。
- * 拉取失败静默退化为"只用已加载窗口"(即 do 的旧行为)。
+ * 拉取失败静默退化为"只用已加载窗口"。
+ *
+ * 同一会话重取时带上次落地那份的 ETag;服务端回 304 就什么都不动:不重新解析,
+ * 也不重设状态(清单 / 产出的折叠跟着这些状态,重设一次就要整份重折)。
  */
 export function useSessionWorkFrames(sessionId: string | null, isProcessing: boolean): SessionWorkFramesState {
   const [baseMessages, setBaseMessages] = useState<ChatMessage[]>([]);
@@ -55,18 +63,25 @@ export function useSessionWorkFrames(sessionId: string | null, isProcessing: boo
   const sessionRef = useRef(sessionId);
   sessionRef.current = sessionId;
   /**
-   * du:请求票据。只比会话 id 不够 —— 同一会话里"回合结束"与"回滚后手动
-   * refresh"会连着发两次,先发后到时**旧快照覆盖新快照**,刚回滚掉的产出
-   * 文件又冒回面板里,直到下一次 refetch 才消失。票据保证只有最后一次生效。
+   * 请求票据。只比会话 id 不够:同一会话里"回合结束"与"回滚后手动 refresh"会连着发两次,
+   * 先发后到时旧快照会覆盖新快照,刚回滚掉的产出文件又冒回面板。票据保证只有最后一次生效。
    */
   const requestSeqRef = useRef(0);
+  /**
+   * 当前状态对应的那份响应的 ETag。只在响应真正落地时记、切会话清空状态时一起清:
+   * 被票据作废的响应不落地,它的 ETag 也不能记,否则 304 会把没显示过的那份当成手里这份。
+   */
+  const validatorRef = useRef<WorkFramesValidator | null>(null);
 
   const refreshFor = useCallback(async (targetSessionId: string) => {
     const ticket = ++requestSeqRef.current;
     try {
       const response = await authenticatedFetch(
         `/api/providers/sessions/${encodeURIComponent(targetSessionId)}/work-frames`,
+        { headers: workFramesRequestHeaders(validatorRef.current, targetSessionId) },
       );
+      // 304:手里这份就是最新的(请求发出时状态就是这份,之后能改状态的只有更新的票据)。
+      if (response.status === 304) return;
       if (!response.ok) return;
       const body = (await response.json().catch(() => null)) as {
         data?: {
@@ -82,7 +97,9 @@ export function useSessionWorkFrames(sessionId: string | null, isProcessing: boo
       // 会话在途中被切走(或有更新的请求在飞)→ 丢弃,别把旧快照安上去。
       if (Array.isArray(frames) && sessionRef.current === targetSessionId
         && ticket === requestSeqRef.current) {
-        // hq:基线末尾接一条回合号标记(见 turnMarkerMessage)
+        const etag = response.headers.get('ETag');
+        validatorRef.current = etag ? { sessionId: targetSessionId, etag } : null;
+        // 基线末尾接一条回合号标记(见 turnMarkerMessage)
         setBaseMessages([...workFramesToMessages(frames), ...turnMarkerMessage(body?.data?.userTurns)]);
         const raw = body?.data?.revertedPaths;
         setRevertedPaths(Array.isArray(raw)
@@ -113,15 +130,16 @@ export function useSessionWorkFrames(sessionId: string | null, isProcessing: boo
   }, [refreshFor]);
 
   useEffect(() => {
+    validatorRef.current = null;
     setBaseMessages([]);
     setRevertedPaths(EMPTY_PATHS);
     setTruncated(false);
     setSkillSurveys(EMPTY_SURVEYS);
     /**
-     * ek:产出映射**先用上一次的本地快照顶上**,再等请求覆盖。
+     * 产出映射先用上一次的本地快照顶上,再等请求覆盖。
      *
-     * 清成空的话,刷新页面就是"卡片消失 → 请求回来 → 卡片重新出现"(用户实测)。
-     * 快照是同步读的,所以首帧就有;内容一致时用户什么也看不见 —— 这正是目的。
+     * 清成空的话,刷新页面就是"卡片消失 → 请求回来 → 卡片重新出现"。
+     * 快照是同步读的,首帧就有;内容一致时用户什么也看不见,这正是目的。
      */
     setTurnOutputs(readCachedTurnOutputs(sessionId) ?? EMPTY_TURN_OUTPUTS);
     if (sessionId) void refreshFor(sessionId);

@@ -1,12 +1,12 @@
 /**
- * 版本号规则的纯函数(v2.0.0 起)—— scripts/release.mjs 用,单测在 server/tests/release-version.test.js。
+ * 版本号规则的纯函数:scripts/release.mjs 用,单测在 server/tests/release-version.test.js。
  *
- * 版本号只用「主.次.修」三个数字,按**部署方要付出的代价**跳号(详见项目文档《版本号规范》):
+ * 版本号只用「主.次.修」三个数字,按部署方要付出的代价跳号(详见项目文档《版本号规范》):
  * - 主:要人工介入(换 Node / 换随包 CLI / 必须改 settings.json 或 .env / 不可回滚的迁移 / 删功能或改默认行为);
  * - 次:可回滚的迁移、依赖变了要 `npm install`、新增可选配置、用户看得见的新功能;
  * - 修:只改代码,库、依赖、配置都不动。
  *
- * 能机器判的只有「依赖 / schema / migrations 变没变」—— 变了至少跳次版本号;「主」要人判。
+ * 能机器判的只有「依赖 / schema / migrations 变没变」:变了至少跳次版本号;「主」要人判。
  */
 
 import { createHash } from 'node:crypto';
@@ -106,9 +106,9 @@ export function checkBump({ previous, next, changed }) {
 }
 
 /**
- * 上一个发布版 = 已合进来的 v* 标签里**版本号最大**的那个(不含这一版自己)。
- * 复审(P2):不能用 `git describe` —— 它按提交距离找最近的标签,热修分支(v2.0.1)合回主线之后,
- * 主线上的 2.1.1 会被拿去和 2.0.1 比(判成跳号不规则、升级标记也算错)。不合规的标签(v1.0.0-rc.1 之类)忽略。
+ * 上一个发布版 = 已合进来的 v* 标签里版本号最大的那个(不含这一版自己)。
+ * 不用 `git describe`:它按提交距离找最近的标签,热修分支(如 v2.0.1)合回主线之后,
+ * 主线上的 2.1.1 会被拿去和 2.0.1 比,跳号判定和升级标记都会算错。不合规的标签(v1.0.0-rc.1 之类)忽略。
  */
 export function pickPreviousTag(tags, version) {
   const own = `v${version}`;

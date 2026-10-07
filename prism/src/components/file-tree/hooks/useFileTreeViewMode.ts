@@ -32,7 +32,7 @@ export function useFileTreeViewMode(): UseFileTreeViewModeResult {
 
     try {
       localStorage.setItem(FILE_TREE_VIEW_MODE_STORAGE_KEY, mode);
-      // F11:视图模式跟着账号走。
+      // 视图模式随账号同步。
       void pushAccountSettings();
     } catch {
       // Keep runtime state even when persistence fails.

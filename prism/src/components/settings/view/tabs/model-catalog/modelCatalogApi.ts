@@ -1,7 +1,7 @@
 import { authenticatedFetch } from '../../../../../utils/api';
 
 /**
- * hn(B1/B2):模型目录的管理接口(root)—— 与服务端 `provider.routes.ts` 的 `/:provider/model-catalog*` 对应。
+ * 模型目录的管理接口(root),对应服务端 `provider.routes.ts` 的 `/:provider/model-catalog*`。
  */
 
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -38,11 +38,11 @@ export type CatalogEntry = {
   createdAt: string;
   updatedAt: string;
   updatedBy: number | null;
-  /** hq:走哪个网关;0 = 默认网关(settings.json)。老服务端没有这个字段 → 按 0。 */
+  /** 走哪个网关;0 = 默认网关(settings.json)。缺省按 0。 */
   gatewayId?: number;
-  /** hq:可用人员(用户 id);null = 所有人(root 始终可用)。 */
+  /** 可用人员(用户 id);null = 所有人(root 始终可用)。 */
   allowedUsers?: number[] | null;
-  /** hq:私有模型的主人(目录条目为 null)。 */
+  /** 私有模型的主人(目录条目为 null)。 */
   ownerUserId?: number | null;
 };
 
@@ -58,13 +58,13 @@ export type CatalogInput = {
   sortOrder?: number;
   enabled?: boolean;
   isDefault?: boolean;
-  /** hq:0 / null = 默认网关;目录条目只能挂共享网关,私有模型只能挂自己的私有网关。 */
+  /** 0 / null = 默认网关;目录条目只能挂共享网关,私有模型只能挂自己的私有网关。 */
   gatewayId?: number | null;
-  /** hq:null = 所有人;数组 = 只有这些用户(目录条目专用)。 */
+  /** null = 所有人;数组 = 只有这些用户(目录条目专用)。 */
   allowedUsers?: number[] | null;
 };
 
-/** ho:每模型回合健康度(服务端 `model_turn_stats` 汇总;`model` 是网关真名,别名会话记的是它解析到的那个)。 */
+/** 每模型回合健康度(服务端 `model_turn_stats` 汇总;`model` 是网关真名,别名会话记的是它解析到的那个)。 */
 export type ModelTurnStats = {
   model: string;
   turns: number;
@@ -79,12 +79,12 @@ export type ModelTurnStats = {
 
 export type ModelStatsReport = { days: number; models: ModelTurnStats[] };
 
-/** ho:子代理模型(全局一份)。model = null → 跟随主模型;force 只在选了模型时有意义。 */
+/** 子代理模型(全局一份)。model = null → 跟随主模型;force 只在选了模型时有意义。 */
 export type SubagentModelPolicy = { model: string | null; force: boolean };
 
 /**
- * 带上服务端的错误码 —— 子代理那张卡要按 `SUBAGENT_MODEL_NOT_ALLOWED` 换成本地化文案;
- * 其余调用方只读 `message`,与原来的 `Error` 等价。
+ * 带上服务端的错误码:子代理那张卡要按 `SUBAGENT_MODEL_NOT_ALLOWED` 换成本地化文案;
+ * 其余调用方只读 `message`,当普通 `Error` 用即可。
  */
 export class CatalogApiError extends Error {
   readonly status: number;
@@ -113,7 +113,7 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
   return body.data;
 }
 
-/** ho:最近 N 天每模型的回合数 / 失败率 / 失败原因 / 首字延迟(服务端把 N 夹在 1..30)。 */
+/** 最近 N 天每模型的回合数 / 失败率 / 失败原因 / 首字延迟(服务端把 N 夹在 1..30)。 */
 export async function fetchModelStats(days: number): Promise<ModelStatsReport> {
   return call<ModelStatsReport>(`${BASE}/stats?days=${encodeURIComponent(String(days))}`);
 }

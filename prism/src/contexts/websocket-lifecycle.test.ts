@@ -97,16 +97,13 @@ test('a socket that has answered nothing for a full minute is torn down', () => 
 
 /**
  * A backwards clock step reads as negative silence, which falls through every
- * threshold to `idle` — the check simply stops running for as long as the step
- * was large, which on a phone waking from an hour's sleep means an hour of not
- * noticing a dead socket. No clamp inside `heartbeatAction` can repair that,
- * because `idle` is already what a clamped zero produces. The only fix is a
- * clock that cannot run backwards, so that is what the timestamps come from.
+ * threshold to `idle`, so the check stops running for as long as the step was
+ * large. No clamp inside `heartbeatAction` can repair that (a clamped zero is
+ * also `idle`); the timestamps must come from a clock that cannot run backwards.
  *
- * A test cannot make the wall clock step backwards, so it cannot observe that
- * failure directly. What it can observe is the property that prevents it: the
- * reading is not derived from the wall clock at all. An epoch-magnitude value
- * here means someone put `Date.now()` back.
+ * A test cannot make the wall clock step backwards, so it pins the property
+ * that prevents the failure instead: the reading is not derived from the wall
+ * clock at all. An epoch-magnitude value here means it comes from `Date.now()`.
  */
 test('the heartbeat clock is not the wall clock', () => {
   const reading = monotonicNow();

@@ -20,27 +20,69 @@ const getApiError = (payload: { error?: string } | undefined, fallback: string) 
   payload?.error || fallback
 );
 
+type CredentialLists = {
+  /** null 表示没拉到(非 2xx、不是 JSON、请求失败),调用方保留旧列表并提示。 */
+  apiKeys: ApiKeyItem[] | null;
+  githubCredentials: GithubCredentialItem[] | null;
+};
+
+const readList = async <T,>(
+  request: () => Promise<Response>,
+  pick: (payload: Record<string, unknown>) => unknown,
+): Promise<T[] | null> => {
+  try {
+    const response = await request();
+    if (!response.ok) {
+      return null;
+    }
+    const list = pick(await response.json() as Record<string, unknown>);
+    return Array.isArray(list) ? list as T[] : [];
+  } catch {
+    return null;
+  }
+};
+
 /**
- * API keys and GitHub tokens, both stored through `/api/settings/credentials`.
+ * 拉 API key 与 GitHub 凭证两张列表,两边互不连累。
  *
- * The GitHub half survived the git removal on purpose. Nothing in Prism's own
- * UI does version control any more, but the external `/api/agent` endpoint
- * still clones repositories and opens pull requests, and it reads its token
- * from here when the caller does not pass one in the request body. This screen
- * is the only way to put one there.
+ * 拉失败的一边返回 null 而不是空列表:当成空列表的话界面显示「没有任何 key」,
+ * 临时故障时用户会以为 key 丢了,去重建或找管理员。
+ */
+export const fetchCredentialLists = async (fetchFn: typeof authenticatedFetch = authenticatedFetch): Promise<CredentialLists> => {
+  const [apiKeys, githubCredentials] = await Promise.all([
+    readList<ApiKeyItem>(
+      async () => fetchFn('/api/settings/api-keys'),
+      (payload) => (payload as ApiKeysResponse).apiKeys,
+    ),
+    readList<GithubCredentialItem>(
+      async () => fetchFn('/api/settings/credentials?type=github_token'),
+      (payload) => (payload as GithubCredentialsResponse).credentials,
+    ),
+  ]);
+  return { apiKeys, githubCredentials };
+};
+
+/**
+ * API keys (`/api/settings/api-keys`) and GitHub tokens (`/api/settings/credentials`).
+ *
+ * Prism's own UI does no version control, but the external `/api/agent` endpoint
+ * clones repositories and opens pull requests, and it reads its GitHub token from
+ * here when the request body does not carry one. This screen is the only way to
+ * store that token.
  */
 export function useCredentialsSettings({
   confirmDeleteApiKeyText,
   confirmDeleteGithubCredentialText,
 }: UseCredentialsSettingsArgs) {
   const { toast } = useToast();
-  // 这些操作原先失败只 console(fetchData 失败还会显示误导性的"空列表")。逐个
-  // 补上提示 —— 删/停用一把 key 却没反应,用户没法判断是成功了还是没成功。
+  // 增删 / 启停失败都要给提示:删除或停用一把 key 却没反应,用户无法判断成没成功。
   const notifyFailure = useCallback((message: string) => {
     toast({ message, variant: 'error' });
   }, [toast]);
   const [apiKeys, setApiKeys] = useState<ApiKeyItem[]>([]);
   const [githubCredentials, setGithubCredentials] = useState<GithubCredentialItem[]>([]);
+  const [apiKeysLoadFailed, setApiKeysLoadFailed] = useState(false);
+  const [githubCredentialsLoadFailed, setGithubCredentialsLoadFailed] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [showNewKeyForm, setShowNewKeyForm] = useState(false);
@@ -55,35 +97,26 @@ export function useCredentialsSettings({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<CreatedApiKey | null>(null);
   /**
-   * 新建密钥失败时给人看的那句话。
+   * 新建密钥失败时显示给用户的错误信息。
    *
-   * 以前失败只 `console.error`,界面上一点动静都没有 —— 表现成"点了创建没反应",
-   * 而真正的原因(老库里 `api_keys.api_key` 还是 NOT NULL)只写在服务端日志里。
-   * 出错就该在出错的地方说出来。
+   * 失败原因(例如数据库约束错误)往往只在服务端日志里;不在出错的地方说出来,
+   * 界面就表现成「点了创建没反应」。
    */
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
-    try {
-      setLoading(true);
-
-      const [apiKeysResponse, credentialsResponse] = await Promise.all([
-        authenticatedFetch('/api/settings/api-keys'),
-        authenticatedFetch('/api/settings/credentials?type=github_token'),
-      ]);
-
-      const [apiKeysPayload, credentialsPayload] = await Promise.all([
-        apiKeysResponse.json() as Promise<ApiKeysResponse>,
-        credentialsResponse.json() as Promise<GithubCredentialsResponse>,
-      ]);
-
-      setApiKeys(apiKeysPayload.apiKeys || []);
-      setGithubCredentials(credentialsPayload.credentials || []);
-    } catch (error) {
-      console.error('Error fetching settings:', error);
-    } finally {
-      setLoading(false);
+    setLoading(true);
+    const lists = await fetchCredentialLists();
+    // 拉失败的一边保留旧列表,只打失败标记,界面据此提示并给重试。
+    if (lists.apiKeys) {
+      setApiKeys(lists.apiKeys);
     }
+    if (lists.githubCredentials) {
+      setGithubCredentials(lists.githubCredentials);
+    }
+    setApiKeysLoadFailed(lists.apiKeys === null);
+    setGithubCredentialsLoadFailed(lists.githubCredentials === null);
+    setLoading(false);
   }, []);
 
   const createApiKey = useCallback(async () => {
@@ -283,6 +316,9 @@ export function useCredentialsSettings({
   return {
     apiKeys,
     githubCredentials,
+    apiKeysLoadFailed,
+    githubCredentialsLoadFailed,
+    reload: fetchData,
     loading,
     showNewKeyForm,
     setShowNewKeyForm,

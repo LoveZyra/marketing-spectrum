@@ -24,11 +24,11 @@ function readUsageNumber(value: unknown): number {
 }
 
 // ── Token-usage transcript cache ─────────────────────────────────────────────
-// The endpoint used to re-read the entire Claude JSONL transcript on every
-// request. Transcripts only ever grow via appends, so a (mtimeMs, size) pair
-// is a reliable freshness key: parse once, then serve from memory until the
-// file changes. Plain Map insertion order gives LRU semantics — delete+set on
-// hit refreshes recency, evict the oldest entry past the cap.
+// Transcripts only ever grow via appends, so a (mtimeMs, size) pair is a
+// reliable freshness key: parse once, then serve from memory until the file
+// changes instead of re-reading the whole JSONL on every request. Plain Map
+// insertion order gives LRU semantics — delete+set on hit refreshes recency,
+// evict the oldest entry past the cap.
 
 type TokenUsageTotals = {
   inputTokens: number;
@@ -128,23 +128,8 @@ async function getTokenUsageTotals(jsonlPath: string): Promise<TokenUsageTotals>
  * config does not allow modules to import.
  */
 /**
- * F14:**从网页消息 id 里取出 provider 原生 uuid。**
- *
- * 网页那侧的 id 有两种来源,形状完全不同:
- *   - 从 transcript 读来的历史行:id 就是 jsonl 的 `uuid`,有时带展示后缀
- *     (`<uuid>_text` / `<uuid>_tr_<id>` / `<uuid>_images`)—— uuid 里没有下划线,
- *     所以第一个 `_` 之前就是它;
- *   - **fj 之后**显示日志成了权威来源,而它的 id 是应用自己生成的
- *     (`text_<时间戳>_<随机>` / `local_*` 之类)—— 切出来是 `text` 这种垃圾。
- *
- * 第二种情况下扫描必然扫不到,而端点此前照样返回 `resumeSessionAt: null` + 200,
- * 客户端拿着它开跑:**「编辑重跑」静默变成「整段历史从头重跑」**,而且没有任何提示。
- *
- * 所以先按形状判一次:不像 uuid 就直说定位不了,别拿一个注定扫不到的值去扫。
- */
-/**
- * fy:形状解析搬到 `shared/fork-anchor.ts`,与落库那边共用同一份
- * (落库要用它算 assistant 行的锚点)。这里保留同名导出,老测试照旧钉得住。
+ * 形状解析在 `shared/fork-anchor.ts`,与落库算 assistant 行锚点共用同一份;
+ * 这里保留同名导出,供端点与测试使用。
  */
 export const extractNativeUuid = nativeUuidFromMessageId;
 
@@ -179,20 +164,15 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
       // uuids never contain underscores, so the part before the first "_"
       // is the native uuid.
       /**
-       * fy(F14):**先查显示日志里记下的分叉锚点。**
+       * 先查显示日志里记下的分叉锚点。
        *
-       * 端点要的是"这条消息之前最后一个原生 assistant uuid"。此前只有一条路:
-       * 从消息 id 的前缀反推 uuid、再扫 jsonl 往回找。而实时对话里用户气泡的 id
-       * 是 `user_<随机>` —— **前缀根本不是 uuid**,那条路从一开始就走不通
-       * (fp 把它从"静默重跑整段历史"改成了明确 409,但仍然做不成)。
+       * 端点要的是"这条消息之前最后一个原生 assistant uuid"。实时对话里用户气泡的 id 是
+       * `user_<随机>`,前缀不是 uuid,从 id 反推再扫 jsonl 的路走不通;而用户那句话没有对应的
+       * 出站 SDK 帧,写它时手里也没有 uuid。assistant 帧的 uuid 是现成的,所以 assistant 侧的
+       * 显示日志行落库时记下自己的原生 uuid,这里按日志顺序往回取第一条即可。
        *
-       * 根子在于用户说的那句话没有对应的出站 SDK 帧,写它的时候手里没有 uuid。
-       * 但 assistant 帧**有**,而且是现成的 —— 所以 fy 起,assistant 侧的显示
-       * 日志行落库时顺手记下自己的原生 uuid,这里按日志顺序往回取第一条即可。
-       *
-       * 三态要分开(见 `forkAnchorFor` 的注释):`undefined` 是"日志里没这一行"
-       * (老会话 / 被 trim 掉),那才该退回扫 jsonl;`null` 是"确实没有前序
-       * assistant",那是真的分不了叉。
+       * 三态要分开(见 `forkAnchorFor` 的注释):`undefined` 是日志里没这一行(老会话 / 被裁掉),
+       * 才退回扫 jsonl;`null` 是确实没有前序 assistant,真的分不了叉。
        */
       if (messageId) {
         const anchor = sessionMessagesDb.forkAnchorFor(appSessionId, messageId);
@@ -248,9 +228,9 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
       }
 
       /**
-       * F14:**指名了消息却没扫到,同样是失败。**
+       * 指名了消息却没扫到,同样是失败。
        *
-       * `resumeSessionAt: null` 只有一个合法含义:调用方**没有指名消息**,
+       * `resumeSessionAt: null` 只有一个合法含义:调用方没有指名消息,
        * 要从头分叉。指名了却扫不到还返回 null,等于把"定位失败"伪装成
        * "从头开始" —— 用户点的是「编辑重跑」,拿到的是整段历史重跑一遍。
        */
@@ -347,9 +327,9 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
       }
 
       /*
-       * hn(B2):分母按**会话当前模型**查模型目录(别名先换真名);目录没填才退回 CONTEXT_WINDOW,
-       * 再退回 200000(CLI 对不认识的模型名就按它算)。这里不能 import claude-sdk.js(eslint 边界),
-       * 实测的有效窗口在聊天里的 token_budget 帧上,那边优先用它。
+       * 分母按会话当前模型查模型目录(别名先换真名);目录没填才退回 CONTEXT_WINDOW,
+       * 再退回 200000(CLI 对不认识的模型名就按它算)。这里不能 import claude-sdk.js(eslint 边界);
+       * 实测的有效窗口在聊天里的 token_budget 帧上,聊天那边优先用它。
        */
       let sessionModel: string | null = null;
       try {
@@ -357,7 +337,7 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
       } catch {
         sessionModel = null;
       }
-      // hq:按看的人查(他的私有模型的窗口也认得出)
+      // 按看的人查,他的私有模型的窗口也认得出。
       const usageViewer = modelViewerFor((req as { user?: { id?: number } }).user?.id ?? null, (req as { user?: { username?: string } }).user?.username ?? null);
       const resolved = await claudeModelCatalog.resolveEntry(sessionModel, usageViewer).catch(() => ({ realModel: null, entry: null }));
       const parsedContextWindow = parseInt(process.env.CONTEXT_WINDOW ?? '', 10);
@@ -371,7 +351,7 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
       res.json({
         used: totalUsed,
         total: contextWindow,
-        // hn:给 /cost 用 —— 当前模型、它的真名与厂商(非 Claude 模型的费用是按 Claude 价估算的)。
+        // 给 /cost 用:当前模型、它的真名与厂商(非 Claude 模型的费用按 Claude 价估算)。
         model: sessionModel,
         realModel: resolved.realModel,
         vendor: resolved.entry?.vendor ?? detectModelVendor(resolved.realModel ?? sessionModel),
@@ -392,21 +372,14 @@ export function createUsageRouter(dependencies: UsageRouterDependencies): Router
   });
 
   /**
-   * fg:用量与费用台账。
+   * 用量与费用台账。
    *
-   * ## 和上面那条 token-usage 端点的区别(**别混**)
+   * 和上面的 token-usage 端点不是同一个数,不要混用:那条读 JSONL 里最后一条 assistant 消息的
+   * usage,衡量"当前上下文占了多少",给 `/cost` 的进度条用(名字里有 Totals,但不是总和);
+   * 这条读 `usage_records` 表,是累计花销,一轮一行。两个数天然不同,差可以是一个数量级。
    *
-   * 上面那条读 JSONL 里**最后一条** assistant 消息的 usage —— 它衡量的是
-   * "当前上下文占了多少",给 `/cost` 的进度条用。名字里有 Totals,但它不是总和。
-   *
-   * 这条读 `usage_records` 表,是**累计花销**:一轮一行,逐条累加过的。
-   * 两个数天然不一样,而且差可以是一个数量级 —— 谁把它们当同一个数用,
-   * 得到的结论就是错的。
-   *
-   * ## 可见范围
-   *
-   * root 看全量,其他人只看自己的行。和审计日志同一条规矩:费用行带着
-   * project_path 和 model,不设防的话任何账号都能摸清别人在做什么项目。
+   * 可见范围:root 看全量,其他人只看自己的行。和审计日志同一条规矩:费用行带着 project_path
+   * 和 model,不设防的话任何账号都能摸清别人在做什么项目。
    */
   router.get('/api/usage/records', authenticateToken, (req, res) => {
     try {

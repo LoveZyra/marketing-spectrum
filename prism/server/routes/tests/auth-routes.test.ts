@@ -9,11 +9,11 @@ import express from 'express';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, test } from 'vitest';
 
 /**
- * G1:注册 / 登录路由的行为矩阵。
+ * 注册 / 登录路由的行为矩阵。
  *
- * 这三条路(审批门、失败锁定、令牌旋转)决定了"谁能进来"和"进来之后旧凭据还算不算数",
- * 而它们此前只有间接覆盖。这里用一个真的 express 服务器跑真的 HTTP —— 中间件顺序
- * (限流 → 锁定 → 路由)本身就是被测对象的一部分,拿函数单独调是测不出来的。
+ * 这三条路(审批门、失败锁定、令牌旋转)决定了"谁能进来"和"进来之后旧凭据还算不算数"。这里用一个
+ * 真的 express 服务器跑真的 HTTP:中间件顺序(限流 → 锁定 → 路由)本身就是被测对象的一部分,
+ * 拿函数单独调是测不出来的。
  *
  * 端口取 0(内核分配),所以并行跑测试也不会撞端口。
  */
@@ -68,7 +68,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
-  // 每条用例一张干净的用户表 —— 但**不重建连接**:auth.js 在模块加载时
+  // 每条用例一张干净的用户表 —— 但不重建连接:auth.js 在模块加载时
   // 抓住了一个连接对象(`const db = getConnection()`),换连接会让它拿着一个
   // 已关闭的句柄。
   const connection = db.getConnection();
@@ -97,7 +97,7 @@ describe('注册', () => {
     assert.ok(result.body.token, '第一个账号应该拿到 token');
   });
 
-  test('之后的账号进待审队列,而且**不发 token** —— 登不进去的账号不该拿到会话', async () => {
+  test('之后的账号进待审队列,而且不发 token —— 登不进去的账号不该拿到会话', async () => {
     await post('/register', { username: 'first', password: 'password123' });
     const result = await post('/register', { username: 'second', password: 'password123' });
 
@@ -151,7 +151,7 @@ describe('登录', () => {
     assert.ok(result.body.token);
   });
 
-  test('不存在的用户和密码错误给**同一句话** —— 否则登录框就成了用户名探测器', async () => {
+  test('不存在的用户和密码错误给同一句话 —— 否则登录框就成了用户名探测器', async () => {
     await post('/register', { username: 'first', password: 'password123' });
 
     const unknown = await post('/login', { username: 'nobody', password: 'password123' }, { 'x-forwarded-for': '10.9.0.1' });
@@ -162,7 +162,7 @@ describe('登录', () => {
     assert.equal(unknown.body.error, wrongPassword.body.error);
   });
 
-  test('连续失败会锁定,锁定后**连正确密码也进不去**', async () => {
+  test('连续失败会锁定,锁定后连正确密码也进不去', async () => {
     await post('/register', { username: 'first', password: 'password123' });
     const from = { 'x-forwarded-for': '10.9.9.9' };
 
@@ -185,12 +185,11 @@ describe('登录', () => {
 });
 
 /**
- * ec:修改密码时当前密码打错,**不能**回 401。
+ * 修改密码时当前密码打错,不能回 401。
  *
- * 这条路走的是带 Bearer 的 authenticatedFetch,前端把登录态下的任何 401 一律当
- * "会话失效"处理 —— 实测:当前密码错一个字,整个人被弹回登录页。调用方是已认证
- * 的,错的是表单里的一个字段,所以是 403 + 明确的 code;密码对的那条路照旧回
- * 新令牌(本设备无感续用)。
+ * 这条路走的是带 Bearer 的 authenticatedFetch,前端把登录态下的任何 401 一律当"会话失效",当前密码错一个字
+ * 就会被弹回登录页。调用方是已认证的,错的是表单里的一个字段,所以是 403 + 明确的 code;密码对的那条路照旧
+ * 回新令牌(本设备无感续用)。
  */
 describe('修改密码', () => {
   test('当前密码错 → 403 + code,不是会让前端登出的 401', async () => {

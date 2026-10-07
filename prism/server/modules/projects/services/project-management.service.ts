@@ -20,8 +20,8 @@ type CreateProjectInput = {
   /** 创建时选「指定用户」的授权列表;写入 project_shares。 */
   sharedUserIds?: number[];
   /**
-   * fh:从模板创建。模板就是服务器上一棵普通目录树,这里递归 copy 进去。
-   * 不传就是原来的行为(空目录)。
+   * 从模板创建。模板就是服务器上一棵普通目录树,递归 copy 进项目目录。
+   * 不传就建空目录。
    */
   templateId?: string | null;
 };
@@ -57,7 +57,7 @@ type ProjectApiView = {
 type CreateProjectServiceResult = {
   outcome: 'created' | 'reactivated_archived';
   project: ProjectApiView;
-  /** fh:铺了模板时带上结果,让界面能如实说"这几个文件已存在,没动"。 */
+  /** 铺了模板时带上结果,让界面能如实说"这几个文件已存在,没动"。 */
   template?: ApplyTemplateResult;
 };
 
@@ -124,16 +124,12 @@ export async function createProject(
   }
 
   /*
-   * fh:**模板先验,后建。**
+   * 模板先验,后建。
    *
-   * 探针里抓到的真事:第一版把铺模板放在这个函数末尾,于是
-   * `templateId: "../evil"` 走的是「建目录 → 项目行落库 → 才发现名字不合法 → 抛」,
-   * 接口回 `success:false` 而项目**已经在库里**。连打五个非法请求,
-   * 侧栏就多了五个幽灵项目 —— 用户被告知失败的东西,下次刷新自己冒出来。
-   *
-   * 所以校验(名字形状、模板存在、符号链接、大小上限)全部提到最前面:
-   * 不合法就在什么都还没建的时候失败。比"失败了再回滚"可靠 —— 回滚本身也会失败,
-   * 而且"复活归档路径"那种情形根本不该回滚。
+   * 校验(名字形状、模板存在、符号链接、大小上限)全部放在最前面,不合法就在什么都还没建的
+   * 时候失败;否则 `templateId: "../evil"` 会在目录已建、项目行已落库之后才抛,接口回失败,
+   * 项目却留在库里成了幽灵项目。这比"失败了再回滚"可靠:回滚本身也会失败,而且复活归档
+   * 路径的情形根本不该回滚。
    */
   const preparedTemplate = input.templateId
     ? await prepareProjectTemplate(input.templateId)
@@ -182,23 +178,16 @@ export async function createProject(
   }
 
   /*
-   * fh:铺模板(校验已经在函数最前面做完了,这里只负责写)。
+   * 铺模板(校验已经在函数最前面做完了,这里只负责写)。
    *
-   * ## 为什么"写"留在最后
+   * 写要发生在目录建好、且这条项目记录确实落库之后:放前面的话,后面任何一个 throw
+   * (路径不合法、路径已被别人占着)都会在一个不属于任何项目的目录里留下一棵没人认领的树。
    *
-   * 写要发生在**目录建好、且这条项目记录确实落库之后**。放前面的话,
-   * 后面任何一个 throw(路径不合法、路径已被别人占着)都会留下一棵铺好的树
-   * 在一个不属于任何项目的目录里 —— 没人知道它存在,也没人会去清。
+   * 复活归档路径时也铺,但不覆盖:`writePreparedTemplate` 对已存在的文件是跳过
+   * (COPYFILE_EXCL),复活的目录里有真东西,拿模板盖上去就是数据丢失。
    *
-   * ## 复活归档路径时也铺,但不覆盖
-   *
-   * `applyProjectTemplate` 对已存在的文件是**跳过**不是覆盖(COPYFILE_EXCL)。
-   * 复活的目录里有真东西,拿模板盖上去就是数据丢失。
-   *
-   * ## 铺失败不回滚项目
-   *
-   * 项目已经建好了,模板只是锦上添花。失败时把错误抛给调用方,由路由决定
-   * 是整个失败还是带着告警成功 —— 这里不擅自决定"要不要把刚建好的项目删掉"。
+   * 铺失败不回滚项目:项目已经建好,失败时把错误抛给调用方,由路由决定是整个失败还是
+   * 带着告警成功,这里不擅自删掉刚建好的项目。
    */
   let templateResult: ApplyTemplateResult | undefined;
   if (preparedTemplate) {
@@ -213,14 +202,14 @@ export async function createProject(
   };
 }
 
-/** hl(动态 P1-5):显示名上限。侧栏一行放不下的名字没有意义,5000 字进库只是给列表页添负担。 */
+/** 显示名上限。侧栏一行放不下的名字没有意义,超长的名字进库只是给列表页添负担。 */
 export const PROJECT_DISPLAY_NAME_MAX_LENGTH = 120;
 
 /**
  * Sets `projects.custom_project_name` for the given `projectId` (or clears it when empty).
  *
- * hl(动态 P1-5):只认字符串(`null` / `undefined` / 空串 = 清掉自定义名,回落到目录名),
- * 其余类型 400;长度封顶 —— 此前不限长不限型,对象也能塞进去。
+ * 只认字符串(`null` / `undefined` / 空串 = 清掉自定义名,回落到目录名),其余类型 400;
+ * 长度不超过 PROJECT_DISPLAY_NAME_MAX_LENGTH。
  */
 export function updateProjectDisplayName(projectId: string, newDisplayName: unknown): void {
   if (newDisplayName !== undefined && newDisplayName !== null && typeof newDisplayName !== 'string') {

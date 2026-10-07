@@ -4,7 +4,7 @@ import { buildModelRows, splitSelectableModels } from './useTaskLikeOptions';
 
 const row = (value: string) => ({ value, label: value });
 
-describe('ho:定时任务 / SkillWhet 的模型下拉不再列别名', () => {
+describe('定时任务 / SkillWhet 的模型下拉不列别名', () => {
   it('目录里有模型:只列目录条目,别名收起来(仍可用于显示当前值)', () => {
     const split = splitSelectableModels(
       [row('glm-5.2'), row('deepseek-v4'), row('sonnet'), row('opus'), row('haiku')],
@@ -26,7 +26,7 @@ describe('ho:定时任务 / SkillWhet 的模型下拉不再列别名', () => {
   });
 });
 
-describe('hq:定时任务的模型下拉 —— 私有 / 别的网关 / 不能用', () => {
+describe('定时任务的模型下拉 —— 私有 / 别的网关 / 不能用', () => {
   const labels = { privateBadge: '私有', unavailable: '暂不可用' };
   const options = [
     { value: 'my-model', label: 'My Model', group: 'catalog' as const, private: true, gatewayId: 7, gatewayName: '我的网关', available: true },

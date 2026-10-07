@@ -179,7 +179,7 @@ const COLLAPSE_ABOVE = 3;
 
 /**
  * Post-turn summary of files Claude changed, with per-file revert and a
- * transactional whole-turn rollback (git checkpoint, prism feature).
+ * transactional whole-turn rollback (both backed by the turn's git checkpoint).
  */
 export default function ChangedFilesCard({ state, isProcessing, onDismiss, onReverted }: ChangedFilesCardProps) {
   const { t } = useTranslation('chat');
@@ -194,14 +194,12 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
   const [metaFlags, setMetaFlags] = useState<CheckpointMetaFlags | null>(null);
 
   /**
-   * dv:换了 checkpoint(= 新的一轮)就把卡内状态整体重置。
+   * 换了 checkpoint(= 新的一轮)就把卡内状态整体重置。
    *
-   * 这张卡是**同一个组件实例**被新一轮的 state 复用的(ChatInterface 里位置
-   * 固定),而 `revertedPaths`、`notice`、`collapsed`、`expandedPath`、
-   * `restoreBlocker` 全是首渲染之后就不再跟着 props 走的本地 state。于是上一轮
-   * 还原过 `a.md`、新一轮又改了 `a.md`,它在新卡里一上来就是"已还原"的灰条,
-   * 点不动;上一轮的成功/失败提示("✅ 已回滚")也留在新卡上误导人;
-   * 折叠状态按上一轮的文件数定,新一轮文件数变了也不重算。
+   * 这张卡是同一个组件实例被新一轮的 state 复用的(ChatInterface 里位置固定),而
+   * `revertedPaths`、`notice`、`collapsed`、`expandedPath`、`restoreBlocker` 都是不跟 props 走的
+   * 本地 state。不重置的话,上一轮还原过、这一轮又改了的文件在新卡里一上来就是"已还原"、点不动;
+   * 上一轮的成功 / 失败提示会留在新卡上;折叠状态也不按新一轮的文件数重算。
    */
   const fileCount = (state.files || []).length;
   useEffect(() => {
@@ -337,20 +335,14 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
 
   return (
     /**
-     * 宽度对齐到**对话列**,不再横贯整屏。
+     * 宽度对齐到对话列,不横贯整屏。
      *
-     * 消息列、输入框、待审批横幅、排队消息卡片这四处早就都是
-     * `mx-auto max-w-[54.25rem]`,只有这块面板留着 `mx-3` —— 于是它比正下方的
-     * 输入框宽出一大截,两条边界对不上,看着像另一个层的东西压在上面。
-     * (ar 轮只收了高度,没碰宽度,所以那轮之后依然是这样。)
-     *
-     * ef:消息列是 `max-w-[54.25rem] px-4`(正文 836px);输入框、待审批横幅、排队卡片
-     * 与这块面板的外壳自带 px-4,所以它们的盒子取 52.25rem(= 868 − 32),外边缘才和
-     * 正文左右两边对齐 —— 以前四处都是 54.25rem,输入框比正文每边宽出 16px。
-     * 这几处保持一致而不另起变量:形式统一比省一个数字重要。
+     * 消息列是 `max-w-[54.25rem] px-4`(正文 836px);输入框、待审批横幅、排队卡片与这块面板
+     * 的外壳自带 px-4,所以它们的盒子取 52.25rem(= 868 − 32),外边缘才和正文左右两边对齐。
+     * 这几处写的是同一个字面量(没有另起变量),改的时候要一起改。
      */
     <div className="mx-auto mb-2 w-full max-w-[52.25rem] overflow-hidden rounded-panel border border-border">
-      {/* 标头(设计稿 2a/2b):分支图标 → 本轮改动 → 文件数 → 总增删 → ml-auto → ckpt → 回滚本轮 */}
+      {/* 标头:分支图标 → 本轮改动 → 文件数 → 总增删 → ckpt(ml-auto)→ 保留改动 → 回滚本轮 → 关闭 */}
       <div className="flex items-center gap-2.5 border-b border-border bg-card px-3.5 py-2">
         <button
           type="button"
@@ -382,13 +374,12 @@ export default function ChangedFilesCard({ state, isProcessing, onDismiss, onRev
           )}
         </button>
 
-        {/* dp:明确的「接受」。改动在 agent 干活时就已实时写盘,从来不存在
-            "待接受的暂存态" —— 语义上关掉这张卡就是接受。但此前"接受"只是
-            右上角一个 × 图标,与两个写着字的撤销按钮(还原/回滚本轮)摆在
-            一起,观感变成了"只能回滚"。给默认动作一个名字和主色。 */}
+        {/* 明确的「保留改动」。改动在 agent 干活时就已实时写盘,不存在"待接受的暂存态",
+            语义上关掉这张卡就是接受;给这个默认动作一个名字和主色,
+            免得旁边写着字的撤销按钮(还原 / 回滚本轮)让人以为只能回滚。 */}
         <button
           type="button"
-          // dq:还原/回滚正在进行时禁点 —— 那一瞬把卡收掉,操作还在后台跑,
+          // 还原 / 回滚进行中时禁点:这时把卡收掉,操作还在后台跑,
           // 结果(成功刷新或失败提示)就没有地方显示了。
           disabled={busy !== null}
           onClick={onDismiss}

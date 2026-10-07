@@ -45,11 +45,6 @@ export type CodeEditorSettingsState = {
   fontSize: string;
 };
 
-// `SettingsStoragePayload` described the three localStorage blobs the settings
-// modal wrote — claude, cursor and codex. It was never imported anywhere, so it
-// documented the shape rather than enforcing it; the cursor and codex blobs are
-// gone and the claude one is written inline by `useSettingsController`.
-
 export type SettingsProps = {
   isOpen: boolean;
   onClose: () => void;

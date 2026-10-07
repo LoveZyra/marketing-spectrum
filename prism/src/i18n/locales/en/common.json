@@ -156,6 +156,7 @@
       "fileTooLarge": "\"{{name}}\" is larger than {{limit}}",
       "totalTooLarge": "This selection is {{total}}; uploads are limited to {{limit}} at a time",
       "partial": "Uploaded {{uploaded}} of {{total}} files",
+      "failedAfterPartial": "{{reason}} ({{uploaded}} file(s) were uploaded; the other {{rest}} were not.)",
       "success": "Uploaded {{uploaded}} file(s)",
       "overwritten": "Overwrote existing file(s): {{names}}",
       "overwrittenMany": "Overwrote existing files: {{names}} and {{rest}} more",
@@ -189,6 +190,7 @@
       "createFailed": "Create failed",
       "uploadNetwork": "Upload failed — check your connection and try again",
       "uploadCanceled": "Upload canceled",
+      "proxyTooLarge": "The upload request exceeded the reverse proxy's size limit (client_max_body_size). Ask your administrator to raise the proxy limit or lower the chunk size (PRISM_UPLOAD_CHUNK_MB).",
       "unknown": "Operation failed"
     }
   },
@@ -452,7 +454,21 @@
     "triggerSchedule": "Scheduled",
     "openRunSession": "Open this run's session",
     "moreRuns": "Show earlier ({{count}})",
-    "modelRetired": "Retired · runs with the default model"
+    "modelRetired": "Retired · runs with the default model",
+    "loadFailed": "Couldn't load scheduled tasks. Please try again.",
+    "staleData": "Couldn't refresh. What's shown below may be out of date.",
+    "retry": "Retry",
+    "errors": {
+      "saveFailed": "Save failed",
+      "actionFailed": "Action failed",
+      "deleteFailed": "Delete failed",
+      "runFailed": "Couldn't start the task",
+      "ticketFailed": "Couldn't get a task ticket",
+      "startFailed": "Couldn't hand the request to the AI",
+      "network": "The request didn't go through (it may have been blocked by a proxy). Check your network and try again.",
+      "withReason": "{{action}}: {{reason}}",
+      "withStatus": "{{action}} (HTTP {{status}})"
+    }
   },
   "export": {
     "md": "Markdown",
@@ -480,7 +496,9 @@
     "sessionCount": "This project has {{count}} sessions."
   },
   "actions": {
-    "close": "Close"
+    "close": "Close",
+    "save": "Save",
+    "cancel": "Cancel"
   },
   "common": {
     "cancel": "Cancel",

@@ -5,13 +5,10 @@ import { describe, test } from 'vitest';
 import { shouldKeepOrphanedSessionView } from './sessionViewGuard';
 
 /**
- * fi:线上截图 —— 用户在一条**正在跑**的会话上不断切换,切到「新会话」页面之后,
- * 标题是新会话,正文却挂着那条会话的内容,而且随它的流式持续更新;F5 才消失,
- * root 新开页面看不到。
+ * `selectedSession` 为空时的例外分支只保护"新会话页上刚建立、路由还没跟上"的那条会话。
  *
- * 病根是 `selectedSession` 为空时的例外分支:原来只要 `currentSessionId` 指的会话
- * 还在跑就不清它。这条例外本意是保护"新会话页上刚建立、路由还没跟上"的那条,
- * 但判据是**在不在跑**而不是**从哪来的**,于是从别的会话切走也被它挡住了。
+ * 判据必须看 id 从哪来,不能只看在不在跑:否则从一条正在跑的会话切到「新会话」页面后,
+ * 标题是新会话,正文却挂着那条会话的内容,并随它的流式持续更新。
  */
 describe('selectedSession 为空时,正文还能不能用 currentSessionId 撑着', () => {
   test('本视图刚建立的 + 正在跑 → 保留(这是例外存在的理由)', () => {
@@ -20,11 +17,10 @@ describe('selectedSession 为空时,正文还能不能用 currentSessionId 撑�
     }), true);
   });
 
-  test('⚠️ 从别的会话切走留下的 + 正在跑 → 必须清(线上那个 bug)', () => {
+  test('从别的会话切走留下的 + 正在跑 → 必须清', () => {
     /*
-     * 这正是截图里的组合:A 在跑,用户点了项目行 / 切了项目,
-     * selectedSession 变空但 currentSessionId 还是 A。
-     * 原来的判据在这里返回 true —— A 的正文就被钉在新会话页面上了。
+     * A 在跑,用户点了项目行 / 切了项目:selectedSession 变空但 currentSessionId 还是 A。
+     * 这里若返回 true,A 的正文就会留在新会话页面上。
      */
     assert.equal(shouldKeepOrphanedSessionView({
       currentSessionId: 'A', establishedHere: null, isProcessing: true,

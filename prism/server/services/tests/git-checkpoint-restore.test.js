@@ -15,16 +15,14 @@ import {
 } from '../git-checkpoint.js';
 
 /**
- * G1:checkpoint **还原**路径的行为矩阵。
+ * checkpoint 还原路径的行为矩阵。
  *
- * 打 checkpoint 有测试(cq 轮的增量快照),还原一直没有 —— 而还原才是危险的那半:
- * 它 `git reset --hard`、删未跟踪文件、replay stash。一条判据错掉就是用户的工作丢了。
- *
- * 这里钉的都是**拒绝**与**兜底**,因为那才是它的价值所在:
+ * 还原是危险的那一半:它 `git reset --hard`、删未跟踪文件、replay stash,一条判据错掉
+ * 就是用户的工作丢了。这里钉的都是拒绝与兜底:
  *   - checkpoint 之后有提交 → 默认拒绝(reset 会把分支指针拖回去,提交就没了);
- *   - 快照不完整 → 默认拒绝,而且**即使 force 也绝不删未跟踪文件**
+ *   - 快照不完整 → 默认拒绝,而且即使 force 也绝不删未跟踪文件
  *     (keep-set 不可信,删"不认识的"文件等于删用户的东西);
- *   - 还原前必须先给当前状态打一份安全 checkpoint —— 后悔药。
+ *   - 还原前必须先给当前状态打一份安全 checkpoint,作为后悔药。
  */
 const run = promisify(execFile);
 
@@ -103,7 +101,7 @@ describe('restoreCheckpoint', () => {
     assert.equal(await read('tracked.txt'), 'v1\n');
   });
 
-  test('快照不完整时默认拒绝;force 还原,但**绝不删**未跟踪文件', async () => {
+  test('快照不完整时默认拒绝;force 还原,但绝不删未跟踪文件', async () => {
     const checkpoint = await createCheckpoint(repo, { sessionId: 's' });
     // 手动把这份 checkpoint 标成 incomplete —— 真实来源是文件数/字节数超限。
     const metaPath = path.join(store, checkpoint.id, 'meta.json');

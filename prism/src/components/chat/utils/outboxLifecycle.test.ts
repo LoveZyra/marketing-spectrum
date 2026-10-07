@@ -12,16 +12,12 @@ import {
 } from './sendCommand';
 
 /**
- * 排队卡这块的**生命周期不变式**,一次钉清楚。
+ * 排队卡的生命周期不变式。
  *
- * 这一轮它出过三次事,每次都是"只堵了一半":
- *   1. fn:发出去之后条目停在 `sending` 却照样落盘 → 换会话读回来再发一次;
- *   2. fo:落盘收窄了,**渲染没收窄** → 卡片挂着不走,刷新才消失;
- *   3. fq 之后仍然复发:`claimQueuedMessage` 认领时把条目**写回盘上**,
- *      而清理那一侧的归属守卫会跳过 → 几轮之前那句话又变成一张排队卡。
- *
- * 前两条是判据没共用,第三条是 **localStorage 有两个写者**。所以除了共用判据,
- * 还加了一条与路径无关的兜底:**已经投递过的幂等键,不许再回到待发。**
+ *   1. 发出去之后条目处于 `sending`,不再落盘 —— 否则换会话读回来会再发一次;
+ *   2. 落盘与渲染共用同一个"待发"判据(`isPendingSend`)—— 否则卡片会挂着不走;
+ *   3. localStorage 有两个写者:`claimQueuedMessage` 认领时会把条目写回盘上,而清理那一侧的
+ *      归属守卫可能跳过。所以另有一条与路径无关的兜底:已经投递过的幂等键,不许再回到待发。
  */
 const cmd = (text: string, sessionKey: string | null = 's1') => freezeSendCommand({
   sessionKey,
@@ -58,9 +54,9 @@ describe('排队条目的生命周期', () => {
     expect(isPendingSend(entry)).toBe(false);
   });
 
-  it('**已经投递过的那条,恢复时一律不回来**(与路径无关的兜底)', () => {
-    // 这就是「回答完第二条之后,第一条的你好又排上队」的那条路:
-    // 盘上那份是认领时写回去、而清理被守卫跳过留下的残留。
+  it('已经投递过的那条,恢复时一律不回来(与路径无关的兜底)', () => {
+    // 盘上残留的是认领时写回去、而清理被守卫跳过的那一份;
+    // 恢复时若放行,已经回答过的那句会重新排上队。
     const command = cmd('你好');
     const stored = toStoredCommand(command);
     const dispatched = new Set([command.clientMessageId]);
@@ -83,7 +79,7 @@ describe('排队条目的生命周期', () => {
     expect(isPendingSend(restored)).toBe(true);
   });
 
-  it('落盘的归属按**命令自己记的会话**判,不按会漂的 ref', () => {
+  it('落盘的归属按命令自己记的会话判,不按会漂的 ref', () => {
     // 新会话的第一条:提交时 sessionKey 是 null、落地时已经是新 id ——
     // 用 ref 判会整段跳过,连"该清"也一起跳过,盘上那份就留下了。
     const forNewSession = cmd('新会话第一条', null);
@@ -96,15 +92,14 @@ describe('排队条目的生命周期', () => {
 
 
 /**
- * fz:**换会话那一拍,落盘不许动新会话的键。**
+ * 换会话那一拍,落盘不许动新会话的键。
  *
  * 落盘 effect 声明在恢复之前,两者依赖里都有 sessionKey —— 换会话那一拍落盘
  * 先跑,`sessionKey` 已经是新会话而 `outbox` 还是旧会话的(没排队就是 null),
- * 于是"没有条目就清理"清掉的正是恢复马上要读的那一个。
- * 排队消息因此活不过一次刷新,也活不过切走再切回。
+ * "没有条目就清理"会清掉恢复马上要读的那一个,排队消息就活不过刷新或切走再切回。
  */
 describe('mayPersistQueuedCommand', () => {
-  it('**换会话那一拍:恢复还没认领新会话 → 一律不动**(这就是那个 bug)', () => {
+  it('换会话那一拍:恢复还没认领新会话 → 一律不动', () => {
     // 恢复还指着旧会话 A,而 sessionKey 已经是 B,outbox 是 null(A 没排队)
     expect(mayPersistQueuedCommand('A', 'B', undefined)).toBe(false);
   });
@@ -118,7 +113,7 @@ describe('mayPersistQueuedCommand', () => {
     expect(mayPersistQueuedCommand('B', 'B', 'B')).toBe(true);
   });
 
-  it('条目自己记的会话对不上 → 不动(fr 那一半仍然有效)', () => {
+  it('条目自己记的会话对不上 → 不动', () => {
     expect(mayPersistQueuedCommand('B', 'B', 'A')).toBe(false);
   });
 

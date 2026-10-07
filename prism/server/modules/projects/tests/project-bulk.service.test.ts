@@ -10,16 +10,14 @@ import { bulkProjectAction } from '@/modules/projects/services/project-bulk.serv
 import { readProjectPermissionsView } from '@/modules/projects/services/project-permissions.service.js';
 
 /**
- * eo:项目批量操作的**权限边界**。
+ * 项目批量操作的权限边界。
  *
- * 这是这个功能里唯一有安全后果的地方:"全选 → 删除"如果不逐条鉴权,就是一把
- * 能扫掉别人项目的扫帚。所以下面每一条测的都是"别人的项目有没有被动到",
- * 而不是"接口能不能跑通"。
+ * "全选 → 删除"如果不逐条鉴权,就是一把能扫掉别人项目的扫帚。所以下面每一条测的都是
+ * "别人的项目有没有被动到",而不是"接口能不能跑通"。
  *
- * 两条口径要分清:
- *   - **删除 / 收藏** 按可见性走(能看见就能删,与单个删除同一档 —— 批量入口
- *     不该比单个入口更严,也不该更松);
- *   - **改权限 / 改所有者** 还要过管理权(root 或 owner),改所有者更是 root 独占。
+ * 口径与单条入口一致,批量入口不比单条更严,也不更松:
+ *   - 收藏按可见性走;
+ *   - 归档 / 删除 / 改权限要管理权(root 或 owner),改所有者是 root 独占。
  */
 const previousDatabasePath = process.env.DATABASE_PATH;
 const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
@@ -110,7 +108,7 @@ describe('bulkProjectAction —— 权限边界', () => {
     assert.equal(projectsDb.getProjectOwner(mine), alice);
   });
 
-  test('root 能改所有者;目标用户不存在时**在动第一个项目之前**就报错', async () => {
+  test('root 能改所有者;目标用户不存在时在动第一个项目之前就报错', async () => {
     await freshDb();
     const alice = Number(userDb.createUser('alice', 'h').id);
     const boss = Number(userDb.createUser('boss', 'h').id);
@@ -138,7 +136,7 @@ describe('bulkProjectAction —— 权限边界', () => {
     assert.equal(projectsDb.getProjectOwner(one), boss);
   });
 
-  test('批量收藏是**设成收藏**,不是逐个翻转', async () => {
+  test('批量收藏是设成收藏,不是逐个翻转', async () => {
     await freshDb();
     const alice = Number(userDb.createUser('alice', 'h').id);
     const already = makeProject('/w/alice/a', alice);

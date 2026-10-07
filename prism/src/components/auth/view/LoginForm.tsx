@@ -19,16 +19,14 @@ const initialState: LoginFormState = {
   password: '',
 };
 
-/**
- * Login form component.
- * Handles credential input with browser autofill support (`autocomplete`
- * attributes) so that password managers can offer to fill saved credentials.
- */
 type LoginFormProps = {
-  /** Omitted when there is nowhere to register (e.g. first-run setup). */
+  /** Omitted when there is nowhere to register; the register link is then hidden. */
   onRegister?: () => void;
 };
 
+/**
+ * Login form. Sets `autocomplete` hints so password managers can offer saved credentials.
+ */
 export default function LoginForm({ onRegister }: LoginFormProps = {}) {
   const { t } = useTranslation('auth');
   const { login } = useAuth();

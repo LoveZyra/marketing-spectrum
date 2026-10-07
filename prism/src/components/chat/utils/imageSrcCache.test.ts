@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ImageSrcCache } from './imageSrcCache';
 
 /**
- * ee:聊天图片 object URL 缓存。乐观行被服务端拷贝换掉时图片组件重挂 ——
+ * 聊天图片 object URL 缓存。乐观行被服务端拷贝换掉时图片组件重挂 ——
  * 第二次挂载必须同步命中缓存(不画占位、不重取),而正在显示的条目不能被淘汰。
  */
 describe('ImageSrcCache', () => {

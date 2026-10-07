@@ -11,13 +11,10 @@ type LanguageSelectorProps = {
 };
 
 /**
- * Language Selector Component
+ * Dropdown for the interface language. A pick switches i18next and is recorded
+ * as the user's explicit choice (see `setLanguagePreference`).
  *
- * A dropdown component for selecting the application language.
- * Automatically updates the i18n language and persists to localStorage.
- *
- * Props:
- * @param {boolean} compact - If true, uses compact style (default: false)
+ * @param {boolean} compact - Compact style for the quick settings panel (default: false)
  */
 export default function LanguageSelector({ compact = false }: LanguageSelectorProps) {
   const { i18n, t } = useTranslation('settings');
@@ -29,13 +26,12 @@ export default function LanguageSelector({ compact = false }: LanguageSelectorPr
     void setLanguagePreference(event.target.value);
   };
 
-  // Compact style for QuickSettingsPanel
+  // Compact style for the quick settings panel
   if (compact) {
     return (
       <div className="flex items-center justify-between gap-2 rounded-lg border border-transparent bg-card p-3 transition-colors hover:border-border">
-        {/* 兜底文案是必须的:简中 / 繁中 / 英文的 settings.json 里一直没有这几个键,
-            没有 defaultValue 时 i18next 会把键名原样打出来,界面上就是
-            「account.language」。 */}
+        {/* defaultValue 兜底:当前语种缺这个键、英文回退又还没挂上时,
+            i18next 会把键名原样打出来(界面上就是「account.language」)。 */}
         <span className="flex min-w-0 items-center gap-2 text-sm text-foreground">
           <Languages className="h-4 w-4 flex-none text-muted-foreground" />
           <span className="min-w-0 truncate">{t('account.language', { defaultValue: '语言' })}</span>

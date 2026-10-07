@@ -18,12 +18,12 @@ export default function ImageViewer({ file, onClose }: ImageViewerProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  // hl(P3 文件组):坏图片(扩展名是 png、内容不是)以前既不报错也不显示 —— 一块空白。
+  // 坏图片(扩展名是 png、内容不是)解码失败时要报错,否则只是一块空白。
   const [decodeFailed, setDecodeFailed] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  // hl(P3 文件组):Esc 关不掉、Tab 跑到背后 —— 接上共用的模态键盘行为。
+  // 共用的模态键盘行为:Esc 关闭、Tab 不跑到背后。
   useModalKeyboard(containerRef, { onClose });
   useEffect(() => { closeButtonRef.current?.focus(); }, []);
 

@@ -13,13 +13,13 @@ type Props = {
 };
 
 /**
- * 跨文件全局搜索面板(F10)。
+ * 跨文件全局搜索面板。
  *
- * 文件树自带的搜索框只匹配**文件名**;人真正要找的常常是内容 —— "那个函数叫什么
- * 来着"、"这个常量还有谁在用"。此前唯一的办法是打开终端自己 grep。
+ * 文件树自带的搜索框只匹配文件名;人真正要找的常常是内容 —— "那个函数叫什么
+ * 来着"、"这个常量还有谁在用"。
  *
  * 三个刻意的选择:
- *   - 默认**字面量**而不是正则。多数人搜的是字面量,而正则里的 `.` `(` `*` 会让
+ *   - 默认字面量而不是正则。多数人搜的是字面量,而正则里的 `.` `(` `*` 会让
  *     结果莫名其妙;要正则的人知道去勾那个开关。
  *   - 结果按文件分组。一屏 300 条平铺没法读,而"哪个文件里有"通常就是答案。
  *   - 截断如实说。少给结果而不告诉人,比给少了更糟 —— 他会以为项目里就这么多。
@@ -32,7 +32,7 @@ export default function ProjectSearchPanel({ projectId, onOpenMatch, onClose }: 
   const [regex, setRegex] = useState(false);
   const [matches, setMatches] = useState<SearchMatch[]>([]);
   const [truncated, setTruncated] = useState(false);
-  // hl(P3 文件组):因体积被跳过的文件数 —— 以前静默跳过,用户以为「项目里真的没有」。
+  // 因体积被跳过的文件数:要告诉用户,否则会以为「项目里真的没有」。
   const [skippedLargeFiles, setSkippedLargeFiles] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);

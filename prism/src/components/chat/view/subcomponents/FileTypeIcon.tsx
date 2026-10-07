@@ -8,13 +8,9 @@ type Props = {
 };
 
 /**
- * ej:产出列表的文件图标 —— 与**文件管理器完全同一套**映射。
- *
- * 之前两处产出(右侧面板、正文下的产出卡)一律画 `FileText`:一列一模一样的
- * 文档图标,`.py`、`.svg`、`.html` 混在一起,扫一眼分不出类型。文件树那边早就
- * 有成熟的一套(`getFileIconData` 按扩展名 / 特殊文件名解析,`getFileFamily`
- * 给七个语义族上色),没有理由在产出这边另起炉灶 —— 同一个文件在两个地方
- * 长得不一样,才是最容易让人怀疑"这是不是同一个东西"的细节。
+ * 产出列表(右侧面板、正文下的产出卡)的文件图标,与文件管理器同一套映射:
+ * getFileIconData 按扩展名 / 特殊文件名选图标,getFileFamily 按语义族上色,
+ * 同一个文件在两处长得一样。
  */
 export default function FileTypeIcon({ path, className }: Props) {
   const filename = path.replace(/\\/g, '/').split('/').pop() || path;

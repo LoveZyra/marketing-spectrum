@@ -14,9 +14,8 @@ export type SessionDeleteTarget = {
   /**
    * 当前用户能不能永久删除这条(判据见 `utils/sessionDeletePermission`)。
    *
-   * `false` 时**不画**那枚红色「永久删除」按钮 —— 否则就是给用户一个必然撞
-   * 403 的主按钮(2026-09-15 非 root 实测)。不传 = 老行为(画出来,服务端拦),
-   * 这样没来得及接线的调用方不会因此少一个按钮。
+   * `false` 时不画那枚红色「永久删除」按钮,免得给用户一个必然撞 403 的主按钮。
+   * 不传则照画、由服务端拦,没接这个字段的调用方不会因此少一个按钮。
    */
   canDeletePermanently?: boolean;
 };
@@ -30,15 +29,13 @@ type Props = {
 };
 
 /**
- * 会话删除确认。
+ * 会话删除确认,侧栏与顶栏「…」共用。
  *
- * ef:从 `SidebarModals` 里抽出来 —— 顶栏「…」也有「删除会话」,而侧栏折叠时
- * `<Sidebar/>` 整棵都不渲染(它的弹窗跟着消失)。同一个对话框两处共用,
+ * 不放在 `SidebarModals` 里:侧栏折叠时 `<Sidebar/>` 整棵都不渲染,它的弹窗跟着消失。
  * 文案与两档语义(归档 / 永久删除)只此一份。
  */
 export default function SessionDeleteDialog({ target, onCancel, onConfirm, t }: Props) {
-  // hl(P3 可访问性):原来没有 dialog 语义、焦点留在背后的页面上。接共用的模态键盘行为,
-  // 初始焦点落在「取消」—— 不可逆操作的对话框不该让回车默认落在删除上。
+  // 接共用的模态键盘行为;初始焦点落在「取消」:不可逆操作的对话框不该让回车默认落在删除上。
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   useModalKeyboard(dialogRef, { open: Boolean(target), onClose: onCancel });
@@ -82,7 +79,7 @@ export default function SessionDeleteDialog({ target, onCancel, onConfirm, t }: 
                   ? t('deleteConfirmation.archivedSessionNotice', 'This session is already archived. You can keep it hidden or delete it permanently.')
                   : t('deleteConfirmation.archiveSessionNotice', 'Archive keeps the session out of the active list while preserving its history.')}
               </p>
-              {/* gk:永久删除 = 进「最近删除」,保留期内可恢复;只有项目负责人 / 管理员可以做。说在按钮上方,别让人以为是彻底销毁。 */}
+              {/* 永久删除 = 进「最近删除」,保留期内可恢复;只有项目负责人 / 管理员可以做。说在按钮上方,别让人以为是彻底销毁。 */}
               <p className="mt-2 text-xs text-muted-foreground">
                 {mayDelete
                   ? t('deleteConfirmation.permanentDeleteNotice', '永久删除会把会话(含对话记录)移入「最近删除」,保留期内可由项目负责人恢复;只有项目负责人或管理员可以永久删除。')

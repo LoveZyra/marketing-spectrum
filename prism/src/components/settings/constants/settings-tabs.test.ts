@@ -7,11 +7,8 @@ import type { SettingsMainTab } from '../types/types';
 import { SETTINGS_MAIN_TABS, SETTINGS_MAIN_TAB_IDS } from './constants';
 
 /**
- * 设置页标签清单的单一来源。
- *
- * 这些断言存在的理由是一次真实的漂移:同一份清单曾经手写在三处,只有侧栏那份
- * 有 `voice`,于是命令面板搜不到语音设置、`?tab=voice` 深链静默回落到 agents。
- * 谁再加一个标签而只改了其中一处,下面就会红。
+ * 设置页标签清单的单一来源:侧栏、命令面板、深链校验都从 SETTINGS_MAIN_TABS 派生。
+ * 钉住清单本身的完整性、root 专属范围与「模型网关」的位置。
  */
 describe('设置页主标签清单', () => {
   test('每个标签都有 id / label / labelKey / keywords / icon', () => {
@@ -41,7 +38,7 @@ describe('设置页主标签清单', () => {
     assert.deepEqual(rootOnly, ['accounts', 'models', 'server']);
   });
 
-  test('hq:「模型网关」每个人都有(不是 root 专属),排在「模型」前面', () => {
+  test('「模型网关」每个人都有(不是 root 专属),排在「模型」前面', () => {
     const tab = SETTINGS_MAIN_TABS.find((item) => item.id === 'gateways');
     assert.ok(tab, '缺 gateways 标签');
     assert.equal(tab.rootOnly, undefined);

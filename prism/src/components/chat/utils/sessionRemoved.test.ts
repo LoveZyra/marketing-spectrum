@@ -10,10 +10,9 @@ import {
 import { draftStorageKey } from './composerDrafts';
 
 /**
- * gk:「这条会话已被删除」态。
+ * 「这条会话已被删除」态。
  *
- * 2026-09-14 生产截图:一句给开发者看的英文 `Session "…" was not found. Create it via
- * POST /api/providers/sessions first.` 出现两次,中间夹着用户那句话,还有一个只会再撞
+ * 会话不在了时,不能只给一句给开发者看的英文报错(`Session "…" was not found. …`)和一个只会再撞
  * 一次的「重发上一条消息」。这里钉三根线:只对 chat.send 的 SESSION_NOT_FOUND 切态、
  * 帧 → 信息的转换、以及「新建会话继续」带草稿用的键与新建会话页读的是同一个。
  */

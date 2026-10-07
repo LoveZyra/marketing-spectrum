@@ -6,16 +6,14 @@ import path from 'node:path';
 import { describe, test } from 'vitest';
 
 /**
- * **把"这个字段该写在哪"钉在 SDK 的类型定义上。**
+ * 把"这个字段该写在哪"钉在 SDK 的类型定义上。
  *
- * gt 里我把自动压缩的两个旋钮写成了 `sdkOptions.autoCompactEnabled` /
- * `sdkOptions.autoCompactWindow` —— 而它们属于 **`Settings`**,不属于 `Options`。
- * SDK **静默忽略**了它们:`PRISM_AUTO_COMPACT=0` 什么也不关,
- * `PRISM_AUTO_COMPACT_WINDOW=30000` 也压不出来。测试环境上"触发不出压缩"就是它。
+ * 自动压缩的两个旋钮(autoCompactEnabled / autoCompactWindow)属于 `Settings`,不属于 `Options`。
+ * 写在 sdkOptions 顶层会被 SDK 静默忽略:`PRISM_AUTO_COMPACT=0` 什么也不关,
+ * `PRISM_AUTO_COMPACT_WINDOW=30000` 也压不出来。
  *
- * 为什么没被任何门禁拦住:`server/claude-sdk.js` 是 **.js**,`sdkOptions` 是纯对象 ——
- * 多写一个不存在的字段,typecheck / eslint / 2100 条测试**一条都不会红**。
- * 这类错只能靠"对着 SDK 的 .d.ts 断言"来拦。
+ * 这类错没有别的门禁能拦:`server/claude-sdk.js` 是 .js,`sdkOptions` 是纯对象,多写一个不存在的字段,
+ * typecheck / eslint / 其余测试一条都不会红,只能对着 SDK 的 .d.ts 断言。
  *
  * 这里同时钉两头:
  *   ① 我们写的代码把旋钮放进了 `options.settings`;
@@ -31,7 +29,7 @@ const sdkTypes = readFileSync(
   'utf8'
 );
 
-/** 挖掉注释 —— 上面那段说明里就写着这几个名字。 */
+/** 挖掉注释再断言:claude-sdk.js 的注释里也会提到这几个名字。 */
 const codeOnly = source
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .split('\n')
@@ -48,7 +46,7 @@ const ownerOf = (declaration) => {
 };
 
 describe('SDK 选项的写入位置', () => {
-  test('**关键**:自动压缩的旋钮写进 options.settings,不是 options 顶层', () => {
+  test('自动压缩的旋钮写进 options.settings,不是 options 顶层', () => {
     assert.match(codeOnly, /sdkOptions\.settings\s*=\s*\{[\s\S]{0,80}compactSettings/);
     assert.equal(
       /sdkOptions\.autoCompactEnabled/.test(codeOnly),
@@ -71,9 +69,9 @@ describe('SDK 选项的写入位置', () => {
     assert.equal(ownerOf('settings?: string | Settings;'), 'Options');
   });
 
-  test('hl(09-24 P2-17):一次性路径(mapCliOptionsToSDK)也吃自动压缩旋钮', () => {
-    // 旋钮抽成了 applyCompactSettings,两条路径都要调它;此前只有常驻路径有,
-    // 定时任务 / Agent API / 常驻失败回退全走 CLI 默认。
+  test('一次性路径(mapCliOptionsToSDK)也吃自动压缩旋钮', () => {
+    // 旋钮集中在 applyCompactSettings,两条路径都要调它:漏了一次性路径,
+    // 定时任务 / Agent API / 常驻失败回退就全走 CLI 默认。
     const oneShot = codeOnly.slice(
       codeOnly.indexOf('function mapCliOptionsToSDK('),
       codeOnly.indexOf('function addSession('),
@@ -94,12 +92,12 @@ describe('SDK 选项的写入位置', () => {
   });
 });
 
-describe('hm(A3.1 ③):跨会话拒收写进 options.settings', () => {
+describe('跨会话拒收写进 options.settings', () => {
   test('SDK 的 .d.ts 里 crossSessionInbound 属于 Settings,取值含 refuse', () => {
     assert.equal(ownerOf("crossSessionInbound?: 'accept' | 'hold' | 'refuse';"), 'Settings');
   });
 
-  test('applyCompactSettings **无条件**带 crossSessionInbound(不再只在配了压缩旋钮时才写 settings)', () => {
+  test('applyCompactSettings 无条件带 crossSessionInbound(没配压缩旋钮时也写 settings)', () => {
     const block = codeOnly.slice(
       codeOnly.indexOf('function applyCompactSettings('),
       codeOnly.indexOf('const MAX_RUNTIMES'),

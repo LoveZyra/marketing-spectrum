@@ -45,9 +45,9 @@ test('malformed payloads yield no images', () => {
 });
 
 /**
- * ed:会话项目的 attachments/ 也是合法来源。
- * cu 起图片按项目落盘,这道门却只认全局目录 —— 项目会话里的每张图都被丢:模型看不到、
- * 落库的用户行没有 images、回合一结束气泡里的图就消失(用户实测)。
+ * 会话项目的 attachments/ 也是合法来源(只认直接子文件)。
+ * 图片按项目落盘;这道门只认全局目录的话,项目会话里的每张图都会被丢:
+ * 模型看不到、落库的用户行没有 images。
  */
 test('session project attachments/ is an additional allowed root (direct children only)', () => {
   const projectAttachments = path.join(os.tmpdir(), 'probe-proj', 'attachments');
@@ -75,19 +75,18 @@ test('no extra roots → behaviour unchanged (only the global store)', () => {
 });
 
 /**
- * A7:**台账兜底** —— 图片落在哪个目录由上传那一刻决定,而这道门比的是
- * `sessions.project_path`。两者是两个不同来源的值:
+ * 台账兜底:图片落在哪个目录由上传那一刻决定,而这道门比的是
+ * `sessions.project_path`。两者可能来自不同来源:
  *
- *   - 落盘目录 ← 前端传的 `projectId`(侧栏选中的项目)→ `projects.project_path`
+ *   - 落盘目录 ← 上传时带了会话就取会话的项目,否则取前端传的 `projectId`(侧栏选中的项目)
  *   - 这道门   ← `sessions.project_path`
  *
- * 对不齐时图片在这里被静默丢掉,而**页面上照样显示得好好的**(前端按侧栏
+ * 对不齐时图片会在这里被静默丢掉,而页面上照样显示得好好的(前端按侧栏
  * projectId 走 `/api/projects/:id/files/content` 取原图)—— 用户看到的是
- * "图在页面上,模型却说传不进来",除了服务端一行 warn 没有任何线索。
- * root 尤其容易踩:它对所有项目可见,上传一定落进某个项目的 attachments/。
+ * "图在页面上,模型却说传不进来"。root 尤其容易踩:它对所有项目可见。
  *
- * 落盘那一侧已经改成按会话解析(见 assets.routes),这里是**历史文件的退路**:
- * 目录改不了,但归属是服务端在落盘那一刻记下的,有据可查。
+ * 落错目录的文件挪不回去,但归属是服务端在落盘那一刻记下的,有据可查,
+ * 所以台账说属于本会话就放行。
  */
 const otherProjectAttachments = path.join(os.tmpdir(), 'wrong-proj', 'attachments');
 const strayImage = path.join(otherProjectAttachments, 'shot.png');
@@ -104,7 +103,7 @@ test('台账说这张图属于本会话 → 放行(救回落错目录的历史�
   assert.deepEqual(result.map((entry) => entry.path), [strayImage]);
 });
 
-test('台账说它属于**别的**会话 → 照旧丢掉', () => {
+test('台账说它属于别的会话 → 照旧丢掉', () => {
   // 这条是兜底的边界:兜底认的是"服务端记过账且归属本会话",不是"路径长得像附件"。
   const result = filterImagesToUploadStore(
     [{ path: strayImage }],
@@ -164,11 +163,10 @@ test('穿越路径即使台账认也不放行(路径先归一,再比)', () => {
 });
 
 /**
- * F08:**共用目录里的图要查归属。**
+ * 共用目录里的图要查归属。
  *
- * 全局图库(`~/.prism/assets`)是所有用户共用的一个目录,而这道门此前只判
- * "在不在这个目录里" —— 路径会出现在导出、日志、别人分享的截图里,
- * 知道文件名就能把**别人的图**塞进自己的对话发给模型。
+ * 全局图库(`~/.prism/assets`)是所有用户共用的一个目录,路径会出现在导出、日志、截图里;
+ * 只判"在不在这个目录里"的话,知道文件名就能把别人的图塞进自己的对话发给模型。
  *
  * 只对全局图库查:项目内的 `attachments/` 走到这一步说明会话可见性已经过了。
  */
@@ -186,7 +184,7 @@ test('台账说这张图是别人的 → 丢掉', () => {
   assert.deepEqual(result, []);
 });
 
-test('台账说是自己的(哪怕是自己**另一条**会话传的)→ 放行', () => {
+test('台账说是自己的(哪怕是自己另一条会话传的)→ 放行', () => {
   // 同一个人在别的会话里传过的图,自己再引用是正常操作(编辑重跑、复制路径)。
   const result = filterImagesToUploadStore(
     [{ path: sharedImage }],

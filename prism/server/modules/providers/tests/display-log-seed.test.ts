@@ -93,14 +93,14 @@ test('transcript 读不动也不能挡住发送', async () => {
     );
     vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    // du:读不动现在报 failed —— 调用方据此**跳过本轮落库**,日志维持空、
-    // 会话继续走 transcript,历史不会因为多写了一行而整段消失。
+    // 读不动报 failed:调用方据此跳过本轮落库,日志维持空、会话继续走 transcript,
+    // 历史不会因为多写了一行而整段消失。
     assert.deepEqual(await seedDisplayLogFromTranscript('s-broken'), { status: 'failed' });
     assert.equal(sessionMessagesDb.countForSession('s-broken'), 0);
   });
 });
 
-test('du:有历史但一条都没抄进去 → failed(不敢把空日志当权威)', async () => {
+test('有历史但一条都没抄进去 → failed(不敢把空日志当权威)', async () => {
   await withIsolatedDatabase(async () => {
     sessionsDb.createSession('s-empty-seed', 'claude', '/workspace/demo');
     sessionsDb.assignProviderSessionId('s-empty-seed', 'prov-empty-seed');

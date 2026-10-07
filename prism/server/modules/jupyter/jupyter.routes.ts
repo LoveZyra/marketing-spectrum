@@ -24,7 +24,7 @@ import {
 
 const router = express.Router();
 
-// hj(审计 P1-2):会话 cookie 每次校验都问一句「签票的人现在还能用吗」(停用 / 驳回 / 退出所有设备)。
+// 会话 cookie 每次校验都问一句「签票的人现在还能用吗」(停用 / 驳回 / 退出所有设备)。
 setJupyterAccountCheck((userId, tokenVersion) => Boolean(userDb.getUsableUser(userId, tokenVersion)));
 
 type AuthenticatedUser = {

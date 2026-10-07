@@ -5,25 +5,25 @@ import path from 'node:path';
 import { CROSS_SESSION_TOOLS, PRISM_OWNED_CLI_ENV_KEYS } from '@/shared/claude-runtime-env.js';
 
 /**
- * hm:**`~/.claude/settings.json` 的启动自检** —— 只 warn,不替运维改这份文件。
+ * `~/.claude/settings.json` 的启动自检:只在日志里报告,不替运维改这份文件。
  *
  * 这份文件属于运维(里面有网关 token),而它同时影响 Prism 起的每个 claude 与终端里、cron 里
  * 的 claude。Prism 能做的是启动时看一眼,把会出事的几项在日志里说清楚:
  *
- * 1. A3.1 第一层:`crossSessionInbound: "refuse"` 与 `permissions.deny` 里的
- *    `SendMessage` / `ListAgents` —— 覆盖所有读用户设置的 claude(终端、SkillWhet、ma-api);
+ * 1. `crossSessionInbound: "refuse"` 与 `permissions.deny` 里的 `SendMessage` / `ListAgents`:
+ *    这是覆盖所有读用户设置的 claude(终端、SkillWhet、ma-api)的第一层;
  *    Prism 自己起的进程另有两层,所以缺了只是 warn;
- * 2. A3.5:`env` 块里不许有 Prism 按 runtime 传的变量 —— settings 的 env 优先于进程 env,
+ * 2. `env` 块里不许有 Prism 按 runtime 传的变量:settings 的 env 优先于进程 env,
  *    写在这里会把按模型给的窗口等静默盖掉;
- * 3. A4.8:`cleanupPeriodDays` —— 不设时 CLI 默认 30 天清 transcript,
+ * 3. `cleanupPeriodDays`:不设时 CLI 默认 30 天清 transcript,
  *    30 天前的会话在 Prism 里就续不上了(部署文档建议 3650)。
  */
 export type ClaudeSettingsFinding = { level: 'error' | 'warn' | 'info'; message: string };
 
 /**
- * ho:**settings.json 不是合法 JSON 时,CLI 会整份忽略它**(容器实测 2.1.285:带 `//` 注释的那份,env 里的网关地址 /
- * 令牌一个都没生效,请求直接打向官方 API —— 生产上就是「Not logged in · Please run /login」;别名映射全空)。
- * 最常见的来源是从部署文档抄了带 `//` 注释的片段(那是 jsonc 说明写法)。这句人话在自检、模型映射接口、实测失败里共用。
+ * settings.json 不是合法 JSON 时,CLI 会整份忽略它:env 里的网关地址 / 令牌都不生效,请求直接打向官方 API,
+ * 表现为「Not logged in · Please run /login」,别名映射全空。最常见的来源是从部署文档抄了带 `//` 注释的
+ * 片段(那是 jsonc 说明写法)。这句人话在自检、模型映射接口、实测失败里共用。
  */
 export function describeSettingsParseError(raw: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
@@ -122,14 +122,13 @@ export async function readClaudeSettingsParseProblem(
   }
 }
 
-/** 启动时跑一次,把结论打进日志(前缀「claude 设置自检」,部署文档按它 grep)。 */
 /**
- * hq:**子进程环境清洗**(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`)的依赖自检。
+ * 子进程环境清洗(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`)的依赖自检。
  *
  * 这一轮用的网关 key(settings.json 的 token、共享网关的默认 key、个人 key)都在 CLI 自己的进程环境里,
- * Bash 工具里 `echo $ANTHROPIC_AUTH_TOKEN` 就能看到(实测)。开了清洗之后 Bash / hook / MCP 子进程里
- * 不再有这些变量(实测:文件读写、联网、用户都不变)—— 但 CLI 在 Linux 上要 **bubblewrap + socat**,
- * 缺一个就**每个回合都起不来**(bwrap 缺:进程直接退出;socat 缺:每轮回一句 "Sandbox is required but failed")。
+ * Bash 工具里 `echo $ANTHROPIC_AUTH_TOKEN` 就能看到。开了清洗之后 Bash / hook / MCP 子进程里
+ * 不再有这些变量(文件读写、联网、用户都不变),但 CLI 在 Linux 上要 bubblewrap + socat,
+ * 缺一个就每个回合都起不来(缺 bwrap:进程直接退出;缺 socat:每轮回一句 "Sandbox is required but failed")。
  * 所以开了却缺依赖时启动就用 error 级说清楚。Prism 把进程环境原样转给 CLI,开关就是 .env 里这一行。
  */
 export function checkSubprocessScrubDeps(
@@ -158,6 +157,7 @@ function commandOnPath(bin: string): boolean {
   });
 }
 
+/** 启动时跑一次,把结论打进日志(前缀「claude 设置自检」,部署文档按它 grep)。 */
 export async function runClaudeSettingsSelfCheck(logger: {
   warn: (...args: unknown[]) => void;
   info: (...args: unknown[]) => void;
@@ -165,7 +165,7 @@ export async function runClaudeSettingsSelfCheck(logger: {
 }): Promise<ClaudeSettingsFinding[]> {
   const scrubProblem = checkSubprocessScrubDeps();
   if (scrubProblem) (logger.error ?? logger.warn)(`[claude 设置自检] ${scrubProblem.message}`);
-  // ho:文件在但不是合法 JSON —— 这比"缺哪几项"严重得多(CLI 整份忽略),单独说、用 error 级
+  // 文件在但不是合法 JSON:这比"缺哪几项"严重得多(CLI 整份忽略),单独说、用 error 级
   const parseProblem = await readClaudeSettingsParseProblem();
   if (parseProblem) {
     (logger.error ?? logger.warn)(`[claude 设置自检] ${parseProblem}`);

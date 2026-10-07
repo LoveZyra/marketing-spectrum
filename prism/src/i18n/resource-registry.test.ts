@@ -62,12 +62,9 @@ describe('glob key parsing', () => {
 
 describe('the picker and the files on disk agree', () => {
   /**
-   * The regression this file exists for. `fr` shipped with all seven
-   * namespaces translated and was listed in the language picker, but the
-   * config's hand-written imports never mentioned it, so selecting Français
-   * produced an entirely English UI and no error anywhere. An offered language
-   * with no resources is indistinguishable from an untranslated one at
-   * runtime, which is why it survived so long.
+   * An offered language with no resources is indistinguishable from an
+   * untranslated one at runtime: selecting it produces an entirely English UI
+   * and no error anywhere.
    */
   test('every language offered in the picker has translations', () => {
     const onDisk = new Set(languagesIn(resourceIndex));
@@ -128,7 +125,7 @@ describe('loading', () => {
 
   /**
    * Null, not a rejection: a namespace added to `en` is missing from the other
-   * nine locales until it is translated, and the backend turns null into an
+   * locales until it is translated, and the backend turns null into an
    * empty bundle so `fallbackLng` serves English for those keys. A throw here
    * would take down the entire language over one absent file.
    */

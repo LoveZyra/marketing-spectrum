@@ -35,9 +35,9 @@ type ChatRunStatus = 'running' | 'completed';
 type ChatRun = {
   appSessionId: string;
   /**
-   * 这一轮的唯一标识。**补发的正确性靠它**。
+   * 这一轮的唯一标识,补发的正确性靠它。
    *
-   * `lastSeq` 是每轮从 0 重新开始的,而客户端的游标按会话保存。没有 runId 时,
+   * `lastSeq` 每轮从 0 重新开始,而客户端的游标按会话保存。没有 runId 的话,
    * 第 1 轮跑到 seq=40、第 2 轮在 seq=20 断线重连,客户端带着 40 来要补发,
    * `seq > 40` 一条都匹配不上 —— 第 2 轮已经发生的内容全部丢失,而且整轮游标
    * 都不会推进,此后每次重连都命中同一个空洞。
@@ -55,19 +55,15 @@ type ChatRun = {
   startedAt: number;
   completedAt: number | null;
   /**
-   * gb:**这一轮是 CLI 自己发起的、Prism 只是在旁边接住(观测回合)。**
+   * 这一轮是 CLI 自己发起的、Prism 只是在旁边接住(观测回合,见 observed-run.service)。
    *
    * 子代理的后台完成通知、会话内定时任务(CronCreate)触发时,CLI 用自己的
-   * 消息队列注入一条 user 帧、模型接着回复 —— 这一整轮 Prism 没有发起、
-   * 此前也没有任何东西承接,于是在读循环的 `if (!turn) continue` 处整轮丢掉:
-   * 不广播(当场看不到)、不落库(刷新也看不到,而且永不补抄)。
-   *
-   * 观测回合就是给这一类补一个承接者。它与真回合的唯一区别是**可被抢占**:
-   * 用户真发消息时不排队、不等它 —— 见 `startRun`。
+   * 消息队列注入一条 user 帧、模型接着回复,这一整轮不是 Prism 发起的。
+   * 观测回合与真回合的唯一区别是可被抢占:用户真发消息时不排队、不等它 —— 见 `startRun`。
    */
   observed: boolean;
   /**
-   * fl:这一轮是**被中止**收尾的吗(时间戳,null = 正常收尾)。
+   * 这一轮是被中止收尾的吗(时间戳,null = 正常收尾)。
    *
    * complete 之后要不要继续收帧全看它:中止 → 一律不收;正常 → 只收收尾摘要。
    * 见 `decorateAndRecordEvent`。
@@ -95,8 +91,7 @@ const MAX_BUFFERED_EVENTS_PER_RUN = 5000;
  *
  * 缓冲里放的是完整 `NormalizedMessage`,包含 `tool_result` 的整段内容 —— 读一个
  * 大文件就是几百 KB 一条。5000 条 × 平均 10 KB = 50 MB/run,乘上并发 run 数和
- * 5 分钟保留期,峰值可以到几百 MB。同一个仓库的 `history-cache.ts` 用的正是字节
- * 预算,并写了很长的理由说明为什么按条数不对 —— 那套论证在这里同样成立。
+ * 5 分钟保留期,峰值可以到几百 MB。`history-cache.ts` 按字节预算的理由在这里同样成立。
  *
  * 按字节丢弃是安全的:`replayEvents` 本来就有"缓冲被截断则客户端回落 REST"的
  * 语义,而 REST 永远是权威来源。
@@ -106,28 +101,17 @@ const MAX_BUFFERED_BYTES_PER_RUN = 8 * 1024 * 1024;
 /**
  * 一条事件的近似字节数。
  *
- * ## 为什么不能"只数字符串内容"
- *
- * 原来这里只数 `content` 和 `toolResult.content` 两个字段,其余一律按 256 字节计。
- * 而缓冲里真正的大头恰恰不在这两个字段上:
- *
- *   - `toolInput` —— Write / Edit 工具带的是**整份文件正文**;
+ * 不能只数 `content` 与 `toolResult.content`,缓冲里的大头在别的字段上:
+ *   - `toolInput` —— Write / Edit 工具带的是整份文件正文;
  *   - `toolResult.toolUseResult`、`subagentTools` —— 子代理那一整棵过程;
  *   - `changed_files` 的 `files[]`(每条带 diff)、`images`。
+ * 漏数它们的话 8 MB 的字节上限几乎触不到,一轮里几十上百次大文件 Write(代码生成类任务的常态)
+ * 就能在一条 run 上挂几百 MB。
  *
- * 于是 8 MB 的上限**几乎永远触不到**,实际只剩 `MAX_BUFFERED_EVENTS_PER_RUN = 5000`
- * 这一道条数闸。一轮里做几十上百次大文件 Write(代码生成类任务的常态)就是
- * 200 帧 × 1 MB = 200 MB 挂在一条 run 上,再乘并发数和 5 分钟保留期。
- * 裁剪逻辑本身是对的,只是永远不会被唤醒。
- *
- * ## 为什么用 JSON.stringify 而不是逐字段累加
- *
- * 这几个字段都是 `unknown`(见 shared/types.ts),形状由 provider 决定,逐字段累加
- * 等于在这里复刻一份 provider 的数据结构 —— 那份复刻迟早和真实形状漂开,而漂开的
- * 表现是"预算又不准了",没人会发现。stringify 是唯一不会漂的口径。
- *
- * 代价是每条事件多一次序列化。这条路径每回合几十到几百次,不在热循环里;
- * 而且 stringify 失败(循环引用)时回落到 256,不会让一条畸形事件打断整轮。
+ * 这几个字段用 JSON.stringify 计:它们都是 `unknown`(见 shared/types.ts),形状由 provider 决定,
+ * 逐字段累加等于在这里复刻一份 provider 的数据结构,迟早与真实形状漂开、让预算悄悄失准。
+ * 代价是每条事件多一次序列化(每回合几十到几百次,不在热循环里);stringify 失败(循环引用)
+ * 时回落到 256,不会让一条畸形事件打断整轮。
  */
 function approximateEventBytes(event: NormalizedMessage): number {
   const content = typeof event.content === 'string' ? event.content.length : 0;
@@ -197,10 +181,10 @@ async function broadcastCanonicalSessionUpsert(appSessionId: string): Promise<vo
     timestamp: new Date().toISOString(),
   });
 
-  // Scoped, not fanned out. This payload carries the project's name and path;
-  // sending it to every open socket is how a colleague's project used to
-  // appear in someone else's sidebar mid-session and vanish again on refresh
-  // (the HTTP list was filtered, this was not).
+  // Scoped, not fanned out: this payload carries the project's name and path,
+  // so it only goes to sockets that may see the project (the same rule the
+  // HTTP list applies); otherwise a colleague's project would flash into
+  // someone else's sidebar mid-session.
   connectedClients.forEach((client) => {
     if (client.readyState !== WS_OPEN_STATE) return;
     if (!canViewerSeeProject({
@@ -214,15 +198,8 @@ async function broadcastCanonicalSessionUpsert(appSessionId: string): Promise<vo
 }
 
 /**
- * fj:定时器要认 **run**,不认会话 id。
- *
- * 原来回调里只做 `runs.get(appSessionId)` —— 没有捕获调度它的那个 run。
- * 同一会话 5 分钟内跑完两轮(排队续发、连续对话都会)时,R1 的定时器到点会看到
- * **R2** 且状态是 completed,直接把它删掉,比 R2 自己的保留期早了几分钟。
- *
- * 现在的可见后果很小(已完成 run 的 replay 本来就被 `isProcessing` 挡着,
- * 只是 `chat_subscribed` 会把 `lastSeq` 报成 0),列在这里是因为这是一个确定的
- * 实现缺陷,而修法只有一行。
+ * 保留期到点后清掉已完成的 run。定时器要认 run,不认会话 id:同一会话 5 分钟内跑完两轮
+ * (排队续发、连续对话)时,只按会话 id 查会让 R1 的定时器提前删掉已完成的 R2。
  */
 function evictRunLater(run: ChatRun): void {
   const timer = setTimeout(() => {
@@ -236,6 +213,16 @@ function evictRunLater(run: ChatRun): void {
 }
 
 /**
+ * 正常收尾之后仍然允许通过的帧。
+ *
+ * 都是回合级摘要,由网关这一侧在回合函数返回之后才算得出来,天然晚于
+ * `complete`;而且每轮至多一条,不会像正文那样源源不断。
+ * 正文类(`text` / `thinking` / `tool_use` / `tool_result` / `stream_*`)
+ * 一律不在此列 —— 那些在 complete 之后出现,只可能是上一个 epoch 的残余。
+ */
+const POST_COMPLETE_KINDS = new Set(['changed_files', 'token_budget', 'context_usage']);
+
+/**
  * Decorates one outbound live event for a run and records it in the event log.
  *
  * Responsibilities:
@@ -245,16 +232,6 @@ function evictRunLater(run: ChatRun): void {
  * 3. Buffer the event for `chat.subscribe` replay.
  * 4. Flip the run to `completed` when the terminal `complete` event passes by.
  */
-/**
- * fl:正常收尾之后仍然允许通过的帧。
- *
- * 都是**回合级摘要**,由网关这一侧在回合函数返回之后才算得出来,天然晚于
- * `complete`;而且每轮至多一条,不会像正文那样源源不断。
- * 正文类(`text` / `thinking` / `tool_use` / `tool_result` / `stream_*`)
- * 一律不在此列 —— 那些在 complete 之后出现,只可能是上一个 epoch 的残余。
- */
-const POST_COMPLETE_KINDS = new Set(['changed_files', 'token_budget', 'context_usage']);
-
 function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): NormalizedMessage | null {
   // Exactly-one-complete contract: when a run is aborted the chat handler
   // emits the terminal `complete` immediately, but the killed runtime may
@@ -265,21 +242,13 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
   }
 
   /**
-   * complete 之后还能不能发,取决于**这一轮是怎么结束的**。
-   *
-   * fj 原来的判据是"已完成就一律不转发",本意是挡住中止之后那阵在途的
-   * `tool_result` / `stream_delta` —— 前端已经停了转圈,正文却还在长。
-   *
-   * fl:那一刀切得太宽,**砍掉了正常回合的收尾摘要**。
-   * `queryClaudeSDK` 的结构是"回合函数自己发 complete → 返回 → 外层再算
-   * `changedFilesSince` 并发 `changed_files`",所以每一个动过文件的正常回合,
-   * 那张「本轮改动的文件」卡都被这里丢掉了(工作面板事件、显示日志一并没有)。
-   * 用 Bash / 脚本写文件时这张卡是**唯一**的线索,补都补不回来。
-   *
-   * 所以判据拆成两条:
-   *   - **中止**收尾 → 后面什么都不收(用户按了停止,后面的都不算数);
-   *   - **正常**收尾 → 只收一小撮明确的收尾摘要(见 POST_COMPLETE_KINDS),
-   *     正文类照旧拒绝 —— 那些只可能是上一个 epoch 的残余。
+   * complete 之后还能不能发,取决于这一轮是怎么结束的:
+   *   - 中止收尾 → 后面什么都不收:用户按了停止,前端已停了转圈,在途的 `tool_result` /
+   *     `stream_delta` 不能再让正文继续长;
+   *   - 正常收尾 → 只收一小撮明确的收尾摘要(见 POST_COMPLETE_KINDS),正文类一律拒绝。
+   *     `queryClaudeSDK` 是"回合函数自己发 complete → 返回 → 外层再算 `changedFilesSince`
+   *     并发 `changed_files`",这张「本轮改动的文件」卡天然晚于 complete;用 Bash / 脚本
+   *     写文件时它是唯一的线索。
    */
   if (run.status === 'completed') {
     if (run.abortedAt !== null || !POST_COMPLETE_KINDS.has(String(message.kind))) {
@@ -302,12 +271,12 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
     outbound.actualSessionId = run.appSessionId;
     run.status = 'completed';
     run.completedAt = Date.now();
-    // fl:记下是不是中止收尾 —— 后面那道"还收不收帧"的闸按它分流。
+    // 记下是不是中止收尾 —— 后面那道"还收不收帧"的闸按它分流。
     if ((message as { aborted?: boolean }).aborted) run.abortedAt = Date.now();
     evictRunLater(run);
   }
 
-  // 审批帧**不进重放缓冲**。
+  // 审批帧不进重放缓冲。
   //
   // 待批审批的权威来源是 `chat_subscribed.pendingPermissions`(前端是整体替换)。
   // 若审批帧也躺在缓冲里,订阅时的顺序就是"先给权威列表、紧接着重放又逐条推回去" ——
@@ -354,7 +323,7 @@ function recordProviderSessionId(run: ChatRun, providerSessionId: string): void 
   }
 
   /**
-   * dv:先落库、成功了再改内存。
+   * 先落库、成功了再改内存。
    *
    * 反过来写的话,落库抛异常时内存里已经认了这个 provider id,而 sessions 表
    * 里还是空 —— 本轮后续的续跑/中止都按内存那份走,可刷新页面、换标签页、
@@ -363,17 +332,13 @@ function recordProviderSessionId(run: ChatRun, providerSessionId: string): void 
    */
   try {
     /**
-     * ga:**被守卫拒绝也算"没落库"。**
+     * 被守卫拒绝也算"没落库"。
      *
-     * fz 给 `assignProviderSessionId` 加的跨项目守卫走的是 `return` 而不是
-     * `throw`,所以它落不进 catch —— 上面那句"先落库、成功了再改内存"当场失效:
-     * 内存认了这个 provider id、还广播出一份"规范映射",而 sessions 表里那一栏
-     * 仍是 NULL。前台在登记本上划掉了单号,仓库其实一件货都没收。
-     *
-     * 现在按返回值分流:没落库就什么都不改 —— 不认领、不广播。运行时下一次
-     * 报同一个 id 时还会再来一次(`run.providerSessionId` 没被改,那道相等早退
-     * 拦不住),真的是跨项目冒领就会再被拒一次,日志里有据可查。
-     * 中止那条路对 claude 有"按 runId 兜底"的第二段,不依赖这个映射。
+     * `assignProviderSessionId` 的跨项目守卫是返回 false 而不是抛异常,落不进 catch,
+     * 所以要按返回值分流:没落库就什么都不改 —— 不认领、不广播。运行时下一次报同一个 id 时
+     * 还会再来一次(`run.providerSessionId` 没变,那道相等早退拦不住),真的是跨项目冒领
+     * 就会再被拒一次,日志里有据可查。中止那条路对 claude 有"按 runId 兜底"的第二段,
+     * 不依赖这个映射。
      */
     if (!sessionsDb.assignProviderSessionId(run.appSessionId, providerSessionId)) {
       log.warn('[ChatRunRegistry] provider 会话映射被数据库守卫拒绝,本轮不认领这个 id', {
@@ -402,15 +367,7 @@ function recordProviderSessionId(run: ChatRun, providerSessionId: string): void 
 }
 
 /**
- * Registry of live provider runs keyed by the stable app session id.
- *
- * The registry is what makes the websocket protocol provider-independent:
- * every run gets a `ChatSessionWriter` that remaps provider-native session
- * ids to the app id, assigns `seq` numbers, and buffers events for replay —
- * regardless of which provider runtime produced them.
- */
-/**
- * fz:一轮真的开跑之后要做的事(目前是把在看的 socket 接进推流集合)。
+ * 一轮真的开跑之后要做的事(目前是把在看的 socket 接进推流集合)。
  *
  * 由 `chat-websocket.service` 在模块初始化时注册 —— 反过来 import 会让注册表
  * 依赖网关层,而 `sessionViewers` 与可见性判据本来就住在那边。
@@ -421,9 +378,17 @@ export function setRunStartedHook(hook: ((appSessionId: string) => void) | null)
   runStartedHook = hook;
 }
 
+/**
+ * Registry of live provider runs keyed by the stable app session id.
+ *
+ * The registry is what makes the websocket protocol provider-independent:
+ * every run gets a `ChatSessionWriter` that remaps provider-native session
+ * ids to the app id, assigns `seq` numbers, and buffers events for replay —
+ * regardless of which provider runtime produced them.
+ */
 export const chatRunRegistry = {
   /**
-   * gk:让侧栏知道"这条会话(重新)出现了" —— 从最近删除恢复之后用。
+   * 让侧栏知道"这条会话(重新)出现了" —— 从最近删除恢复之后用。
    * 走的是 run 收尾时那条现成的按可见范围广播的路,不另写一份。
    */
   announceSessionUpsert(appSessionId: string): Promise<void> {
@@ -441,23 +406,20 @@ export const chatRunRegistry = {
     /** null = 还没有浏览器在看(外部 API 触发的回合),之后由 `attachConnection` 接上。 */
     connection: RealtimeClientConnection | null;
     userId: string | number | null;
-    /** du:false = 本轮不落显示日志(老会话 seed 失败,见 ChatSessionWriter)。 */
+    /** false = 本轮不落显示日志(已有会话的 seed 失败,见 ChatSessionWriter)。 */
     persistDisplayLog?: boolean;
-    /** gb:观测回合 —— CLI 自己发起的那一轮,Prism 只是接住(见 ChatRun.observed)。 */
+    /** 观测回合 —— CLI 自己发起的那一轮,Prism 只是接住(见 ChatRun.observed)。 */
     observed?: boolean;
   }): ChatRun | null {
     const existing = runs.get(input.appSessionId);
     if (existing && existing.status === 'running') {
       /**
-       * gb:**观测回合永远不许挡住用户。**
+       * 观测回合永远不许挡住用户。
        *
-       * 观测回合承接的是 CLI 自己发起的那一轮(子代理完成通知、会话内定时任务)。
        * 让它像真回合那样把用户的发送顶成"已排队",等于给"卡死"开了一个新入口:
        * 那一轮的 `result` 只要不来(CLI 侧异常、注入轮被吃掉),这条会话就永久忙,
-       * 而队列的出口是"上一轮跑完" —— 永远不会到。
-       *
-       * 而且**今天本来就不挡**:`runtime.turn` 在 CLI 自发回合期间是 null,
-       * `runPersistentTurn` 一个字都不拦。所以让路 = 与现状一致,不是退步。
+       * 而队列的出口是"上一轮跑完" —— 永远不会到。运行时那一侧也不拦:CLI 自发回合期间
+       * `runtime.turn` 是 null,`runPersistentTurn` 照常开跑。
        *
        * 让路的方式是把它当场收尾(而不是丢着不管):订阅的浏览器会收到 complete,
        * 转圈停下来,不会留一个永远转着的幽灵回合。
@@ -471,16 +433,12 @@ export const chatRunRegistry = {
     }
 
     /**
-     * fz:**终端接管着这段对话时,谁都不许开跑。**
+     * 终端接管着这段对话时,谁都不许开跑。
      *
-     * 网页聊天那条路在 `handleChatSend` 里查过 `currentHolder` 了,可另外三个
-     * 调用点(定时任务、外部 Agent API 的同步与异步)一次都没查 —— 于是终端
-     * 正接管着的时候,一个定时任务照样能起一个 CLI resume 同一份 transcript,
-     * 两个进程往同一个 jsonl 里追加,两条历史交错谁也修不回来。
-     *
-     * 判据放在 `startRun` 里,而不是在三个调用点各补一句:这里是"一轮要开跑了"
-     * 的唯一入口,补在调用点上就是等着第四个调用点漏掉 —— 这一轮已经因为
-     * "同一个判据只写在一部分入口上"付过太多次代价了。
+     * 否则定时任务、外部 Agent API 这类调用点会在终端接管期间起一个 CLI resume 同一份
+     * transcript,两个进程往同一个 jsonl 里追加,两条历史交错谁也修不回来。
+     * 判据放在 `startRun` 而不是各个调用点:这里是"一轮要开跑了"的唯一入口,
+     * 写在调用点上迟早有新的调用点漏掉。
      */
     const holder = currentHolder(input.appSessionId);
     if (holder) {
@@ -521,30 +479,20 @@ export const chatRunRegistry = {
 
     runs.set(input.appSessionId, run);
     /**
-     * fz:**每一轮开跑都要把"正在看这条会话的人"接进推流集合。**
+     * 每一轮开跑都要把"正在看这条会话的人"接进推流集合(经 runStartedHook)。
      *
-     * `attachSessionViewers` 此前只挂在 `chat.send` 那一条路上,而 `startRun`
-     * 有四个调用点:网页聊天、定时任务、外部 Agent API 的同步与异步两条。
-     * 后三条都传 `connection: null` 且不 attach —— 于是定时任务在一条**用户
-     * 正开着**的会话上跑起来时,那个浏览器一帧都收不到:没有转圈、没有停止
-     * 按钮、消息列表纹丝不动,而服务端正在这条会话名下改文件、跑命令。
-     * 他在这条"空闲"会话里发一条消息,只会收到一句"已排队",不知道在等谁。
-     *
-     * 判据放在这里而不是在三个调用点各补一行:`startRun` 是"一轮开跑了"的
-     * 唯一入口,补在调用点上就是等着第五个调用点漏掉。
+     * 定时任务、外部 Agent API 这类调用点传的是 `connection: null`;不接的话,定时任务在
+     * 一条用户正开着的会话上跑起来时,那个浏览器一帧都收不到(没有转圈、没有停止按钮),
+     * 而服务端正在这条会话名下改文件、跑命令。放在 `startRun` 里的理由同上:
+     * 它是"一轮开跑了"的唯一入口。
      */
     runStartedHook?.(input.appSessionId);
     return run;
   },
 
   /**
-   * ga:**`startRun` 返回 null 现在有两种原因,把它问出来。**
-   *
-   * fz 在 `startRun` 里加了"终端接管着就不许开跑"。可三个非网页调用点的文案
-   * 还是老的那一种:定时任务抛 `目标会话正有回合在跑,本次跳过`、外部 API 回
-   * `already has a run in progress` —— 于是一个开着的终端会让定时任务连发三条
-   * **内容是错的**失败告警(5 分钟一次、共 3 次),而真正该做的事是去把那个
-   * 终端关掉。打印室门上两种情况都让你进不去,广播却只会说"里面有人在印"。
+   * `startRun` 返回 null 有两种原因(有回合在跑 / 终端接管中),调用方用这里问出是哪一种,
+   * 好给出对的提示:终端接管时该做的是关掉那个终端,而不是等回合跑完。
    *
    * 判据顺序必须和 `startRun` 完全一致(先看在跑的回合,再看接管),否则两处
    * 会给出不同的说法。两者都是同步的,调用方拿到 null 后紧接着问,中间不可能
@@ -598,9 +546,8 @@ export const chatRunRegistry = {
   /**
    * Cwd-aware view of the running runs, for cross-feature directory guards
    * (e.g. git-checkpoint restore refuses to rewrite a directory any live run
-   * may be writing to). Runs are registered by the chat websocket handler and
-   * do not capture a cwd themselves, so the working directory is resolved
-   * lazily here from the sessions table (`project_path`), which this module
+   * may be writing to). Runs do not capture a cwd themselves, so the working
+   * directory is resolved lazily here from the sessions table (`project_path`), which this module
    * already treats as the source of truth for session rows. `cwd` is null
    * when the session row is missing or has no project path.
    */
@@ -631,12 +578,8 @@ export const chatRunRegistry = {
    * 把一个 socket 加进这条 run 的订阅者集合。
    *
    * 页面刷新后新 socket 订阅上来就能接着收还在跑的流,对所有 provider 都一样。
-   *
-   * **加入,不是替换。**原来这里是 `updateWebSocket`,一次单持有者赋值 ——
-   * 谁最后订阅流就归谁,原来那个标签页从此收不到任何东西,一直转圈到刷新。
-   * 同一个人开两个标签页就会踩到,公开项目里换成另一个人也一样。而且它对审批
-   * 请求同样生效:审批帧发到了抢走流的那个浏览器,那边如果没在看这个会话,
-   * 前端还会再把它丢一次 —— 两边都看不见,原用户只等到一句超时。
+   * 加入,不是替换:多个标签页(或公开项目里的多个人)同时订阅时谁都不会把流抢走,
+   * 审批帧也能送到每一个在看的人(见 ChatSessionWriter 的 `connections`)。
    *
    * 谁有资格进这个集合由调用方判断(`assertSocketMaySeeSession`),这里不做鉴权。
    */
@@ -663,25 +606,29 @@ export const chatRunRegistry = {
   },
 
   /**
-   * Returns buffered events with `seq` greater than `afterSeq` for replay.
+   * 把一帧作为当前这一轮的实时事件推给所有查看者:编号、进重放缓冲、发给订阅者,不落显示日志。
    *
-   * An empty array with `run.lastSeq > afterSeq` not covered by the buffer
-   * means the buffer was truncated; the client should refresh over REST.
+   * 给调用方已经自己写进显示日志的帧用(chat 网关的用户行,见 ChatSessionWriter.sendWithoutPersist)。
+   * 这条会话没有在跑的回合时什么都不做,返回 false。
    */
+  broadcastWithoutPersist(appSessionId: string, message: NormalizedMessage): boolean {
+    const run = runs.get(appSessionId);
+    if (!run || run.status !== 'running') return false;
+    run.writer.sendWithoutPersist(message);
+    return true;
+  },
+
   /** 当前(或刚结束)那一轮的 id;没有 run 时为 null。 */
   currentRunId(appSessionId: string): string | null {
     return runs.get(appSessionId)?.runId ?? null;
   },
 
   /**
-   * fj:重放缓冲里**还剩的最早那个 seq**。
+   * 重放缓冲里还剩的最早那个 seq。
    *
-   * 缓冲会按条数/字节被裁剪(注释里写着"截断后客户端回落 REST"),但客户端此前
-   * **无从知道自己是不是踩到了截断**:它只看 seq 有没有跳号,而重放是从缓冲现有
-   * 的第一条开始发的 —— 首帧就缺了一段时,跳号检测看到的是"连续的",于是那段
-   * 内容静默丢失,直到下一次跳号或整轮结束才被 REST 补回来。
-   *
-   * 报出这个水位,客户端拿它和自己的 `lastSeq` 一比就知道要不要直接回落 REST。
+   * 缓冲会按条数 / 字节被裁剪,而重放从缓冲现有的第一条开始发:被裁掉的恰好是开头一段时,
+   * 客户端的跳号检测看到的是"连续的",那段内容会静默丢失。报出这个水位,客户端拿它和
+   * 自己的 `lastSeq` 一比就知道要不要直接回落 REST。
    */
   earliestBufferedSeq(appSessionId: string): number | null {
     const run = runs.get(appSessionId);
@@ -690,15 +637,22 @@ export const chatRunRegistry = {
     return typeof first.seq === 'number' ? first.seq : null;
   },
 
+  /**
+   * Returns buffered events with `seq` greater than `afterSeq` for replay
+   * (the whole buffer when the client's cursor belongs to another run).
+   *
+   * An empty array with `run.lastSeq > afterSeq` not covered by the buffer
+   * means the buffer was truncated; the client should refresh over REST.
+   */
   replayEvents(appSessionId: string, afterSeq: number, clientRunId?: string | null): NormalizedMessage[] {
     const run = runs.get(appSessionId);
     if (!run) return [];
-    // 客户端**明确说了**它的游标属于另一轮 → 从头补。
+    // 客户端明确说了它的游标属于另一轮 → 从头补。
     // seq 每轮从 0 重来,拿上一轮的游标去过滤这一轮,只会把这一轮整段滤掉。
     //
-    // 没说 runId 的按老行为(只按 seq 过滤):那是旧版客户端,或者它本来就还没有
-    // 游标(此时 afterSeq 也是 0,从哪算都一样)。这里**不能**一律从头补 ——
-    // 旧客户端带着有效游标来,从头补等于把它已经收过的 stream_delta 再灌一遍。
+    // 没带 runId 的只按 seq 过滤:可能是不带 runId 的客户端,或者它本来就还没有
+    // 游标(此时 afterSeq 也是 0,从哪算都一样)。这里不能一律从头补 ——
+    // 带着有效游标来的客户端会被再灌一遍已经收过的 stream_delta。
     const differentRun = typeof clientRunId === 'string' && clientRunId !== '' && clientRunId !== run.runId;
     const from = differentRun ? 0 : afterSeq;
     return run.events.filter((event) => typeof event.seq === 'number' && event.seq > from);

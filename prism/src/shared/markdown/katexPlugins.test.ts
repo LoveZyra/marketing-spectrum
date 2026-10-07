@@ -37,8 +37,8 @@ describe('containsMath', () => {
   });
 
   it('does not treat a single-line price range as maths', () => {
-    // "$5 to $7" has whitespace right after the opening delimiter of the second
-    // pair, which is exactly what remark-math requires to be absent.
+    // Read as one pair, "$5 and $" has whitespace right before the closing
+    // delimiter, which is exactly what remark-math requires to be absent.
     expect(containsMath('Between $5 and $7 per seat.')).toBe(false);
   });
 });

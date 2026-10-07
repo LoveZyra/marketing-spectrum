@@ -1,5 +1,5 @@
 /**
- * prism: split a user turn's raw text into the prompt the person typed and the
+ * Split a user turn's raw text into the prompt the person typed and the
  * attachment payloads the composer appended to it.
  *
  * Why this exists at render time rather than at send time: the transcript on

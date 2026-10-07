@@ -14,7 +14,7 @@ import SkillSurveyToggleCard from './SkillSurveyToggleCard';
  *
  * 「退出登录」和「切换账号」在机制上是同一件事 —— 清掉本地令牌后应用自动回到
  * 登录页,输入另一个账号即完成切换,所以做成一个按钮、两个说法都写上。
- * 「退出所有设备」走服务端 token_version 递增,吊销这个账号在**所有**浏览器/设备
+ * 「退出所有设备」走服务端 token_version 递增,吊销这个账号在所有浏览器/设备
  * 上已签发的旧令牌(令牌泄露后的恢复手段),需二次确认。
  */
 export default function AccountSettingsTab() {
@@ -88,21 +88,12 @@ export default function AccountSettingsTab() {
   };
 
   return (
-    /*
-      gn:这里原来是 `max-w-xl`(576px)。设置弹窗放宽之后,别的页签(账号 / 外观 /
-      通知 / 关于)都跟着铺开,只有「我的账号」停在 576px,右边空出一大条
-      (2026-09-15 用户截图)。与其余页签同口径:不在页面这一层设上限,
-      由弹窗自己的宽度决定。
-    */
+    /* 与其余页签一致:不在页面这一层设宽度上限,由弹窗自己的宽度决定。 */
     <div className="space-y-6">
       {/*
-        当前身份 + 两个退出入口。
-
-        gp:「退出登录」与「退出所有设备」原来是页面**最下面两张独立卡片**,各占一整块,
-        把「附件空间」「修改密码」这些真正要读的内容顶下去;而它们本来就是"对当前这个
-        账号做的事",跟身份行放在一起才好找(2026-09-15 用户提的)。
-        两张卡片的标题与说明没有丢 —— 都进了按钮的 `title`,悬停照样看得到。
-        窄屏时按钮组整体换行到下一行(`flex-wrap` + `basis-full sm:basis-auto`)。
+        当前身份 + 两个退出入口:退出都是「对当前账号做的事」,和身份行放在一起才好找,
+        也不会把「附件空间」「修改密码」这些要读的内容顶下去。各自的标题与说明放在按钮的 `title` 里。
+        窄屏时按钮组整体换到下一行(`flex-wrap` + `basis-full sm:basis-auto`)。
       */}
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border p-4">
         <div className="bg-primary/8 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-primary">
@@ -132,7 +123,7 @@ export default function AccountSettingsTab() {
             {t('account.logoutButton')}
           </button>
 
-          {/* 调色板里没有红:二次确认靠文案切换 + 主按钮态表达,不再用 destructive 底色 */}
+          {/* 调色板里没有红:二次确认靠文案切换 + 主按钮态表达,不用 destructive 底色 */}
           <button
             type="button"
             onClick={handleRevokeAll}
@@ -167,7 +158,7 @@ export default function AccountSettingsTab() {
 
       <AttachmentUsageCard />
 
-      {/* gy:技能效果询问开关 —— 技能优化没挂载时整卡不画 */}
+      {/* 技能效果询问开关;技能优化没挂载时整卡不显示 */}
       <SkillSurveyToggleCard />
 
       {/* 修改密码 */}
@@ -179,15 +170,11 @@ export default function AccountSettingsTab() {
           </h3>
         </div>
         {/*
-          ec:这三个密码框必须待在**自己的 <form> 里,并且带一个用户名字段**。
-          用户实测:点开「我的账号」,侧栏的项目搜索框里凭空出现登录名、列表被过滤成
-          「未找到匹配的项目」。这是浏览器密码管理器干的:页面一出现 current-password
-          字段,Chrome 就把保存的密码填进去,并顺手找个"用户名框"填用户名 —— 密码框
-          不在任何 form 里时,Chrome 把整页当一张表单,取密码框之前最近的文本输入框,
-          那正好是侧栏搜索框。包进 form 之后 Chrome 只在 form 内找;再放一个隐藏的
-          用户名字段(只读,值就是当前账号 —— Chromium 文档明说 display:none 的
-          autocomplete=username 字段照样认),它就有了正确的落点,保存/更新的凭据也对。
-          (SetupForm / LoginForm 就是这么写的,这里当初漏了。)
+          这三个密码框必须放在自己的 <form> 里,并带一个用户名字段。页面一出现 current-password,
+          Chrome 密码管理器就会填入保存的密码并找一个「用户名框」填登录名;密码框不在 form 里时
+          它把整页当一张表单,取密码框之前最近的文本框 —— 正是侧栏的项目搜索框,项目列表随之被过滤空。
+          包进 form 后 Chrome 只在 form 内找;隐藏的只读用户名字段(值为当前账号,Chromium 认
+          display:none 的 autocomplete=username)给了它正确的落点,保存 / 更新的凭据也对。
         */}
         <form
           className="p-4"
@@ -257,9 +244,8 @@ export default function AccountSettingsTab() {
       </div>
 
       {/*
-        gk:与我有关的操作记录。此前审计列表只在 root 的「账号管理」页上,普通用户
-        没有任何入口 —— 被删的人在页面里什么都看不到,删除记了也等于白记。
-        服务端裁范围:非 root = 我做的 + 对我做的(对我做的行 ip 已抹掉)。
+        与我有关的操作记录:普通用户也要能看到别人对自己做过的操作(例如自己负责的项目里的会话被删)。
+        范围由服务端裁剪:非 root 只看到我做的 + 对我做的(对我做的那些行抹掉了 ip)。
       */}
       <div className="rounded-lg border border-border bg-card p-4">
         <p className="mb-3 text-xs text-muted-foreground">

@@ -15,9 +15,9 @@ import { resetEncryptionKey } from '@/shared/crypto-box.js';
 import providerRouter from '../provider.routes.js';
 
 /**
- * hq:网关 / key 路由 —— 在**路由层**钉:
- * - root 接口普通用户 403;别人的私有网关 / 私有模型一律 404(改不了、读不到);
- * - **key 只进不出**:每个碰 key 的接口,响应 JSON 里都找不到 key 明文(最多末四位);审计里也没有;
+ * 网关 / key 路由,在路由层钉住:
+ * - root 接口对普通用户 403;别人的私有网关 / 私有模型一律 404(改不了、读不到);
+ * - key 只进不出:每个碰 key 的接口,响应 JSON 里都找不到 key 明文(最多末四位),审计里也没有;
  * - 目录条目挂网关 / 可用人员的引用校验、删网关 409、私有网关总开关。
  */
 
@@ -125,7 +125,7 @@ const data = (reply: Reply) => reply.body.data as Record<string, any>;
 
 /* ================================================================== */
 
-describe('hq 路由:root 接口', () => {
+describe('路由:root 接口', () => {
   test('普通用户访问 root 接口一律 403,且什么都没改', async () => {
     const { baseUrl, users } = await setup();
     const created = await call(baseUrl, 'boss', 'POST', '/gateways', { name: 'G', baseUrl: 'https://g.example.com', authType: 'bearer' });
@@ -299,9 +299,8 @@ describe('hq 路由:root 接口', () => {
     }
   });
 
-  // BUG(低):root 替别人设 / 清个人 key 的审计行没有 target_user_id(只在 detail 里记了 forUserId),
-  // 被操作的人在「与我有关的操作记录」里看不到 —— 与 admin.routes.ts 的 adminAuditBase(hl 动态 P2-9)约定不一致。
-  // 修法:claude-gateways.routes.ts 的 audit() 增加 targetUserId 参数,gateway_key_set_by_root / gateway_key_cleared_by_root 传 userId。
+  // root 替别人设 / 清个人 key 时,审计行要带 target_user_id(被操作的人),
+  // 否则那个人在「与我有关的操作记录」里看不到;与 admin 路由的审计约定一致。
   test('root 替别人设 / 清 key:审计行带 target_user_id = 被操作的人', async () => {
     const { baseUrl, users } = await setup();
     assert.equal((await call(baseUrl, 'boss', 'PUT', `/gateways/0/keys/${users.bob.id}`, { key: 'sk-for-bob' })).status, 200);
@@ -372,7 +371,7 @@ describe('hq 路由:root 接口', () => {
 
 /* ================================================================== */
 
-describe('hq 路由:本人的私有网关 / 私有模型', () => {
+describe('路由:本人的私有网关 / 私有模型', () => {
   test('别人的私有网关 / 私有模型:读不到、改不了、删不了、测不了(404),数据原样', async () => {
     const { baseUrl } = await setup();
     const p = data(await call(baseUrl, 'alice', 'POST', '/my-gateways', { name: 'mine', baseUrl: 'https://alice.example.com', authType: 'bearer', key: 'sk-alice-p' })).gateway;
@@ -413,9 +412,8 @@ describe('hq 路由:本人的私有网关 / 私有模型', () => {
     assert.deepEqual(data(aliceView).models.map((row: Record<string, unknown>) => [row.modelId, row.label]), [['alice-model', 'A']]);
   });
 
-  // BUG(低):别人的私有网关在 `PUT /my-gateways/:id/key` 上回 400 PRIVATE_GATEWAY(不存在的 id 回 404)——
-  // 能据此探出某个 id 是不是别人的私有网关。修法:claude-gateways.service.ts requireKeyableGateway 在
-  // 私有网关且 owner ≠ 调用者时也抛 NOT_FOUND 404(需要把 userId 传进去),或路由层先查归属。
+  // 别人的私有网关在 `PUT /my-gateways/:id/key` 上也必须回 404,与不存在的 id 同形,
+  // 否则能据此探出某个 id 是不是别人的私有网关。
   test('别人的私有网关上填个人 key → 404(与其它入口一致,不泄露存在性)', async () => {
     const { baseUrl } = await setup();
     const p = data(await call(baseUrl, 'alice', 'POST', '/my-gateways', { name: 'mine', baseUrl: 'https://alice.example.com', authType: 'bearer' })).gateway;

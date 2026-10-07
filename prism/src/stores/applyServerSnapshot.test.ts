@@ -6,12 +6,11 @@ import { applyServerSnapshot, createEmptySlot } from './useSessionStore';
 import type { NormalizedMessage, SessionSlot } from './useSessionStore';
 
 /**
- * B1:四条取历史的路径(首屏 / 刷新 / 补页 / 搜索定位)收口到同一个归并函数。
+ * 四条取历史的路径(首屏 / 刷新 / 补页 / 搜索定位)收口到同一个归并函数。
  *
- * 之前它们各写一份:窗口替换、游标推进、total/hasMore、剪实时行、重算合并。
- * 三份长得像但**并不相同** —— 剪实时行只有首屏和刷新做、游标改写只有刷新
- * 写对了。fk 的两处回归(K01/K02)是同一个形状:**收窄一个判据时只收窄了
- * 它的一半**。这里钉的就是"规则只有一份"这件事,而不是某一条路径。
+ * 归并包括窗口替换、游标推进、total/hasMore、剪实时行、重算合并。各写一份的话,
+ * 几份长得像却并不相同,收窄一个判据时很容易只收窄了它的一半。
+ * 这里钉的就是"规则只有一份"这件事,而不是某一条路径。
  */
 
 const at = (seconds: number) =>
@@ -60,7 +59,7 @@ describe('applyServerSnapshot — replace(首屏 / 刷新 / 搜索定位)', () =
 
     assert.deepEqual(slot.serverMessages.map((m) => m.id), ['s1', 's2']);
     // 游标留在 40 而窗口只剩 2 条,下一次「看更早」就会从 offset=40 取页,
-    // 服务端的尾部偏移语义直接跳过倒数 2~40 那一段(du 修过的那条)。
+    // 服务端的尾部偏移语义直接跳过倒数 2~40 那一段。
     assert.equal(slot.offset, 2, '游标必须等于当前窗口的条数');
     assert.equal(slot.total, 120);
     assert.equal(slot.hasMore, true);
@@ -129,11 +128,11 @@ describe('applyServerSnapshot — prepend(补页)', () => {
   });
 });
 
-describe('N02:补页也剪实时行', () => {
+describe('补页也剪实时行', () => {
   test('补页取回的服务端行会顶掉 realtime 里的同一次工具调用', () => {
-    // 回合在**非当前查看**的会话里跑完:complete 分支的刷新被 sid 判定挡掉,
+    // 回合在非当前查看的会话里跑完:complete 分支的刷新被 sid 判定挡掉,
     // realtime 里留着整整一轮。之后重新打开这条会话、再上翻一页,补页正好
-    // 把那一轮的服务端行取了回来 —— 原来补页不剪,于是两份并排渲染到 F5。
+    // 把那一轮的服务端行取了回来;补页不剪的话,两份会并排渲染到 F5。
     const slot = slotWith({
       serverMessages: [user('s9', '后面的问题', at(9))],
       realtimeMessages: [toolUse('rt_tool', 'toolu_01', at(2))],
@@ -156,7 +155,7 @@ describe('N02:补页也剪实时行', () => {
     assert.deepEqual(slot.serverMessages.map((m) => m.id), ['s1', 's2', 's9']);
   });
 
-  test('剪的依据是**合并后的完整窗口**,不是补回来的这一页', () => {
+  test('剪的依据是合并后的完整窗口,不是补回来的这一页', () => {
     // 只按这一页剪会把尾部那一轮尚未落盘的实时行误删 —— 它们的服务端行
     // 根本不在这一页里。
     const slot = slotWith({
@@ -220,13 +219,13 @@ describe('applyServerSnapshot — 附带状态', () => {
 
 
 /**
- * fz:**前插之后要确认它真的是"更早的"。**
+ * 前插之后要确认它真的是"更早的"。
  *
- * 服务端的 offset 是尾部偏移。回合跑着、total 在涨,而这期间没有整体刷新落地 ——
- * 上翻一页取回的那一页尾部可能落在已有窗口**之后**:那几行比手里所有行都新,
- * 却不在 existingIds 里,于是被当成"更早的一页"塞到数组最前面。而这条落地路径
- * 紧接着 prune 掉它们的实时副本,computeMerged 随后走"realtime 为空就原样返回
- * server"的快路径 —— **不排序**。用户看到本轮最新的几条跳到 transcript 最顶端。
+ * 服务端的 offset 是尾部偏移。回合跑着、total 在涨,而这期间没有整体刷新落地时,
+ * 上翻一页取回的那一页尾部可能落在已有窗口之后:那几行比手里所有行都新,却不在
+ * existingIds 里,会被当成"更早的一页"塞到数组最前面。这条落地路径紧接着 prune 掉
+ * 它们的实时副本,computeMerged 随后走"realtime 为空就原样返回 server"的快路径、不排序,
+ * 于是本轮最新的几条跳到 transcript 最顶端。
  */
 describe('前插不许把更新的行放到前面', () => {
   test('这一页里混进了比手里所有行都新的几条 —— 落地之后仍按时间有序', () => {

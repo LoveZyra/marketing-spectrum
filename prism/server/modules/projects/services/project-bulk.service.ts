@@ -9,25 +9,18 @@ import { setProjectStarForActor } from '@/modules/projects/services/project-star
 import { AppError } from '@/shared/utils.js';
 
 /**
- * 项目的批量操作(eo)。
+ * 项目的批量操作。
  *
- * ## 为什么逐条鉴权,而不是一条 SQL 扫完
+ * 逐条鉴权,而不是一条 SQL 扫完:不逐条鉴权的"全选 → 删除"就是一把能扫掉别人项目的扫帚。
+ * 每一个 id 都过一遍可见性(`resolveVisibleProjectRoot`);归档、删除、改权限、改所有者
+ * 还要过管理权(见循环里的判定)。一次几十上百个项目,慢一点无所谓。
  *
- * "全选 → 删除"如果做成一个不逐条鉴权的接口,就等于给了一把能扫掉别人项目的
- * 扫帚。所以这里**每一个 id 都过一遍**可见性(`resolveVisibleProjectRoot`),
- * 改权限/改所有者还要再过一遍管理权(root 或 owner)。慢一点无所谓,一次几十
- * 上百个项目,人还在等着看结果。
+ * "看不见"是跳过而不是报错:报错等于告诉调用方那个 id 存在。与会话的批量接口
+ * (`bulkSessionAction`)同一口径:跳过、计数、不解释。
  *
- * ## 为什么"看不见"是跳过而不是报错
- *
- * 报错等于告诉调用方那个 id 存在。与会话的批量接口(`bulkSessionAction`)同一
- * 口径:跳过、计数、不解释。
- *
- * ## 为什么一条失败不中断其余
- *
- * 批量操作里最糟的结果是"删了一半然后抛异常" —— 调用方既不知道成了哪些,
- * 也不知道该不该重试。逐条 catch,最后给一份**能对账的**结果:成功的 id、
- * 跳过的 id(带原因)、失败的 id(带原因)。
+ * 一条失败不中断其余:最糟的结果是删了一半然后抛异常,调用方既不知道成了哪些,也不知道
+ * 该不该重试。逐条 catch,最后给一份能对账的结果:成功的 id、跳过的 id(带原因)、
+ * 失败的 id(带原因)。
  */
 
 export type BulkProjectAction =
@@ -73,7 +66,7 @@ export async function bulkProjectAction(
   const skipped: BulkProjectOutcome['skipped'] = [];
   const failed: BulkProjectOutcome['failed'] = [];
 
-  // 改所有者是 root 专属,且目标用户必须存在 —— 在动第一个项目**之前**就问清楚,
+  // 改所有者是 root 专属,且目标用户必须存在 —— 在动第一个项目之前就问清楚,
   // 而不是改了三个之后在第四个上抛出来。
   if (input.action === 'owner') {
     if (actor.isRoot !== true) {
@@ -91,7 +84,7 @@ export async function bulkProjectAction(
   }
 
   const actingUserId = typeof actor.id === 'number' ? actor.id : null;
-  // gk:逐条删除 / 归档的审计与回收站里的"谁删的"用它;ip / ua 这里拿不到(批量入口不带),留空。
+  // 逐条删除 / 归档的审计与回收站里的"谁删的"用它;批量入口不带 ip / ua,留空。
   const bulkActor = { userId: actingUserId, username: actor.username ?? null };
 
   for (const projectId of ids) {
@@ -100,12 +93,9 @@ export async function bulkProjectAction(
       continue;
     }
     /*
-      改权限 / 改所有者要额外的管理权;收藏沿用单个操作的口径(可见即可)。
-      gk:**永久删除**要管理权(owner / root)—— 共享项目里的协作者只能归档。
-      gn:**归档也要**。归档一个项目会让它从所有人的活跃侧栏消失,与单条那条路
-      (projects.routes 的 DELETE)必须同口径,否则批量入口就是同一件事的后门。
-      删除与归档都走 canDeleteProject / canArchiveProject:无主(公共)项目没有
-      "负责人"这一档,与单条同口径。
+      改权限 / 改所有者、永久删除、归档都要管理权;收藏沿用单个操作的口径(可见即可)。
+      删除与归档走 canDeleteProject / canArchiveProject,与单条入口(projects.routes 的 DELETE)
+      同口径,否则批量入口就是同一件事的后门;无主(公共)项目只有 root 能删和归档。
     */
     const manageable = input.action === 'delete'
       ? canDeleteProject(projectId, actor)
@@ -118,7 +108,7 @@ export async function bulkProjectAction(
       continue;
     }
 
-    // hl(动态 P2-4):与单条入口同一套项目级推送;名单在动行之前收。
+    // 与单条入口同一套项目级推送;名单在动行之前收。
     const announce = prepareProjectChangeBroadcast(projectId);
     try {
       switch (input.action) {
@@ -144,7 +134,7 @@ export async function bulkProjectAction(
           announce('permissions');
           break;
         case 'owner': {
-          // hl(动态 P2-5):与单条同一份 —— 原 owner 自动进授权名单,审计带 targetUserId。
+          // 与单条入口同一份实现:原 owner 自动进授权名单,审计带 targetUserId。
           if (!transferProjectOwner(projectId, input.ownerUserId ?? null, actor)) {
             throw new AppError('项目不存在', { code: 'PROJECT_NOT_FOUND', statusCode: 404 });
           }

@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAuth } from '../components/auth/context/AuthContext';
 import { buildAuthenticatedWebSocketUrl } from '../utils/ws-auth';
 
+import { createSentClientMessageIds } from './sentClientMessageIds';
 import {
   HEARTBEAT_PING_AFTER_MS,
   HEARTBEAT_RECONNECT_AFTER_MS,
@@ -33,10 +34,8 @@ type WebSocketContextType = {
   /**
    * Sends a frame, reporting whether it actually went out.
    *
-   * The return value is the whole point: this used to return void and log a
-   * warning when the socket was closed, so a message composed during a
-   * reconnect vanished with no trace anywhere the user could see. Callers are
-   * expected to branch on it and keep the draft.
+   * Callers must branch on the result and keep the draft when it is false;
+   * otherwise a message composed during a reconnect vanishes without a trace.
    */
   sendMessage: (message: unknown) => boolean;
   /**
@@ -48,6 +47,13 @@ type WebSocketContextType = {
    */
   subscribe: (listener: ServerEventListener) => () => void;
   isConnected: boolean;
+  /**
+   * 这个标签页有没有发出过带这个 `clientMessageId` 的 `chat.send`。
+   *
+   * 服务端有些帧会把某条消息的正文带回来(排队被中止时退回的那段),同一个人开着的别的标签页
+   * 也会收到;只有真正发出这条消息的标签页才该把正文填回输入框。
+   */
+  wasSentHere: (clientMessageId: string) => boolean;
 };
 
 /**
@@ -56,16 +62,6 @@ type WebSocketContextType = {
  * life.
  */
 const WebSocketContext = createContext<WebSocketContextType | null>(null);
-
-/*
- * 曾经这里还有一个 `LatestServerEventContext`,把"最近一帧"单独放一个 context,
- * 目的是不让只用 sendMessage 的组件跟着每一帧重渲染。但它自己那一半仍然每帧都变,
- * 而唯一的消费者是 TaskMaster —— 那个功能整体移除之后,它变成了纯粹的开销:
- * 流式输出时以 30–60 Hz 触发一次顶层 setState,没有任何人读。
- *
- * 现在只保留 `subscribe`:回调式、不进 React state,天然不引发重渲染,而且不会像
- * state 那样在批处理里丢帧。
- */
 
 export const useWebSocket = () => {
   const context = useContext(WebSocketContext);
@@ -77,8 +73,8 @@ export const useWebSocket = () => {
 
 const useWebSocketProviderState = () => {
   const wsRef = useRef<WebSocket | null>(null);
-  const unmountedRef = useRef(false); // Track if component is unmounted
-  const hasConnectedRef = useRef(false); // Track if we've ever connected (to detect reconnects)
+  const unmountedRef = useRef(false);
+  const hasConnectedRef = useRef(false); // set on the first open; any later open is a reconnect
   /**
    * Listener registry for the subscribe API. A ref (not state) because the
    * set must be readable synchronously inside `onmessage` and never trigger
@@ -107,6 +103,14 @@ const useWebSocketProviderState = () => {
    * will ever close.
    */
   const attemptRef = useRef(0);
+  /**
+   * 这个标签页发出去过的 `chat.send` 幂等键(见 `wasSentHere`)。
+   *
+   * 记在这里而不是输入框那边:所有 `chat.send` 都从这里的 `sendMessage` 出去,输入框发送和
+   * 后台会话的自动续发是同一个出口,在这里记才不漏。按标签页记,另存一份到 sessionStorage,
+   * 刷新之后还认得(见 sentClientMessageIds.ts)。
+   */
+  const [sentClientMessageIds] = useState(() => createSentClientMessageIds());
   const { token } = useAuth();
 
   const dispatch = useCallback((event: ServerEvent) => {
@@ -148,7 +152,7 @@ const useWebSocketProviderState = () => {
   }, []);
 
   const connect = useCallback(async () => {
-    if (unmountedRef.current) return; // Prevent connection if unmounted
+    if (unmountedRef.current) return;
     // Read here rather than only inside the URL builder so this callback truly
     // depends on the token: logging in or refreshing must rebuild the socket,
     // and the dependency list below is what drives that. Bailing out early also
@@ -168,17 +172,17 @@ const useWebSocketProviderState = () => {
       if (!wsUrl) {
         // "Not now", not "never" — the ticket endpoint can fail transiently.
         // Without this retry one blip would strand the client offline until a
-        // manual reload, which is exactly how the old code behaved.
+        // manual reload.
         scheduleReconnect();
         return;
       }
 
       const websocket = new WebSocket(wsUrl);
       // Published while still CONNECTING, not in onopen: unmount closes
-      // whatever is in this ref, and a socket that was mid-handshake used to
-      // be invisible to that cleanup. It would then open against an unmounted
-      // provider, leaving a live socket nothing would ever close. Every reader
-      // of the ref already checks `readyState === OPEN`.
+      // whatever is in this ref, so a socket still mid-handshake must be
+      // visible to that cleanup, or it opens against an unmounted provider and
+      // nothing ever closes it. Every reader of the ref checks
+      // `readyState === OPEN`.
       wsRef.current = websocket;
 
       websocket.onopen = () => {
@@ -232,7 +236,7 @@ const useWebSocketProviderState = () => {
       // retry, so the client would stay offline until a manual reload.
       scheduleReconnect();
     }
-  }, [token, dispatch, scheduleReconnect]); // everytime token changes, we reconnect
+  }, [token, dispatch, scheduleReconnect]);
 
   connectRef.current = connect;
 
@@ -299,12 +303,13 @@ const useWebSocketProviderState = () => {
     }
     try {
       socket.send(JSON.stringify(message));
+      sentClientMessageIds.noteSent(message);
       return true;
     } catch (error) {
       console.error('Failed to send WebSocket message:', error);
       return false;
     }
-  }, []);
+  }, [sentClientMessageIds]);
 
   const subscribe = useCallback((listener: ServerEventListener) => {
     listenersRef.current.add(listener);
@@ -313,9 +318,14 @@ const useWebSocketProviderState = () => {
     };
   }, []);
 
+  const wasSentHere = useCallback(
+    (clientMessageId: string) => sentClientMessageIds.has(clientMessageId),
+    [sentClientMessageIds],
+  );
+
   const connection: WebSocketContextType = useMemo(
-    () => ({ sendMessage, subscribe, isConnected }),
-    [sendMessage, subscribe, isConnected],
+    () => ({ sendMessage, subscribe, isConnected, wasSentHere }),
+    [sendMessage, subscribe, isConnected, wasSentHere],
   );
 
   return { connection };

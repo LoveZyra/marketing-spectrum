@@ -14,27 +14,18 @@ import { isRootUser } from '@/shared/root-users.js';
 import { createAdminRouter } from '../admin.routes.js';
 
 /**
- * 管理接口:**每一条**都必须过 root 闸门。
+ * 管理接口:每一条都必须过 root 闸门。
  *
- * ## 为什么值得为一句 `router.use` 写测试
+ * 这组端点(重置任意账号密码、停用账号、读全站账号列表……)是全站权限最高的,
+ * 全靠一句 `router.use(authenticateToken, requireRoot)` 罩住。一句罩住比逐条挂不容易漏,
+ * 但新路由是否受保护取决于加在那一句的上面还是下面,这在 diff 里几乎看不出来。
  *
- * 这个路由的 8 条端点里有"重置任意账号密码""停用账号""读全站账号列表" ——
- * 全站权限最高的一组。它们靠**一句** `router.use(authenticateToken, requireRoot)` 罩住。
+ * 所以这里不逐条列端点,而是从源码里扫出端点逐个打 —— 新增的端点自动纳入,
+ * 不需要有人记得回来补测试(与 `.gitignore`、`INIT_SCHEMA_SQL` 的守卫同一思路)。
  *
- * 一句罩住是好设计(比逐条挂不容易漏),但它也意味着:**任何人往这个文件里加一条
- * 路由,是否受保护完全取决于加在那一句的上面还是下面**,而这件事在 diff 里几乎看不出来。
- * 覆盖率报告里这个文件是 0.0%,也就是说这一句从来没有被验证过真的生效。
- *
- * 所以这里不逐条列端点,而是**从源码里把端点扫出来**逐个打 —— 以后新增的端点
- * 自动被纳入,不需要有人记得回来补测试。这和 `.gitignore`、`INIT_SCHEMA_SQL`
- * 那两条守卫是同一个思路:让"漏一个"这件事不可表示。
- *
- * ## 顺带钉住 root 判定的口径
- *
- * `isRootUser` 是大小写不敏感的(ez 轮把 `users.username` 也改成了 `COLLATE NOCASE`,
- * 修的正是"注册一个大小写变体就是 root"那个提权)。这里验一下大小写变体的用户名
- * 确实仍被认成 root —— 免得哪天有人"顺手"把 `isRootUser` 改成精确匹配,
- * 让配置里写 `Boss` 的部署一夜之间没有管理员。
+ * 顺带钉住 root 判定的口径:`isRootUser` 大小写不敏感,与 `users.username` 的
+ * `COLLATE NOCASE` 一致(否则注册一个大小写变体就能冒充 root)。若有人把它改成精确匹配,
+ * 配置里写 `Boss` 的部署会突然没有管理员。
  */
 
 type TestUser = { id: number; username: string };
@@ -151,9 +142,8 @@ describe('管理接口的 root 闸门', () => {
 
   test('root 判定大小写不敏感 —— 配置写 boss,用 BOSS 登录也是 root', async () => {
     await withAdminServer(async ({ baseUrl }) => {
-      // ez 轮把 users.username 改成 COLLATE NOCASE(修"注册大小写变体即 root"的提权),
-      // 而 isRootUser 本来就是不敏感的。两边必须保持同一口径:哪天有人把 isRootUser
-      // 改成精确匹配,配置里写 `Boss` 的部署会一夜之间没有管理员。
+      // users.username 是 COLLATE NOCASE(防止注册大小写变体冒充 root),isRootUser 也不区分大小写。
+      // 两边必须同一口径:isRootUser 若改成精确匹配,配置里写 `Boss` 的部署会没有管理员。
       const response = await hit(baseUrl, 'BOSS', 'GET', '/users');
       assert.equal(response.status, 200, 'root 判定变成大小写敏感了');
     });

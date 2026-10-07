@@ -1,20 +1,20 @@
 /**
  * 「交给浏览器自己下」的两条路由。
  *
- * 这套东西存在的理由只有一个:**一次普通导航设不了 `Authorization` 头**。
+ * 这套东西存在的理由只有一个:一次普通导航设不了 `Authorization` 头。
  * 页面自己 fetch 再拼 blob 没有这个问题,但整份文件要先进内存 —— 没有进度条、
  * 切页就断、大文件把标签页撑崩。要把下载交回浏览器的下载管理器,凭据只能进 URL。
  *
- * 所以这里新增了一条**不挂 `authenticateToken` 的路由**。这是本次唯一的安全面
+ * 所以这里新增了一条不挂 `authenticateToken` 的路由。这是本次唯一的安全面
  * 变化,下面的断言按"这条路由能被任何人打到"来写:
- *   - 票必须限定到**一个目标**(泄了只泄那一个文件,不是那个账号);
- *   - 票**跨项目、跨用途都不认**;
- *   - 票只证明"是谁在下",可见性和路径在直传口**重跑一遍**;
- *   - 路径**不进查询串**(所以也不进反代日志)。
+ *   - 票必须限定到一个目标(泄了只泄那一个文件,不是那个账号);
+ *   - 票跨项目、跨用途都不认;
+ *   - 票只证明"是谁在下",可见性和路径在直传口重跑一遍;
+ *   - 路径不进查询串(所以也不进反代日志)。
  *
  * 另外两条是"进度条到底成不成立"的硬前提,一样在这里钉:
- *   - 单文件直传**必须**有 `Content-Length`,否则浏览器画不出百分比;
- *   - 流式打包**必须没有** `Content-Length` —— 边压边发算不出总长度,
+ *   - 单文件直传必须有 `Content-Length`,否则浏览器画不出百分比;
+ *   - 流式打包必须没有 `Content-Length` —— 边压边发算不出总长度,
  *     写一个猜的值会让浏览器提前判定完成,用户拿到截断的包。
  */
 import { readFileSync } from 'node:fs';
@@ -86,13 +86,13 @@ async function withFilesServer(runTest: (ctx: Ctx) => Promise<void>): Promise<vo
     app.use(express.json());
 
     /**
-     * **这一行是故意照抄 `server/index.js:502` 的。**
+     * 这一行是故意照抄 `server/index.js:502` 的。
      *
      * 那句 `app.use('/api/projects', authenticateToken, projectModuleRoutes)` 是
-     * 前缀中间件,排在文件路由**前面** —— 任何 `/api/projects/...` 的请求都要先过它。
+     * 前缀中间件,排在文件路由前面 —— 任何 `/api/projects/...` 的请求都要先过它。
      *
      * 第一版实现把直传口挂在 `/api/projects/:id/files/download` 上,隔离测试里
-     * **全绿**,真实 app 里**每一次下载都是 401**,而且和"票过期"同形。测试harness
+     * 全绿,真实 app 里每一次下载都是 401,而且和"票过期"同形。测试harness
      * 不复刻这道前缀中间件,就复刻不出这个坑。所以它留在这里:哪天有人把直传口挪回
      * `/api/projects` 下面,下面那些测试会立刻红。
      */
@@ -104,7 +104,7 @@ async function withFilesServer(runTest: (ctx: Ctx) => Promise<void>): Promise<vo
     };
     app.use('/api/projects', blanketAuth, express.Router());
 
-    // authenticateToken 是**注入**的,路由各自决定挂不挂。
+    // authenticateToken 是注入的,路由各自决定挂不挂。
     app.use(createFilesRouter({ authenticateToken: fakeAuth }));
     // 直传口:连 authenticateToken 的注入口都没有,挂在另一个前缀下。
     app.use('/api/downloads', createFileDownloadRouter());
@@ -310,10 +310,10 @@ describe('下载票:流式打包', () => {
 });
 
 /**
- * 上面那些跑的是**这个测试自己搭的 app**。真实装配在 `server/index.js` 里,
- * 而第一版实现正是**装配顺序**上出的问题 —— 隔离测试全绿、真实 app 全 401。
+ * 上面那些跑的是这个测试自己搭的 app。真实装配在 `server/index.js` 里,
+ * 而第一版实现正是装配顺序上出的问题 —— 隔离测试全绿、真实 app 全 401。
  * 所以这里再钉一道:真实装配文件里,这两个 router 必须挂在 `/api/downloads` 上,
- * 并且**不许**有人给这个前缀套上 authenticateToken(套上就等于这条路彻底失效,
+ * 并且不许有人给这个前缀套上 authenticateToken(套上就等于这条路彻底失效,
  * 而表现只是"下载点了没反应",不会有任何报错)。
  */
 describe('真实装配', () => {

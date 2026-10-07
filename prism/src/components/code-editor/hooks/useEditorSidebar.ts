@@ -14,7 +14,7 @@ type UseEditorSidebarOptions = {
   isMobile: boolean;
   initialWidth?: number;
   /**
-   * ei:当前会话 id。产出文件可能落在**项目目录之外**(计划文件、/tmp 脚本…),
+   * 当前会话 id。产出文件可能落在项目目录之外(计划文件、/tmp 脚本…),
    * 项目文件接口不服务那些路径 —— 这类文件改走"这段会话的产出"通道(只读)。
    */
   activeSessionId?: string | null;
@@ -28,16 +28,13 @@ export const useEditorSidebar = ({
 }: UseEditorSidebarOptions) => {
   const { t } = useTranslation('codeEditor');
   /**
-   * F10:编辑器多标签。
+   * 编辑器多标签。
    *
-   * 之前一次只能开一个文件 —— 对着一份代码改另一份(照着接口写实现、比对两处
-   * 配置)时,每看一眼就要把当前文件关掉,回来还要重新找。
+   * 打开的文件按打开顺序排,活动的那个由 `activeEditorPath` 指;这样关掉当前这个
+   * 之后落到哪一个是可预测的(左边那个),而不是随机跳。
    *
-   * 打开的文件按**打开顺序**排,活动的那个由 `activeEditorPath` 指;这样"关掉
-   * 当前这个"之后落到哪一个是可预测的(左边那个),而不是跳到一个随机的。
-   *
-   * 上限 12 个:再多的标签条自己就不可读了,而"开了三十个文件"通常意味着人想要
-   * 的其实是搜索(F10 的另一半),不是标签。
+   * 上限 12 个:再多标签条自己就不可读了,开三十个文件的人要的其实是全局内容搜索,
+   * 不是标签。
    */
   const [openFiles, setOpenFiles] = useState<CodeEditorFile[]>([]);
   const [activeEditorPath, setActiveEditorPath] = useState<string | null>(null);
@@ -69,7 +66,7 @@ export const useEditorSidebar = ({
       const normalizedPath = filePath.replace(/\\/g, '/');
       const fileName = normalizedPath.split('/').pop() || filePath;
       /**
-       * ei:落在项目目录**之外**的绝对路径(agent 常把计划写进 ~/.claude/plans、
+       * 落在项目目录之外的绝对路径(agent 常把计划写进 ~/.claude/plans、
        * 把临时脚本写进 /tmp)交给会话产出通道 —— 项目文件接口对它们一律 403,
        * 而它们确实是这段对话的产出,用户理应看得到、下得下来。只读。
        */
@@ -91,7 +88,7 @@ export const useEditorSidebar = ({
         const existing = current.findIndex((file) => file.path === filePath);
         if (existing >= 0) {
           // 已经开着就复用那个标签,但用新的 diffInfo 覆盖 —— 从聊天里点同一个
-          // 文件的 diff 卡时,要看的是**这次**的 diff。
+          // 文件的 diff 卡时,要看的是这次的 diff。
           const next = [...current];
           next[existing] = nextFile;
           return next;
@@ -109,25 +106,24 @@ export const useEditorSidebar = ({
   const handleCloseFile = useCallback((filePath?: string) => {
     const target = filePath ?? activeEditorPath;
     if (!target) return;
-    // 只有关**当前**这个才可能丢改动 —— 后台标签根本没挂载编辑器。
+    // 只有关当前这个才可能丢改动 —— 后台标签根本没挂载编辑器。
     if (target === activeEditorPath && !confirmDiscard()) {
       return;
     }
 
-    setOpenFiles((current) => {
-      const index = current.findIndex((file) => file.path === target);
-      if (index < 0) return current;
-      const next = current.filter((file) => file.path !== target);
+    const index = openFiles.findIndex((file) => file.path === target);
+    if (index < 0) return;
+    // updater 里只做过滤、不调别的 setState:updater 要是纯函数,严格模式下会被调两次。
+    setOpenFiles((current) => current.filter((file) => file.path !== target));
 
-      if (target === activeEditorPath) {
-        // 落到左边那个;没有左边就落到右边;都没有就是关光了。
-        const fallback = next[index - 1] ?? next[index] ?? null;
-        setActiveEditorPath(fallback?.path ?? null);
-        if (!fallback) setEditorExpanded(false);
-      }
-      return next;
-    });
-  }, [activeEditorPath, confirmDiscard]);
+    if (target === activeEditorPath) {
+      // 落到左边那个;没有左边就落到右边;都没有就是关光了。
+      const remaining = openFiles.filter((file) => file.path !== target);
+      const fallback = remaining[index - 1] ?? remaining[index] ?? null;
+      setActiveEditorPath(fallback?.path ?? null);
+      if (!fallback) setEditorExpanded(false);
+    }
+  }, [activeEditorPath, confirmDiscard, openFiles]);
 
   const handleSelectFile = useCallback((filePath: string) => {
     if (filePath === activeEditorPath) return;

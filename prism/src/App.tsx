@@ -7,10 +7,8 @@ import { ToastProvider } from './shared/view/ui';
 import { AuthProvider, ProtectedRoute } from './components/auth';
 import AuthLoadingScreen from './components/auth/view/AuthLoadingScreen';
 import { WebSocketProvider } from './contexts/WebSocketContext';
-// 懒加载。整个应用外壳(chat 220 kB + sidebar 73 kB + markdown 栈 156 kB +
-// dompurify/react-dropzone 等 83 kB…)原本是入口的静态依赖,合计约 1 MB —— 也就是
-// 说没登录的人要先把它全部下载并解析完,才看得到一个登录表单。
-// 它整个在 ProtectedRoute 之内,本来就只有登录后才渲染。
+// 应用外壳(chat、sidebar、markdown 栈等,合计约 1 MB)懒加载:它只在 ProtectedRoute 内、登录后才渲染,
+// 静态导入会让未登录的人先下载并解析整包,才看得到登录表单。
 const AppContent = lazy(() => import('./components/app/AppContent'));
 import i18n from './i18n/config.js';
 
@@ -41,11 +39,9 @@ function detectRouterBasename() {
   }
 
   const candidatePaths = [
-    // index.html ships no manifest link — the PWA was dropped when Prism became
-    // web-only — so this query normally yields nothing and is filtered out
-    // below. It stays because a subpath deployment that adds its own manifest
-    // gives the strongest basename hint available, and a null DOM lookup costs
-    // nothing.
+    // index.html ships no manifest link, so this normally yields nothing and is
+    // filtered out below. It stays because a subpath deployment that adds its own
+    // manifest gives the strongest basename hint, and a null lookup costs nothing.
     { kind: 'manifest' as const, value: document.querySelector('link[rel="manifest"]')?.getAttribute('href') },
     { kind: 'script' as const, value: document.querySelector('script[type="module"][src]')?.getAttribute('src') },
     ...Array.from(
@@ -86,9 +82,8 @@ function detectRouterBasename() {
           // the app is mounted. This must also run for a single segment:
           //   /icons/claude-ai-icon.svg     -> ''
           //   /ai/icons/claude-ai-icon.svg  -> '/ai'
-          // The previous implementation only stripped while more than one
-          // segment remained, which incorrectly turned root deployments into a
-          // Router basename of /icons and caused a blank page after login.
+          // Otherwise a root deployment gets the basename /icons and renders a
+          // blank page after login.
           while (segments.length > 0 && DEPLOYMENT_ASSET_DIRECTORIES.has(segments[segments.length - 1])) {
             segments.pop();
           }

@@ -13,11 +13,8 @@ import path from 'node:path';
  * SVG is included because previewed reports embed charts as SVG, and the
  * response carries `nosniff` plus a CSP that blocks scripts from other origins.
  *
- * These helpers used to live in `modules/publish`. That feature was removed;
- * the *rules* were not, because they are the load-bearing part — a MIME
- * whitelist and a path normalizer are what keep a file-serving route from
- * becoming a stored-XSS vector. They moved here rather than being deleted with
- * their old owner.
+ * Together with the path normalizer in this module, this whitelist is what
+ * keeps a file-serving route from becoming a path-traversal or stored-XSS vector.
  */
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -102,11 +99,10 @@ export function normalizePublicSubPath(rawTail: string): string | null {
  * be switched off.
  */
 export const PREVIEW_PAGE_CSP = [
-  // hj(审计 P0-1):**sandbox 必须写在响应头里,不能只靠 iframe 的 sandbox 属性。**
-  // 预览口不要登录、与 Prism 同源;iframe 属性只在嵌入时生效 —— 有人把预览链接
-  // 直接发给你、或你右键「在新标签页打开框架」,页面就以 Prism 的源运行,能读走
-  // localStorage 里的登录令牌。这里的令牌集合与 HtmlPreview.tsx 的 iframe 属性逐字相同
-  // (都不给 allow-same-origin),所以嵌入时的行为一点不变。
+  // sandbox 必须写在响应头里,不能只靠 iframe 的 sandbox 属性。预览口不要登录、与 Prism 同源,
+  // 而 iframe 属性只在嵌入时生效:预览链接被直接打开(或「在新标签页打开框架」)时,页面就以
+  // Prism 的源运行,能读走 localStorage 里的登录令牌。这里的 sandbox 取值与 HtmlPreview.tsx 的
+  // iframe 属性逐字相同(都不给 allow-same-origin),嵌入时的行为不变。
   'sandbox allow-scripts allow-forms allow-modals allow-popups',
   "default-src 'self' data: blob:",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:",

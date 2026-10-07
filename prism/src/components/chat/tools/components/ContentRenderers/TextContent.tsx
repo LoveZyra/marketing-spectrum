@@ -7,8 +7,8 @@ interface TextContentProps {
 }
 
 /**
- * Renders plain text, JSON, or code content
- * Used by: Raw parameters, generic text results, JSON responses
+ * Renders plain text, JSON, or code content for ToolRenderer's `text` content type
+ * (no current tool config selects it).
  */
 export const TextContent: React.FC<TextContentProps> = ({
   content,

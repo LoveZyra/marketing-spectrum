@@ -20,9 +20,9 @@ type StepConfigurationProps = {
 };
 
 /**
- * A GitHub URL field and a token card used to sit below the path field: filling
- * the URL switched the wizard onto a clone workflow. Cloning was removed with
- * the rest of the git surface, so a project is a directory that already exists.
+ * The wizard's configuration step: the project's directory on the server
+ * (created if missing), an optional template and its visibility. There is no
+ * clone-from-URL workflow.
  */
 export default function StepConfiguration({
   workspacePath,
@@ -57,7 +57,7 @@ export default function StepConfiguration({
         </p>
       </div>
 
-      {/* fh:模板选择。没配模板时这块整个不渲染(见 TemplateSelector 顶部)。 */}
+      {/* 模板选择。没配模板时这块整个不渲染(见 TemplateSelector 顶部)。 */}
       <TemplateSelector value={templateId} disabled={isCreating} onChange={onTemplateIdChange} />
 
       <PermissionSelector

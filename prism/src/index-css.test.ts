@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * hf:原生 select 的下拉箭头是 index.css 里画在右内边距上的背景图。几乎每个 select 都带
+ * 原生 select 的下拉箭头是 index.css 里画在右内边距上的背景图。几乎每个 select 都带
  * `p-2` / `px-3` 之类的工具类,工具类会把右内边距改小,箭头就压到文字上 —— 所以右内边距
  * 必须 !important 固定成"箭头宽 + 留白",且与箭头的尺寸 / 位置同口径。
  */

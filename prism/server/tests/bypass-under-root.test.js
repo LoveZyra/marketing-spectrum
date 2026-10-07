@@ -7,16 +7,12 @@ import { describeBypassUnderRoot } from '../claude-sdk.js';
 /**
  * 「跳过权限」档位在 root 下会被 claude CLI 直接拒掉。
  *
- * 真实事故:线上所有人突然发不出消息,聊天里只有
- * `Claude Code process exited with code 1`,服务端日志里同样只有这一句。
- * 手动跑 `claude -p "hi"` 却完全正常 —— 因为手跑时没带 `--dangerously-skip-permissions`。
- * 真正的原因藏在子进程的 stderr 里,而当时 Prism 没接那个回调,整句话进了黑洞。
+ * CLI 拒绝时只以 code 1 退出,原因只写在子进程 stderr 里,聊天和服务端日志都只看到
+ * `Claude Code process exited with code 1`;手动跑 `claude -p` 不带 `--dangerously-skip-permissions`,复现不出来。
+ * CLI 的条件是:uid === 0 且 `IS_SANDBOX !== '1'` 且没有 `CLAUDE_CODE_BUBBLEWRAP`。这里复刻同一个条件,
+ * 在拉起子进程之前就把原因和办法说清楚。
  *
- * CLI 的判断逐字是:uid === 0 且 `IS_SANDBOX !== '1'` 且没有 `CLAUDE_CODE_BUBBLEWRAP`。
- * 这里把同一个条件复刻一遍,好在**拉起子进程之前**就把话说明白。
- *
- * 注意只有这一个档位受影响 —— 其余四个在 root 下都正常。把这条钉住,免得以后
- * 有人"顺手"把整个 root 环境判成不可用。
+ * 只有这一个档位受影响,其余四个在 root 下都正常,不能把整个 root 环境判成不可用。
  */
 
 const originalGetuid = process.getuid;
@@ -80,9 +76,8 @@ describe('root 下的「跳过权限」档位', () => {
   });
 
   /**
-   * `IS_SANDBOX=true` / `yes` 之类**不算数** —— CLI 比的是严格等于字符串 '1'。
-   * 这里跟着比严格值,不然 Prism 放行了而 CLI 照样 exit 1,退回到一模一样的
-   * 谜之退出码,只是这次还多了一层"Prism 说没问题"的误导。
+   * `IS_SANDBOX=true` / `yes` 之类不算数:CLI 比的是严格等于字符串 '1'。
+   * 这里也必须比严格值,否则 Prism 放行而 CLI 照样 exit 1,用户只看到一个没有原因的退出码。
    */
   test('IS_SANDBOX 只认字符串 1,和 CLI 保持一致', () => {
     asRoot();

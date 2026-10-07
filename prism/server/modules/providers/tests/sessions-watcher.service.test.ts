@@ -67,9 +67,9 @@ test('poll interval override rejects values that would spin the CPU', () => {
 });
 
 /**
- * The previous ignore list was glob strings (`'**\/node_modules/**'`). chokidar 4
- * dropped glob support and treats a plain string as an exact path, so every one
- * of those patterns had become inert without anything failing.
+ * Glob strings (`'**\/node_modules/**'`) do not work as an ignore list: chokidar 4
+ * dropped glob support and treats a plain string as an exact path, so such
+ * patterns would be inert without anything failing.
  */
 test('subagent transcripts are pruned from the watch tree', () => {
   const subagentFile = path.join('projects', '-home-me-app', 'sess-1', 'subagents', 'agent-9.jsonl');
@@ -83,9 +83,7 @@ test('subagent transcripts are pruned from the watch tree', () => {
 
 /**
  * 模型探测(/models 的"实测真实模型")的 cwd 编码进 ~/.claude/projects 后带着
- * 'prism-model-probe' 标记。不忽略它,每次探测都会往所有人的侧栏广播一个幽灵
- * 项目 —— getSupportedModels() 当年就是因为这个被整个禁用的(见
- * claude-models.provider.ts),这条测试防止同一个坑换个入口再踩一次。
+ * 'prism-model-probe' 标记。不忽略它,每次探测都会往所有人的侧栏广播一个幽灵项目。
  */
 test('model-probe transcripts are pruned from the watch tree', () => {
   const probeDir = path.join('projects', '-root--prism-prism-model-probe');

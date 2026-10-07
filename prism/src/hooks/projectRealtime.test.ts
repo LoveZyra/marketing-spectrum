@@ -1,6 +1,6 @@
 /**
- * hl(动态 P2-4):侧栏对 `project_upserted` / `project_removed` 的处理 —— 已知项目就地合并
- * 元数据且**保留会话列表**,陌生项目交给调用方重拉(返回 null),移除时引用稳定。
+ * 侧栏对 `project_upserted` / `project_removed` 的处理:已知项目就地合并元数据且保留会话列表,
+ * 陌生项目交给调用方重拉(返回 null),没命中时引用不变。
  */
 import { describe, expect, it } from 'vitest';
 
@@ -66,7 +66,7 @@ describe('removeProjectById', () => {
   });
 });
 
-describe('hl 复核 P3-8 markSelectedProjectRemoved', () => {
+describe('markSelectedProjectRemoved', () => {
   it('正在看的项目被移除:保留(基线置 null 把对话区切掉),只打 removedFromView', () => {
     const selected = project();
     const next = markSelectedProjectRemoved(selected, 'p1');

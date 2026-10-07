@@ -9,8 +9,8 @@ let closeConnection: () => void;
 let tempDir: string;
 
 /**
- * dr:changed_files 帧现在落显示日志(工作面板认非 Write 写盘靠它),
- * 但必须**剥掉 diff** —— 单文件 diff 上限 20KB,留着日志会白胖几个量级。
+ * changed_files 帧落显示日志(工作面板靠它识别非 Write 工具的写盘),
+ * 但必须剥掉 diff:单文件 diff 上限 20KB,留着会让日志膨胀几个量级。
  */
 beforeAll(async () => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-changed-files-'));

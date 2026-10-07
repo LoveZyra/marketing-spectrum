@@ -5,8 +5,8 @@ import { describe, test } from 'vitest';
 import { collectToolUseDelta, readTurnWatchdogConfig } from '../claude-sdk.js';
 
 /**
- * 回合看门狗的两条规则(2026-08-19 根治"长 SQL 被 60 分钟绝对墙钟误杀"):
- * 1. 静默看门狗默认 60 分钟、可关;绝对上限默认关、老配置照旧生效;
+ * 回合看门狗的两条规则(长时间运行的工具,如长 SQL,不能被墙钟误杀):
+ * 1. 静默看门狗默认 60 分钟、可关;绝对上限默认关,已配置的 PRISM_TURN_TIMEOUT_MS 仍作为绝对上限生效;
  * 2. 在途工具跟踪:tool_use 记开始、tool_result 记结束 —— 工具执行期间的
  *    流上静默不判死。
  */

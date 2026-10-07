@@ -6,14 +6,17 @@
  * credential kinds can coexist in the same table.
  *
  * Values are encrypted at rest with AES-256-GCM (see server/shared/crypto-box.js).
- * Rows written before encryption existed are still readable — `decrypt()`
- * passes through anything without the v1 envelope — and get upgraded the next
- * time they are written.
+ * The only write path is the INSERT in `createCredential`, so rows stored as
+ * plaintext before encryption existed are never rewritten by normal use:
+ * `encryptLegacyPlaintext()` encrypts them in place, and `initializeDatabase`
+ * runs it on every start (a no-op once no plaintext row is left). `decrypt()`
+ * still passes plaintext through, so a row that pass could not reach keeps
+ * working.
  */
 
 import { getConnection } from '@/modules/database/connection.js';
 import { appConfigDb } from '@/modules/database/repositories/app-config.js';
-import { decrypt, encrypt, getEncryptionKey } from '@/shared/crypto-box.js';
+import { decrypt, encrypt, getEncryptionKey, isEncrypted } from '@/shared/crypto-box.js';
 import { createLogger } from '@/shared/logger.js';
 const log = createLogger('db');
 import type {
@@ -148,5 +151,45 @@ export const credentialsDb = {
       )
       .run(isActive ? 1 : 0, credentialId, userId);
     return result.changes > 0;
+  },
+
+  /**
+   * Encrypts, in place, every stored value that is not yet a v1 envelope.
+   * Returns how many rows were rewritten. Idempotent: encrypted and empty
+   * values are left alone, so a second run changes nothing.
+   *
+   * The key is resolved before the transaction starts. When no key exists
+   * yet, `key()` generates one and persists it to app_config; doing that
+   * inside the transaction would let a rollback discard the stored key while
+   * the memoized copy keeps encrypting new rows with it, and those rows would
+   * be unreadable after the next restart.
+   *
+   * Each UPDATE carries the value it read (compare-and-swap), so a row
+   * changed in between is skipped instead of overwritten with a stale value.
+   */
+  encryptLegacyPlaintext(): number {
+    const db = getConnection();
+    // GLOB is case-sensitive, matching `isEncrypted()`; LIKE would also skip "V1:..." values.
+    const rows = (db
+      .prepare(
+        "SELECT id, credential_value FROM user_credentials WHERE credential_value <> '' AND credential_value NOT GLOB 'v1:*'"
+      )
+      .all() as Array<{ id: number; credential_value: string }>)
+      .filter((row) => !isEncrypted(row.credential_value));
+    if (rows.length === 0) return 0;
+
+    const activeKey = key();
+    const update = db.prepare(
+      'UPDATE user_credentials SET credential_value = ? WHERE id = ? AND credential_value = ?'
+    );
+    const encrypted = db.transaction(() => {
+      let changed = 0;
+      for (const row of rows) {
+        changed += update.run(encrypt(row.credential_value, activeKey), row.id, row.credential_value).changes;
+      }
+      return changed;
+    })();
+    log.info(`已加密 ${encrypted} 条历史明文凭据`, { candidates: rows.length });
+    return encrypted;
   },
 };

@@ -2,10 +2,10 @@ import { getConnection } from '@/modules/database/connection.js';
 import { nativeUuidFromMessageId } from '@/shared/fork-anchor.js';
 
 /**
- * gy:用户对助手回答的反馈(👍/👎 与效果调查卡),技能优化的数据源。表结构与
+ * 用户对助手回答的反馈(赞 / 踩与效果调查卡),技能优化的数据源。表结构与
  * 语义见 `schema.ts` 的 `MESSAGE_FEEDBACK_TABLE_SCHEMA_SQL`。
  *
- * 一人一条回答一行(UNIQUE(message_id, user_id)):改票 / 从调查卡改成 👎 都是 upsert,
+ * 一人一条回答一行(UNIQUE(message_id, user_id)):改票 / 从调查卡改成踩都是 upsert,
  * 不留历史 —— 历史意见对训练没有价值,反而会把同一个人的两次意见算成两条证据。
  */
 export type FeedbackSource = 'vote' | 'survey';
@@ -49,7 +49,7 @@ export type SkillFeedbackStats = {
   skill: string;
   shown: number;        // 调查卡:answered + dismissed
   answered: number;     // 调查卡答复数
-  votes: number;        // 👍/👎 数
+  votes: number;        // 赞 / 踩数
   good: number;
   neutral: number;
   bad: number;
@@ -57,7 +57,7 @@ export type SkillFeedbackStats = {
   users: number;
   /** 最近的说明 / 待优化点(非空),最新在前 */
   recentNotes: Array<{ note: string; verdict: number | null; user_id: number; project_id: string | null; updated_at: string }>;
-  /** ha(F3-02):按项目分组的答复(只算 answered);用于"某项目连续差、全局好"的提示 */
+  /** 按项目分组的答复(只算 answered);用于"某项目连续差、全局好"的提示 */
   byProject: Array<{ project_id: string | null; answered: number; good: number; neutral: number; bad: number }>;
 };
 
@@ -86,7 +86,7 @@ export const messageFeedbackDb = {
         expected_output = excluded.expected_output,
         skill_hint = COALESCE(excluded.skill_hint, message_feedback.skill_hint),
         project_id = COALESCE(excluded.project_id, message_feedback.project_id),
-        -- hl(09-24 P2-21):唯一键是 (message_id, user_id),改票时 session_id 也跟着写 ——
+        -- 唯一键是 (message_id, user_id),改票时 session_id 也跟着写 ——
         -- 同一个 messageId 换了会话(分叉 / 恢复)不能让一行永远挂在旧会话上。
         session_id = excluded.session_id,
         updated_at = CURRENT_TIMESTAMP
@@ -186,7 +186,7 @@ export const messageFeedbackDb = {
   },
 
   /**
-   * ha(P3-01):反馈叠加层的原料 —— 某个 skill 的、答过且有判定的反馈(含好评:好评在 harvest
+   * 反馈叠加层的原料 —— 某个 skill 的、答过且有判定的反馈(含好评:好评在 harvest
    * 里是 outcome=success 的证据),可选只要 `since` 之后的。按会话分组在路由层做。
    */
   overlayRows(skillHint: string, sinceIso: string | null, limit = 20_000): MessageFeedbackRow[] {
@@ -207,7 +207,7 @@ export const messageFeedbackDb = {
   },
 
   /**
-   * gz:「来自反馈 · 待入库」—— 答过且带判据(期望结果或待优化点)、还没转成任务的反馈。
+   * 「来自反馈 · 待入库」—— 答过且带判据(期望结果或待优化点)、还没转成任务的反馈。
    * 好评不进训练(它们没有"要改什么");dismissed 不算答复。
    */
   inbox(skillHint: string | null, limit = 200): MessageFeedbackRow[] {

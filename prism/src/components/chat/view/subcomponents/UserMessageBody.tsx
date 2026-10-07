@@ -13,13 +13,13 @@ function formatChars(count: number): string {
 }
 
 /**
- * prism: the text of a user turn, with content attachments folded away.
+ * The text of a user turn, with content attachments folded away.
  *
  * The transcript stores the prompt and its attachments as one string, so a
  * turn that attached a parsed PDF would otherwise render the whole extracted
  * document inside the chat bubble. Each attachment collapses to a one-line
- * chip that expands on click — the text is still there, it just no longer
- * buries the sentence the person actually wrote.
+ * chip that expands on click, so the text stays available without burying the
+ * sentence the person actually wrote.
  */
 export default function UserMessageBody({ content }: UserMessageBodyProps) {
   const { t } = useTranslation('chat');

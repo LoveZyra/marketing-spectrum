@@ -18,18 +18,18 @@ import { handleChatConnection } from '@/modules/websocket/services/chat-websocke
 /**
  * `chat.send` 的归属校验。
  *
- * 这条守卫原先**漏掉了** —— `chat.abort`、`chat.subscribe`、
+ * 这条守卫原先漏掉了 —— `chat.abort`、`chat.subscribe`、
  * `chat.permission-response` 三处都过 `canViewerSeeSession`,唯独 `chat.send` 只查了
  * "会话存不存在"。而 send 恰恰是四条里影响最大的那条:
  *
- * 常驻 runtime 在 claude-sdk 里是**按 provider session id 建索引的,键里没有用户**,
+ * 常驻 runtime 在 claude-sdk 里是按 provider session id 建索引的,键里没有用户,
  * `runtimeForSend` 每一轮都拿发送方的 `permissionMode` / `allowedTools` 覆盖 runtime
  * 上的,还会对活着的子进程调 `setPermissionMode`。所以少了这道门,任何已登录的
  * socket 只要拿得到一个会话 id,就能往别人的对话里写消息,并把自己的权限模式
  * (包括 `bypassPermissions`)按到别人的运行时上。
  *
- * 这里断言的是**副作用**而不是返回值:关键不在于回了什么错,而在于
- * **provider 运行时根本没有被拉起来**。只断言错误码的话,一个"先 spawn 再报错"
+ * 这里断言的是副作用而不是返回值:关键不在于回了什么错,而在于
+ * provider 运行时根本没有被拉起来。只断言错误码的话,一个"先 spawn 再报错"
  * 的实现照样能过。
  */
 
@@ -135,12 +135,12 @@ describe('chat.send 的归属校验', () => {
       assert.equal(errors.length, 1);
       // 对外与"这个 id 不存在"同形 —— 不能变成一个"会话是否存在"的探针。
       assert.equal(errors[0].code, 'SESSION_NOT_FOUND');
-      // gk:带上"这是在回 chat.send" —— 客户端只对这一种切「会话已被删除」态。
+      // 带上"这是在回 chat.send":客户端只对这一种切「会话已被删除」态。
       assert.equal(errors[0].request, 'chat.send');
     });
   });
 
-  test('gk:会话行已经没了 → SESSION_NOT_FOUND 同样标着 request=chat.send', async () => {
+  test('会话行已经没了 → SESSION_NOT_FOUND 同样标着 request=chat.send', async () => {
     await withIsolatedDatabase(async () => {
       const alice = { id: Number(userDb.createUser('alice', 'hash').id), username: 'alice' };
       const { ws, spawned } = connect(alice);
@@ -184,10 +184,9 @@ describe('chat.send 的归属校验', () => {
   });
 
   /**
-   * hiddenContext(ck 轮):「让 Claude 创建定时任务」把票据与接口用法装在
-   * options.hiddenContext 里随消息走。约定三条:提示词= 人话+隐藏块;显示日志
-   * 的用户行**只有人话**(刷新后气泡不能冒出大段 curl);隐藏块不顺流进运行时
-   * 的 options(它只属于提示词层)。
+   * hiddenContext:「让 Claude 创建定时任务」把票据与接口用法装在 options.hiddenContext 里随消息走。
+   * 约定三条:提示词 = 人话 + 隐藏块;显示日志的用户行只有人话(刷新后气泡不能冒出大段 curl);
+   * 隐藏块不顺流进运行时的 options(它只属于提示词层)。
    */
   test('hiddenContext:进提示词,不进显示日志、不进运行时 options', async () => {
     await withIsolatedDatabase(async () => {
@@ -218,9 +217,8 @@ describe('chat.send 的归属校验', () => {
   });
 
   /**
-   * 无主项目的口径 2026-08-14 变了:**不再默认公开**,只有落在
-   * PRISM_PUBLIC_WORKSPACE 之下才对所有人可见/可发,否则仅 root。这条钉住新语义
-   * 的两侧:公共目录内人人可发,目录外普通人被挡、root 仍可发。
+   * 无主项目不默认公开:只有落在 PRISM_PUBLIC_WORKSPACE 之下才对所有人可见 / 可发,否则仅 root。
+   * 这条钉住两侧:公共目录内人人可发,目录外普通人被挡、root 仍可发。
    */
   test('无主项目:公共目录内人人可发,目录外仅 root', async () => {
     const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;

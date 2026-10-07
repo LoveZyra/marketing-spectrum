@@ -9,11 +9,7 @@ import type { SkillWhetData } from '../SkillWhetPage';
 
 import StatusStrip, { Badge } from './StatusStrip';
 
-/**
- * gy:总览 —— 三格**真**数字(受管副本 / 任务集条数 / 反馈覆盖的技能)。
- * gz 再加三格(在跑 + 排队 / 待审阅候选 / 累计费用)和最近五个作业;全部来自作业表与技能状态,
- * 不放演示数据。
- */
+/** 近 14 天每日训练费用的柱图(手绘 SVG,只圆柱顶)。 */
 function CostChart({ rows }: { rows: ReturnType<typeof dailyCost> }) {
   const { t } = useTranslation('skillwhet');
   const W = 560; const H = 150; const L = 40; const R = 8; const T = 10; const B = 22;
@@ -52,6 +48,10 @@ function CostChart({ rows }: { rows: ReturnType<typeof dailyCost> }) {
   );
 }
 
+/**
+ * 总览:六格数字(受管副本 / 任务集条数 / 有反馈但未导入的技能 / 在跑 + 排队 / 待审阅候选 / 累计费用)、
+ * 近 14 天费用与接受率、最近五个作业。全部来自作业表与技能状态,不放演示数据。
+ */
 export default function Overview({ status, data, onRecheck, onOpenJob, onOpenRuns }: {
   status: SkillWhetStatus | null;
   data: SkillWhetData;
@@ -60,7 +60,7 @@ export default function Overview({ status, data, onRecheck, onOpenJob, onOpenRun
   onOpenRuns: () => void;
 }) {
   const { t } = useTranslation('skillwhet');
-  const { jobs, live } = useJobs(null, 500);            // he:14 天趋势要多拉一些
+  const { jobs, live } = useJobs(null, 500);            // 14 天趋势要多拉一些作业
   const labelOf = useJobLabel();
   const skillRows = Array.isArray(data.skills?.skills) ? data.skills.skills : [];
   const managed = skillRows.length;
@@ -71,7 +71,7 @@ export default function Overview({ status, data, onRecheck, onOpenJob, onOpenRun
   const surveyRate = status?.survey?.rate ?? 0.5;
   const running = jobs.filter((job) => job.state === 'running').length;
   const queued = jobs.filter((job) => job.state === 'queued').length;
-  // hl(动态 P3):「待审阅候选」只算 improved=true 的训练产物(没采纳的);原来把无改进的 staging 也算成候选
+  // 「待审阅候选」只算 improved=true 且还没采纳的训练产物;无改进的 staging 不算候选。
   const awaiting = skillRows.filter((skill) => jobs.some((job) =>
     job.skill === skill.name && (job.kind ?? 'train') === 'train' && job.state === 'done' && job.improved === true
     && job.staging && job.staging !== skill.adopted_staging)).length;
@@ -99,7 +99,7 @@ export default function Overview({ status, data, onRecheck, onOpenJob, onOpenRun
         <p className="mt-1 text-[13px] text-muted-foreground">{t('overview.subtitle', { defaultValue: '六格数字全是真数据:副本、任务集、反馈覆盖、作业、候选、费用。' })}</p>
       </div>
       <StatusStrip status={status} onRecheck={onRecheck} />
-      {/* hc:按容器宽度排列(每格至少 190px),不按视口 —— 页面左边多一栏时原来三列被挤成一两个字一行 */}
+      {/* 按容器宽度排列(每格至少 190px)而不按视口:页面左边多一栏时,按视口分的三列会被挤得一行只剩一两个字。 */}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-3.5" data-testid="overview-cards">
         {cards.map(({ label, value, sub }) => (
           <div key={label} className="rounded-panel border border-border bg-card p-4">

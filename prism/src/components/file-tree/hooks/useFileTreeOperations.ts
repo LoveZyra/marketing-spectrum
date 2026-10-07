@@ -8,7 +8,6 @@ import type { FileTreeNode } from '../types/types';
 import { describeFileServerError } from '../utils/serverErrorText';
 import type { Project } from '../../../types/app';
 
-// Invalid filename characters
 const INVALID_FILENAME_CHARS = /[<>:"/\\|?*\x00-\x1f]/;
 const RESERVED_NAMES = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
 
@@ -16,11 +15,11 @@ const RESERVED_NAMES = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
 export type ToastMessage = {
   message: string;
   /**
-   * `warning` 用于"做完了,但结果不完整" —— 例如 ZIP 少打了没加载到的子目录。
+   * `warning` 用于"做完了,但结果不完整或需要留意":例如批量删除有几项失败、上传覆盖了同名文件。
    *
-   * `info` 是"正在做,还没好"。它**不自动消失**(见 FileTree.tsx 的自动隐藏),
-   * 由随后的成功/失败提示顶掉 —— 一条 3 秒就走的"正在准备"对一个 40 秒的下载
-   * 毫无意义,用户只会在剩下的 37 秒里继续以为"点了没反应"。
+   * `info` 是"正在做,还没好"。它和 warning 一样停留 8 秒(见 FileTree.tsx 的自动隐藏),
+   * 也会被随后的成功 / 失败提示顶掉:一条 3 秒就走的"正在准备"对一个 40 秒的下载
+   * 毫无意义,用户只会在剩下的时间里继续以为"点了没反应"。
    */
   type: 'success' | 'error' | 'warning' | 'info';
 };
@@ -51,7 +50,7 @@ export type UseFileTreeOperationsResult = {
   handleCancelDelete: () => void;
   handleConfirmDelete: () => Promise<void>;
   /**
-   * F9:不经确认框直接删一项 —— 批量删除自己已经确认过一次了,
+   * 不经确认框直接删一项:批量删除自己已经确认过一次了,
    * 逐项再弹一次就成了点二十下"确定"。抛错交给调用方计数。
    */
   deleteItemDirectly: (item: FileTreeNode) => Promise<void>;
@@ -69,7 +68,7 @@ export type UseFileTreeOperationsResult = {
   // Other operations
   handleCopyPath: (item: FileTreeNode) => void;
   handleDownload: (item: FileTreeNode) => Promise<void>;
-  /** 批量下载用:一次把选中的全部路径交给服务端,打成**一个**包。 */
+  /** 批量下载用:一次把选中的全部路径交给服务端,打成一个包。 */
   downloadPaths: (paths: string[], label: string) => Promise<void>;
 
   // Loading state
@@ -86,7 +85,6 @@ export function useFileTreeOperations({
 }: UseFileTreeOperationsOptions): UseFileTreeOperationsResult {
   const { t } = useTranslation();
 
-  // State
   const [renamingItem, setRenamingItem] = useState<FileTreeNode | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteConfirmation>({
@@ -99,7 +97,6 @@ export function useFileTreeOperations({
   const [newItemName, setNewItemName] = useState('');
   const [operationLoading, setOperationLoading] = useState(false);
 
-  // Validation
   const validateFilename = useCallback((name: string): string | null => {
     if (!name || !name.trim()) {
       return t('fileTree.validation.emptyName', 'Filename cannot be empty');
@@ -158,7 +155,7 @@ export function useFileTreeOperations({
       onRefresh();
       handleCancelRename();
     } catch (err) {
-      // hl(P3 文件组):失败**不**退出改名态 —— 输入框留着让人改一个名字再试;
+      // 失败不退出改名态:输入框留着让人换个名字再试;
       // 焦点由 FileTree 里的 effect 在 operationLoading 落回 false 后放回输入框。
       showToast((err as Error).message, 'error');
     } finally {
@@ -270,15 +267,10 @@ export function useFileTreeOperations({
     }
   }, [selectedProject, newItemParent, newItemType, newItemName, validateFilename, showToast, t, onRefresh, handleCancelCreate]);
 
-  // Copy path to clipboard.
-  //
-  // The old spelling was `navigator.clipboard.writeText(...).catch(...)`, whose
-  // comment named non-HTTPS as the failure case it handled — but over plain
-  // HTTP `navigator.clipboard` is undefined, so reading .writeText threw a
-  // TypeError before any promise existed and the .catch never ran. It also
-  // announced success synchronously, ahead of the write it was reporting on.
-  // copyTextToClipboard feature-detects, falls back to execCommand, and
-  // resolves to whether the text actually landed.
+  // Copy path to clipboard. Over plain HTTP `navigator.clipboard` is undefined,
+  // so calling it directly throws before any promise exists. copyTextToClipboard
+  // feature-detects, falls back to execCommand, and resolves to whether the text
+  // actually landed, so the toast reports the real outcome.
   const handleCopyPath = useCallback((item: FileTreeNode) => {
     void copyTextToClipboard(item.path).then((copied) =>
       copied
@@ -288,15 +280,13 @@ export function useFileTreeOperations({
   }, [showToast, t]);
 
   /**
-   * 把下载失败的 HTTP 状态翻成一句能看懂的中文。
+   * 把下载失败的 HTTP 状态翻成一句能看懂的话,让用户分得清是没权限还是文件没了。
    *
-   * 之前统一抛 "Failed to download file" —— 中文界面里一句含糊的英文,用户读不出
-   * "到底是没权限还是文件没了",体感就是"点了没反应"。按状态分:401 登录失效、
-   * 403/404 无权限或文件不存在(files/content 对看不见的项目回 404、路径越界回 403),
-   * 其余给出状态码兜底。
+   * 按状态分:401 登录失效、403/404 无权限或文件不存在(files/content 对看不见的项目回 404、
+   * 路径越界回 403),其余给出状态码兜底。
    */
   const describeDownloadFailure = useCallback((status: number, name: string, serverMessage?: string): string => {
-    // hl(P3 文件组):打包名额满时签票就回 429(带中文原因)—— 原样给用户。
+    // 打包名额满时签票就回 429(带中文原因),原样给用户。
     if (status === 429 && serverMessage) {
       return serverMessage;
     }
@@ -327,9 +317,9 @@ export function useFileTreeOperations({
     const { url, kind } = await response.json() as { url: string; kind: 'file' | 'zip' };
 
     // 打包要先在服务端走一遍目录才开始出字节,慢一点;给一句话填上这段静默。
-    // 直传不需要 —— 下载栏是立刻出现的,那本身就是最好的反馈。
-    // hl(P3 文件组):这条 info 现在有 8 秒上限(见 FileTree 的自动隐藏)—— 浏览器导航式下载
-    // 拿不到"完成"事件,永不消失的「正在准备」比没有更糟;打包排队满的失败已在签票时拦下。
+    // 直传不需要:下载栏是立刻出现的,那本身就是最好的反馈。
+    // 这条 info 有 8 秒上限(见 FileTree 的自动隐藏):浏览器导航式下载拿不到"完成"事件,
+    // 永不消失的「正在准备」比没有更糟;打包排队满的失败已在签票时拦下。
     if (kind === 'zip') {
       showToast(
         t('fileTree.toast.downloadPreparing', {
@@ -343,16 +333,12 @@ export function useFileTreeOperations({
   }, [selectedProject, describeDownloadFailure, showToast, t]);
 
   /**
-   * 下载:**签一张票,然后让浏览器自己去下。**
+   * 下载:签一张票,然后让浏览器自己去下。
    *
-   * 以前是 fetch → blob → `a[download]`:整份文件先落进标签页内存,拼完才弹保存框。
-   * 下载是右键菜单里的一项,点完菜单立刻收起、行上没有任何变化 —— 大文件那几十秒
-   * 界面完全是静的,体感就是"点了没反应";几 GB 的文件还会直接把标签页撑崩。
-   * 目录更糟:以前是在**浏览器里**逐个文件读进内存再打 ZIP,峰值约 2× 目录大小。
-   *
-   * 现在两步:先 POST 换一张 5 分钟失效、只指向这一个目标的票(权限、路径、
-   * 文件存在与否全在这一步挡掉,**失败还在 fetch 语境里,弹得出提示**),
-   * 再把带票的 URL 交给浏览器 —— 下载栏立刻出现,进度条是浏览器画的。
+   * 两步:先 POST 换一张 5 分钟失效、只指向这一个目标的票(权限、路径、文件存在与否全在这一步挡掉,
+   * 失败还在 fetch 语境里,弹得出提示),再把带票的 URL 交给浏览器:下载栏立刻出现,进度条是浏览器画的。
+   * 不在标签页里先把整份文件读进内存:下载是右键菜单里的一项,点完菜单就收起,大文件那几十秒界面
+   * 完全是静的;几 GB 的文件还会把标签页撑崩,目录在浏览器里打包峰值约 2× 目录大小。
    *
    * 单个文件 → 直传,有百分比;目录或多选 → 服务端边压边发,只有"已下载 XX MB"
    * (边压边发算不出总大小,JupyterLab 下文件夹也是这样)。
@@ -363,8 +349,8 @@ export function useFileTreeOperations({
     try {
       await downloadPaths([item.path], item.name);
     } catch (err) {
-      // 右键菜单这条路没有别的接错处 —— 这里不接就是一个未处理的 rejection,
-      // 用户什么都看不到。批量那条走 downloadPaths,它照常抛出去给调用方汇总。
+      // 右键菜单这条路没有别的接错处:这里不接就是一个未处理的 rejection,
+      // 用户什么都看不到。批量下载直接调 downloadPaths,错误照常抛给调用方处理。
       showToast((err as Error).message, 'error');
     } finally {
       setOperationLoading(false);

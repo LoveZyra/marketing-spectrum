@@ -54,7 +54,7 @@ export default function MainContentTabSwitcher({
               isActive={isActive}
               onClick={() => setActiveTab(tab.id)}
               className="px-3 py-2.5"
-              // hl(P3 可访问性):lg 以下文字是 hidden 的,按钮只剩图标 —— 读屏器念不出是哪个页签。
+              // lg 以下文字隐藏、按钮只剩图标,显式给 aria-label,读屏器才念得出是哪个页签。
               ariaLabel={displayLabel}
             >
               <tab.icon className="h-4 w-4" strokeWidth={2} aria-hidden="true" />

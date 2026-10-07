@@ -108,12 +108,10 @@ export const projectsDb = {
      * unfiltered list — that is what root gets, and what every caller with no
      * user context (the session watcher, maintenance jobs) gets.
      *
-     * 无主项目的口径(2026-08-14 改)—— 不再一律公开:一个非 root 账号看到的
-     * 无主项目**只有落在公共目录(PRISM_PUBLIC_WORKSPACE)之下的那些**,其余
-     * 无主项目仅 root 可见。这必须和 JS 侧 `canViewerSeeProject` 逐字一致,
-     * 否则列表和逐路由校验会漂移;`project-visibility-parity` 测试盯着这一点。
-     * 公共目录未配置时,`buildPublicPathClause` 返回一个恒假条件,于是无主项目
-     * 对非 root 完全不可见 —— 正是要的默认。
+     * 无主项目的口径:非 root 账号只看得到落在公共目录(PRISM_PUBLIC_WORKSPACE)之下的那些,
+     * 其余无主项目仅 root 可见。这必须和 JS 侧 `canViewerSeeProject` 逐字一致,否则列表和
+     * 逐路由校验会漂移,`tests/visibility-parity.test.ts` 盯着这一点。公共目录未配置时,
+     * `buildPublicPathClause` 返回一个恒假条件,无主项目对非 root 完全不可见。
      */
     getProjectPaths(visibleTo: number | null = null): ProjectRepositoryRow[] {
         const db = getConnection();
@@ -363,9 +361,9 @@ export const projectsDb = {
     /**
      * 所有项目行(含归档),只取清理要用的两列。
      *
-     * ep:给「清掉 Prism 自己跑出来的幽灵项目」用 —— 那种行必须**按真实路径**判,
-     * 而按路径判就得把全表过一遍(路径形状不是前缀相等,判据在
-     * `isPrismInternalProjectPath` 里)。项目表是几十到几百行的量级,全表扫没问题。
+     * 给「清掉 Prism 自己跑出来的幽灵项目」用:那种行必须按真实路径判,而按路径判就得把全表过一遍
+     * (路径形状不是前缀相等,判据在 `isPrismInternalProjectPath` 里)。项目表是几十到几百行的量级,
+     * 全表扫没问题。
      */
     listAllProjectPaths(): Array<{ project_id: string; project_path: string }> {
         return cachedPrepare(getConnection(), 'SELECT project_id, project_path FROM projects')

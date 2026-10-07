@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 
 type DiffLine = {
   type: string;
@@ -17,7 +18,8 @@ interface ToolDiffViewerProps {
 }
 
 /**
- * Compact diff viewer — VS Code-style
+ * Compact diff for Edit / Write / ApplyPatch: a file header with a badge, then the
+ * +/- lines (capped at MAX_RENDERED_DIFF_LINES).
  */
 export const ToolDiffViewer: React.FC<ToolDiffViewerProps> = ({
   oldContent,
@@ -28,6 +30,7 @@ export const ToolDiffViewer: React.FC<ToolDiffViewerProps> = ({
   badge = 'Diff',
   badgeColor = 'gray'
 }) => {
+  const { t } = useTranslation('chat');
   const badgeClasses = badgeColor === 'green'
     ? 'bg-primary/[0.08] text-card-foreground dark:text-primary'
     : 'bg-muted text-muted-foreground';
@@ -42,7 +45,7 @@ export const ToolDiffViewer: React.FC<ToolDiffViewerProps> = ({
     [createDiff, oldContent, newContent]
   );
 
-  /** fj:单次渲染的 diff 行上限 —— 超出的用一行提示代替(见下面的说明)。 */
+  /** 单次渲染的 diff 行上限,超出部分用一行提示代替(原因见下方渲染处)。 */
   const MAX_RENDERED_DIFF_LINES = 500;
   const visibleDiffLines = diffLines.length > MAX_RENDERED_DIFF_LINES
     ? diffLines.slice(0, MAX_RENDERED_DIFF_LINES)
@@ -95,16 +98,15 @@ export const ToolDiffViewer: React.FC<ToolDiffViewerProps> = ({
           </div>
         ))}
         {/*
-          * fj:超长 diff 只渲染前 N 行。
-          *
-          * 这里原来是无上限的 `diffLines.map`,每行两个 `<span>`;而
-          * `defaultOpen: false` 只是 CSS(`CollapsibleContent` 永远渲染 children),
-          * 所以点开一条写了几千上万行文件的 Write,一次点击就生成几万个 DOM
-          * 节点,主线程冻住数秒到数十秒。
+          * 超长 diff 只渲染前 N 行:每行两个 `<span>`,展开一条写了上万行文件的 Write
+          * 会一次生成几万个 DOM 节点,主线程卡住数秒以上。
           */}
         {hiddenDiffLineCount > 0 && (
           <div className="px-2 py-1 text-[11px] text-muted-foreground">
-            还有 {hiddenDiffLineCount} 行未显示 —— 完整内容请打开文件查看。
+            {t('details.diffHiddenLines', {
+              count: hiddenDiffLineCount,
+              defaultValue: '还有 {{count}} 行未显示 —— 完整内容请打开文件查看。',
+            })}
           </div>
         )}
       </div>

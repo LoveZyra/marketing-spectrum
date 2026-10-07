@@ -31,9 +31,9 @@ type ShellIncomingMessage = {
   initialCommand?: string;
   isPlainShell?: boolean;
   forceRestart?: boolean;
-  /** F10:多标签时每个终端一个 id;不传则与改动前行为逐字一致。 */
+  /** 多标签时每个终端一个 id,拼进 PTY 键;不传则同一用户、项目、会话共用一个终端。 */
   terminalId?: string;
-  /** hm(A3.3):接管时这段对话在 chat 里的权限档位(前端从 localStorage 读来),服务端再过白名单与策略。 */
+  /** 接管时这段对话在 chat 里的权限档位(前端从 localStorage 读来),服务端再过白名单与策略。 */
   permissionMode?: string;
 };
 
@@ -57,7 +57,7 @@ type PtySessionEntry = {
   isTakeover: boolean;
   /** 被接管的 app 会话 id,断开时用它释放占用。 */
   claimedSessionId: string | null;
-  /** fj:接管令牌 —— 释放时出示,防止把别人刚建立的那把锁删掉(见 conversation-ownership)。 */
+  /** 接管令牌:释放时出示,防止把别人刚建立的那把锁删掉(见 conversation-ownership)。 */
   claimToken?: string | null;
 };
 
@@ -65,7 +65,7 @@ const ptySessionsMap = new Map<string, PtySessionEntry>();
 const PTY_SESSION_TIMEOUT = 30 * 60 * 1000;
 const SHELL_URL_PARSE_BUFFER_LIMIT = 32768;
 /**
- * 回放缓冲的字节预算。老的上限只数**条数**(5000 chunk),而 chunk 大小不设限 ——
+ * 回放缓冲的字节预算。老的上限只数条数(5000 chunk),而 chunk 大小不设限 ——
  * 终端里 `cat` 一个大文件,单个 PTY 的缓冲能挂住几十 MB 直到 30 分钟超时回收
  * (chat 侧的 run registry 早改成字节预算了,这里当时漏掉)。2MiB 足够回放一屏
  * 滚动历史;超预算从头部裁,行为与旧的 shift 一致。
@@ -80,8 +80,8 @@ type ShellWebSocketDependencies = {
    */
   releaseConversation?: (providerSessionId: string) => Promise<{ released: boolean; reason: string }>;
   /**
-   * hm(A3.3):接管命令里的 `--permission-mode` 过服务端策略(PRISM_ALLOW_BYPASS_USERS 降级、
-   * root 下的 bypass 说明)。由组合根注入 —— 策略住在 claude-sdk.js,模块不 import 它。
+   * 接管命令里的 `--permission-mode` 过服务端策略(PRISM_ALLOW_BYPASS_USERS 降级、
+   * root 下的 bypass 说明)。由组合根注入:策略住在 claude-sdk.js,模块不 import 它。
    * 不注入时只做白名单,不降级。
    */
   policeTakeoverPermissionMode?: (
@@ -137,8 +137,8 @@ const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9_.\-:]+$/;
 /**
  * 终端为什么没能接管这段对话。
  *
- * 以前这里只有"能/不能"两种结果,不能的时候静默退回一个全新的 `claude` —— 用户
- * 以为在继续原来的对话,其实在跟一段空白记录说话,而且没有任何提示。
+ * 不能只有"能 / 不能"两种结果:不能时静默退回一个全新的 `claude`,用户会以为在继续原来的对话,
+ * 其实在跟一段空白记录说话。
  */
 type ResumeResolution =
   | { ok: true; sessionId: string }
@@ -164,9 +164,9 @@ function resolveResumeSessionId(
     resumeSessionId = undefined;
   }
 
-  // null 与 undefined 意思不同,以前被合并处理了:null 是"查过了,这个会话还没有
-  // provider 端的 id"(第一轮还没跑完,或者第一轮失败了),undefined 是"查询本身
-  // 出错"。前者退回 app id 去 resume 必然失败,所以分开报。
+  // null 与 undefined 意思不同,要分开处理:null 是"查过了,这个会话还没有 provider 端的 id"
+  // (第一轮还没跑完,或者第一轮失败了),undefined 是"查询本身出错"。前者退回 app id 去 resume
+  // 必然失败,所以单独报。
   if (resumeSessionId === null) {
     return { ok: false, reason: 'not_recorded' };
   }
@@ -180,20 +180,7 @@ function resolveResumeSessionId(
 }
 
 /**
- * Resolves provider command line for plain shell and agent-backed shell modes.
- */
-/**
- * 终端里跑什么。
- *
- * 默认是**普通终端**,不再自动 `claude --resume`。以前只要选中了会话,打开 Shell
- * 就会另起一个 Claude 进程接管同一段对话,而 chat 那边的常驻 runtime 还活着 ——
- * 两个进程往同一份 transcript 上写,谁也看不见谁。而 Shell 面板真正不可替代的
- * 用途是"在项目目录里跑命令"(git、测试、脚本),那件事不需要第二个 Claude。
- *
- * 要在终端里继续对话仍然可以,但要显式接管(`takeover`),走释放 → 交接的流程。
- */
-/**
- * hm(A3.3):接管命令里能出现的档位 —— 要拼进 `bash -c` 串,只收白名单里的字面量。
+ * 接管命令里能出现的档位:要拼进 `bash -c` 串,只收白名单里的字面量。
  * `auto` 映射成 `default`(网关给不了 auto 的分类器;与 claude-sdk.js 的 VALID_PERMISSION_MODES 同口径),
  * 其余认不出来的一律 `default`。
  */
@@ -204,6 +191,15 @@ export function normalizeTakeoverPermissionMode(value: unknown): string {
   return TAKEOVER_PERMISSION_MODES.has(mode) ? mode : 'default';
 }
 
+/**
+ * Resolves provider command line for plain shell and agent-backed shell modes.
+ *
+ * 终端里跑什么:默认是普通终端,不自动 `claude --resume`。chat 那边的常驻 runtime 可能还活着,另起一个
+ * Claude 进程接管同一段对话,就是两个进程往同一份 transcript 上写,谁也看不见谁。Shell 面板
+ * 真正不可替代的用途是在项目目录里跑命令(git、测试、脚本),不需要第二个 Claude。
+ *
+ * 要在终端里继续对话仍然可以,但要显式接管(`takeover`),走释放 → 交接的流程。
+ */
 export function buildShellCommand(
   message: ShellIncomingMessage,
   resume: ResumeResolution,
@@ -215,7 +211,7 @@ export function buildShellCommand(
 
   if (initialCommand) {
     /*
-     * hm(A2):登录弹窗发来的是 `claude --dangerously-skip-permissions /login` 这类串 ——
+     * 登录弹窗发来的是 `claude --dangerously-skip-permissions /login` 这类串:
      * 开头的 `claude` 换成 Prism 实际用的那一个(`CLAUDE_CLI_PATH` 显式配了就是它),
      * 免得登录的是 PATH 上另一个版本的 CLI。其余命令原样。
      */
@@ -225,7 +221,7 @@ export function buildShellCommand(
   }
 
   if (wantsTakeover && resume.ok) {
-    // hm(A3.3):显式带档位 —— CLI 2.1.283/2.1.284 起交互式会话不指定就进 auto。
+    // 显式带档位:CLI(2.1.283 起)的交互式会话不指定档位就进 auto。
     const mode = normalizeTakeoverPermissionMode(options.permissionMode);
     return `${claudeCommand} --resume "${resume.sessionId}" --permission-mode ${mode}`;
   }
@@ -291,14 +287,11 @@ function prioritizeUserNpmGlobalBin(env: NodeJS.ProcessEnv): { key: string; valu
 }
 
 /**
- * Handles websocket connections used by the standalone shell terminal UI.
- */
-/**
- * PTY 池快照(F6 管理面)。**只读**,不碰任何状态。
+ * PTY 池快照,给管理面用。只读,不碰任何状态。
  *
  * PTY 是最容易悄悄堆起来的一类资源:每个都是一个 shell 子进程,断开后还留
  * 30 分钟等重连,回放缓冲各自最多 2 MiB。面板要能一眼看出"有没有堆着"、
- * "缓冲吃了多少内存",以及**挂在谁头上** —— 键的前缀 `u<userId>_` 就是账号。
+ * "缓冲吃了多少内存",以及挂在谁头上 —— 键的前缀 `u<userId>_` 就是账号。
  */
 export function getPtyPoolStats(): {
   count: number;
@@ -334,6 +327,9 @@ export function getPtyPoolStats(): {
   };
 }
 
+/**
+ * Handles websocket connections used by the standalone shell terminal UI.
+ */
 export function handleShellConnection(
   ws: WebSocket,
   request: AuthenticatedWebSocketRequest,
@@ -348,14 +344,11 @@ export function handleShellConnection(
   const connectionViewer = readSocketViewer(ws);
 
   /**
-   * ga:**心跳里那道"凭据被吊销就断开"的复检,对终端连接此前恒不触发。**
+   * 终端连接也要盖握手时的 `token_version`。
    *
-   * 复检比的是握手时盖的 `prismTokenVersion` 与当前值 —— 而 `stampSocketViewer`
-   * 只盖身份、不盖版本号,聊天那条路是**另外单独盖**的(chat-websocket 里那一段)。
-   * 于是「退出所有设备」/ 改密码之后,已经建立的终端连接一直有效,
-   * 还捏着它接管的那把会话锁。
-   *
-   * 一个判据两条连接都要盖 —— 这正是"同一件事只写在一部分入口上"的形状。
+   * 心跳里"凭据被吊销就断开"的复检比的是握手时盖的 `prismTokenVersion` 与当前值,而
+   * `stampSocketViewer` 只盖身份、不盖版本号(聊天连接在 chat-websocket 里另外盖)。不盖的话,
+   * 「退出所有设备」/ 改密码之后,已建立的终端连接一直有效,还捏着它接管的那把会话锁。
    */
   (ws as typeof ws & { prismTokenVersion?: number | null }).prismTokenVersion =
     connectionViewer.userId !== null && connectionViewer.userId !== undefined
@@ -382,12 +375,11 @@ export function handleShellConnection(
         const initialCommand = readString(data.initialCommand);
         const forceRestart = readBoolean(data.forceRestart);
         /**
-         * F10:终端多标签。
+         * 终端多标签。
          *
-         * PTY 的复用键此前是 `u<用户>_<项目路径>_<会话|default>`,于是同一个项目
-         * 下开第二个终端会**连到第一个的 PTY 上** —— 两个标签共享一个 shell,
-         * 输出互相串,关一个另一个也跟着哑。客户端给每个标签一个 id,键里带上它,
-         * 各自一个 PTY;不带 id 的老客户端落到空后缀,行为与改动前逐字一致。
+         * PTY 复用键带上客户端给每个标签的 id,各自一个 PTY;否则同一个项目下开第二个终端会连到
+         * 第一个的 PTY 上,两个标签共享一个 shell,输出互相串。不带 id 的客户端落到空后缀,
+         * 一个项目一个 PTY。
          *
          * 只取字母数字和连字符:这个值直接进键,不能让它带进分隔符或路径片段。
          */
@@ -511,21 +503,15 @@ export function handleShellConnection(
         const appSessionId = readString(data.sessionId);
 
         /**
-         * ga:**接管一段对话之前,先确认这个人看得见它。**
+         * 接管一段对话之前,先确认这个人看得见它。
          *
-         * 这个文件里此前 `canViewerSeeSession` 出现次数是 **0** —— 接管只按
-         * 会话 id 查库,不带 viewer。而拿到锁之后聊天侧**四处无条件认它**:
-         * `chat.send` 回 SESSION_HELD_BY_SHELL、`startRun` 直接返回 null、
-         * 预热跳过、删会话被挡;释放时还会
-         * `sessionMessagesDb.deleteForSession(appSessionId)` ——
-         * **把那条会话的整份显示日志删掉**。
+         * 拿到锁之后聊天侧四处无条件认它:`chat.send` 回 SESSION_HELD_BY_SHELL、`startRun` 直接返回 null、
+         * 预热跳过、删会话被挡;释放时还会 `sessionMessagesDb.deleteForSession(appSessionId)`,删掉那条
+         * 会话的整份显示日志。不判可见性的话,知道一个会话 id(就在地址栏里)就能抢走别人的对话、
+         * 让他发不出消息,最后在关终端时清空他的历史。
          *
-         * 也就是说:知道一个会话 id(它就在浏览器地址栏里)就能把别人的对话
-         * 抢过来、让他发不出消息、最后在关掉终端时把他的历史清空。
-         *
-         * 这里判的是**要接管的那条会话**(带 sessionId 才有接管这回事);
-         * 不带 sessionId 的普通终端不受影响。判不过一律按"没有可恢复的记录"
-         * 处理,不给存在性探针 —— 与其它端点的 404 同形口径一致。
+         * 判的是要接管的那条会话(带 sessionId 才有接管这回事),不带 sessionId 的普通终端不受影响。
+         * 判不过只回"不存在或没有权限",不区分两种情况,不给存在性探针,与其他端点的 404 同形口径一致。
          */
         const takeoverSessionId = appSessionId || (resume.ok ? resume.sessionId : '');
         if (takeoverSessionId && !canViewerSeeSession(takeoverSessionId, connectionViewer)) {
@@ -537,15 +523,13 @@ export function handleShellConnection(
           return;
         }
         // 身份在连接建立时就盖好了(见 handleShellConnection 顶部),这里直接用。
-        // 原来这里是手抄的一份 `ws.prismUserId` 读取 —— 而 shell 连接从来没被
-        // 盖过章,所以它读到的永远是 null。
         const viewer = connectionViewer;
 
         // 接管前先把 chat 那边的 runtime 放掉。顺序不能反:先起 CLI 再释放,中间
         // 那一小段就是两个进程同时写同一份 transcript,正是要消掉的东西。
         let takeoverNote = '';
         let takeoverGranted = false;
-        // fj:接管令牌 —— 释放时出示(见 conversation-ownership 的说明)。
+        // 接管令牌:释放时出示(见 conversation-ownership 的说明)。
         let claimToken: string | null = null;
         if (wantsTakeover) {
           if (!resume.ok) {
@@ -554,28 +538,23 @@ export function handleShellConnection(
               : '\x1b[33m无法解析这段对话的会话 id,已为你打开普通终端。\x1b[0m\r\n';
           } else if (chatRunRegistry.isProcessing(appSessionId || resume.sessionId)) {
             /**
-             * fz:**"有没有回合在跑"要问回合注册表,不是问常驻子进程。**
+             * "有没有回合在跑"要问回合注册表,不是问常驻子进程。
              *
-             * 下面那条 `releaseConversation` 走的是 `releaseClaudeSession`,
-             * 它看的是 `claudeRuntimes` 里那个**常驻**运行时有没有 `turn` ——
-             * 相当于"看某一张固定的椅子上有没有人坐着"。可还有两类回合根本不建
-             * 常驻运行时(定时任务、外部 Agent API,它们都带 `oneShot: true`),
-             * 它们**站着写**:椅子永远是空的,于是接管一路放行,两个 CLI 进程
-             * 同时往同一份 jsonl 追加,两条历史交错谁也修不回来;用户关掉终端时
-             * 那套清账还会把整份显示日志删掉重抄,而原始 transcript 已经花了。
+             * 下面的 `releaseConversation` 走 `releaseClaudeSession`,看的是 `claudeRuntimes` 里那个常驻
+             * 运行时有没有 `turn`。定时任务、外部 Agent API 的回合(都带 `oneShot: true`)根本不建常驻运行时,
+             * 只看那里会一路放行接管:两个 CLI 进程同时往同一份 jsonl 追加,两条历史交错修不回来;
+             * 关掉终端时的清账还会把整份显示日志删掉重抄,而原始 transcript 已经花了。
              *
-             * `chatRunRegistry` 是"这条会话有没有东西在跑"的唯一权威(它自己的
-             * 文档原话),而 shell 这条路一次都没查过它。放在 `releaseConversation`
-             * **之前**:先问权威,权威说在跑就直接不放行,连释放都不用试。
+             * `chatRunRegistry` 是"这条会话有没有东西在跑"的唯一权威。放在 `releaseConversation` 之前:
+             * 权威说在跑就直接不放行,连释放都不用试。
              */
             takeoverNote = '\x1b[33mchat 里有一轮对话正在进行(也可能是定时任务或外部接口触发的),现在接管会打断它。等它跑完再试。已为你打开普通终端。\x1b[0m\r\n';
           } else if (dependencies.releaseConversation) {
             const released = await dependencies.releaseConversation(resume.sessionId);
             if (released.released) {
               /**
-               * fl:拿不到 token = 这段对话**已经被别人的终端接管着**
-               * (claimForShell 不再盲覆盖)。不能当成接管成功 —— 那会变成两个
-               * PTY 同时写同一份 transcript。
+               * 拿不到 token 说明这段对话已经被别人的终端接管着(claimForShell 不覆盖已有的锁)。
+               * 不能当成接管成功,否则会是两个 PTY 同时写同一份 transcript。
                */
               const claim = claimForShell(appSessionId || resume.sessionId, viewer);
               if (claim.token) {
@@ -605,8 +584,8 @@ export function handleShellConnection(
         }
 
         /*
-         * hm(A3.3):接管用的档位 = chat 里这段对话的档位(前端带来),过白名单与服务端策略。
-         * root 下选了 bypass、而 CLI 会拒 —— 退回 default 并在终端里说一声,而不是让 CLI 立刻退出。
+         * 接管用的档位 = chat 里这段对话的档位(前端带来),过白名单与服务端策略。
+         * root 下选了 bypass 而 CLI 会拒时,退回 default 并在终端里说一声,而不是让 CLI 立刻退出。
          */
         let takeoverMode = normalizeTakeoverPermissionMode(data.permissionMode);
         if (takeoverGranted && dependencies.policeTakeoverPermissionMode) {
@@ -631,9 +610,8 @@ export function handleShellConnection(
         const termRows = readNumber(data.rows, 24);
         const prioritizedPath = prioritizeUserNpmGlobalBin(process.env);
         /*
-         * hm(A2 / Q10):SDK 随包 claude 所在目录放到 PATH 最前 —— 终端里敲 `claude`、接管、登录
-         * 与对话用同一个版本。`CLAUDE_CLI_PATH` 配成路径就放它的目录;配成裸命令名(`claude`)不动 PATH
-         * (运维要退回全局 CLI)。
+         * SDK 随包 claude 所在目录放到 PATH 最前:终端里敲 `claude`、接管、登录与对话用同一个版本。
+         * `CLAUDE_CLI_PATH` 配成路径就放它的目录;配成裸命令名(`claude`)不动 PATH(运维要退回全局 CLI)。
          * `DISABLE_AUTOUPDATER=1`:终端里的 claude 不自己去装新版本(装到 ~/.local/bin 会变成
          * cron 与别的入口用的那个)。
          */
@@ -650,7 +628,7 @@ export function handleShellConnection(
           env: {
             ...ptyEnv,
             DISABLE_AUTOUPDATER: '1',
-            // hm(复审):接管后任务清单工具别凭空消失 —— 与对话里的 CLI 一致(见 buildClaudeSdkEnv)
+            // 接管后任务清单工具不能凭空消失:与对话里的 CLI 一致(见 buildClaudeSdkEnv)
             CLAUDE_CODE_ENABLE_TODO_TOOLS: '1',
             TERM: 'xterm-256color',
             COLORTERM: 'truecolor',
@@ -786,8 +764,8 @@ export function handleShellConnection(
           }
         });
 
-        // 说清楚这个终端是什么。以前"接管失败"和"正常新会话"打的是同一句话,
-        // 用户没有任何线索知道自己在跟一段空白记录说话。
+        // 说清楚这个终端是什么:"接管失败"和"正常新会话"要打不同的话,
+        // 否则用户不知道自己在跟一段空白记录说话。
         let welcomeMsg = takeoverGranted
           ? `\x1b[36m已接管对话 ${resume.ok ? resume.sessionId : ''},chat 侧运行时已释放。退出终端后 chat 可继续。\x1b[0m\r\n`
           : `\x1b[36m终端已就绪:${projectPath}\x1b[0m\r\n`;

@@ -86,7 +86,7 @@ export const uploadFormDataWithProgress = <T = Record<string, unknown>>(
     xhr.onload = () => {
       // Same sliding-session refresh authenticatedFetch performs, via the
       // shared guard: malformed headers and tokens belonging to a different
-      // user (cache replay / account-switch race) are both dropped (dj).
+      // user (cache replay / account-switch race) are both dropped.
       installRefreshedToken(xhr.getResponseHeader('X-Refreshed-Token'));
 
       const payload = parseJsonBody(xhr);
@@ -96,11 +96,8 @@ export const uploadFormDataWithProgress = <T = Record<string, unknown>>(
       }
 
       /**
-       * dv:401 的处置也要镜像过来(本文件开头那句"authenticatedFetch 学到的
-       * 都得在这里同步一遍"此前只兑现了续期头那一半)。缺了它,令牌被撤销时
-       * 传大文件的人只看到一句 "Upload failed (401)":不弹"登录已过期"、
-       * 不派发 session-expired、也不跳登录 —— 正是 api.js 注释里描述的
-       * "点了没反应"旧病在上传路径上的残留。
+       * 401 的处置也要与 authenticatedFetch 一致(见本文件开头)。缺了它,令牌被撤销时传大文件的人
+       * 只看到一句 "Upload failed (401)":不弹"登录已过期"、不派发 session-expired、也不跳登录。
        */
       if (xhr.status === 401) {
         handleSessionExpired();

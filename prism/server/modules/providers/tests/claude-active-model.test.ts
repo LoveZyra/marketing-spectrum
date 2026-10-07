@@ -66,8 +66,8 @@ describe('/models 报告的当前模型', () => {
 
     const active = await new ClaudeProviderModels().getCurrentActiveModel(APP_SESSION_ID);
 
-    // 曾经这里返回 'default':对话记录里每条事件带的都是 Claude 自己的
-    // session id,拿 app id 去比一律不匹配,于是整份记录都被跳过。
+    // 对话记录里每条事件带的都是 Claude 自己的 session id;拿 app id 去比会一律不匹配,
+    // 整份记录都被跳过,结果退回 'default'。
     assert.equal(active.model, 'claude-opus-4-1');
   });
 
@@ -103,7 +103,6 @@ describe('/models 报告的当前模型', () => {
     assert.equal(active.model, 'default');
   });
 
-  // bx / E4:超过 64KB 的大 transcript 走尾读,不整读也要读出最新模型。
   test('大 transcript(>64KB)只读尾部也能读出最近模型', async () => {
     tempDirectory = await mkdtemp(path.join(tmpdir(), 'claude-active-model-big-'));
     previousDataDir = process.env.PRISM_DATA_DIR;

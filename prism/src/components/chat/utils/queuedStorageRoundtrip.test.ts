@@ -4,14 +4,13 @@ import { readQueuedMessage, writeQueuedMessage, claimQueuedMessageAs, queuedMess
 import { fromStoredCommand, toStoredCommand, restoredEntry, type SendCommand } from './sendCommand';
 
 /**
- * fz:**这条测试必须真的走一遍 localStorage。**
+ * 这条测试必须真的走一遍 localStorage。
  *
- * 老的那条(outboxLifecycle.test.ts)拿 `toStoredCommand(...)` 的返回值直接喂
- * `fromStoredCommand`,中间没经过存储 —— 于是 `readQueuedMessage` 把七个字段
- * 削成两个这件事,一条测试都红不起来。凡是跨存储的边界,测试必须真的跨过去。
+ * 只把 `toStoredCommand(...)` 的返回值直接喂 `fromStoredCommand`(outboxLifecycle.test.ts 的做法)
+ * 不经过存储,`readQueuedMessage` 丢字段时一条测试都红不起来。凡是跨存储的边界,测试必须真的跨过去。
  */
 /**
- * 测试环境是 node,没有 localStorage。这里装一个**真的会序列化**的内存实现 ——
+ * 测试环境是 node,没有 localStorage。这里装一个真的会序列化的内存实现 ——
  * 关键就在于让 JSON 的写入与读出真的发生一次,而不是把对象直接传过去。
  */
 const store = new Map<string, string>();
@@ -42,7 +41,7 @@ const command = (over: Partial<SendCommand> = {}): SendCommand => ({
 } as SendCommand);
 
 describe('排队命令的存储往返', () => {
-  it('**写进去七项,读回来还是七项**', () => {
+  it('写进去七项,读回来还是七项', () => {
     writeQueuedMessage('S', toStoredCommand(command()));
     const back = readQueuedMessage('S') as Record<string, unknown> | null;
     expect(back).not.toBeNull();
@@ -54,7 +53,7 @@ describe('排队命令的存储往返', () => {
     expect(back?.namingText).toBe('看这张图');
   });
 
-  it('**附件还在 → 恢复成 queued**(不是"以为没图,照发")', () => {
+  it('附件还在 → 恢复成 queued(不是"以为没图,照发")', () => {
     writeQueuedMessage('S', toStoredCommand(command()));
     const stored = readQueuedMessage('S') as never;
     const entry = restoredEntry(fromStoredCommand(stored, { sessionKey: 'S', sessionId: 'S', projectId: 'P' }));
@@ -63,7 +62,7 @@ describe('排队命令的存储往返', () => {
     expect(entry?.command.clientMessageId).toBe('cmd_abc_123');
   });
 
-  it('**附件真丢了 → needs_attachment,停下来等用户**(F12 那道保险)', () => {
+  it('附件真丢了 → needs_attachment,停下来等用户', () => {
     const stored = { ...toStoredCommand(command()), images: [] };
     writeQueuedMessage('S', stored as never);
     const back = readQueuedMessage('S') as never;
@@ -71,7 +70,7 @@ describe('排队命令的存储往返', () => {
     expect(entry?.status).toBe('needs_attachment');
   });
 
-  it('**认领不许把盘上那份削平** —— 认领只该盖个戳', () => {
+  it('认领不许把盘上那份削平 —— 认领只该盖个戳', () => {
     writeQueuedMessage('S', toStoredCommand(command()));
     claimQueuedMessageAs('S', 'tab-1', 1000);
     const back = readQueuedMessage('S') as Record<string, unknown> | null;

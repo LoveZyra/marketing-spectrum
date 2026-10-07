@@ -111,18 +111,16 @@ const SUMMARY_TEXT: Record<ActivityIconKey, { key: string; fallback: string }> =
 /**
  * 活动时间轴 —— 一轮里的思考与工具调用按发生顺序排在同一条竖线上。
  *
- * **默认展开多少,取决于这一轮跑完没有**:
- * - 还在跑:只摊开最新 3 步 —— 正在看的永远是"现在在干什么",更早的先收起来;
- * - 已跑完:**无论几步都整段收成抬头那一行** —— 做完的活儿不该继续占着屏幕。
+ * 默认露出多少(规则见 planActivityFold):
+ * - 正在跑的这一轮、正文还没开始写:只露最新 3 步,更早的折起;不足 3 步全露;
+ * - 正文一出现(或回合已结束):无论几步都整段收成抬头那一行。
+ * 两种情况都可以点抬头展开全部。
  *
- * 两种情况都点抬头展开全部。进行中且不足 3 步的段全摊着,没什么可折的。
+ * 竖线由每行图标下方那一截拼成:`flex-1` 撑到本行底部,末行不画。线起于第一个图标、
+ * 止于最后一个图标;某一行展开后它那一截跟着拉长,竖线贯穿展开区不断开。
  *
- * 竖线是每行图标下方那一截拼出来的:`flex-1` 撑到本行底部,末行不画。于是线
- * 正好起于第一个图标、止于最后一个图标;某一行展开后,它这一截自然拉长,
- * 竖线继续贯穿展开区,不会断(ej 修:此前写死 10px,展开就断)。
- *
- * 每行只给一句人话(工具自带 description 就用它),原始命令、参数、输出都收在
- * 展开区里 —— 展开走的还是既有的 MessageComponent,渲染能力一项不减。
+ * 每行只给一句人话(工具自带 description 就用它),原始命令、参数、输出收在展开区里,
+ * 展开区复用 MessageComponent 渲染。
  */
 function ActivityTimeline({
   group,
@@ -144,25 +142,24 @@ function ActivityTimeline({
   /**
    * 用户手动定过的展开状态,`null` = 跟着自动规则走。
    *
-   * 以前这里是一个布尔 `isRunOpen`("是否展开全部"),自动规则一变它就表达不了
-   * "我手动收起来了" —— 抬头现在只要有一行就出现,而这一行可能一条都没折,
-   * 点它必须是**收起**,布尔那套只能在"展开全部 / 回到自动"之间来回。
+   * 是三态而不是"是否展开全部"的布尔:抬头只要有一行就出现,而那一行可能一条都没折,
+   * 这时点它必须是「收起」,所以要能表达"手动收起"。
    */
   const [manualFold, setManualFold] = useState<'open' | 'closed' | null>(null);
   /**
-   * gh:用户点「收起」时如果收到的是 0 行(段内 ≤3 行、或回合已结束),就记住"收到 0"。
-   * 否则回合还在跑、第 4 步一到,`collapsedVisibleCount` 从 0 变 3,三行在用户
+   * 用户点「收起」时如果收到的是 0 行(段内 ≤3 行、或正文已出现),就记住"收到 0"。
+   * 否则回合还在跑、第 4 步一到,`collapsedVisibleCount` 从 0 变 3,三行会在用户
    * 明确收起的抬头下面自己弹出来,而 manualFold 仍是 closed、再点一次反而全开。
    * 用户反向点开时清掉。
    */
   const closedToZeroRef = useRef(false);
   /**
-   * gh:**"正文出现了"要坐实 250ms 才算数。**
+   * "正文出现了"要坐实 250ms 才算数。
    *
    * 每条助手 text 都是 'reply',于是 `[组][text]` 一到,keepTailOpen 翻假、整段折起;
    * 下一帧 tool_use 到达,text 被吸进组里,keepTailOpen 又翻真、整段展开 ——
-   * 一段跑 30 步的回合里每句「Now let me check X」都让时间轴缩一下再长回来。
-   * 这里只把 true→false 这一个方向延后 250ms:真正的正文(后面不再有工具)照旧折,
+   * 一段跑 30 步的回合里每句「Now let me check X」都会让时间轴缩一下再长回来。
+   * 所以只把 true→false 这一个方向延后 250ms:真正的正文(后面不再有工具)照旧折,
    * 只是晚一眨眼;要被吸收的过渡正文在这 250ms 里就被吸收了,不再抖。
    */
   const settledKeepTail = useSettledTrue(keepTailOpen, 250);
@@ -192,20 +189,18 @@ function ActivityTimeline({
     .map(({ key, count }) => t(SUMMARY_TEXT[key].key, { count, defaultValue: SUMMARY_TEXT[key].fallback }))
     .join(' · ');
 
-  // 这一轮还有没有在跑的步骤 —— 决定收起时留几行(规则见 planActivityFold)。
-  // 折不折看的是**回合有没有结束**,而不是这一段里还有没有工具在跑 ——
-  // 后者会在最后一个工具刚返回、正文还没开始写的那一刻把整段塌掉(见 planActivityFold)。
+  // 这一段里还有没有在跑的步骤:只用于抬头右端的「运行中」。折不折不看它(看正文出没出现,
+  // 见 planActivityFold),否则会在最后一个工具刚返回、正文还没开始写的那一刻把整段塌掉。
   const hasRunning = rows.some((row) => row.summary?.status === 'running');
   // 抬头右端的整段耗时:把各行耗时加起来(没有一行报出耗时就不显示)。
   const runDuration = useMemo(() => formatRunDuration(group.messages), [group.messages]);
   // 自动规则(见 planActivityFold):正文没出现前留尾部三行,出现后整段收起。
   const auto = planActivityFold(rows.length, settledKeepTail);
   /**
-   * 手动定过就以手动为准 —— 用户明确点过的状态不该被下一次自动重算冲掉。
+   * 手动定过就以手动为准:用户明确点过的状态不该被下一次自动重算冲掉。
    *
-   * gb:**手动"收起"的目标不再是写死的 0**,而是与自动规则同一个判据
-   * (`collapsedVisibleCount`):回合还在跑就留尾部三行,回合结束才收干净。
-   * 写死 0 时,一轮跑到几十步点一下收起,正在跑的那几步也一起没了,
+   * 手动「收起」与自动规则用同一个判据(`collapsedVisibleCount`):正文没出现前留尾部三行,
+   * 之后才收干净。否则一轮跑到几十步时点一下收起,正在跑的那几步也看不到了,
    * 而且这一轮剩下的全程都不再露出来(manualFold 压过自动规则)。
    */
   const collapsedCount = collapsedVisibleCount(rows.length, settledKeepTail);
@@ -220,12 +215,12 @@ function ActivityTimeline({
   const isFullyOpen = rows.length > 0 && visibleCount >= rows.length;
 
   /**
-   * 收尾折叠走**高度过渡**,不是瞬间卸载。
+   * 收尾折叠走高度过渡,不是瞬间卸载。
    *
-   * 回合结束时 `visibleCount` 从 3 掉到 0,如果直接把行卸载,几百像素当场消失 ——
-   * 页面"啪"地跳一下。这里让行**留在 DOM 里**,由容器从 `1fr` 过渡到 `0fr`
+   * 正文出现时 `visibleCount` 从 3 掉到 0,如果直接把行卸载,几百像素当场消失,
+   * 页面"啪"地跳一下。所以行留在 DOM 里,由容器从 `1fr` 过渡到 `0fr`
    * (grid 的收起技巧,不需要量高度),看着是收进抬头,而不是凭空不见。
-   * 代价是每段多留 3 行不可见的 DOM,换一次不刺眼的收尾。
+   * 代价是每段多留 3 行不可见的 DOM。
    */
   const rowsCollapsed = visibleCount === 0;
   const visibleRows = isFullyOpen
@@ -245,17 +240,14 @@ function ActivityTimeline({
     <div
       className="chat-message tool px-3 sm:px-0"
       data-message-timestamp={group.timestamp || undefined}
-      /* ga:滚动位置恢复靠它精确找回"上次读到的那一行"(见 rowKey)。 */
+      /* 滚动位置恢复靠它精确找回"上次读到的那一行"(见 rowKey)。 */
       data-row-key={rowKey}
     >
-      {/* 整段小结:一句话说清这一轮干了什么,并且是这些步骤的**唯一入口**。
-          fw:**只要有一行就出现**。此前"少于三步不给抬头",于是一个回合刚开跑
-          时行光秃秃地摊着,等第三行落地抬头才凭空冒出来、整段还往下错一档。
+      {/* 整段小结:一句话说清这一轮干了什么,也是这些步骤的唯一入口。
+          只要有一行就出现,否则回合刚开跑时行光秃秃地摊着,行数够了抬头才冒出来,整段往下错一档。
           点它 = 全摊开 / 全收起(半折状态点一次先摊开)。
-          ei:**不套白框**。eg 那轮按 mockup 给它加了卡片外框,实机看下来那是给
-          对话流凭空多加一层容器 —— 一轮里可能有好几段活动,几个白框摞在正文之间
-          比内容本身还抢眼。回到一行次级墨色的纯文本(Cowork 的做法),
-          容器交给消息本身。 */}
+          不套卡片外框:一轮里可能有好几段活动,几个框摞在正文之间比内容还抢眼,
+          所以只是一行次级墨色的纯文本。 */}
       {showSummary && canFold && (
         <button
           type="button"
@@ -277,8 +269,8 @@ function ActivityTimeline({
             ? <ChevronDown className="h-3.5 w-3.5 flex-none text-muted-foreground" aria-hidden />
             : <ChevronRight className="h-3.5 w-3.5 flex-none text-muted-foreground" aria-hidden />}
           <span className="min-w-0 flex-1 truncate">{summaryText}</span>
-          {/* 右端只出一样东西,按优先级:
-              全摊开 → 「收起」;半折 → 被折了多少;整段收起 → 整段耗时。 */}
+          {/* 右端按状态只出一样:全摊开 → 「收起」;半折 → 被折了多少;整段收起 → 整段耗时。
+              另有步骤在跑时多一个「运行中」。 */}
           {runDuration && rowsCollapsed && (
             <span className="flex-none font-mono text-[11px] text-muted-foreground">{runDuration}</span>
           )}
@@ -315,17 +307,15 @@ function ActivityTimeline({
         const isExpanded = expandedKeys.has(row.key);
         const summary = row.summary;
 
-        // 过渡性正文(cd 轮):不是"一行标签点开看详情",正文本身就是内容 ——
+        // 过渡性正文:不是"一行标签点开看详情",正文本身就是内容 ——
         // 小圆点挂在竖线上,全文内联(超长由 ClampedBlock 先折),流程不断线。
         if (row.kind === 'narration') {
           const narrationText = String(row.message.content || '');
           return (
             <div key={row.key} className="flex gap-2">
               {/*
-                ek:圆点要和正文**第一行的中心**对齐,所以这一格的高度得跟着正文算:
-                正文 `py-1.5`(6px)+ 13.5px/22 的首行 → 中心在 6 + 11 = 17px,
-                格高 34px 时圆点正好落在那儿。此前写的是 26px(格中心 13px),
-                圆点比字高了 4px —— 探针量出来就是 −4(用户截图里看得出来)。
+                圆点要和正文第一行的中心对齐,所以这一格的高度跟着正文算:
+                正文 `py-1.5`(6px)+ 13.5px/22 的首行 → 中心在 6 + 11 = 17px,格高取 34px。
               */}
               <span className="flex w-4 flex-none flex-col items-center" aria-hidden>
                 <span className="flex h-[34px] items-center justify-center">
@@ -334,9 +324,8 @@ function ActivityTimeline({
                 {!isLastRow && <span className="prism-activity-link min-h-[10px] w-px flex-1" />}
               </span>
 
-              {/* ej:复制只留 ClampedBlock 右上角那一枚。这里原本在正文下面又挂了
-                  一个 MessageCopyControl,同一段话两个复制按钮(用户截图)——
-                  一个悬停出现在右上、一个常驻在左下,谁也说不清有什么区别。 */}
+              {/* 复制只用 ClampedBlock 右上角那一枚,正文下面不再另挂复制按钮:
+                  同一段话两个复制入口,用户分不清有什么区别。 */}
               <div className="min-w-0 flex-1 py-1.5">
                 <ClampedBlock maxHeight={320} copyText={narrationText}>
                   <Markdown className="prose prose-sm max-w-none font-sans text-[13.5px] leading-[22px] text-body dark:prose-invert">
@@ -350,12 +339,10 @@ function ActivityTimeline({
 
         const iconKey: ActivityIconKey = summary ? summary.icon : 'thinking';
         /**
-         * 行首图标 = **工具类型**(读=书、写=加号文件、执行=终端…),失败换 XCircle。
+         * 行首图标表示工具类型(读 = 书、写 = 加号文件、执行 = 终端…),失败换 XCircle。
          *
-         * eh:eg 那轮改成过一列 ✓ / ◌ / ✕ 的状态图标,试下来是丢信息 ——
-         * 扫一眼看不出这一段里都动用了什么。**状态交给颜色**(这也是竖线时代
-         * 就在用的那套):进行中 = 强调紫,跑完 = 次级墨色,失败 = 红。
-         * 竖线不恢复:抬头卡片已经把这一段框起来了,里面再画一条贯穿线是第二层框。
+         * 状态交给颜色而不是图标:进行中 = 强调色,跑完 = 次级墨色,失败 = destructive 色。
+         * 换成 ✓ / ◌ / ✕ 一类的状态图标会丢信息,扫一眼看不出这一段动用了哪些工具。
          */
         const Icon = summary?.status === 'error' ? XCircle : ICONS[iconKey];
 
@@ -379,14 +366,9 @@ function ActivityTimeline({
         return (
           <div key={row.key} className="flex gap-2">
             {/*
-              图标列:图标 + 图标下方的连接线(最后一行不画)。
-              eh:这是 Cowork 那种「竖线把相邻两步串起来」的连法 —— 只连相邻两个
-              图标之间的空档,不是 eg 之前那条贯穿整段的长轨(长轨在抬头卡片里
-              等于第二层框)。
-              ej:连接线由固定 10px 改成 `flex-1`(行不再 items-start,图标列跟着
-              行高撑满)。之前展开某一行,行高涨了几百像素、线还是那 10px,
-              线就在展开区顶上断成一小截、下一个图标孤零零挂在下面(用户截图)。
-              现在展开多高、线就跟到多高,始终把上下两个图标连起来。
+              图标列:图标 + 图标下方的连接线(最后一行不画),只连相邻两个图标之间的空档。
+              连接线用 `flex-1`,行也不用 items-start,图标列跟着行高撑满:
+              某一行展开多高,线就跟到多高,始终把上下两个图标连起来。
             */}
             <span className="flex w-4 flex-none flex-col items-center" aria-hidden>
               <span className="flex h-[30px] items-center justify-center">
@@ -446,8 +428,8 @@ function ActivityTimeline({
                 <div className="pb-2 pt-0.5">
                   {row.message.isThinking ? (
                     /* 思考是旁注不是正文:压一档字号与颜色,左侧留发丝线,
-                       太长先折 10 行左右,底下给「展开全部」。复制同样只留
-                       ClampedBlock 右上角那一枚(ej)。 */
+                       太长先折 10 行左右,底下给「展开全部」。复制同样只用
+                       ClampedBlock 右上角那一枚。 */
                     <ClampedBlock
                       maxHeight={220}
                       copyText={String(row.message.content || '')}
@@ -484,13 +466,7 @@ function ActivityTimeline({
 }
 
 /**
- * memo 的前提是 `group` 引用稳定 —— ChatMessagesPane 在分组后做了身份保持:
- * 成员没变的段沿用上一轮的同一个 ToolGroupItem 对象。于是流式期间只有
- * 正在跑的那一段重渲,已完成的时间轴整段跳过(每段都要重算 rows/摘要,
- * 长对话里这占了 tick 开销的大头)。
- */
-/**
- * gh:布尔值的"true→false 延后 N 毫秒"版本(false→true 立刻)。
+ * 布尔值的"true→false 延后 N 毫秒"版本(false→true 立刻)。
  * 用于把"正文出现了 → 折叠"这一下延后一眨眼,让会被吸收的过渡正文来得及被吸收。
  */
 function useSettledTrue(value: boolean, delayMs: number): boolean {
@@ -506,4 +482,10 @@ function useSettledTrue(value: boolean, delayMs: number): boolean {
   return value ? true : settled;
 }
 
+/**
+ * memo 的前提是 `group` 引用稳定 —— ChatMessagesPane 在分组后做了身份保持:
+ * 成员没变的段沿用上一轮的同一个 ToolGroupItem 对象。于是流式期间只有
+ * 正在跑的那一段重渲,已完成的时间轴整段跳过(每段都要重算 rows / 摘要,
+ * 长对话里这占了 tick 开销的大头)。
+ */
 export default memo(ActivityTimeline);

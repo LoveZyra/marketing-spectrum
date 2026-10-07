@@ -1,5 +1,5 @@
 /**
- * gy:`/api/skillwhet/*` 回来的形状(与 SkillWhet `managed.status()` / `PyramidResult.to_dict()` /
+ * `/api/skillwhet/*` 回来的形状(与 SkillWhet `managed.status()` / `PyramidResult.to_dict()` /
  * `TaskStore.summary()` 与 Prism `messageFeedbackDb.statsBySkill()` 逐字段对齐)。
  */
 export type GateVerdict = 'pass' | 'fail' | 'skip';
@@ -20,7 +20,7 @@ export type PyramidResult = {
   total_ms?: number;
   results: GateResult[];
   ran_at?: string;
-  /** hl(动态 P2-19):没装、因此没查的工具(serve 0.5.2 起);有就不算通过 */
+  /** 没装、因此没查的工具(serve ≥ 0.5.2 才回);非空时不算通过 */
   missing_tools?: string[];
   warnings?: string[];
 };
@@ -40,7 +40,7 @@ export type ManagedSkill = {
   latest_staging?: string | null;
   staging_count?: number;
   adopted?: boolean;
-  /** hd:副本当前内容来自哪份 staging(serve status.adopted_staging) */
+  /** 副本当前内容来自哪份 staging(serve status.adopted_staging) */
   adopted_staging?: string | null;
   wiki_patterns?: number;
   provenance_records?: number;
@@ -66,9 +66,9 @@ export type FeedbackStats = {
   projects: number;
   users: number;
   recentNotes: Array<{ note: string; verdict: number | null; user_id: number | null; project_id: number | null; updated_at: string }>;
-  /** ha:按项目分组(看不见的项目 project_id / project_name 为 null) */
+  /** 按项目分组(看不见的项目 project_id / project_name 为 null) */
   byProject?: Array<{ project_id: string | null; project_name: string | null; answered: number; good: number; neutral: number; bad: number }>;
-  /** ha:某项目连续差而全局好 —— 可考虑为它派生副本 */
+  /** 连续差评而全局好评的项目:可考虑为它们派生副本 */
   divergentProjects?: string[];
 };
 
@@ -81,7 +81,7 @@ export type ContractResponse = {
   };
 };
 
-/** he:经验的状态 —— 见 SkillWhet `wiki.py` 的说明。0.4.x 的 serve 不回 `index`。 */
+/** 经验的状态,见 SkillWhet `wiki.py` 的说明。0.4.x 的 serve 不回 `index`。 */
 export type WikiStatus = 'hypothesis' | 'supported' | 'disputed' | 'retired';
 export type WikiPattern = {
   id: string; title: string; kind: string; observations: number; status: WikiStatus;
@@ -94,7 +94,7 @@ export type WikiResponse = {
   index?: WikiPattern[];
 };
 
-/** he:夜训计划(`GET /api/skillwhet/nightly`)。 */
+/** 夜训计划(`GET /api/skillwhet/nightly`)。 */
 export type NightlyResult =
   | 'running' | 'improved' | 'unchanged' | 'no_candidate' | 'budget'
   | 'skipped_no_new_tasks' | 'skipped_busy' | 'deferred_budget'
@@ -121,7 +121,7 @@ export type NightlyResponse = {
   nightlyMaxCostUsd: number;
   maxCostUsd: number;
   hardMaxCostUsd?: number;
-  /** hi:夜训单次硬上限(100)与夜训轮数上限(20);老服务端不回 → 用 hardMaxCostUsd / 10 */
+  /** 夜训单次费用硬上限(100)与夜训轮数上限(20);服务端不回时前端退回 hardMaxCostUsd 与 10 轮 */
   nightlyHardMaxCostUsd?: number;
   nightlyMaxRounds?: number;
   autopauseAfter: number;
@@ -165,7 +165,7 @@ export async function unwrap<T>(response: Response): Promise<T> {
   return (body?.data ?? body) as T;
 }
 
-// ── gz ─────────────────────────────────────────────────────────────────
+// ── 作业、staging 与发布 ──────────────────────────────────────────────
 export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
 
 export type JobKind = 'train' | 'harvest' | 'release_eval';
@@ -208,14 +208,14 @@ export type ProgressEvent = {
 export type Budget = {
   maxCostUsd: number;
   maxHours: number;
-  /** hf2:root 可越过 .env 上限到这里(serve 老版本 / 老 Prism 不回 → 视同 .env 上限) */
+  /** root 可越过 .env 上限到这里;服务端不回时视同 .env 上限 */
   hardMaxCostUsd?: number;
   hardMaxHours?: number;
   maxWorkers: number;
   userDailyMaxCostUsd: number;
   spentToday: number;
   isRoot: boolean;
-  /** hn(B7):非 root 能选的模型(别名 + 目录上架条目,或 .env 白名单);root 为 null = 不限。老 Prism 不回。 */
+  /** 非 root 能选的模型(别名 + 目录上架条目,或 .env 白名单);root 为 null = 不限。服务端不回时前端按三个别名收紧(见 RunNew)。 */
   allowedModels?: string[] | null;
 };
 
@@ -233,14 +233,14 @@ export type StagingSummary = {
   rounds: number;
   test_score_baseline: number | null;
   test_score_best: number | null;
-  /** ha release-once:这份 staging 唯一一次留出集评估的结果;null = 还没评 */
+  /** 这份 staging 唯一一次(release-once)留出集评估的结果;null = 还没评 */
   release?: ReleaseResult | null;
   contract?: { base_bundle_hash?: string; candidate_bundle_hash?: string; protocol_hash?: string };
-  /** hd:这份 staging 被发布到技能库的时刻(可能多次) */
+  /** 这份 staging 被发布到技能库的时刻(可能多次) */
   published?: string[];
 };
 
-/** hd:发布 / 回滚记录(serve 记在自己的 home 里) */
+/** 发布 / 回滚记录(serve 记在自己的 home 里) */
 export type PublishEvent = { at: string; event: 'publish' | 'rollback'; by: string | null; staging: string | null; to: string | null; mode: string | null };
 
 export type ReleaseResult = {
@@ -278,7 +278,7 @@ export type StagingDiff = { rel: string; binary: boolean; changed?: boolean; add
 
 export type StagingDetail = StagingSummary & {
   manifest: Record<string, unknown>;
-  /** hd:diff 的底 —— base = 训练开始时的副本;backup = 采纳前的副本(老 staging);copy = 副本当前内容 */
+  /** diff 的底:base = 训练开始时的副本;backup = 采纳前的副本(老 staging);copy = 副本当前内容 */
   diff_base?: 'base' | 'backup' | 'copy';
   report: {
     rounds?: Array<Record<string, unknown>>;

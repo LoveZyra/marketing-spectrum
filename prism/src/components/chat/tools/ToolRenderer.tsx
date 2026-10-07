@@ -35,7 +35,7 @@ interface ToolRendererProps {
   };
 }
 
-/** 兜底配置里的英文段名 → 中文。只在渲染处翻译,配置与键名都不动。 */
+/** 兜底配置里的英文段名 → i18n 键(缺译文时回落中文)。只在渲染处翻译:配置里的段名同时是这张表的键,保持英文。 */
 const SECTION_TITLE_I18N: Record<string, { key: string; fallback: string }> = {
   Parameters: { key: 'details.parameters', fallback: '参数' },
   Details: { key: 'details.result', fallback: '返回' },
@@ -54,12 +54,11 @@ function getToolCategory(toolName: string): string {
 }
 
 /**
- * 服务端 `canUseTool` 返回的拒绝文案(见 server/claude-sdk.js)—— 其它 provider
- * 无法可靠地表达"被拒绝",只能按文本认。
+ * 服务端 `canUseTool` 拒绝时返回的文案(见 server/claude-sdk.js)。工具结果只带 isError,
+ * 没有"被拒绝"的结构化标记,只能按文本识别。
  *
- * `permission request timed out` 那条保留着:它已经不再产生了(超时改成了
- * "一直等",文案也换成了中文的"一直没有人回应"),但**旧会话的 transcript 里
- * 还留着大量这句**,重新打开时仍要渲染成"已拒绝"而不是"出错"。
+ * `permission request timed out` 服务端已不再产生;存量会话的 transcript 里还有,
+ * 重新打开时要渲染成"已拒绝"而不是"出错"。
  */
 const CLAUDE_DENIAL_MESSAGES = [
   'user denied tool use',
@@ -82,8 +81,8 @@ function deriveToolStatus(toolResult: any): ToolStatus {
 }
 
 /**
- * Main tool renderer router
- * Routes to OneLineDisplay or CollapsibleDisplay based on tool config
+ * Routes a tool call to its display: subagent container, Bash command row, or the
+ * one-line / plan / collapsible display named by the tool config.
  */
 export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   toolName,
@@ -112,7 +111,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
     }
   }, [mode, toolInput, toolResult]);
 
-  // Only derive and show status badge on input renders
+  // The status badge belongs to the input render; result renders never show one.
   const toolStatus = useMemo(
     () => mode === 'input' ? deriveToolStatus(toolResult) : undefined,
     [mode, toolResult],
@@ -125,7 +124,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
     }
   }, [displayConfig, parsedData, onFileOpen]);
 
-  // Route subagent containers to dedicated component (after hooks to satisfy Rules of Hooks)
+  // Subagent containers have their own component. Early returns stay below the hooks (Rules of Hooks).
   if (isSubagentContainer && subagentState) {
     if (mode === 'result') return null;
     return (
@@ -139,9 +138,8 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
 
   if (!displayConfig) return null;
 
-  // Bash renders as a Codex-style command row: the command on a single line with
-  // a chevron that expands to show the output inline. The combined view lives on
-  // the input render; the separate result section is suppressed in MessageComponent.
+  // Bash renders as a single command row whose chevron expands the output inline.
+  // Command and output share the input render; MessageComponent skips Bash's result section.
   if (toolName === 'Bash' && mode === 'input') {
     const command = typeof parsedData === 'object' && parsedData !== null && 'command' in parsedData
       ? String(parsedData.command || '')

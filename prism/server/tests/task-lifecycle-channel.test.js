@@ -5,19 +5,14 @@ import { describe, it } from 'vitest';
 import { taskLifecycleMessage } from '../claude-sdk.js';
 
 /**
- * gb:**SDK 的任务生命周期通道 → Prism 的显示行。**
+ * SDK 的任务生命周期通道 → Prism 的显示行。
  *
- * 线上现象:让模型开几个后台子 agent,界面永远停在「✅ 3 个已启动」,完成汇报
- * 一条都看不到,刷新也没有。查下来病根有两层:
+ * 后台子 agent 的完成汇报是一条结构化的 SDK 消息(`type:'system'` / `subtype:'task_notification'`,
+ * 带 `status` / `summary` / `output_file` / `usage`),读循环必须专门接住、转成显示行,否则界面
+ * 永远停在「✅ 3 个已启动」,完成汇报一条都看不到。它到达时那一轮往往是 CLI 自己发起的
+ * (`runtime.turn` 为 null),那一层由回合外路由负责(见 observed-run 那一侧)。
  *
- *   1. 完成汇报本来是一条**结构化的 SDK 消息**(`type:'system'` /
- *      `subtype:'task_notification'`,带 `status` / `summary` / `output_file` /
- *      `usage`),而 `claude-sdk.js` 的读循环只认 `system/status` 与
- *      `system/compact_boundary` —— **这条通道从来没接过**;
- *   2. 它到达时那一轮是 CLI 自己发起的,`runtime.turn` 是 null,于是连同模型的
- *      回复一起在 `if (!turn) continue` 处整轮丢掉(见 observed-run 那一侧)。
- *
- * 这一份钉第 1 层:**通道接对了没有**。
+ * 这一份只钉通道本身:哪些消息转成什么样的显示行。
  */
 describe('taskLifecycleMessage', () => {
   const base = { type: 'system', session_id: 'p1', uuid: 'u1' };
@@ -40,11 +35,10 @@ describe('taskLifecycleMessage', () => {
     assert.match(row.summary, /8s/);
     assert.match(row.summary, /7 次工具/);
     /**
-     * gf:**`summary` 只有一行,全文在 `content` 里。**
+     * `summary` 只有一行,全文在 `content` 里。
      *
-     * 前端拿 `summary` 当"这张卡的后台状态"用(subagentState.background.summary)。
-     * gd 把 head/usage/全文塞进同一个字符串,于是子代理卡展开后顶出一坨没排版的
-     * 长文 —— 用户原话「后台任务完成这个详细信息……现在不好看」。
+     * 前端拿 `summary` 当"这张卡的后台状态"用(subagentState.background.summary);把全文也塞进去,
+     * 子代理卡展开后就会顶出一坨没排版的长文。
      *
      * 拆开之后两件事都成立:卡片拿到的是一行;显示日志与 transcript 里全文一个字不丢。
      */
@@ -72,7 +66,7 @@ describe('taskLifecycleMessage', () => {
     assert.notEqual(make().id, other.id);
   });
 
-  it('task_started 带 tool_use_id 的**不画** —— 子代理卡已经在画它了', () => {
+  it('task_started 带 tool_use_id 的不画 —— 子代理卡已经在画它了', () => {
     const withTool = taskLifecycleMessage({
       ...base, subtype: 'task_started', task_id: 't', tool_use_id: 'toolu_1',
       description: '核对文件', subagent_type: 'Explore',
@@ -107,18 +101,17 @@ describe('taskLifecycleMessage', () => {
 });
 
 /**
- * gd:**进展与汇报要带 `tool_use_id` —— 那是子代理卡的身份。**
+ * 进展与汇报要带 `tool_use_id`:那是子代理卡的身份。
  *
- * 任务一转后台,那次工具调用**立刻**拿到一个 "running in the background" 的
- * tool_result(SDK 原话),子代理卡当场收工、步数停在那儿;之后的一切只在
+ * 任务一转后台,那次工具调用立刻拿到一个 "running in the background" 的
+ * tool_result,子代理卡当场收工、步数停在那儿;之后的一切只在
  * `task_progress` / `task_notification` 里。不把 `tool_use_id` 带出来,
- * 前端就没有任何办法把它们归回那张卡 —— 线上看到的「2 步 ✓ + 另起一行的汇报」
- * 就是这么来的。
+ * 前端就没法把它们归回那张卡,只能显示成「2 步 ✓ + 另起一行的汇报」。
  */
-describe('gd:任务行带上卡片身份', () => {
+describe('任务行带上卡片身份', () => {
   const base = { type: 'system', session_id: 'p1', uuid: 'u1' };
 
-  it('进展 → task_progress(**不是** task_notification,它不进 durable 白名单)', () => {
+  it('进展 → task_progress(不是 task_notification,它不进 durable 白名单)', () => {
     const row = taskLifecycleMessage({
       ...base,
       subtype: 'task_progress',
@@ -136,7 +129,7 @@ describe('gd:任务行带上卡片身份', () => {
     assert.equal(row.taskProgress.lastToolName, 'Bash');
   });
 
-  it('同一个任务的进展**同一个 id** —— 直播按 id upsert,不堆成一串', () => {
+  it('同一个任务的进展同一个 id —— 直播按 id upsert,不堆成一串', () => {
     const make = (n) => taskLifecycleMessage({
       ...base, subtype: 'task_progress', task_id: 't1', tool_use_id: 'toolu_X',
       description: 'x', usage: { tool_uses: n },

@@ -3,7 +3,7 @@ import { describe, test, expect } from 'vitest';
 import { draftStorageKey, mergeQueuedIntoInput } from './composerDrafts';
 
 /**
- * F2 回归:草稿按会话分键。原来按项目分,同项目多个会话的草稿互相覆盖。
+ * 草稿按会话分键:同一项目的多个会话各存各的草稿,互不覆盖。
  */
 describe('draftStorageKey', () => {
   test('有会话号:会话键优先', () => {
@@ -22,7 +22,7 @@ describe('draftStorageKey', () => {
 });
 
 /**
- * dn-B2 回归:按停止时排队内容与正在打的字合并,谁都不丢。
+ * 按停止时,排队内容与正在打的字合并,两边都不丢。
  */
 describe('mergeQueuedIntoInput', () => {
   test('输入框为空:整条排队内容原样回来', () => {

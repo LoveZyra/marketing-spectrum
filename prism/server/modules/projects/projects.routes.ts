@@ -141,15 +141,14 @@ router.get(
  * 之前注册,免得 "shareable-users" 被当成一个 projectId 吞掉。
  */
 /**
- * fh:可用的项目模板。
+ * 可用的项目模板。
  *
  * 不做权限区分:模板是服务器上的公共脚手架(运维放进 `PRISM_PROJECT_TEMPLATES_DIR`),
- * 谁都能用、内容里也不该有秘密。真正的门在**复制**那一侧 —— 符号链接一律拒、
- * 已有文件不覆盖、文件数与总字节封顶,见 project-template.service.ts 顶部那段。
+ * 谁都能用、内容里也不该有秘密。真正的门在复制那一侧:符号链接一律拒、已有文件不覆盖、
+ * 文件数与总字节封顶,见 project-template.service.ts 顶部那段。
  *
- * 位置要紧:和 `/archived`、`/shareable-users` 一样是**单段字面量**路由,
- * 必须待在 `/:projectId` 那一族前面。放文件末尾的话,将来谁加一条裸的
- * `router.get('/:projectId')`,这条就会被悄悄吃掉,而且报的是 404 不是冲突。
+ * 和 `/archived`、`/shareable-users` 一样是单段字面量路由,必须注册在 `/:projectId` 那一族
+ * 前面,否则一条裸的 `router.get('/:projectId')` 就会把它悄悄吃掉,报的还是 404 而不是冲突。
  */
 router.get(
   '/templates',
@@ -206,7 +205,7 @@ router.put(
     }
 
     const input = parsePermissionsInput((req.body ?? {}) as Record<string, unknown>);
-    // hl(动态 P2-4):改权限前先收"现在谁看得见"的名单 —— 改完之后被收回可见性的人要收 removed。
+    // 改权限前先收"现在谁看得见"的名单:改完之后被收回可见性的人要收到 removed。
     const announce = prepareProjectChangeBroadcast(projectId);
     const view = applyProjectPermissions(projectId, input, readUser(req)?.id ?? null);
     announce('permissions');
@@ -215,13 +214,12 @@ router.put(
 );
 
 /**
- * eo:项目的批量操作(归档 / 彻底删 / 收藏 / 取消收藏 / 权限 / 改所有者)。
+ * 项目的批量操作(归档 / 彻底删 / 收藏 / 取消收藏 / 权限 / 改所有者)。
  *
- * 放在 `/:projectId` 那一组**之前**注册 —— 否则 `bulk` 会被当成一个 projectId
- * 吞掉(`shareable-users` 当初也是为这个才提前注册的)。
+ * 注册在 `/:projectId` 那一组之前,否则 `bulk` 会被当成一个 projectId 吞掉。
  *
  * 鉴权全在服务层逐条做,这里只负责把入参问清楚:action 认不认、id 数量合不合规、
- * 权限入参是否成立。**在动第一个项目之前**报错,而不是改了三个之后才抛。
+ * 权限入参是否成立。在动第一个项目之前报错,而不是改了三个之后才抛。
  */
 router.post(
   '/bulk',
@@ -296,13 +294,12 @@ router.post(
       });
     }
 
-    // 反归档越权:传别人的已归档路径,createProject 会把它 isArchived=0 复活并
-    // 回传对方的真实 projectId —— 既改了别人的状态,又是文件 IDOR 的"拿 id"桥。
-    // 已存在的行若对当前用户不可见,直接拒。不存在的路径正常走新建。
+    // 防反归档越权:传别人的已归档路径,createProject 会把它复活(isArchived=0)并回传对方的
+    // 真实 projectId,既改了别人的状态,又成了文件 IDOR 拿 id 的桥。已存在的行若对当前用户
+    // 不可见,直接拒;不存在的路径正常走新建。
     //
-    // hl(09-24 P2-14):**先 realpath 再查行。** 此前用原始路径查、createProject 却按
-    // realpath 落库 —— 在工作区里放一个指向别人已归档项目的软链,原始路径查不到行、
-    // 可见性判定被跳过,realpath 一落就把别人的项目复活了。两个路径形态都查一遍。
+    // 原始路径与 realpath 两种形态都要查:createProject 按 realpath 落库,只查原始路径的话,
+    // 一个指向别人已归档项目的软链就能绕过可见性判定,把别人的项目复活。
     const pathValidation = await validateWorkspacePath(projectPath);
     const candidatePaths = [...new Set([projectPath, pathValidation.resolvedPath].filter(
       (value): value is string => typeof value === 'string' && value.length > 0,
@@ -311,8 +308,8 @@ router.post(
     if (existing && !resolveVisibleProjectRoot(readRequestViewer(req), existing.project_id)) {
       throw new AppError('Project not found', { code: 'PROJECT_NOT_FOUND', statusCode: 404 });
     }
-    // 命中的是一个**已归档**项目:这一步实质是"还原",按还原的门走(owner / root),
-    // 看得见但不是负责人的协作者不能借"新建"把别人归档的项目拉回来(09-24 P2-15 同门)。
+    // 命中的是一个已归档项目:这一步实质是"还原",按还原的门走(owner / root),
+    // 看得见但不是负责人的协作者不能借"新建"把别人归档的项目拉回来。
     if (existing && Boolean(existing.isArchived) && !canActorRestoreProject(existing.project_id, readUser(req))) {
       throw new AppError('这个路径对应一个已归档的项目,只有它的负责人或管理员可以还原。', {
         code: 'PROJECT_RESTORE_FORBIDDEN',
@@ -356,7 +353,7 @@ router.post(
       sharedUserIds = parsedIds;
     }
 
-    // fh:从模板创建。只取字符串,合法性交给 resolveTemplateDir(形状收死,不做
+    // 从模板创建。只取字符串,合法性交给 resolveTemplateDir(形状收死,不做
     // resolve-then-prefix-check 那种每次都要重新论证的写法)。
     const templateId = typeof requestBody.templateId === 'string' && requestBody.templateId.trim()
       ? requestBody.templateId.trim()
@@ -373,20 +370,17 @@ router.post(
 
     const revived = projectCreationResult.outcome === 'reactivated_archived';
     /*
-     * hl 复核:**只有请求体显式带了 visibility 才改复活项目的权限。** 缺省时的 `personal`
-     * 是"新建项目"的默认值,拿它去覆盖一个归档前是「指定用户」的项目,等于静默收回所有人的
-     * 访问。向导只在用户动过权限选择器时才发这个字段(见 ProjectCreationWizard 的
-     * permissionTouched);不能改成"等于默认值就不应用" —— 那样用户**有意**改回「个人」
-     * 就永远生效不了。
+     * 只有请求体显式带了 visibility 才改复活项目的权限。缺省时的 `personal` 是新建项目的默认值,
+     * 拿它覆盖一个归档前是「指定用户」的项目,等于静默收回所有人的访问。向导只在用户动过权限
+     * 选择器时才发这个字段(见 ProjectCreationWizard 的 permissionTouched);也不能改成"等于默认值
+     * 就不应用",那样用户有意改回「个人」就永远不生效。
      */
     const explicitVisibility = typeof requestBody.visibility === 'string';
     if (revived && explicitVisibility) {
       /*
-       * hl(09-24 P2-14):复活归档路径时,用户在向导里选的可见性 / 共享此前被**静默丢掉**
-       * (createProjectPath 的 ON CONFLICT 分支按设计不改归属与权限,复活后仍是归档前的
-       * 那套)。用户明明选了「指定用户」,建完却是「个人」,而界面说"创建成功"。
-       * 现在把他选的那套按「项目权限」同一份实现应用上(无主项目会被认领给操作者,
-       * 有主项目不夺归属)。上面那道门保证走到这里的人本来就能管这个项目。
+       * 复活归档路径时,createProjectPath 的 ON CONFLICT 分支按设计不改归属与权限,所以用户在
+       * 向导里选的可见性 / 共享要在这里另行应用,否则会被静默丢掉。用「项目权限」同一份实现
+       * (无主项目会被认领给操作者,有主项目不夺归属);上面那道门保证走到这里的人本来就能管这个项目。
        */
       applyProjectPermissions(
         projectCreationResult.project.projectId,
@@ -394,7 +388,7 @@ router.post(
         callerId,
       );
     }
-    // hl(动态 P2-4):新建 / 复活都推给能看见的人。
+    // 新建 / 复活都推给能看见的人。
     broadcastProjectChange(projectCreationResult.project.projectId, revived ? 'revived' : 'created');
 
     res.json({
@@ -461,7 +455,7 @@ router.patch(
       });
     }
 
-    // hl(动态 P2-4 / P2-5 / P2-9):名单先收、原 owner 自动授权、审计带 targetUserId —— 见 transferProjectOwner。
+    // 名单在转移之前收;原 owner 自动授权、审计带 targetUserId 都在 transferProjectOwner 里。
     const announce = prepareProjectChangeBroadcast(projectId);
     const transfer = transferProjectOwner(projectId, ownerUserId, {
       id: actor.id ?? null,
@@ -483,11 +477,9 @@ router.patch(
 );
 
 /**
- * hl(动态 P1-5):改显示名与改权限 / 归档同门 —— 只有 owner / root。
- *
- * `custom_project_name` 是**全局**的一列:ben 把 ann 的项目改个名,所有人的侧栏一起变。
- * 此前只过 `assertVisibleProject`,共享接收方和公共项目的路人都能改。
- * 改成 asyncHandler:入参不合法(类型 / 超长)由 AppError 回 400,而不是一律 500。
+ * 改显示名与改权限 / 归档同门:只有 owner / root。`custom_project_name` 是全局的一列,
+ * 一个人改了名,所有人的侧栏一起变,所以光"看得见"不够。
+ * 用 asyncHandler:入参不合法(类型 / 超长)由 AppError 回 400,而不是一律 500。
  */
 router.put(
   '/:projectId/rename',
@@ -522,7 +514,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
     if (!assertVisibleProject(req, res, projectId)) return;
-    // hl(09-24 P2-15):还原与归档对称 —— 只有 owner / root。
+    // 还原与归档对称:只有 owner / root。
     if (!canActorRestoreProject(projectId, readUser(req))) {
       throw new AppError('只有项目负责人或管理员可以还原这个项目。', {
         code: 'PROJECT_RESTORE_FORBIDDEN',
@@ -547,11 +539,8 @@ router.delete(
     const force = req.query.force === 'true';
     const user = readUser(req);
     /*
-      gk:永久删除项目只给 owner / root。
-      gn:**归档也一样**。归档一个项目,它会从所有人的活跃侧栏里消失,而按钮上
-      没有任何"这不是你的项目"的提示 —— 2026-09-15 实测,非 root 账号就这么把
-      别人的项目整个归档了(可一键还原,但所有人当场都看不见)。
-      hl(动态 P2-7):无主(公共目录)项目也只给 root —— 见 canDeleteProject。
+      永久删除与归档都只给 owner / root:归档一个项目,它会从所有人的活跃侧栏里消失。
+      无主(公共目录)项目只给 root,见 canDeleteProject。
     */
     if (!canActorArchiveProject(projectId, user)) {
       throw new AppError(
@@ -564,7 +553,7 @@ router.delete(
         },
       );
     }
-    // hl(动态 P2-4):名单要在行动之前收(删掉之后判不出谁看得见)。
+    // 名单要在行动之前收(删掉之后判不出谁看得见)。
     const announce = prepareProjectChangeBroadcast(projectId);
     await deleteOrArchiveProject(projectId, force, {
       userId: user?.id ?? null,

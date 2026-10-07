@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import type { CSSProperties, ReactElement } from 'react';
 import {
   CornerDownLeft,
@@ -12,6 +13,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
+import { listOptionId } from '../../utils/composerAutocompleteAria';
+
 type CommandMenuCommand = {
   name: string;
   description?: string;
@@ -23,9 +26,11 @@ type CommandMenuCommand = {
 };
 
 type CommandMenuProps = {
+  /** 列表的 DOM id。输入框用 aria-controls / aria-activedescendant 指向列表和键盘选中的那一项。 */
+  id?: string;
   commands?: CommandMenuCommand[];
   selectedIndex?: number;
-  /** fj:鼠标悬停项 —— 只影响高亮,不影响回车行为(见 useSlashCommands)。 */
+  /** 鼠标悬停项:只影响高亮,不影响回车行为(见 useSlashCommands)。 */
   hoveredIndex?: number;
   onSelect?: (command: CommandMenuCommand, index: number, isHover: boolean) => void;
   onClose: () => void;
@@ -51,6 +56,7 @@ const menuBaseStyle: CSSProperties = {
   backdropFilter: 'blur(12px)',
 };
 
+/** 分组名的兜底中文;界面上按 `commandMenu.groups.<分组>` 取当前语言。 */
 const namespaceLabels: Record<string, string> = {
   frequent: '常用',
   builtin: '内置命令',
@@ -129,6 +135,7 @@ const getMenuPosition = (position: { top: number; left: number; bottom?: number 
 };
 
 export default function CommandMenu({
+  id,
   commands = [],
   selectedIndex = -1,
   hoveredIndex = -1,
@@ -138,6 +145,7 @@ export default function CommandMenu({
   isOpen = false,
   frequentCommands = [],
 }: CommandMenuProps) {
+  const { t } = useTranslation('chat');
   const menuRef = useRef<HTMLDivElement | null>(null);
   const selectedItemRef = useRef<HTMLDivElement | null>(null);
   const menuPosition = getMenuPosition(position);
@@ -225,6 +233,7 @@ export default function CommandMenu({
     : ['skill', 'builtin', 'cli', 'project', 'user', 'other'];
   const extraNamespaces = Object.keys(groupedCommands).filter((namespace) => !preferredOrder.includes(namespace));
   const orderedNamespaces = [...preferredOrder, ...extraNamespaces].filter((namespace) => groupedCommands[namespace]);
+  const renderedOptionIds = new Set<number>();
   const renderInPortal = (node: ReactElement) =>
     typeof document === 'undefined' ? node : createPortal(node, document.body);
 
@@ -243,7 +252,7 @@ export default function CommandMenu({
           textAlign: 'center',
         }}
       >
-        暂无可用命令
+        {t('commandMenu.empty', { defaultValue: '暂无可用命令' })}
       </div>
     );
   }
@@ -251,8 +260,9 @@ export default function CommandMenu({
   return renderInPortal(
     <div
       ref={menuRef}
+      id={id}
       role="listbox"
-      aria-label="可用命令"
+      aria-label={t('commandMenu.ariaLabel', { defaultValue: '可用命令' })}
       className="command-menu border border-border bg-popover text-popover-foreground"
       style={{ ...menuBaseStyle, ...menuPosition, opacity: 1, transform: 'translateY(0)' }}
     >
@@ -260,7 +270,11 @@ export default function CommandMenu({
         <div key={namespace} className="command-group">
           {orderedNamespaces.length > 1 && (
             <div className="flex items-center justify-between px-2 pb-1.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <span>{namespaceLabels[namespace] || namespace}</span>
+              <span>
+                {namespaceLabels[namespace]
+                  ? t(`commandMenu.groups.${namespace}`, { defaultValue: namespaceLabels[namespace] })
+                  : namespace}
+              </span>
               <span className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 {(groupedCommands[namespace] || []).length}
               </span>
@@ -268,16 +282,23 @@ export default function CommandMenu({
           )}
 
           {(groupedCommands[namespace] || []).map(({ command, commandIndex, renderKey }) => {
-            // fj:键盘选中或鼠标悬停都高亮,但只有前者会让回车去插入命令。
-            const isSelected = commandIndex === selectedIndex || commandIndex === hoveredIndex;
+            // 键盘选中或鼠标悬停都高亮,但只有前者会让回车去插入命令,也只有它算 aria-selected。
+            const isKeyboardSelected = commandIndex === selectedIndex;
+            const isSelected = isKeyboardSelected || commandIndex === hoveredIndex;
             const NamespaceIcon = getNamespaceIcon(namespace);
             const accentClass = getNamespaceAccentClass(namespace);
+            // 同一条命令万一出现两次,id 只给第一次,免得重复
+            const optionId = id && commandIndex >= 0 && !renderedOptionIds.has(commandIndex)
+              ? listOptionId(id, commandIndex)
+              : undefined;
+            if (optionId) renderedOptionIds.add(commandIndex);
             return (
               <div
                 key={renderKey}
-                ref={isSelected ? selectedItemRef : null}
+                id={optionId}
+                ref={isKeyboardSelected ? selectedItemRef : null}
                 role="option"
-                aria-selected={isSelected}
+                aria-selected={isKeyboardSelected}
                 className={`command-item group relative mb-1 flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-colors ${
                   isSelected
                     ? 'border-primary/30 bg-primary/10'

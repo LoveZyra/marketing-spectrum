@@ -12,14 +12,11 @@ import { canViewerSeeProject } from '@/shared/project-visibility.js';
 /**
  * 两道可见性门必须逐字一致:SQL 侧 `getProjectPaths(visibleTo)`(侧栏列表)和
  * JS 侧 `canViewerSeeProject`(逐路由校验、实时广播)。任何一边改了口径而另一边
- * 没跟上,就会出现"列表里看得到但点进去 404"或反过来"列表里没有却能直接调接口"
- * —— 后者就是越权。这个测试在同一组样本上交叉验证两者给出相同答案。
+ * 没跟上,就会出现"列表里看得到但点进去 404",或反过来"列表里没有却能直接调接口",
+ * 后者就是越权。这个测试在同一组样本上交叉验证两者给出相同答案。
  *
- * 新口径(2026-08-14):无主项目只有落在 PRISM_PUBLIC_WORKSPACE 之下才对非 root
- * 可见,其余仅 root。
- *
- * 2026-08-18 扩展(创建项目的权限三选):visibility='public' 对所有人可见;
- * project_shares 里被指定的用户可见 —— 两侧同步扩,交叉验证同样覆盖。
+ * 覆盖的口径:无主项目只有落在 PRISM_PUBLIC_WORKSPACE 之下才对非 root 可见,其余仅 root;
+ * visibility='public' 对所有人可见;project_shares 里被指定的用户可见。
  */
 
 /** 与调用点同构的完整 JS 判定输入(含显式可见性与指定授权)。 */
@@ -169,13 +166,13 @@ describe('SQL 列表口径与 JS 逐路由口径一致', () => {
 });
 
 /**
- * E10 把归档会话列表的可见性也下推进了 SQL(`getArchivedSessionsPage`)。会话
+ * 归档会话列表的可见性也在 SQL 里判(`getArchivedSessionsPage`)。会话
  * 没有自己的 owner —— 它挂在项目上,所以这条 SQL 是 sessions LEFT JOIN projects
  * 再套同一段判定。它必须与 JS 侧 `canViewerSeeSession` 逐条一致,否则就是
  * "归档面板里列得出来、点进去 404",或者反过来 —— 越权。
  *
  * 三种项目行都要覆盖:有主 / 显式 public / 被指定授权 / 无主(公共目录内外),
- * 外加**项目行根本不存在**的会话(watcher 先索引了 transcript,项目还没落行)。
+ * 外加项目行根本不存在的会话(watcher 先索引了 transcript,项目还没落行)。
  */
 describe('归档会话列表的 SQL 口径与 canViewerSeeSession 一致', () => {
   const listedFor = (userId: number): string[] =>
@@ -288,14 +285,9 @@ describe('归档会话列表的 SQL 口径与 canViewerSeeSession 一致', () =>
 });
 
 /**
- * fb 把**未归档**会话列表的可见性也下推进了 SQL(`getVisibleSessionsPage`),
- * 给外部 API `GET /api/agent/sessions` 用 —— 它原来是整表捞出来再在 JS 侧逐行过滤,
- * 而过滤函数每行查库,4000 条会话就把同步的事件循环按住 219ms。
- *
- * 归档那条已经有 parity 测试(见上一个 describe),但这次新增的是**另外两档**
- * (`exclude` 与 `include`),它们各自的 WHERE 不一样。下推可见性最大的风险就是
- * SQL 与 JS 判据漂开 —— 一漂就是"列得出来点进去 404",或者反过来:越权。
- * 所以三档都得钉。
+ * `getVisibleSessionsPage` 的 `exclude` 与 `include` 两档(外部 API `GET /api/agent/sessions` 用)
+ * 各有自己的 WHERE,和 `only` 一样必须与 JS 侧 `canViewerSeeSession` 逐条同答案(`only` 见上一个
+ * describe)。SQL 与 JS 判据一漂开,就是"列得出来点进去 404",或者反过来:越权。
  */
 describe('未归档 / 全部会话列表的 SQL 口径与 canViewerSeeSession 一致', () => {
   test('exclude 与 include 两档都与 JS 逐条同答案', async () => {
@@ -369,7 +361,7 @@ describe('未归档 / 全部会话列表的 SQL 口径与 canViewerSeeSession �
       ['arch-alice', 'live-alice', 'live-open', 'live-pub'],
     );
 
-    // total 必须是**过滤后**的总数,不是全表 —— 分页的正确性全靠它
+    // total 必须是过滤后的总数,不是全表 —— 分页的正确性全靠它
     const bobExcluded = sessionsDb.getVisibleSessionsPage(
       { kind: 'user', userId: bob.id }, 500, 0, { archived: 'exclude' },
     );
@@ -383,6 +375,61 @@ describe('未归档 / 全部会话列表的 SQL 口径与 canViewerSeeSession �
     assert.deepEqual(
       [...p1.rows, ...p2.rows].map((r) => r.session_id).sort(),
       rootAll.rows.map((r) => r.session_id).sort(),
+    );
+  });
+});
+
+/**
+ * `projectPath` 条件(定时任务表单的会话下拉用)与可见性叠加:只取该项目的会话,
+ * 看不见的项目照样一条不出,`total` 也按过滤后的算。
+ */
+describe('getVisibleSessionsPage 的 projectPath 条件', () => {
+  test('只取该项目的会话,与可见性叠加;路径按落库口径规范化', async () => {
+    delete process.env.PRISM_PUBLIC_WORKSPACE;
+    delete process.env.PRISM_ROOT_USERS;
+    await freshDb();
+
+    const alice = { id: Number(userDb.createUser('alice', 'h').id), username: 'alice' };
+    const bob = { id: Number(userDb.createUser('bob', 'h').id), username: 'bob' };
+    projectsDb.createProjectPath('/workspace/alice/app', null, alice.id);
+    projectsDb.createProjectPath('/workspace/alice/lib', null, alice.id);
+    projectsDb.createProjectPath('/workspace/bob/app', null, bob.id);
+    for (const [sessionId, projectPath] of [
+      ['a-app-1', '/workspace/alice/app'],
+      ['a-app-2', '/workspace/alice/app'],
+      ['a-lib-1', '/workspace/alice/lib'],
+      ['b-app-1', '/workspace/bob/app'],
+    ]) {
+      sessionsDb.createSession(sessionId, 'claude', projectPath, sessionId);
+    }
+
+    const idsOf = (result: { rows: Array<{ session_id: string }> }) => result.rows.map((row) => row.session_id).sort();
+    const aliceScope = { kind: 'user' as const, userId: alice.id };
+    const bobScope = { kind: 'user' as const, userId: bob.id };
+
+    const aliceApp = sessionsDb.getVisibleSessionsPage(aliceScope, 50, 0, { projectPath: '/workspace/alice/app' });
+    assert.deepEqual(idsOf(aliceApp), ['a-app-1', 'a-app-2']);
+    assert.equal(aliceApp.total, 2);
+    assert.deepEqual(
+      idsOf(sessionsDb.getVisibleSessionsPage(aliceScope, 50, 0, { projectPath: '/workspace/alice/app/' })),
+      ['a-app-1', 'a-app-2'],
+    );
+
+    // bob 看不见 alice 的项目:带上它的路径也一条不出
+    const bobOnAlice = sessionsDb.getVisibleSessionsPage(bobScope, 50, 0, { projectPath: '/workspace/alice/app' });
+    assert.deepEqual(bobOnAlice.rows, []);
+    assert.equal(bobOnAlice.total, 0);
+
+    // root 不过滤可见性,但项目条件照样生效
+    assert.deepEqual(
+      idsOf(sessionsDb.getVisibleSessionsPage({ kind: 'all' }, 50, 0, { projectPath: '/workspace/bob/app' })),
+      ['b-app-1'],
+    );
+
+    // 空串等于不带条件
+    assert.deepEqual(
+      idsOf(sessionsDb.getVisibleSessionsPage(aliceScope, 50, 0, { projectPath: '' })),
+      ['a-app-1', 'a-app-2', 'a-lib-1'],
     );
   });
 });

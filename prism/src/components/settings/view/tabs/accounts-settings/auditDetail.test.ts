@@ -9,15 +9,15 @@ import {
 } from './auditDetail';
 
 /**
- * gk:审计页把删除类事件的 JSON detail 翻成一句人话。
+ * 审计页把删除类事件的 JSON detail 翻成一句人话。
  * 事故里最该答得上的一句是"谁、几点、从哪、删了我哪条、盘上的东西还在不在"。
  *
  * 不传翻译器时用中文兜底串(identityAuditTranslator),所以这些断言就是中文界面下的实际输出。
  */
 describe('describeAuditDetail', () => {
   /**
-   * 入口标签是当前缀拼的,每一条都要能直接接上动词。
-   * gk 拼出过「清空归档永久删除了会话」(少一个「时」),这一条钉住所有入口。
+   * 入口标签是当前缀拼的,每一条都要能直接接上动词(少一个「时」就会拼出「清空归档永久删除了会话」);
+   * 这一条钉住所有入口。
    */
   it('每个入口标签拼到动词前都读得通', () => {
     const cases: Array<[string, string]> = [
@@ -87,9 +87,9 @@ describe('describeAuditDetail', () => {
   });
 
   /**
-   * 文案必须**全部**过翻译器 —— 这一条是英文界面的回归闸门:上一版把中文写死在
-   * 模块里,英文界面下「事件」列与「详情」列突然变中文(而 gk 其它审计文案都走 locale)。
-   * 这里的假翻译器把每个键换成 `[键]`,于是任何漏过 t 的中文都会留在输出里。
+   * 文案必须全部过翻译器,这一组是英文界面的回归闸门:写死的中文会让英文界面下
+   * 「事件」列与「详情」列变成中文。这里的假翻译器把每个键换成 `[键]`,
+   * 于是任何漏过 t 的中文都会留在输出里。
    */
   describe('i18n', () => {
     const keysOnly: AuditTranslator = (key) => `[${key}]`;
@@ -129,10 +129,10 @@ describe('describeAuditDetail', () => {
 });
 
 /**
- * hq:模型网关与 key 的审计事件 —— 筛选分组里的字符串要与服务端 `AuditEvent` 对得上,
+ * 模型网关与 key 的审计事件:筛选分组里的字符串要与服务端 `AuditEvent` 对得上,
  * 对不上的话筛出来是空、不会报错(见 AuditLogList 的 EVENT_GROUPS 注释)。
  */
-describe('hq:网关与 key 的审计事件', () => {
+describe('网关与 key 的审计事件', () => {
   const read = (relative: string) => readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
 
   it('每个事件都在服务端的 AuditEvent 里', () => {

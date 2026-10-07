@@ -8,7 +8,7 @@ import { authTypeBadge, describeKeySource, maskKey } from './gatewayLogic';
 import { errorMessage, myGatewaysApi, type GatewayTestResult, type MyGatewayView } from './gatewaysApi';
 
 /**
- * hq:「模型网关 → 我的 key」里的一张卡:默认网关 / 一个共享网关上,我的回合用哪把 key、上面有哪些我能用的模型;
+ * 「模型网关 → 我的 key」里的一张卡:默认网关 / 一个共享网关上,我的回合用哪把 key、上面有哪些我能用的模型;
  * 填 / 换 / 清我的个人 key,测试(不带 key = 测我现在会用的那把;填 key 的表单里「先测试」测输入框里那把)。
  */
 type Props = {

@@ -10,13 +10,7 @@
  *     refuse deleting untracked files on restore when the snapshot was
  *     truncated.
  *
- * Test style note: written in vitest import style (describe/it blocks with
- * top-level named imports). vitest itself is not a dependency of this repo —
- * the runner is node:test, matching the other suites under services/tests.
- * To move to vitest later, only the two import lines change
- * (`import { describe, it, expect } from 'vitest'`).
- *
- * Run: node --test server/services/tests/git-checkpoint-parsing.test.js
+ * Run: npx vitest run server/services/tests/git-checkpoint-parsing.test.js
  */
 
 import assert from 'node:assert/strict';

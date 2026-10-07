@@ -19,10 +19,7 @@ export type McpProject = {
  * One entry out of Claude's MCP config.
  *
  * The fields here are exactly the ones `ClaudeMcpProvider` serialises and reads
- * back: `command`/`args`/`env` for stdio, `url`/`headers` for http and sse. A
- * `cwd`, an `envVars` list, a `bearerTokenEnvVar` and `envHttpHeaders` used to
- * ride along as well — those are Codex's config format, and with Codex gone the
- * form collected them, the route parsed them and the adapter dropped them.
+ * back: `command`/`args`/`env` for stdio, `url`/`headers` for http and sse.
  */
 export type ProviderMcpServer = {
   provider: McpProvider;

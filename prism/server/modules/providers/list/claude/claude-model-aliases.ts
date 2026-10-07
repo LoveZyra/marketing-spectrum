@@ -1,9 +1,9 @@
 import type { ProviderModelsDefinition } from '@/shared/types.js';
 
 /**
- * 别名组 —— CLI 自己认识的几个名字(`default` 走 settings 配置链,其余经
- * `ANTHROPIC_DEFAULT_*_MODEL` 映射到网关模型)。hn 起它们只作"子代理与 CLI 内部任务用哪个模型",
- * 选择器里默认收起;但**始终留在服务端目录里**(档位解析与模型校验靠它)。
+ * 别名组:CLI 自己认识的几个名字(`default` 走 settings 配置链,其余经
+ * `ANTHROPIC_DEFAULT_*_MODEL` 映射到网关模型)。它们用来指定"子代理与 CLI 内部任务用哪个模型",
+ * 选择器里默认收起;但始终留在服务端目录里(档位解析与模型校验靠它)。
  *
  * 单独成文件:模型目录服务与 models provider 都要它,放在任一边都会成环。
  */

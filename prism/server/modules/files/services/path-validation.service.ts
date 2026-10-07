@@ -60,13 +60,12 @@ export async function realpathAllowingMissingLeaf(targetPath: string): Promise<s
       }
 
       /**
-       * hj(审计 P1-4):**悬空软链不能当「还不存在的路径」处理。**
+       * 悬空软链不能当「还不存在的路径」处理。
        *
-       * `proj/evil.txt -> /项目外/pwned.txt`,目标不存在时 realpath 报 ENOENT;原来这里直接
-       * 退到父目录 `proj/` 去判断 → 判在项目内 → 放行,而随后的 writeFile 会**跟着软链**
-       * 在项目外建出文件。软链可以来自 git clone 的仓库,也可以是 agent 建的。
-       * 现在:这一段本身是软链,就把它读出来、按它指向的位置接着往下解析 —— 指向项目内的
-       * 悬空软链照常可写,指向项目外的会在最后的包含判断里被拒。
+       * `proj/evil.txt -> /项目外/pwned.txt` 的目标不存在时 realpath 报 ENOENT;若退到父目录
+       * `proj/` 去判断就会放行,而随后的 writeFile 会跟着软链在项目外建出文件。软链可以来自
+       * git clone 的仓库,也可以是 agent 建的。所以这一段本身是软链时,读出它的目标、按指向的
+       * 位置接着往下解析:指向项目内的悬空软链照常可写,指向项目外的会在最后的包含判断里被拒。
        */
       let linkTarget: string | null = null;
       try {
@@ -80,7 +79,7 @@ export async function realpathAllowingMissingLeaf(targetPath: string): Promise<s
         if (hops > 40) {
           throw Object.assign(new Error('Too many symbolic links'), { code: 'ELOOP' });
         }
-        // 相对软链按**真实**父目录解析,不是字面父目录 —— 父路径里本身有软链时两者不同
+        // 相对软链按真实父目录解析,不是字面父目录 —— 父路径里本身有软链时两者不同
         // (`deep/sub -> s`,`s/evil -> ../../outside/x`:按字面算会以为还在项目里)。
         // 父目录这一段本身也可能是悬空的,所以递归调本函数。
         const realParent = path.isAbsolute(linkTarget)
@@ -138,7 +137,7 @@ export async function validatePathInProject(
       return { valid: false, error: CONTAINMENT_ERROR };
     }
   } catch (error) {
-    // hj:软链环(或自己造的超长软链链)不是「文件系统解析不了」,是可疑输入 —— 拒绝。
+    // 软链环(或刻意造的超长软链链)不是「文件系统解析不了」,是可疑输入,拒绝。
     if ((error as NodeJS.ErrnoException)?.code === 'ELOOP') {
       return { valid: false, error: CONTAINMENT_ERROR };
     }
@@ -151,12 +150,11 @@ export async function validatePathInProject(
 }
 
 /**
- * hj:校验一个**目录项本身**(删除、改名的源路径)—— 不跟随最后一段软链。
+ * 校验一个目录项本身(删除、改名的源路径),不跟随最后一段软链。
  *
  * 删除 / 改名作用在软链这个目录项上,不是它指向的东西:`rm link` 删的是链接,`rename link`
- * 挪的是链接。按目标判的话,指向项目外的软链(git 仓库里常见的绝对路径软链)、软链环,
- * 在 hj 收紧悬空软链之后就既删不掉也改不了名了。所以这里只要求:词法上在项目里,
- * 且**父目录**的真实路径在项目里。
+ * 挪的是链接。按目标判的话,指向项目外的软链(git 仓库里常见的绝对路径软链)和软链环
+ * 就既删不掉也改不了名。所以这里只要求:词法上在项目里,且父目录的真实路径在项目里。
  */
 export async function validateEntryInProject(
   projectRoot: string,

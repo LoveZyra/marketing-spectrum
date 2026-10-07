@@ -40,8 +40,8 @@ type UseFileTreeDataResult = {
   navigateUp: () => void;
   resetToProject: () => void;
   /**
-   * hl(动态 P2-10):把一个被截断的目录**单独**列一遍(`?path=`,再给一份完整预算),
-   * 结果原地接进树里。失败时抛错,由调用方提示。
+   * 把一个被截断的目录单独列一遍(`?path=`,再给一份完整预算),结果原地接进树里。
+   * 失败时抛错,由调用方提示。
    */
   loadSubtree: (dirPath: string) => Promise<void>;
   /** 正在懒加载的目录路径集合(行上画转圈用)。 */
@@ -74,11 +74,11 @@ export function replaceSubtree(
 }
 
 /**
- * hl 复核 P2-1:整树刷新之后,哪些**懒加载过**的目录要重新拉。
+ * 整树刷新之后,哪些懒加载过的目录要重新拉。
  *
- * 原来刷新后把缓存的子树无条件盖回新数据上 —— 懒加载过的目录从此永远显示第一次拉到的
- * 旧内容(别人新建 / 删掉的文件都看不到)。现在刷新时不套缓存,只挑出:仍然存在、
- * 仍然没列全(truncated)、而且此刻展开着的缓存目录,重新请求一遍。
+ * 刷新时不把缓存的旧子树盖回新数据(否则懒加载过的目录会一直显示第一次拉到的内容,
+ * 别人新建 / 删掉的文件都看不到),只挑出仍然存在、仍然没列全(truncated)、
+ * 而且此刻展开着的缓存目录,重新请求一遍。
  */
 export function pickSubtreesToReload(
   nodes: FileTreeNode[],
@@ -148,16 +148,16 @@ export function useFileTreeData(
   const [loadingSubtrees, setLoadingSubtrees] = useState<ReadonlySet<string>>(new Set());
   const abortControllerRef = useRef<AbortController | null>(null);
   /**
-   * 懒加载过的子树:整树刷新(上传 / 改名 / 手动刷新)会把它们又截断掉,刷新后按路径
-   * 重新接回去,别让用户每次刷新都再点一遍「…还有更多」。换视图(换项目 / 进目录)时清空。
+   * 懒加载过的子树路径:整树刷新(上传 / 改名 / 手动刷新)会把它们又截断掉,刷新后按路径
+   * 重新拉取展开着的那些,别让用户每次刷新都再点一遍「…还有更多」。换视图(换项目 / 进目录)时清空。
    */
   const lazySubtreesRef = useRef<Set<string>>(new Set());
   const isDirExpandedRef = useRef(isDirExpanded);
   isDirExpandedRef.current = isDirExpanded;
   /** 每次整树加载 +1;旧一轮的懒加载重拉看到代数变了就停。 */
   const generationRef = useRef(0);
-  // 上一次**成功**加载的视图标识(项目+浏览路径)。同一视图的重取(refreshKey 变)
-  // 不再把 loading 置真 —— 旧行为是每次刷新都闪一遍骨架屏并清掉滚动位置。
+  // 上一次成功加载的视图标识(项目 + 浏览路径)。同一视图的重取(refreshKey 变)
+  // 只标 refreshing、不把 loading 置真,免得每次刷新都闪一遍骨架屏并清掉滚动位置。
   const loadedViewRef = useRef<string | null>(null);
 
   // File-tree requests use the DB projectId; the backend resolves it to the
@@ -254,7 +254,6 @@ export function useFileTreeData(
       return;
     }
 
-    // Abort previous request
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -294,7 +293,7 @@ export function useFileTreeData(
 
         const data = (await response.json()) as FileTreeNode[];
         if (isActive) {
-          // hl 复核 P2-1:不再把缓存的旧子树盖回新数据;记下哪些目录懒加载过,稍后按需重拉。
+          // 不把缓存的旧子树盖回新数据:记下哪些目录懒加载过,稍后按需重拉(见 pickSubtreesToReload)。
           generationRef.current += 1;
           const generation = generationRef.current;
           const cached = isSameView ? new Set(lazySubtreesRef.current) : new Set<string>();
@@ -307,7 +306,7 @@ export function useFileTreeData(
             projectRoot: readPathHeader(response, 'X-Prism-Tree-Project-Root'),
             externalRead: response.headers.get('X-Prism-Tree-External-Read') === '1',
           });
-          // 服务端条目上限截断标记:前端此前根本不读它,大目录静默少显示。
+          // 服务端条目上限截断标记:不读它的话,大目录会静默少显示。
           setTruncated(response.headers.get('X-Prism-Truncated') === '1');
           loadedViewRef.current = viewKey;
         }

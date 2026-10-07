@@ -38,7 +38,7 @@ export default function ProjectCreationWizard({
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /**
-   * hl 复核:用户动没动过权限选择器。没动过就**不发** visibility —— 路径若命中一个已归档的
+   * 用户动没动过权限选择器。没动过就不发 visibility —— 路径若命中一个已归档的
    * 项目,服务端据此保留它原来的共享设置,而不是被表单默认的「个人」覆盖掉。
    * 新建项目时不发与发 `personal` 等价(服务端缺省就是个人)。
    */
@@ -70,7 +70,7 @@ export default function ProjectCreationWizard({
     setStep((previousStep) => (previousStep > 1 ? ((previousStep - 1) as WizardStep) : previousStep));
   }, []);
 
-  // hl(动态 P2-22):Esc 关(创建中不关)、Tab 不跑到弹窗背后、打开时焦点落进弹窗。
+  // Esc 关(创建中不关)、Tab 不跑到弹窗背后、打开时焦点落进弹窗。
   const dialogRef = useRef<HTMLDivElement>(null);
   const handleEscapeClose = useCallback(() => {
     if (!isCreating) onClose();
@@ -94,11 +94,11 @@ export default function ProjectCreationWizard({
             sharedUserIds: formState.visibility === 'shared' ? formState.sharedUserIds : [],
           }
           : {}),
-        // 空串 = 不用模板,后端据此走原来的空目录流程
+        // 空串 = 不用模板,后端走空目录流程
         templateId: formState.templateId || undefined,
       });
 
-      // hl(09-24 P2-14):命中已归档路径 = 还原了旧项目(连同旧会话),不是新建 —— 说一声。
+      // 命中已归档路径 = 还原了旧项目(连同旧会话),不是新建,要告诉用户。
       if (revived) {
         toast({
           message: t('projectWizard.revivedTitle', { defaultValue: '已还原一个归档的项目' }),

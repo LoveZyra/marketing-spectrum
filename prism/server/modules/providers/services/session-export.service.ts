@@ -5,12 +5,10 @@
  * 都是过程噪音,导出的读者要的是"聊了什么",不是"执行了什么"。注入过滤在
  * normalize 层早已生效,这里拿到的就是干净的正文。渲染是纯函数,单测直接钉。
  *
- * F12 两处增强:
- *   - **JSON 格式** —— md/html 是给人读的,读完就完了。想把对话喂给别的工具
- *     (统计、二次分析、迁移到别处)时,把 HTML 再解析回来是荒谬的。
- *   - **含工具过程** —— 默认之所以剔掉工具,是因为多数导出是给人看的;但排查
- *     "它当时到底改了哪个文件"时,过程恰恰是唯一有用的东西。做成开关,而不是
- *     替谁做决定。
+ *   - JSON 格式:md/html 是给人读的;想把对话喂给别的工具(统计、二次分析、迁移)时用它,
+ *     不必再从 HTML 解析回来。
+ *   - 含工具过程(`includeTools`):多数导出是给人看的,所以默认剔掉工具;但排查
+ *     "它当时到底改了哪个文件"时,过程恰恰是唯一有用的东西,所以做成开关。
  */
 
 export type ExportableMessage = {
@@ -23,26 +21,16 @@ export type ExportableMessage = {
   toolName?: string;
   toolInput?: unknown;
   /**
-   * fj:字段名对齐 `NormalizedMessage` 的 `toolId`。
-   *
-   * 这里原来叫 `toolUseId`,而全仓的归一化消息上根本没有这个名字;导出路由又用
-   * `history.messages as ExportableMessage[]` 强转,**类型系统因此不报错**,
-   * 运行时恒为 `undefined` —— JSON 导出里每个 `tool_call`/`tool_result` 的
-   * `toolUseId` 都是 null,消费方没法把结果连回调用。而 JSON 导出的自述目标
-   * 就是"喂给别的工具做二次分析"。
-   *
-   * 对外的字段名保持 `toolUseId` 不变(见 renderJsonExport)。
+   * 字段名与 `NormalizedMessage` 的 `toolId` 对齐,名字对不上的话运行时恒为 undefined,
+   * 消费方没法把结果连回调用。JSON 导出对外的字段名是 `toolUseId`(见 renderJsonExport)。
    */
   toolId?: string;
   isError?: boolean;
   /**
-   * F38:**这条消息带了哪些附件。**
+   * 这条消息带了哪些附件。不列出来的话,一条"看这张图,里面的报错是什么"导出来只剩那句话,
+   * 读的人无从知道当时还给了模型一张图,拿 JSON 做二次分析也建立在残缺的输入上。
    *
-   * 导出此前完全不提附件 —— 一条"看这张图,里面的报错是什么"导出来只剩那句话,
-   * 读的人无从知道当时还给了模型一张图。JSON 导出的自述目标是"喂给别的工具做
-   * 二次分析",少了附件那份分析建立在残缺的输入上。
-   *
-   * 只导**清单**(文件名 / 路径 / 类型),不导内容:导出是给人读和给工具分析的,
+   * 只导清单(文件名 / 路径 / 类型),不导内容:导出是给人读和给工具分析的,
    * 把几百 KB base64 塞进 Markdown 只会让它打不开。
    */
   attachments?: ExportableAttachment[];
@@ -63,10 +51,8 @@ export type SessionExportInput = {
   title: string;
   sessionId: string;
   /**
-   * F38:**provider 原生会话 id。**
-   *
-   * 导出里原来只有 app 会话 id,而 transcript、检查点、工具日志全按原生 id 组织
-   * —— 拿着导出去对 jsonl 时,第一步就断了。带上它,导出才是自洽的。
+   * provider 原生会话 id。transcript、检查点、工具日志全按原生 id 组织,
+   * 只有 app 会话 id 的话,拿着导出去对 jsonl 第一步就断了。
    */
   providerSessionId?: string | null;
   exportedAt: string;
@@ -111,7 +97,7 @@ const isToolMessage = (message: ExportableMessage): boolean =>
 /**
  * 该进导出的消息。
  *
- * `includeTools` 打开时**保留原始顺序**把工具调用与结果混在正文里 —— 工具的意义
+ * `includeTools` 打开时保留原始顺序,把工具调用与结果混在正文里 —— 工具的意义
  * 全在"它发生在哪两句话之间",单独列一节等于把这层信息扔了。
  */
 export function selectExportMessages(
@@ -122,7 +108,7 @@ export function selectExportMessages(
     isBodyMessage(message) || (options.includeTools === true && isToolMessage(message)));
 }
 
-/** fj:`tool_use` 的 id → 工具名,给 `tool_result` 反查用。 */
+/** `tool_use` 的 id → 工具名,给 `tool_result` 反查用。 */
 function buildToolNameIndex(messages: ExportableMessage[]): Map<string, string> {
   const index = new Map<string, string>();
   for (const message of messages) {
@@ -136,9 +122,8 @@ function buildToolNameIndex(messages: ExportableMessage[]): Map<string, string> 
 /**
  * 工具消息的一行摘要(md/html 用)。
  *
- * fj:`tool_result` 上没有 `toolName`(归一化消息只给 `toolId`/`content`/`isError`),
- * 所以此前所有结果块都退回字面量「结果」,渲染成"结果 · 结果"。改成按 `toolId`
- * 反查同 id 的 `tool_use` 拿工具名。
+ * `tool_result` 上没有 `toolName`(归一化消息只给 `toolId`/`content`/`isError`),
+ * 所以按 `toolId` 反查同 id 的 `tool_use` 拿工具名;查不到才退回字面量「结果」。
  */
 function toolSummary(message: ExportableMessage, byToolId?: Map<string, string>): string {
   const resolvedName = message.toolName
@@ -181,7 +166,7 @@ export function renderMarkdownExport(input: SessionExportInput, options: ExportO
       .filter(Boolean)
       .join(' · ');
     lines.push(`## ${who}${meta ? ` (${meta})` : ''}`, '', (message.content ?? '').trim(), '');
-    // F38:附件只列清单,不导内容(base64 塞进 Markdown 会让它打不开)。
+    // 附件只列清单,不导内容(base64 塞进 Markdown 会让它打不开)。
     const attachments = attachmentsOf(message);
     if (attachments.length > 0) {
       lines.push(`附件(${attachments.length}):`);
@@ -197,7 +182,7 @@ export function renderMarkdownExport(input: SessionExportInput, options: ExportO
 /**
  * JSON 导出。
  *
- * 刻意**不是**把内部 NormalizedMessage 原样倒出来 —— 那是内部结构,导出一旦这么
+ * 刻意不把内部 NormalizedMessage 原样倒出来 —— 那是内部结构,导出一旦这么
  * 做就等于把它变成对外契约,以后改不动。这里给一份稳定、自解释的形状。
  */
 export function renderJsonExport(input: SessionExportInput, options: ExportOptions = {}): string {
@@ -205,7 +190,7 @@ export function renderJsonExport(input: SessionExportInput, options: ExportOptio
     prismExportVersion: 1,
     title: input.title,
     sessionId: input.sessionId,
-    // F38:带上原生 id —— transcript / 检查点 / 工具日志都按它组织。
+    // 带上原生 id:transcript / 检查点 / 工具日志都按它组织。
     providerSessionId: input.providerSessionId ?? null,
     exportedAt: input.exportedAt,
     includesTools: options.includeTools === true,
@@ -215,7 +200,7 @@ export function renderJsonExport(input: SessionExportInput, options: ExportOptio
           type: message.kind === 'tool_use' ? 'tool_call' : 'tool_result',
           timestamp: message.timestamp ?? null,
           tool: message.toolName ?? null,
-          // 对外契约不变,取值改成真实存在的那个字段。
+          // 对外字段名是 toolUseId,取值来自归一化消息上的 toolId。
           toolUseId: message.toolId ?? null,
           ...(message.kind === 'tool_use'
             ? { input: message.toolInput ?? null }
@@ -229,7 +214,7 @@ export function renderJsonExport(input: SessionExportInput, options: ExportOptio
         timestamp: message.timestamp ?? null,
         model: message.role === 'assistant' ? message.model ?? null : null,
         content: (message.content ?? '').trim(),
-        // F38:清单而不是内容 —— 消费方要原图自己按 path 取。
+        // 清单而不是内容:消费方要原图自己按 path 取。
         attachments: attachments.map((attachment) => ({
           name: attachmentLabel(attachment),
           path: attachment.path ?? null,
@@ -264,7 +249,7 @@ export function renderHtmlExport(input: SessionExportInput, options: ExportOptio
         .filter(Boolean)
         .join(' · ');
       const attachments = attachmentsOf(message);
-      // F38:附件只列清单 —— 导出是给人读的,内嵌 base64 会让文件打不开。
+      // 附件只列清单:导出是给人读的,内嵌 base64 会让文件打不开。
       const attachmentsHtml = attachments.length > 0
         ? `\n  <div class="attachments">附件(${attachments.length}):${
           attachments.map((attachment) => `<span>${escapeHtml(attachmentLabel(attachment))}</span>`).join('')

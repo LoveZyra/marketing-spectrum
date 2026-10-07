@@ -156,6 +156,7 @@
       "fileTooLarge": "「{{name}}」超过单文件上限 {{limit}}",
       "totalTooLarge": "这批文件共 {{total}},一次上传最多 {{limit}}",
       "partial": "已上传 {{uploaded}} / {{total}} 个文件",
+      "failedAfterPartial": "{{reason}}({{uploaded}} 个文件已上传,其余 {{rest}} 个没有上传)",
       "success": "已上传 {{uploaded}} 个文件",
       "overwritten": "已覆盖同名文件:{{names}}",
       "overwrittenMany": "已覆盖同名文件:{{names}},另有 {{rest}} 个",
@@ -189,6 +190,7 @@
       "createFailed": "创建失败",
       "uploadNetwork": "上传失败,请检查网络后重试",
       "uploadCanceled": "上传已取消",
+      "proxyTooLarge": "上传请求超过了反向代理的大小上限(client_max_body_size)。请联系管理员调大代理上限,或调小分片大小(PRISM_UPLOAD_CHUNK_MB)",
       "unknown": "操作失败"
     }
   },
@@ -452,7 +454,21 @@
     "triggerSchedule": "定时",
     "openRunSession": "看这次的会话",
     "moreRuns": "看更早的({{count}} 条)",
-    "modelRetired": "已下架 · 运行时按默认模型"
+    "modelRetired": "已下架 · 运行时按默认模型",
+    "loadFailed": "定时任务列表加载失败,请稍后重试。",
+    "staleData": "刷新失败,下面显示的可能不是最新状态。",
+    "retry": "重试",
+    "errors": {
+      "saveFailed": "保存失败",
+      "actionFailed": "操作失败",
+      "deleteFailed": "删除失败",
+      "runFailed": "启动失败",
+      "ticketFailed": "领取票据失败",
+      "startFailed": "发起失败",
+      "network": "网络请求没有发出去(可能被代理拦截),请检查网络后重试",
+      "withReason": "{{action}}:{{reason}}",
+      "withStatus": "{{action}}(HTTP {{status}})"
+    }
   },
   "export": {
     "md": "Markdown",
@@ -480,7 +496,9 @@
     "sessionCount": "这个项目下有 {{count}} 条会话。"
   },
   "actions": {
-    "close": "关闭"
+    "close": "关闭",
+    "save": "保存",
+    "cancel": "取消"
   },
   "common": {
     "cancel": "取消",

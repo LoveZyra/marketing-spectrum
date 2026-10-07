@@ -20,11 +20,9 @@ import { pickStoredModel } from '../utils/modelAvailability';
 /**
  * The agent backend this build talks to.
  *
- * `provider` used to be state here: seeded from a `selected-provider`
- * localStorage key, re-synced from `session.__provider`, and reassigned by the
- * model picker. `LLMProvider` has one member now, so all three paths could only
- * ever produce this value. It stays a named constant rather than being inlined
- * because the provider is still a real axis on the wire — every route below is
+ * `LLMProvider` has one member, so this is a constant rather than state. It
+ * stays a named constant rather than being inlined because the provider is
+ * still a real axis on the wire — every route below is
  * `/api/providers/:provider/...` — and the per-provider maps this hook keeps
  * are the shape the backend answers in.
  */
@@ -161,11 +159,11 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
   }, []);
 
   /**
-   * fj:迟到的响应不许污染当前会话。
+   * 迟到的响应不许污染当前会话。
    *
-   * 这个请求没有任何票据:切会话很快时(A 慢 → B 快),A 的响应会**盖在**
-   * B 的视图上 —— 界面上显示的是另一条会话的模型,而用户完全看不出来。
-   * store 那边早就有 `_fetchSeq` 这套票据,这里补一个同样的。
+   * 切会话很快时(A 慢 → B 快),A 的响应会盖在 B 的视图上,界面显示的是另一条会话的模型,
+   * 用户完全看不出来。所以每次请求领一张票,只有最新那张的响应才落地(与 store 的 `_fetchSeq`
+   * 同一套做法)。
    */
   const activeModelRequestRef = useRef(0);
   const refreshActiveSessionModel = useCallback(async (sessionId?: string | null) => {
@@ -182,8 +180,8 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
       );
       const body = (await response.json()) as { success?: boolean; data?: { model?: string; source?: string | null } };
       if (ticket !== activeModelRequestRef.current) return; // 被更新的请求顶替了
-      // hn:服务端报的是"默认"(新会话、transcript 还没落盘)时不采用 —— 这一轮实际用的是本地选的模型,
-      // 拿默认值盖上去 chip 会显示成另一个模型(实测:选 DeepSeek 发第一条,chip 跳成默认的 GLM)
+      // 服务端报的是"默认"(新会话、transcript 还没落盘)时不采用 —— 这一轮实际用的是本地选的模型,
+      // 拿默认值盖上去 chip 会显示成另一个模型(例如选 DeepSeek 发第一条,chip 跳成默认的 GLM)
       setActiveSessionModel(response.ok && body.data?.model && body.data.source !== 'default' ? body.data.model : null);
     } catch {
       if (ticket !== activeModelRequestRef.current) return;
@@ -287,7 +285,7 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
     void loadProviderModels();
   }, [loadProviderModels]);
 
-  // hn:设置页改了模型目录(同一个标签页里)→ 重拉列表,选择器与 chip 不用刷新页面就是新的。
+  // 设置页改了模型目录(同一个标签页里)→ 重拉列表,选择器与 chip 不用刷新页面就是新的。
   useEffect(() => {
     const onCatalogChanged = () => { void loadProviderModels({ bypassCache: true }); };
     window.addEventListener('prism:model-catalog-changed', onCatalogChanged);
@@ -347,9 +345,9 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
   }, [providerCapabilities]);
 
   /**
-   * hn:第一次打开(没存过)用服务端给的默认 —— 模型目录里的 is_default;不要停在写死的别名 default 上。
-   * hq:存着的模型还在列表里就不换(哪怕它此刻对这个人不可用 —— 发送时服务端说清楚,不悄悄换模型);
-   * 需要退回默认时**不挑不可用的**。规则见 utils/modelAvailability.pickStoredModel(有单测)。
+   * 第一次打开(没存过)用服务端给的默认,即模型目录里的 is_default,不停在写死的别名 default 上。
+   * 存着的模型还在列表里就不换(哪怕它此刻对这个人不可用:发送时服务端说清楚,不悄悄换模型);
+   * 需要退回默认时不挑不可用的。规则见 utils/modelAvailability.pickStoredModel(有单测)。
    */
   const pickStoredOrCurrent = (
     storageKey: string,
@@ -414,9 +412,9 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
   }, [getAllowedEffortValues]);
 
   /**
-   * ho(复审):档位按**这段对话实际在用的模型**认(activeSessionModel),不是按"新会话默认模型"。
-   * 原来按默认模型认:会话 S1 跑着 opus、默认是 glm 时,在 S1 的「档位 ›」里选了 glm 没有的「最高」,
-   * 下面的校正立刻把它改回 default —— 菜单显示的是 opus 的档位,发出去的却是 default。
+   * 档位按这段对话实际在用的模型认(activeSessionModel),不按"新会话默认模型"认:
+   * 会话 S1 跑着 opus、默认是 glm 时,在 S1 的「档位 ›」里选了 glm 没有的「最高」,
+   * 按默认模型校正会立刻把它改回 default,菜单显示的是 opus 的档位,发出去的却是 default。
    */
   const providerModels = useMemo<Record<LLMProvider, string>>(() => ({
     claude: activeSessionModel || claudeModel,
@@ -436,9 +434,9 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
   }, [providerModelCatalog.claude, claudeModel]);
 
   /*
-   * ho(复审):原来这里有一个 effect 把存着的档位按当前模型**改写进 localStorage**。档位按会话模型认之后,
-   * 那样做会在看一眼"没有最高档"的会话时就把全局偏好抹成 default,回到原来的会话就丢了。
-   * 现在只派生(见下面 currentProviderEffort):存着的偏好不动,每段对话按自己的模型取能用的那一档。
+   * 存着的档位偏好不按当前模型改写进 localStorage:档位按会话模型认,看一眼"没有最高档"的会话
+   * 就会把全局偏好抹成 default,回到原来的会话就丢了。只派生(见下面 currentProviderEffort):
+   * 存着的偏好不动,每段对话按自己的模型取能用的那一档。
    */
 
   useEffect(() => {
@@ -539,14 +537,12 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
   }, [selectedSession?.id, getPermissionModesForProvider]);
 
   /**
-   * do/du:计划卡点了「开始实施」→ 档位切出计划模式。批准只作用于当前回合
-   * (CLI 内部继续执行),而 composer 档位决定**下一条消息**;不切的话下一句
-   * 追问又进计划模式,"点了开始却还在计划"。
+   * 计划卡点了「开始实施」→ 档位切出计划模式。批准只作用于当前回合(CLI 内部继续执行),
+   * 而 composer 档位决定下一条消息;不切的话下一句追问又进计划模式,"点了开始却还在计划"。
    *
-   * du:必须走 `selectPermissionMode` —— 上面那段注释警告过的正是这个坑:
-   * do 轮直接调 setPermissionMode,**没写 localStorage**,于是切走再切回
-   * (或 capabilities 响应落地让恢复 effect 重跑)时,档位又从存档里读回
-   * `plan`,症状原样复发。只在当前正是 plan 时动作,故读 ref 判断。
+   * 必须走 `selectPermissionMode`(上面那段注释警告过):直接调 setPermissionMode 不写
+   * localStorage,切走再切回(或 capabilities 响应落地让恢复 effect 重跑)时档位又从存档里读回
+   * `plan`。只在当前正是 plan 时动作,故读 ref 判断。
    */
   const permissionModeRef = useRef(permissionMode);
   permissionModeRef.current = permissionMode;
@@ -601,7 +597,7 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
 
     const body = (await response.json().catch(() => ({}))) as ChangeActiveModelApiResponse & { error?: unknown };
     if (!response.ok || !body.success || !body.data?.supported) {
-      // hn:服务端的原因(MODEL_NOT_ALLOWED —— 模型已下架 / 不在目录里)直接给用户看。
+      // 服务端的原因(MODEL_NOT_ALLOWED:模型已下架 / 不在目录里)直接给用户看。
       throw new Error(typeof body.error === 'string' && body.error ? body.error : 'Unable to change the active model for this session.');
     }
 

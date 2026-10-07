@@ -11,23 +11,19 @@ import { getDataDir } from '@/utils/runtime-paths.js';
 /**
  * 模型别名 → 真实模型的实测。
  *
- * /models 弹窗里的卡片写着 "Sonnet 4.6 · $3/$15 per Mtok" —— 那是 Anthropic 的
- * 官方口径。但部署把 ANTHROPIC_BASE_URL 指向自己的网关时,**选什么别名、实际由
- * 哪个模型来答,是网关说了算**。本部署就是活例子:界面上选 "sonnet",实际服务的
- * 是 deepseek-v4-flash。卡片文案在这种环境下不只是没用,是误导。
- *
- * 而"别名映射到什么"没有任何查询接口 —— 网关在**请求时**才做解析。所以唯一诚实
- * 的办法是实测:对每个别名发一次最小请求,读响应里的真实模型名。这个文件做三件事:
+ * /models 弹窗卡片上的 "Sonnet 4.6 · $3/$15 per Mtok" 是 Anthropic 的官方口径;ANTHROPIC_BASE_URL
+ * 指向自建网关时,选什么别名、实际由哪个模型来答由网关决定(例如选 "sonnet" 实际是 deepseek-v4-flash),
+ * 卡片文案反而误导。网关只在请求时解析别名,没有查询接口,所以只能实测:
+ * 对每个别名发一次最小请求,读响应里的真实模型名。这个文件做三件事:
  *
  *  1. 逐别名探测(空 system prompt、只读 user 级 settings 拿鉴权;拿到第一条带
  *     model 的响应就立刻停,不等这一轮跑完 —— 每次探测的开销在几百 token 量级);
- *  2. 结果落盘缓存(dataDir/claude-model-mappings.json),带时间戳 ——
- *     映射是网关的配置,不会一天变八次,没必要每次打开弹窗都实测;
- *  3. 收拾残局:CLI 跑一次就会在 ~/.claude/projects 下留一份 transcript,
+ *  2. 结果落盘缓存(dataDir/claude-model-mappings.json),带时间戳:
+ *     映射是网关的配置,很少变,没必要每次打开弹窗都实测;
+ *  3. 收拾残局:CLI 跑一次就会在 ~/.claude/projects 下留一份 transcript(无法关掉),
  *     probe 的 cwd 里带上 PROBE_DIR_MARKER,sessions-watcher 按这个标记忽略,
- *     探测完再把那些 transcript 目录整个删掉。这正是 getSupportedModels()
- *     被禁用的原因(见 claude-models.provider.ts 里的注释) —— 那个问题在这里
- *     用"标记 + 忽略 + 事后删除"解决,而不是靠不产生 transcript(CLI 做不到)。
+ *     探测完再把那些 transcript 目录整个删掉。CLI 的 supportedModels() 不用,
+ *     也是因为它会留下这种幽灵会话(见 claude-models.provider.ts)。
  */
 
 /**
@@ -53,7 +49,7 @@ export type ModelMappingsFile = {
   /**
    * 实测落盘那一刻 ~/.claude/settings.json 的 mtime。模型映射就配置在那个文件里,
    * settings 一改,已缓存的"实际模型"就可能过期 —— 读取侧据此判 stale,前端提示
-   * 重测、chip 停显过期真名。旧版缓存没有这个字段:视为未知、不判过期,下次实测补上。
+   * 重测、chip 停显过期真名。缺这个字段的缓存视为未知、不判过期,下次实测补上。
    */
   settingsMtimeMs?: number;
 };
@@ -170,37 +166,31 @@ async function probeOneAlias(alias: string, probeCwd: string): Promise<ModelMapp
       // maxTurns 只是兜底 —— 下面一拿到模型名就 break,根本不等这一轮跑完。
       maxTurns: 1,
       cwd: probeCwd,
-      // 必须读 user 级 settings —— 否则探测报 "Not logged in · Please run /login"。
-      // 原因:自定义网关部署把鉴权(ANTHROPIC_BASE_URL / AUTH_TOKEN,或 apiKeyHelper)
-      // 放在 ~/.claude/settings.json 里,这份配置只有通过 settingSources 的 'user' 源
-      // 才会加载。真实会话用的是 ['project','user','local'](见 claude-sdk.js),所以能答;
-      // 之前这里写 [] 把鉴权也一并屏蔽了,于是"对话可用、实测全失败"。
-      //
-      // 只取 'user' 不取 'project'/'local':探测 cwd 是隔离目录(getDataDir()/probe),
-      // 本就没有项目级 settings 可读,单 'user' 既拿到鉴权,又不受任何具体项目配置影响。
+      // 必须读 user 级 settings,否则探测报 "Not logged in · Please run /login":
+      // 自定义网关部署把鉴权(ANTHROPIC_BASE_URL / AUTH_TOKEN,或 apiKeyHelper)放在
+      // ~/.claude/settings.json 里,只有 settingSources 含 'user' 才会加载。
+      // 不取 'project'/'local':探测 cwd 是数据目录下的隔离目录,本就没有项目级 settings,
+      // 只取 'user' 既拿到鉴权,又不受任何具体项目配置影响。
       settingSources: ['user'],
-      // hm(A3.2 / A2):与对话同一份 env(带 CLAUDE_CODE_ENABLE_TODO_TOOLS)与同一个 CLI ——
+      // 与对话同一份 env(带 CLAUDE_CODE_ENABLE_TODO_TOOLS)与同一个 CLI ——
       // `CLAUDE_CLI_PATH` 没配就不传,用 SDK 随包的那一份。
       env: buildClaudeSdkEnv(process.env),
       pathToClaudeCodeExecutable: sdkExecutableOption(),
       abortController: abort,
     };
-    // 与真实对话同口径(见 claude-sdk.js 的 toSdkModel):'default' 档**省略 model**,
+    // 与真实对话同口径(见 claude-sdk.js 的 toSdkModel):'default' 档省略 model,
     // 让 CLI 按 settings 配置链("model" → ANTHROPIC_MODEL → 内置默认)自选。
-    // 实测过 `--model default`:CLI 会把 'default' 原样透传给网关、落进网关对陌生
-    // 名字的兜底路由,和会话真实走的路无关 —— 所以两边都必须省略,才测得准。
-    // 其余别名照发,和会话一致。
+    // `--model default` 会被 CLI 原样透传给网关、落进网关对陌生名字的兜底路由,
+    // 和会话真实走的路无关,所以两边都必须省略才测得准。其余别名照发,和会话一致。
     if (alias !== 'default') options.model = alias;
 
     const stream = query({ prompt: '1', options: options as never });
 
     for await (const message of stream) {
       const found = extractActualModel(message);
-      // 关键:第一条带 model 的消息(通常是模型刚开口的那条 assistant 消息)一到手
-      // 就停 —— 不等这一轮把可能的工具调用/第二轮跑完。像 'default' 这类模型第一轮就
-      // 发起工具调用时,SDK 会抛 "Reached maximum number of turns (1)";但真实模型名
-      // 那时早已在 assistant 消息里给出了。提前 break 就拿到了,不会被这个错误盖掉 ——
-      // 这正是"底层模型明明可用、实测却失败"的成因。
+      // 第一条带 model 的消息(通常是模型刚开口的那条 assistant 消息)一到手就停,
+      // 不等这一轮把可能的工具调用 / 第二轮跑完:模型第一轮就发起工具调用时,SDK 会抛
+      // "Reached maximum number of turns (1)",而真实模型名那时已经在 assistant 消息里了。
       if (found) {
         actual = found;
         break;
@@ -225,10 +215,9 @@ async function probeOneAlias(alias: string, probeCwd: string): Promise<ModelMapp
 }
 
 /**
- * 把探测三态归一成最终结果。单独抽出来是为了能单测那条最关键的规则:
- * **只要在出错前已经读到模型名,就算成功** —— 这正是 'default' 别名"底层模型可用、
- * 实测却报 Reached maximum number of turns 失败"的修复点(拿到模型名后这一轮才
- * 因工具调用/maxTurns 抛错,不该把已读到的模型名盖成失败)。
+ * 把探测三态归一成最终结果。单独抽出来是为了单测最关键的规则:
+ * 只要在出错前已经读到模型名,就算成功 —— 拿到模型名后这一轮才因工具调用 / maxTurns 抛错
+ * (例如 'default' 别名报 Reached maximum number of turns),不该把已读到的模型名盖成失败。
  */
 export function resolveProbeOutcome(params: {
   actualModel: string | null;
@@ -283,9 +272,9 @@ export function isProbeRunning(): boolean {
 /**
  * 探测一组别名,返回并落盘全量映射(旧结果保留,被探测的别名覆盖)。
  *
- * 串行而不是并行:每个探测都是一个完整的 CLI 子进程,7 个并行等于瞬间拉起
- * 7 个 node,而这台服务器同时还跑着真正的会话。串行慢十几秒,没人在乎 ——
- * 这是个点一下按钮的显式操作,不在任何热路径上。
+ * 串行而不是并行:每个探测都是一个完整的 CLI 子进程,并行会瞬间拉起一批 node,
+ * 而服务器同时还跑着真正的会话。串行慢十几秒可以接受:这是点按钮触发的显式操作,
+ * 不在任何热路径上。
  */
 export async function probeModelMappings(aliases: string[]): Promise<Record<string, ModelMapping>> {
   if (inFlight) return inFlight;

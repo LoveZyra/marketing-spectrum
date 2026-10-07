@@ -34,7 +34,7 @@ function Sidebar({
   onRefresh,
   onShowSettings,
   isMobile,
-  // gn:别人删了 / 恢复了一条时的重拉信号;与侧栏自己的 trashReloadToken 相加,
+  // 别人删了 / 恢复了一条时的重拉信号;与侧栏自己的 trashReloadToken 相加,
   // 两边任意一个动了,「最近删除」那一段就重拉一次。
   externalTrashSignal,
 }: SidebarProps) {
@@ -43,8 +43,6 @@ function Sidebar({
   const { toast } = useToast();
   const { preferences, setPreference } = useUiPreferences();
 
-  // 设置入口上的红色未读计数。事件开关本身在设置页里,所以计数挂在设置入口上,
-  // 点进去即清零 —— 不做系统通知,免掉浏览器授权那条死角。
   // 设置入口上的红色计数 = 待审批账号数。审批入口在设置 → 账号里,所以数字挂在
   // 设置入口上;非 root 恒为 0(那个标签页对他们本来就不显示)。
   const pendingApprovalCount = usePendingApprovalCount(Boolean(useAuth().user?.isRoot));
@@ -68,6 +66,8 @@ function Sidebar({
     conversationResults,
     isSearching,
     searchProgress,
+    searchFailure,
+    retryConversationSearch,
     clearConversationResults,
     runningSessionsCount,
     deletingProjects,
@@ -148,8 +148,8 @@ function Sidebar({
   };
 
   /**
-   * eo:项目多选。状态放在这一层而不是 useSidebarController 里 —— 那个 hook
-   * 已经 1100 多行,多选是自成一体的一小块,单独一个 hook 更好读也更好测。
+   * 项目多选。状态不放进 useSidebarController:那个 hook 已经很大,
+   * 多选是自成一体的一小块,单独一个 hook 更好读也更好测。
    */
   const projectBulk = useProjectBulkSelection({
     onRefresh: () => { void refreshProjects(); },
@@ -262,6 +262,8 @@ function Sidebar({
             conversationResults={conversationResults}
             isSearching={isSearching}
             searchProgress={searchProgress}
+            searchFailure={searchFailure}
+            onRetrySearch={retryConversationSearch}
             onRestoreArchivedProject={restoreArchivedProject}
             onArchivedSessionClick={openArchivedSession}
             onRestoreArchivedSession={restoreArchivedSession}

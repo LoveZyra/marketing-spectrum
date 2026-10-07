@@ -5,17 +5,15 @@ import type { ChatMessage } from '../types/types';
 import { canRenderTurnOutputs, endsTurnForOutputs } from './turnBoundary';
 
 /**
- * fl(K02 回归):产出归属不许跨回合。
+ * 产出归属不许跨回合。
  *
- * fj 把"哪条消息能挂产出卡"的判据收窄了(此前 ExitPlanMode 之类会把卡吃掉),
- * 但**连清空也一起收窄了** —— 于是 `Write → 报错 → 用户又问一句 → 助手回答`
- * 这一串里,前一轮的文件被挂到了下一轮的回答下面,用户点开的是上一轮的文件。
- *
- * fu:这两个判据以前在这里**抄了一份** —— 组件里改了、测试里那份没改,
- * 就红不起来。现在从 `utils/turnBoundary` import 真身,组件用的也是同一份。
+ * 「领取」产出卡的判据(canRenderTurnOutputs)只认普通助手正文,ExitPlanMode、思考之类的行既不领也不清;
+ * 「清空」的判据(endsTurnForOutputs)单独成立:用户消息与错误行就地清空,否则
+ * `Write → 报错 → 用户又问一句 → 助手回答` 这一串里,前一轮的文件会挂到下一轮的回答下面。
+ * 两个判据直接从 `utils/turnBoundary` 导入,与组件用的是同一份。
  */
 
-/** 照抄 Pane 里的传递逻辑,拿一串消息跑一遍,返回每条最终拿到的产出。 */
+/** 按 ChatMessagesPane 里的传递逻辑把一串消息跑一遍,返回每条最终拿到的产出。 */
 function walk(items: ChatMessage[], groupOutputs: Map<number, string[]>): Array<string[]> {
   let pending: string[] = [];
   return items.map((item, index) => {
@@ -36,7 +34,7 @@ function walk(items: ChatMessage[], groupOutputs: Map<number, string[]>): Array<
 const msg = (type: string, extra: Record<string, unknown> = {}) =>
   ({ type, content: '', timestamp: '2026-09-09T00:00:00Z', ...extra }) as ChatMessage;
 
-describe('fl:产出归属不跨回合', () => {
+describe('产出归属不跨回合', () => {
   it('Write → 报错 → 用户提问 → 助手回答:文件不跟到下一轮', () => {
     const items = [
       msg('assistant'),                     // 0:占位(工具组在下面用 map 注入)
@@ -54,7 +52,7 @@ describe('fl:产出归属不跨回合', () => {
     expect(out[2]).toEqual([]);
   });
 
-  it('本轮内的不可展示行(思考 / 交互式提示)继续往下传 —— 这是 fj 修的那一条', () => {
+  it('本轮内的不可展示行(思考 / 交互式提示)继续往下传', () => {
     const items = [
       msg('assistant'),                                   // 0:工具组
       msg('assistant', { isInteractivePrompt: true }),    // 1:ExitPlanMode
@@ -73,7 +71,7 @@ describe('fl:产出归属不跨回合', () => {
   });
 });
 
-describe('ho(复审):插话不是回合边界', () => {
+describe('插话不是回合边界', () => {
   it('合流进这一轮的用户消息(interjection)不切断回合;普通用户消息照旧是边界', () => {
     const at = new Date('2026-10-01T00:00:00Z');
     expect(endsTurnForOutputs({ type: 'user', content: '插话', timestamp: at, interjection: true } as ChatMessage)).toBe(false);

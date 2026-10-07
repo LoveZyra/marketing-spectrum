@@ -6,9 +6,9 @@ import { useTranslation } from 'react-i18next';
 import { findOccurrenceStarts, stepMatchIndex } from '../../utils/findMatches';
 
 /**
- * 会话内查找条(Ctrl+F,F1)。
+ * 会话内查找条(Ctrl+F)。
  *
- * 匹配走**渲染后的 DOM 文本**(TreeWalker 收集文本节点),所以 markdown 渲染
+ * 匹配走渲染后的 DOM 文本(TreeWalker 收集文本节点),所以 markdown 渲染
  * 出来什么就能搜到什么;整词高亮用 CSS Custom Highlight API(`CSS.highlights`)
  * —— 不往 React 管的 DOM 里塞 <mark>,流式更新不会打架。浏览器不支持该 API 时
  * (老内核)退化为只滚动定位 + 命中消息闪环,功能仍完整。
@@ -100,7 +100,7 @@ export default function ChatFindBar({ open, onClose, scrollContainerRef, content
   const [query, setQuery] = useState('');
   const [matchCount, setMatchCount] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(-1);
-  /** fj:当前命中下标的同步副本 —— 算下一位置时读它,不再靠 setState 的更新函数。 */
+  /** 当前命中下标的同步副本:算下一位置时读它,不经过 setState 的更新函数。 */
   const currentIndexRef = useRef(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const matchesRef = useRef<DomMatch[]>([]);
@@ -113,15 +113,9 @@ export default function ChatFindBar({ open, onClose, scrollContainerRef, content
     matchesRef.current = matches;
     setMatchCount(matches.length);
     /**
-     * fj:更新函数必须是纯的 —— DOM 副作用挪到外面。
-     *
-     * React 在重放更新队列时(严格模式,或这次更新被处理前又发生了一次渲染)
-     * 会**再次调用**这个函数,于是 `CSS.highlights.set` / `scrollIntoView` 跟着
-     * 重复执行:偶发的滚过头、跳两下、高亮闪一下 —— 而"下一个偶尔跳错位置"
-     * 这类反馈极难查。
-     *
-     * 这里的下一位置只依赖 `matchesRef` 和当前 index,读 ref 即可,不需要
-     * 更新函数的入参。
+     * 下一位置只依赖 matchesRef 和当前下标,直接读 ref 算好再 set;DOM 副作用
+     * (CSS.highlights.set / scrollIntoView)放在 setState 之外:更新函数可能被
+     * React 重放(严格模式,或处理前又渲染了一次),副作用会跟着重复执行。
      */
     const previous = currentIndexRef.current;
     const next = matches.length === 0
@@ -149,7 +143,7 @@ export default function ChatFindBar({ open, onClose, scrollContainerRef, content
   }, []);
 
   const step = useCallback((direction: 'next' | 'prev') => {
-    // fj:同上 —— 算好再 set,副作用不放在更新函数里(那里可能被重放)。
+    // 同 scan:算好再 set,副作用不放进更新函数(那里可能被重放)。
     const total = matchesRef.current.length;
     const next = stepMatchIndex(currentIndexRef.current, total, direction);
     currentIndexRef.current = next;

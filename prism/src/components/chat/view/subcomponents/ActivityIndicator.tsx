@@ -40,11 +40,8 @@ const RING_DOTS = Array.from({ length: 12 }, (_, index) => {
 });
 
 /**
- * 运行中指示器 —— 站在消息流的末尾,不再贴在输入框上沿。
- *
- * 原来它是两片贴着输入框上边缘的"标签页",一跑起来输入框的形状就跟着变;
- * 现在它就是对话流里的最后一行:点圈 + 正在做什么 + 耗时。
- * 中止按钮搬去了输入框右下角(和发送同一处),那里才是动作该在的地方。
+ * 运行中指示器:消息流的最后一行,点圈 + 正在做什么 + 耗时。
+ * 只负责展示;中止按钮在输入框右下角(与发送同一处)。
  */
 export default function ActivityIndicator({ activity }: ActivityIndicatorProps) {
   const { t } = useTranslation('chat');
@@ -86,7 +83,7 @@ export default function ActivityIndicator({ activity }: ActivityIndicatorProps) 
   }, [startedAt]);
 
   /**
-   * 压缩自己的计时,和回合的耗时分开 —— 维护窗口的压缩发生在回合**答完之后**,
+   * 压缩自己的计时,和回合的耗时分开:维护窗口的压缩发生在回合答完之后,
    * 拿 `startedAt`(回合开始)去算,一上来就是"已经 8 分钟",毫无意义。
    */
   const compaction = renderedActivity?.compaction ?? null;
@@ -114,10 +111,9 @@ export default function ActivityIndicator({ activity }: ActivityIndicatorProps) 
   /**
    * 终态自己也会过期。
    *
-   * 回合**结束**时靠上面那段滞留(activity 变 null 后多留 LINGER)。但 CLI 原生
-   * 压缩是压完**继续答这一轮**的 —— 那条路上 activity 一直活着,没有任何帧会来
-   * 覆盖压缩状态,结果行就会一路挂在正文下面直到回合结束。这里给终态自己上一个
-   * 计时器,时间一到退回普通指示器。
+   * 回合结束时靠上面那段滞留(activity 变 null 后多留 LINGER)。但 CLI 原生压缩是压完
+   * 继续答这一轮的:那条路上 activity 一直活着,没有帧会覆盖压缩状态,结果行会一路挂到
+   * 回合结束。所以终态自带计时器,时间一到退回普通指示器。
    */
   const [resultExpired, setResultExpired] = useState(false);
   useEffect(() => {
@@ -150,15 +146,14 @@ export default function ActivityIndicator({ activity }: ActivityIndicatorProps) 
   /**
    * 压缩上下文单独成一档。
    *
-   * 服务端那条状态的原文是英文("Compacting context…" / "Context at 82% —
-   * compacting before sending…"),直接摆到界面上既不通顺也不跟随语言设置。
-   * 所以服务端只发 `statusKind: 'compacting'`,文案在这里本地化;
-   * 图标也从"正在思考"的点圈换成归档图标 —— 压缩不是在想事情,是在收拾行李。
+   * 服务端的 statusText 是英文原文("Compacting context…" / "Context at 82% —
+   * compacting before sending…"),不跟随语言设置,所以按 `statusKind: 'compacting'`
+   * 在这里本地化文案;图标也从点圈换成归档图标 —— 压缩不是在想事情,是在收拾行李。
    */
   const isCompacting = renderedActivity.statusKind === 'compacting' && !resultExpired;
 
   /**
-   * 压缩没有"完成度"可言,所以这里给的是**阶段 + 时间 + 心跳**,不是百分比。
+   * 压缩没有"完成度"可言,所以这里给的是阶段 + 时间 + 心跳,不是百分比。
    * tone 由纯函数算(见 compactionProgress),组件只负责画。
    */
   const tone = compaction && !resultExpired
@@ -241,7 +236,7 @@ export default function ActivityIndicator({ activity }: ActivityIndicatorProps) 
       role="status"
       aria-live="polite"
     >
-      {/* 扫描线:一道极淡的强调色高光从左扫到右,只在深色主场出现。
+      {/* 扫描线:一道极淡的强调色高光从左扫到右,只在深色主题出现(见 index.css 的 .dark .prism-scan)。
           纯 background-position 动画,不参与布局,也不碰文字。 */}
       <span
         className="prism-scan pointer-events-none absolute inset-y-0 left-0 w-64 max-w-full rounded-sm"

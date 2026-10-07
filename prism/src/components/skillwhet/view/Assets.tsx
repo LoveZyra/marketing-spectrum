@@ -13,7 +13,7 @@ import StatusStrip, { Badge } from './StatusStrip';
 import UploadSkillDialog from './UploadSkillDialog';
 
 /**
- * gy:技能资产 —— 受管副本一卡一张;技能库里有但没导入的、只在对话反馈里出现过的,
+ * 技能资产:受管副本一卡一张;技能库里有但没导入的、只在对话反馈里出现过的,
  * 也各列一排(让 root 一眼看到能导什么、哪些技能用户在用却还没进训练)。
  */
 type AssetsProps = {
@@ -57,7 +57,7 @@ export default function Assets({ status, data, isRoot, username, onRecheck, onTr
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-start gap-3">
-        {/* hl(动态 P2-21,切片 D 转来):手机端标题块被搜索框 / 按钮挤成一字一列 —— 窄屏占满一行,sm 起再并排 */}
+        {/* 窄屏时标题块独占一行,sm 起再与搜索框 / 按钮并排,免得手机上被挤成一字一列。 */}
         <div className="min-w-0 flex-1 basis-full sm:basis-auto">
           <h1 className="text-xl font-semibold text-foreground">{t('assets.title', { defaultValue: '技能资产' })}</h1>
           <p className="mt-1 text-[13px] text-muted-foreground">{t('assets.subtitle', { defaultValue: '受管副本来自技能库导入或你自己上传;训练只在副本上跑,live 只在「发布」时被替换。' })}</p>

@@ -13,7 +13,7 @@ describe('nativeUuidFromMessageId', () => {
     expect(nativeUuidFromMessageId(`${UUID}_tr_toolu_01`)).toBe(UUID);
   });
 
-  it('**app 自造的 id 反推不出 uuid** —— 这正是 F14 的病灶', () => {
+  it('app 自造的 id 反推不出 uuid', () => {
     expect(nativeUuidFromMessageId(`user_${UUID}`)).toBeNull();
     expect(nativeUuidFromMessageId('local_1757400000000_ab12cd')).toBeNull();
     expect(nativeUuidFromMessageId(`claude_${UUID}`)).toBeNull();
@@ -25,7 +25,7 @@ describe('nativeUuidFromMessageId', () => {
 
 /**
  * 判据要和 jsonl 里的 `type === 'assistant'` 对齐,不是和"看起来像模型说的"对齐。
- * 尤其 `tool_result`:界面上挂在工具行下面,jsonl 里却是一条 **user** 记录,
+ * 尤其 `tool_result`:界面上挂在工具行下面,jsonl 里却是一条 user 记录,
  * 拿它的 uuid 去 `resumeSessionAt` 会被 SDK 拒掉。
  */
 describe('isAssistantSideRow', () => {
@@ -35,7 +35,7 @@ describe('isAssistantSideRow', () => {
     expect(isAssistantSideRow({ kind: 'tool_use' })).toBe(true);
   });
 
-  it('**tool_result 不是**(它在 jsonl 里是 user 记录)', () => {
+  it('tool_result 不是(它在 jsonl 里是 user 记录)', () => {
     expect(isAssistantSideRow({ kind: 'tool_result' })).toBe(false);
   });
 
@@ -58,11 +58,11 @@ describe('forkAnchorUuid', () => {
     expect(forkAnchorUuid({ id: `${UUID}_0`, kind: 'tool_use' })).toBe(UUID);
   });
 
-  it('**assistant 侧但 id 是 app 自造的 → 没有锚点**(不能瞎编一个)', () => {
+  it('assistant 侧但 id 是 app 自造的 → 没有锚点(不能瞎编一个)', () => {
     expect(forkAnchorUuid({ id: `claude_${UUID}`, kind: 'text', role: 'assistant' })).toBeNull();
   });
 
-  it('**非 assistant 侧一律没有锚点** —— 列的含义必须唯一:非空即可用', () => {
+  it('非 assistant 侧一律没有锚点 —— 列的含义必须唯一:非空即可用', () => {
     expect(forkAnchorUuid({ id: `${UUID}_tr_toolu_01`, kind: 'tool_result' })).toBeNull();
     expect(forkAnchorUuid({ id: UUID, kind: 'text', role: 'user' })).toBeNull();
     expect(forkAnchorUuid({ id: `user_${UUID}`, kind: 'text', role: 'user' })).toBeNull();

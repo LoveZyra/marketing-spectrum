@@ -1,6 +1,6 @@
 /**
- * Centralized tool configuration registry
- * Defines display behavior for all tool types 
+ * Per-tool display config read by ToolRenderer: how a tool call's input and result
+ * render in the chat. Tools without an entry fall back to `Default`.
  */
 
 export interface ToolDisplayConfig {
@@ -34,7 +34,7 @@ export interface ToolDisplayConfig {
     type?: 'one-line' | 'collapsible' | 'plan' | 'special';
     title?: string | ((result: any) => string);
     defaultOpen?: boolean;
-    // Special result handlers
+    // Collapsible result content
     contentType?: 'markdown' | 'file-list' | 'todo-list' | 'text' | 'success-message' | 'task' | 'question-answer' | 'result';
     getMessage?: (result: any) => string;
     getContentProps?: (result: any) => any;
@@ -387,8 +387,7 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       defaultOpen: false,
       contentType: 'markdown',
       getContentProps: (input) => {
-        // If only prompt exists (and required fields), show just the prompt
-        // Otherwise show all available fields
+        // A bare prompt (no model / resume) renders as-is; otherwise list the fields.
         const hasOnlyPrompt = input.prompt &&
           !input.model &&
           !input.resume;
@@ -399,7 +398,6 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
           };
         }
 
-        // Format multiple fields
         const parts = [];
 
         if (input.model) {
@@ -429,10 +427,9 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       defaultOpen: false,
       contentType: 'markdown',
       getContentProps: (result) => {
-        // Handle agent results which may have complex structure
         if (result && result.content) {
           let content = result.content;
-          // If content is a JSON string, try to parse it (agent results may arrive serialized)
+          // Agent results may arrive as a serialized JSON array of content blocks.
           if (typeof content === 'string') {
             try {
               const parsed = JSON.parse(content);
@@ -444,7 +441,7 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
               return { content };
             }
           }
-          // If content is an array (typical for agent responses with multiple text blocks)
+          // Content blocks: keep only the text blocks.
           if (Array.isArray(content)) {
             const textContent = content
               .filter((item: any) => item.type === 'text')
@@ -454,7 +451,6 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
           }
           return { content: String(content) };
         }
-        // Fallback to string representation
         return { content: String(result || 'No response') };
       }
     }
@@ -507,7 +503,7 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
     }
   },
 
-  // Also register as ExitPlanMode (the actual tool name used by Claude)
+  // ExitPlanMode is the name the CLI actually emits; exit_plan_mode above is an identical entry.
   ExitPlanMode: {
     input: {
       type: 'plan',
@@ -569,10 +565,8 @@ export function shouldHideToolResult(toolName: string, toolResult: any): boolean
   // still need to be visible so failed tool calls are diagnosable.
   if (toolResult?.isError) return false;
 
-  // Always hidden
   if (config.result.hidden) return true;
 
-  // Hide on success only
   if (config.result.hideOnSuccess && toolResult) {
     return true;
   }

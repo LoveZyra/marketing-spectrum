@@ -23,23 +23,23 @@ import FileTypeIcon from './FileTypeIcon';
 interface ChatWorkPanelProps {
   /** 最新一份 TodoWrite 清单(taskChecklist.ts),没有则为 null。 */
   todos: TodoItem[] | null;
-  /** hq:会话数到的最后一个用户回合(没动过清单的新回合不认锚点,见 findProgressAnchor);0 = 不知道。 */
+  /** 会话数到的最后一个用户回合(没动过清单的新回合不认锚点,见 findProgressAnchor);0 = 不知道。 */
   checklistTurn?: number;
   /** 本会话 Write 出的可交付文件(sessionOutputs.ts),时间正序。 */
   outputs: SessionOutputFile[];
-  /** dw:服务端帧数触顶 —— 更早的记录没载入,面板照实说,不装作这就是全部。 */
+  /** 服务端帧数触顶,更早的记录没载入;面板要如实提示,不能当成全部。 */
   historyTruncated?: boolean;
   /**
-   * dy:右侧已经开了文件预览栏。为 true 时本面板自动折成窄边条,把宽度让给
+   * 右侧已经开了文件预览栏。为 true 时本面板自动折成窄边条,把宽度让给
    * 预览和正文;预览一关自动还原(仅还原"自动折的那次",不覆盖手动偏好)。
    */
   previewOpen?: boolean;
   isProcessing: boolean;
   /** 「下载」打项目文件内容接口用。 */
   projectId?: string | null;
-  /** ei:判断产出是否落在项目目录内 —— 在外面的走会话产出通道。 */
+  /** 判断产出是否落在项目目录内;在目录外的走会话产出通道。 */
   projectPath?: string | null;
-  /** ei:会话产出通道的会话 id。 */
+  /** 会话产出通道用的会话 id。 */
   sessionId?: string | null;
   /** 「打开」走既有编辑器/预览面板。 */
   onFileOpen?: (filePath: string) => void;
@@ -54,12 +54,9 @@ const COLLAPSE_KEY = 'chat_work_panel_collapsed';
 const PROGRESS_COLLAPSE_KEY = 'chat_work_panel_progress_collapsed';
 
 /*
- * 进度时间轴(取代 dw 的"已完成超过 6 条整体折叠"):当前步是竖线上那颗点,
- * 当前步之前的已完成只留最近 DEFAULT_KEEP_RECENT 条,更早的收进顶上一行
- * 「N 个更早的步骤」;默认滚到当前步。判据全在 progressTimeline.ts。
- *
- * 清单是会话级累计的,长会话能攒几十条历史 —— 原来的阈值折叠是"全折或全不折",
- * 一展开就又是一整列;现在新的永远露着,只有旧的收起来。
+ * 进度时间轴:当前步是竖线上那颗点,当前步之前的已完成只留最近 DEFAULT_KEEP_RECENT 条,
+ * 更早的收进顶上一行「N 个更早的步骤」;默认滚到当前步。判据全在 progressTimeline.ts。
+ * 清单是会话级累计的,长会话能攒几十条,所以新的永远露着,只收起旧的。
  */
 
 /**
@@ -106,7 +103,7 @@ function ChatWorkPanel({
   const progressRegionId = `${idBase}-progress`;
   const stepListId = `${idBase}-steps`;
 
-  // dy:预览开着就让位。规则(以及为什么这么定)在 workPanelAutoCollapse.ts。
+  // 预览开着就让位。规则(以及为什么这么定)在 workPanelAutoCollapse.ts。
   const autoRef = useRef(false);
   useEffect(() => {
     setCollapsed((current) => {
@@ -131,7 +128,7 @@ function ChatWorkPanel({
    * 滚过去;追加任务、勾掉别的条目、展开历史都不算,不去抢用户的滚动条。
    * 全部完成时锚点为空,身份仍然有一个(停到尾巴上,「全部完成」可见)。
    */
-  // hq(复审五轮):按"停靠行"认(没有锚点时 = 第一条没完成的),锚点在老任务与"没有"之间切换时不来回滚
+  // 按"停靠行"认(没有锚点时 = 第一条没完成的),锚点在老任务与"没有"之间切换时不来回滚
   const anchorKey = hasChecklist
     ? `${sessionKey}\u0000${focusIndex}\u0000${focusIndex >= 0 ? todoList[focusIndex].content : ''}`
     : null;
@@ -211,7 +208,7 @@ function ChatWorkPanel({
     return () => observer.disconnect();
   }, [listVisible, scrollToAnchor, updateEdgeFade]);
 
-  // dx:产出表同样默认只露最近的,更早的收进一行摘要(见 sessionOutputs.ts)。
+  // 产出表同样默认只露最近的,更早的收进一行摘要(见 sessionOutputs.ts)。
   const { visible: visibleOutputs, hidden: hiddenOutputs } = foldEarlierOutputs(
     outputs,
     showEarlierOutputs,
@@ -236,11 +233,8 @@ function ChatWorkPanel({
   };
 
   /**
-   * 下载:**签一张票,然后让浏览器自己去下。**
-   *
-   * 以前是 fetch → blob → `a[download]`:整份文件先落进标签页内存,拼完才弹保存框 ——
-   * 没有进度条、切页就断、几 GB 的产出直接把标签页撑崩。现在换成签票 + 导航,
-   * 下载栏立刻出现,进度是浏览器画的。
+   * 下载:签一张票,然后让浏览器自己去下(导航,而不是 fetch → blob):文件不经过
+   * 标签页内存,下载栏立刻出现、进度由浏览器显示,大文件也撑不崩标签页。
    *
    * 失败全部挡在签票那一步(权限、路径、文件不存在),那一步还在 fetch 语境里,
    * setNotice 照常弹得出来 —— 后面那步是浏览器导航,失败只会在下载栏里留一行。
@@ -254,7 +248,9 @@ function ChatWorkPanel({
       const response = viaSession || !projectId
         ? await api.issueSessionOutputDownloadTicket(String(sessionId), file.path)
         : await api.issueDownloadTicket(projectId, [file.path]);
-      if (!response.ok) throw new Error(`下载失败(HTTP ${response.status})`);
+      if (!response.ok) {
+        throw new Error(t('workPanel.downloadFailed', { status: response.status, defaultValue: '下载失败(HTTP {{status}})' }));
+      }
       const { url } = await response.json() as { url: string };
       startBrowserDownload(url);
     } catch (error) {
@@ -305,9 +301,7 @@ function ChatWorkPanel({
       className="hidden w-[300px] flex-none flex-col overflow-hidden border-l border-border bg-background lg:flex xl:w-[320px]"
       aria-label={t('workPanel.title', { defaultValue: '工作面板' })}
     >
-      {/* ds:分区滚动(对齐 Cowork 右栏)。清单区块整体**封顶列高一半**、
-          列表内部自滚;产出区吃剩余高度、同样内部自滚 —— 此前是 aside 整条
-          滚,20 条任务直接把产出区顶出屏幕外。标题行各自常驻不滚。 */}
+      {/* 分区滚动:清单区封顶列高一半、列表内部自滚;产出区吃剩余高度、同样内部自滚,任务再多也不会把产出区顶出屏幕;标题行常驻不滚 */}
       <div className="flex max-h-[50%] flex-none flex-col">
         {/* 顶行:「进度 ⌄」(收起本区)+ 第几步 …… 收起整个面板 */}
         <div className="flex flex-none items-center justify-between gap-2 px-3.5 pb-1 pt-2.5">
@@ -480,12 +474,11 @@ function ChatWorkPanel({
                     <span className="min-w-0 truncate font-mono text-[12px] text-body">{file.name}</span>
                   </span>
                 )}
-                {/* ef:设计稿里产出行右端是「预览」那只眼睛 —— 这是日常动作;
-                    下载退到悬停时才出现,少一个常驻图标,行也就干净了。 */}
+                {/* 产出行右端常驻的是「预览」(日常动作);下载只在悬停 / 聚焦时出现 */}
                 {(projectId || sessionId) && (
                   <button
                     type="button"
-                    // dt:只禁正在下载的这一个 —— 一个在下全体变灰没道理。
+                    // 只禁用正在下载的这一个,其它文件照样能下。
                     disabled={busyPath === file.path}
                     onClick={() => void handleDownload(file)}
                     aria-label={t('workPanel.download', { defaultValue: '下载此文件' })}
@@ -517,8 +510,7 @@ function ChatWorkPanel({
             {t('workPanel.noOutputs', { defaultValue: '本会话还没有产出文件。' })}
           </p>
         )}
-        {/* dw:会话太长、服务端只下发了尾部的工作帧 —— 照实说一句,别让
-            用户以为几天前那个文件被吞了。 */}
+        {/* 会话太长、服务端只下发了尾部的工作帧:如实提示一句,免得用户以为更早的文件丢了 */}
         {historyTruncated && (
           <p className="flex-none px-3.5 pt-1 text-[11px] text-muted-foreground">
             {t('workPanel.historyTruncated', { defaultValue: '会话较长,更早的记录未载入。' })}

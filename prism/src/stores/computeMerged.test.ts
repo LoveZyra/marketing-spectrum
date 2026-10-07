@@ -6,11 +6,10 @@ import { computeMerged, pruneRealtimeSupersededByServer } from './useSessionStor
 import type { NormalizedMessage } from './useSessionStore';
 
 /**
- * G1:聊天消息的合并逻辑。
+ * 聊天消息的合并逻辑。
  *
- * 屏幕上那一串是"服务端历史 + 本地实时"合出来的,而这段是整个聊天里最容易出
- * **重影**(同一句话两个气泡)和**顺序错乱**(实时行全堆在最底下)的地方 ——
- * bw 轮修过一次,cq 轮又碰过一次。它是纯函数,直接钉行为最便宜。
+ * 屏幕上那一串是"服务端历史 + 本地实时"合出来的,这里是整个聊天里最容易出重影
+ * (同一句话两个气泡)和顺序错乱(实时行全堆在最底下)的地方。它是纯函数,直接钉行为最便宜。
  */
 const message = (
   id: string,
@@ -53,7 +52,7 @@ describe('computeMerged', () => {
     assert.deepEqual(merged.map((m) => m.id), ['srv_1'], '同一句话不该出现两个气泡');
   });
 
-  test('**重复发同一句话**不会被误当成回声吞掉 —— 时间窗之外的照常显示', () => {
+  test('重复发同一句话不会被误当成回声吞掉 —— 时间窗之外的照常显示', () => {
     const echoed = user('srv_1', '继续', '2026-08-27T10:00:00.000Z');
     // 十分钟后又发了一次"继续",服务端还没回声 —— 这条必须留在屏幕上
     const localAgain = user('local_999', '继续', '2026-08-27T10:10:00.000Z');
@@ -106,14 +105,11 @@ describe('computeMerged', () => {
 });
 
 /**
- * fi:服务端刷新之后清本地实时行。
+ * 服务端刷新之后清本地实时行。
  *
- * 线上截图:同一组工具调用(「执行 17 条命令 → 读取 news-spec.md → 思考」)在
- * 一条会话里出现两次,F5 才消失。库里查过没有重复行 —— 是本地实时行没被清掉。
- *
- * 清理规则原来只认三类:id 撞上的、助手正文、带 toolId 的 tool_use。
- * `tool_result` 和 `thinking` 一条规则都没有,落到兜底 `return true` 永远留着。
- * 构造 id 不一致(服务端补了 id / 前端本地合成)的场景实测:3 条变 6 条。
+ * 本地实时行没被清掉时,同一组工具调用会在会话里出现两次,F5 才消失。除了 id 撞上的、
+ * 助手正文、带 toolId 的 tool_use,`tool_result` 与 `thinking` 也必须有对应的清理规则,
+ * 否则落到兜底 `return true` 永远留着;服务端补了 id / 前端本地合成导致 id 不一致时尤其明显。
  */
 describe('pruneRealtimeSupersededByServer:服务端已有对应行时本地实时行要清掉', () => {
   const T = '2026-08-27T10:00:01.000Z';
@@ -142,7 +138,7 @@ describe('pruneRealtimeSupersededByServer:服务端已有对应行时本地实�
     assert.deepEqual(pruneRealtimeSupersededByServer(server, realtime).map((m) => m.id), []);
   });
 
-  test('⚠️ 服务端还没落库的实时行必须留着 —— 回合进行中不能闪空', () => {
+  test('服务端还没落库的实时行必须留着 —— 回合进行中不能闪空', () => {
     /*
      * 这条是上面两条的边界。清理只能在"服务端确实有对应行"时发生;
      * 服务端还没写到的,哪怕 kind 相同也要留 —— 否则回合进行中每次刷新
@@ -179,13 +175,13 @@ describe('pruneRealtimeSupersededByServer:服务端已有对应行时本地实�
 });
 
 /**
- * fj:回合序号不许把同一句用户消息数两遍。
+ * 回合序号不许把同一句用户消息数两遍。
  *
  * 合并数组里同一句常常有两份(本地乐观行 `local_*` + 服务端落库那份),而
- * `computeMerged` 的去重是渲染时做的。序号多算之后,fi 那条按"同一轮同文"
- * 判定的 thinking 去重就会漏删或跨回合误删。
+ * `computeMerged` 的去重是渲染时做的。序号多算之后,按"同一轮同文"判定的
+ * thinking 去重就会漏删或跨回合误删。
  */
-describe('fj:回合序号与用户回声', () => {
+describe('回合序号与用户回声', () => {
   const userMsg = (id: string, content: string, ts: string) => ({
     id, kind: 'text', role: 'user', content, timestamp: ts, sessionId: 's', provider: 'claude',
   }) as never;
@@ -210,14 +206,13 @@ describe('fj:回合序号与用户回声', () => {
 });
 
 /**
- * N01:回合序号只按"服务端那份"数,不看 id 长什么样。
+ * 回合序号只按"服务端那份"数,不看 id 长什么样。
  *
- * fj 那版判据是 `id.startsWith('local_')` —— 那只是实时用户行的**一种**形状。
- * 队列续发、回放补帧构造出来的实时用户行不是这个形状,于是被多算一次,
- * 而"同一轮里服务端有没有同文"的去重整体错位一个回合:该删的没删(两份并排),
- * 或者删掉了另一轮的同名内容。
+ * `id.startsWith('local_')` 只是实时用户行的一种形状。队列续发、回放补帧构造出来的
+ * 实时用户行不是这个形状,按它判会被多算一次,"同一轮里服务端有没有同文"的去重就整体
+ * 错位一个回合:该删的没删(两份并排),或者删掉了另一轮的同名内容。
  */
-describe('回合序号(N01)', () => {
+describe('回合序号', () => {
   const T0 = '2026-09-09T10:00:00.000Z';
   const T1 = '2026-09-09T10:00:01.000Z';
   const T2 = '2026-09-09T10:00:02.000Z';
@@ -234,7 +229,7 @@ describe('回合序号(N01)', () => {
       user('srv_u2', '第二个问题', T2),
       thinking('srv_t2', '在想第二个问题', T3),
     ];
-    // 实时那份用户行的 id **不是** local_ 形状(队列续发/回放补帧就是这样)。
+    // 实时那份用户行的 id 不是 local_ 形状(队列续发/回放补帧就是这样)。
     const realtime = [
       message('q_u2', { role: 'user', content: '第二个问题', timestamp: T2 }),
       thinking('rt_t2', '在想第二个问题', T3),

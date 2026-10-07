@@ -6,16 +6,16 @@ import { describe, expect, it, test } from 'vitest';
 import {
   EMPTY_SERVER_QUEUE,
   describeDroppedQueueMessage,
+  planQueueCancelled,
   queuedForSession,
   reduceServerQueue,
 } from './serverQueue';
 
 /**
- * B4:服务端排队卡片按会话存。
+ * 服务端排队卡片按会话存。
  *
- * 原来是全视图一个 `{sessionId, preview, enqueuedAt} | null`,而排队帧是
- * **所有已订阅会话**一起来的 —— 后来的会话把先前那条挤掉,切回去卡片就不见了,
- * 而服务端那条消息还在队列里等着。
+ * 排队帧是所有已订阅会话一起来的;全视图只存一份的话,后来的会话会把先前那条挤掉,
+ * 切回去卡片就不见了,而服务端那条消息还在队列里等着。
  */
 const q = (preview: string, enqueuedAt = '2026-09-09T10:00:00.000Z') => ({ preview, enqueuedAt });
 
@@ -37,7 +37,7 @@ describe('reduceServerQueue', () => {
     expect(queuedForSession(queue, 'B')).toBeNull();
   });
 
-  test('没有变化时**返回同一个 Map** —— 空闲 ack 每秒好几帧,不能每帧都重渲染', () => {
+  test('没有变化时返回同一个 Map —— 空闲 ack 每秒好几帧,不能每帧都重渲染', () => {
     const empty = EMPTY_SERVER_QUEUE;
     expect(reduceServerQueue(empty, 'A', null)).toBe(empty);
 
@@ -67,11 +67,11 @@ describe('reduceServerQueue', () => {
       'A',
       { preview: 'x', enqueuedAt: 't', extra: 'ignored' } as unknown as { preview: string; enqueuedAt: string },
     );
-    // gi:redacted 归一成布尔(没带就是 false),别的字段照旧不进状态
+    // redacted 归一成布尔(没带就是 false),别的字段照旧不进状态
     expect(queuedForSession(queue, 'A')).toEqual({ preview: 'x', enqueuedAt: 't', redacted: false });
   });
 
-  test('gi:redacted 变了也算变化 —— 同一条从"别人的"变成"自己的"要重渲染', () => {
+  test('redacted 变了也算变化 —— 同一条从"别人的"变成"自己的"要重渲染', () => {
     const base = reduceServerQueue(EMPTY_SERVER_QUEUE, 'A', { preview: '', enqueuedAt: 't', redacted: true });
     const same = reduceServerQueue(base, 'A', { preview: '', enqueuedAt: 't', redacted: true });
     expect(same).toBe(base);
@@ -94,11 +94,10 @@ describe('queuedForSession', () => {
 });
 
 /**
- * ga:被丢弃的排队消息,提示文案必须按**实际发生的事**写。
+ * 被丢弃的排队消息,提示文案必须按实际发生的事写。
  *
- * fz 把"正文已退回输入框"写死在 `undeliverable` 的文案里,而回填的前提是
- * "正在看这条会话"且"输入框是空的" —— 这条帧最常见的触发场景两个前提都不成立。
- * 于是用户被告知"东西还在你手上",他去输入框找,什么都没有。
+ * 回填输入框的前提是"正在看这条会话"且"输入框是空的",这条帧最常见的触发场景两个前提都不成立。
+ * 没退回去却说"正文已退回输入框",用户去输入框找,什么都没有。
  */
 describe('describeDroppedQueueMessage', () => {
   it('真的退回输入框了 → 一句话都不说(东西在用户手上)', () => {
@@ -141,7 +140,7 @@ describe('describeDroppedQueueMessage', () => {
 });
 
 /**
- * 上面证明"文案对了",下面证明**处理器真的按实际结果调它** —— 这一轮反复
+ * 上面证明"文案对了",下面证明处理器真的按实际结果调它 —— 这一轮反复
  * 付代价的形状正是"判据写对了,喂给它的数据不是那个东西"。
  */
 describe('chat_queue_cancelled 的接线', () => {
@@ -150,16 +149,67 @@ describe('chat_queue_cancelled 的接线', () => {
     'utf8',
   );
 
-  it('returnedToComposer 来自真实的回填回调,不是写死的', () => {
-    expect(source).toMatch(/const returnedToComposer = Boolean\(/);
-    expect(source).toMatch(/&& onServerQueueReturned\?\.\(sid, droppedContent\),/);
-    expect(source).toMatch(/describeDroppedQueueMessage\(/);
-  });
-
-  it('文案不再由处理器现场拼 —— fz 那句写死的"已退回输入框"没有任何字符串留着', () => {
+  // 回填与提示的实际行为(回填回调返回 false 时提示里抄原文等)见 hooks/realtimeControlFrames.test.ts
+  it('文案不由处理器现场拼 —— 源码里没有写死的"已退回输入框"', () => {
     // 只看字符串字面量(注释里引用它是为了记住这条教训)。
     expect(source).not.toMatch(/'[^'\n]*已退回输入框[^'\n]*'/);
     // 处理器里也不该再出现按 reason 现场拼文案的三元。
     expect(source).not.toMatch(/content: msg\.reason === 'aborted'/);
+  });
+});
+
+/**
+ * 退回的正文只回填到发出这条消息的标签页,提示里的原文哪个标签页都抄。
+ *
+ * 服务端只把正文发给排它的那个人(他所有的连接),同一个人开着的另一个标签页也会收到。
+ * 回填按"这个标签页发过它没有"挡一道,免得灌进别的标签页正打着字的输入框;提示里照抄原文,
+ * 刷新过的标签页不记得发过它,不抄的话这段话就没了。
+ */
+describe('planQueueCancelled', () => {
+  const sentHere = (ids: string[]) => (id: string) => ids.includes(id);
+
+  it('本标签页发过这条:正文可以回填,也可以抄进提示;本地回声撤掉', () => {
+    expect(planQueueCancelled({ content: '把配置也改一下', clientMessageId: 'c1' }, sentHere(['c1'])))
+      .toEqual({ refill: '把配置也改一下', original: '把配置也改一下', dropEchoOf: 'c1' });
+  });
+
+  it('同一个人的别的标签页(或刷新过、不记得发过它的标签页):不回填,但原文照样留给提示', () => {
+    expect(planQueueCancelled({ content: '把配置也改一下', clientMessageId: 'c1' }, sentHere([])))
+      .toEqual({ refill: '', original: '把配置也改一下', dropEchoOf: 'c1' });
+  });
+
+  it('刷新过的发起人标签页收到中止帧:提示里有原文,这段话不会凭空消失', () => {
+    const plan = planQueueCancelled({ content: '把第 3 步改成先跑单测再提交', clientMessageId: 'cm-1' }, sentHere([]));
+    const notice = describeDroppedQueueMessage('aborted', plan.original, false);
+    expect(notice).toContain('> 把第 3 步改成先跑单测再提交');
+  });
+
+  it('不带 clientMessageId 的老帧维持原样:有正文就用,不撤回声(认不出是哪条)', () => {
+    expect(planQueueCancelled({ content: '老服务端退回的正文' }, sentHere([])))
+      .toEqual({ refill: '老服务端退回的正文', original: '老服务端退回的正文', dropEchoOf: null });
+  });
+
+  it('没有正文的帧(过期作废、撤销)照样撤回声', () => {
+    expect(planQueueCancelled({ clientMessageId: 'c1' }, sentHere(['c1'])))
+      .toEqual({ refill: '', original: '', dropEchoOf: 'c1' });
+  });
+
+  it('别人收到的帧(服务端不给正文)得到的提示只有结论,没有原文', () => {
+    const plan = planQueueCancelled({ clientMessageId: 'c9' }, sentHere([]));
+    expect(describeDroppedQueueMessage('aborted', plan.original, false)).toBe('排队中的那条消息随本轮中止一起取消了,没有发送。');
+  });
+});
+
+describe('chat_queue_cancelled 的 wasSentHere 来源(接线)', () => {
+  const chatInterface = readFileSync(
+    fileURLToPath(new URL('../view/ChatInterface.tsx', import.meta.url)),
+    'utf8',
+  );
+
+  // 处理器本身的行为由 hooks/realtimeControlFrames.test.ts 直接驱动 useChatRealtimeHandlers 钉住
+  it('wasSentHere 来自 WebSocket 层(所有 chat.send 的唯一出口),由 ChatInterface 传进处理器', () => {
+    expect(chatInterface).toMatch(/const \{ subscribe, wasSentHere \} = useWebSocket\(\);/);
+    const handlerCall = chatInterface.slice(chatInterface.indexOf('useChatRealtimeHandlers({'));
+    expect(handlerCall.slice(0, 2000)).toMatch(/\n\s+wasSentHere,\n/);
   });
 });

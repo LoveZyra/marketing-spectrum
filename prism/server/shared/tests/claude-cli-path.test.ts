@@ -72,10 +72,10 @@ test('resolveClaudeCodeExecutablePath falls back to the configured command when 
   assert.equal(resolved, 'claude');
 });
 
-/* ---------------- hm(A2):随包二进制 ---------------- */
+/* ---------------- 随包二进制 ---------------- */
 
 
-test('hm:CLAUDE_CLI_PATH 没配 → 传随包二进制的绝对路径(不让 SDK 每次自己挑);找不到 → claude;配了照旧解析', () => {
+test('CLAUDE_CLI_PATH 没配 → 传随包二进制的绝对路径(不让 SDK 每次自己挑);找不到 → claude;配了照旧解析', () => {
   const bundled = { platform: 'linux', arch: 'x64', preferMusl: false, resolve: (id: string) => `/app/node_modules/${id}`, exists: () => true };
   assert.equal(sdkExecutableOption(undefined, bundled), '/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude');
   assert.equal(sdkExecutableOption('   ', bundled), '/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude');
@@ -85,7 +85,7 @@ test('hm:CLAUDE_CLI_PATH 没配 → 传随包二进制的绝对路径(不让 SDK
   assert.equal(configuredClaudeCliPath('claude'), 'claude');
 });
 
-test('hm:候选顺序与 SDK 一致 —— glibc 先 glibc,musl 先 musl,其它平台一个', () => {
+test('候选顺序与 SDK 一致 —— glibc 先 glibc,musl 先 musl,其它平台一个', () => {
   assert.deepEqual(bundledClaudeBinaryCandidates('linux', 'x64', false), [
     '@anthropic-ai/claude-agent-sdk-linux-x64/claude',
     '@anthropic-ai/claude-agent-sdk-linux-x64-musl/claude',
@@ -98,7 +98,7 @@ test('hm:候选顺序与 SDK 一致 —— glibc 先 glibc,musl 先 musl,其它�
   assert.deepEqual(bundledClaudeBinaryCandidates('darwin', 'arm64', false), ['@anthropic-ai/claude-agent-sdk-darwin-arm64/claude']);
 });
 
-test('hm:**漂移守卫** —— SDK 包里的选择逻辑仍是我们照抄的那一段(换版改了顺序就红)', () => {
+test('漂移守卫 —— SDK 包里的选择逻辑仍是我们照抄的那一段(换版改了顺序就红)', () => {
   const require = createRequire(import.meta.url);
   const sdkEntry = require.resolve('@anthropic-ai/claude-agent-sdk');
   const bundle = fsNode.readFileSync(sdkEntry, 'utf8');
@@ -111,7 +111,7 @@ test('hm:**漂移守卫** —— SDK 包里的选择逻辑仍是我们照抄的�
   assert.match(bundle, /`\$\{\w+\}\/claude\$\{\w+\}`/);
 });
 
-test('hm:本机(容器)解析到的就是 SDK 会用的那个平台包里的 claude,且真实存在', () => {
+test('本机(容器)解析到的就是 SDK 会用的那个平台包里的 claude,且真实存在', () => {
   resetBundledClaudeBinaryCacheForTests();
   const found = resolveBundledClaudeBinary();
   if (process.platform === 'linux' && process.arch === 'x64') {
@@ -121,13 +121,13 @@ test('hm:本机(容器)解析到的就是 SDK 会用的那个平台包里的 cla
   }
 });
 
-test('hm:解析不到任何平台包 → null;终端命令回落 PATH 上的 claude', () => {
+test('解析不到任何平台包 → null;终端命令回落 PATH 上的 claude', () => {
   const deps = { platform: 'linux', arch: 'x64', preferMusl: false, resolve: () => { throw new Error('nope'); } };
   assert.equal(resolveBundledClaudeBinary(deps), null);
   assert.deepEqual(resolveClaudeCommandForShell(undefined, deps), { command: 'claude', source: 'path' });
 });
 
-test('hm:终端命令 —— 配了用配的(路径加引号),没配用随包路径', () => {
+test('终端命令 —— 配了用配的(路径加引号),没配用随包路径', () => {
   const deps = { platform: 'linux', arch: 'x64', preferMusl: false, resolve: (id: string) => `/app/node_modules/${id}`, exists: () => true };
   assert.deepEqual(resolveClaudeCommandForShell(undefined, deps), {
     command: '/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude', source: 'bundled',
@@ -137,7 +137,7 @@ test('hm:终端命令 —— 配了用配的(路径加引号),没配用随包路
   assert.equal(shellQuote("it's"), "'it'\\''s'");
 });
 
-test('hm:PATH 前置随包目录;CLAUDE_CLI_PATH 配成路径就前置它的目录,配成裸命令名就不动;不重复', () => {
+test('PATH 前置随包目录;CLAUDE_CLI_PATH 配成路径就前置它的目录,配成裸命令名就不动;不重复', () => {
   const deps = { platform: 'linux', arch: 'x64', preferMusl: false, resolve: (id: string) => `/app/node_modules/${id}`, exists: () => true };
   const dir = pathNode.posix.dirname('/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude');
   const env = withBundledClaudeOnPath({ PATH: `/usr/bin:${dir}:/bin`, HOME: '/h' }, { ...deps, configuredPath: undefined });
@@ -145,7 +145,7 @@ test('hm:PATH 前置随包目录;CLAUDE_CLI_PATH 配成路径就前置它的目�
   assert.equal(env.HOME, '/h');
   const untouched = withBundledClaudeOnPath({ PATH: '/usr/bin' }, { ...deps, configuredPath: 'claude' });
   assert.equal(untouched.PATH, '/usr/bin');
-  // 复审:配成路径时终端与 SkillWhet 也要用它(原来不动 PATH,只有对话 / 接管 / 登录用上)
+  // 配成路径时终端与 SkillWhet 也要用它,与对话 / 接管 / 登录一致
   const configured = withBundledClaudeOnPath({ PATH: '/usr/bin:/opt/claude/bin' }, { ...deps, configuredPath: '/opt/claude/bin/claude' });
   assert.equal(configured.PATH, '/opt/claude/bin:/usr/bin');
   // 相对路径不进 PATH

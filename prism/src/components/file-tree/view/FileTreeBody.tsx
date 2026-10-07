@@ -32,14 +32,14 @@ type FileTreeBodyProps = {
   handleCancelRename?: () => void;
   renameInputRef?: RefObject<HTMLInputElement>;
   operationLoading?: boolean;
-  /** F9:拖放到指定文件夹 + 多选。见 FileTreeNode 里的说明。 */
+  /** 拖放到指定文件夹 + 多选。见 FileTreeNode 里的说明。 */
   onItemDragOver?: (event: React.DragEvent, itemPath: string) => void;
   onItemDrop?: (event: React.DragEvent, itemPath: string) => void;
   dropTarget?: string | null;
   selectedPaths?: ReadonlySet<string>;
   onToggleSelect?: (item: FileTreeNode, event: React.MouseEvent) => void;
   selectionMode?: boolean;
-  /** hl(动态 P2-10):截断目录的懒加载,见 FileTreeNode。 */
+  /** 截断目录的懒加载,见 FileTreeNode。 */
   onLoadMore?: (item: FileTreeNode) => void;
   loadingSubtrees?: ReadonlySet<string>;
   nodeLabels?: { loadMore: string; loading: string; symlink: string };

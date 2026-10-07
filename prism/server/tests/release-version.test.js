@@ -23,7 +23,7 @@ import { formatReleaseLabel, isReleaseVersion, pickReleaseMeta } from '../../sha
 import { readReleaseInfo } from '../shared/release-info.ts';
 
 /**
- * v2.0.0:版本号只用「主.次.修」三个数字,按部署代价跳号(项目文档《版本号规范》)。
+ * 版本号只用「主.次.修」三个数字,按部署代价跳号(见项目文档《版本号规范》)。
  * 这里钉住:号的格式、跳号规则(依赖 / schema / migrations 变了至少跳次版本号)、依赖指纹不受根版本号影响、
  * 清单排序与 `LC_ALL=C sort` 一致、运行中的版本信息怎么读。
  */

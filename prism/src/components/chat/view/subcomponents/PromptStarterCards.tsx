@@ -26,29 +26,15 @@ interface StarterCategory {
 }
 
 /**
- * 首页的起手卡,按工作台的几个核心场景分组。点一条提示词是**填进输入框**,
+ * 首页的起手卡,按工作台的几个核心场景分组。点一条提示词是填进输入框,
  * 不会自动发送。
  *
- * ## 版式沿革(改之前先读完)
+ * 版式是定过的:一张卡两条提示词、四张大卡,左边配品牌区(PrismVisionPanel),
+ * 输入框在页面底部。
  *
- * - ee 及之前:一张卡两条提示词,四张卡占满右半屏。
- * - ef:砍成一张卡一句提示词、60px 半高,理由是输入框搬到了卡片上方,
- *   点完就能直接改。
- * - **ex:按用户要求整体还原回 ee 那版** —— 两条提示词、四张大卡、左边配品牌区。
- *   输入框也回到页面底部。
- *
- * 所以这里"一张卡两条"不是随手写的,是回到过的版式。要再改回半高版,
- * 对着 CHANGELOG 的 ef / ex 两条互查。
- *
- * ## 外部应用为什么长在第四张卡里
- *
- * 位置是 ee 的位置(方案咨询这张卡只留一条提示词,腾出的那行给它),但**地址不是**
- * ee 的写法 —— ek 把外部应用抽成了 `config/externalApps.ts`,理由是入口不该写死在
- * 某个组件里。还原版式不等于把那条一起还原回去,所以这里读清单,不写 `/recsys`。
- *
- * 它长得和提示词行明显不同(主题色描边 + 外链图标):同一张卡里两种行为,
- * 至少要让人一眼看出哪条是"跳走"。这是 ek 当初拆走它的核心理由,版式还原了,
- * 那个理由仍然成立,所以在样式上留住。
+ * 外部应用入口放在第四张卡里(方案咨询这张卡只留一条提示词,腾出的那行给它),
+ * 地址读 `config/externalApps.ts` 的清单,不在组件里写死。它的样式与提示词行明显不同
+ * (主题色描边 + 外链图标):同一张卡里两种行为,要让人一眼看出哪条是"跳走"。
  */
 const CATEGORIES: StarterCategory[] = [
   {
@@ -121,7 +107,7 @@ export default function PromptStarterCards({ onPick }: PromptStarterCardsProps) 
                 <span className="bg-primary/8 grid h-8 w-8 place-items-center rounded-sm">
                   <Icon className="h-5 w-5 text-primary" strokeWidth={2} aria-hidden />
                 </span>
-                {/* hl(P3 中英混排):en 界面下原来整块中文。中文原文仍是 CATEGORIES 里那份(作兜底)。 */}
+                {/* 文案走 i18n,CATEGORIES 里的中文原文作兜底 */}
                 <span className="text-sm font-semibold text-foreground">
                   {t(`home.starterCards.${category.key}.label`, { defaultValue: category.label })}
                 </span>

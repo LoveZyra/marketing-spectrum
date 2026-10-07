@@ -17,10 +17,10 @@ import {
 import { GATEWAY_AUTH_TYPES, errorMessage, type GatewayAuthType, type GatewayTestResult } from './gatewaysApi';
 
 /**
- * hq:网关表单 —— root 的共享网关与每个人的私有网关共用。
+ * 网关表单,root 的共享网关与每个人的私有网关共用。
  *
  * - 新建(`withKey`):名字 / 地址 / 鉴权方式 / 可选的 key;「先测试」用表单里的地址与 key 打一次(不保存);
- * - 编辑(不带 key):只改名字 / 地址 / 鉴权方式 —— key 在行上单独换,免得一改名字就要重新粘一遍 key。
+ * - 编辑(不带 key):只改名字 / 地址 / 鉴权方式。key 在行上单独换,免得一改名字就要重新粘一遍 key。
  */
 export type GatewayFormValues = { name: string; baseUrl: string; authType: GatewayAuthType; key: string };
 

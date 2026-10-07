@@ -15,7 +15,8 @@ interface CollapsibleSectionProps {
 }
 
 /**
- * Reusable collapsible section with consistent styling
+ * Collapsible tool-details section. While open, its header sticks to the top of the
+ * scroll container so the title stays visible over long content.
  */
 export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
   title,
@@ -29,7 +30,7 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
 }) => {
   return (
     <Collapsible defaultOpen={open} className={cn('group/section', className)}>
-      {/* When there's a clickable title (Edit/Write), only the chevron toggles collapse */}
+      {/* With a clickable title (Edit/Write/ApplyPatch open the file), only the chevron toggles collapse */}
       {onTitleClick ? (
         <div className="flex cursor-default select-none items-center gap-1.5 py-0.5 text-xs group-data-[state=open]/section:sticky group-data-[state=open]/section:top-0 group-data-[state=open]/section:z-10 group-data-[state=open]/section:-mx-1 group-data-[state=open]/section:bg-background group-data-[state=open]/section:px-1">
           <CollapsibleTrigger className="flex flex-shrink-0 items-center p-0.5 text-muted-foreground hover:text-foreground">
@@ -80,11 +81,10 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
       )}
 
       {/*
-              fj:`mountOnOpen` —— 折叠着的时候不挂 children。
-              工具详情里可能是几千行的 diff 或一大坨 JSON,而"收起"本来只是
-              CSS 技巧,不打开这个开关的话它们在没人看的时候就已经进 DOM 了。
-            */}
-            <CollapsibleContent mountOnOpen>
+        `mountOnOpen`:折叠时不挂载内容。工具详情可能是几千行的 diff 或大段 JSON;
+        不开这个开关,收起只是 CSS 隐藏,没人看时它们也已经在 DOM 里。
+      */}
+      <CollapsibleContent mountOnOpen>
         <div className="mt-1.5 pl-[18px]">
           {children}
         </div>

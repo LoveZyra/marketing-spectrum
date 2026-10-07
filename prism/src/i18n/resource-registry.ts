@@ -1,28 +1,14 @@
 /**
  * Discovery of translation resources.
  *
- * The config used to name every locale/namespace pair twice: once as a
- * hand-written `import`, once as a hand-written entry in i18next's `resources`
- * object — seventy imports kept in sync with a directory tree by memory alone.
- * Nothing checked that the two lists agreed with what was on disk, and they did
- * not. `fr` was offered in the language picker and had all seven namespaces
- * translated — the most complete locale after English — with no import and no
- * `resources` entry, so choosing Français produced an entirely English UI.
+ * `import.meta.glob` enumerates the locale files themselves, so there is no
+ * hand-written list to drift from the directory tree and "present on disk but
+ * unreachable at runtime" is unrepresentable. That failure would be silent: an
+ * unregistered locale falls back to English, which looks like a missing
+ * translation rather than a wiring bug.
  *
- * The same shape of bug lived in `.gitignore`, which ignored `tasks.json` at
- * every depth to catch TaskMaster's state file and then negated it once per
- * locale — for seven of the ten. `zh-TW/tasks.json` was translated in full and
- * had never been committed.
- *
- * That failure mode is silent by construction: an unregistered locale falls
- * back to English, which looks like a missing translation rather than a wiring
- * bug, and an unregistered file produces no warning at all.
- *
- * So the list is no longer written by hand. `import.meta.glob` enumerates the
- * files themselves, which makes "present on disk but unreachable at runtime"
- * unrepresentable. Loading them lazily is the second reason: the eager imports
- * put all ten languages in the initial bundle, so every visitor downloaded
- * nine translations they had not asked for.
+ * Files load lazily, one chunk per locale/namespace, so a visitor downloads
+ * only the languages actually used.
  */
 
 /** Resolves to the parsed JSON module for one locale/namespace pair. */
@@ -97,9 +83,8 @@ export function namespacesIn(index: ResourceIndex, language: string): string[] {
 /**
  * One chunk per locale/namespace file, resolved at build time by Vite.
  *
- * Deliberately not `{ eager: true }` — eager is what the hand-written imports
- * already were, and is what put ten languages into every visitor's first
- * download.
+ * Deliberately not `{ eager: true }`: that would put every language into every
+ * visitor's first download.
  */
 const localeModules = import.meta.glob('./locales/*/*.json') as Record<string, ResourceLoader>;
 
@@ -109,7 +94,7 @@ export const resourceIndex: ResourceIndex = buildResourceIndex(localeModules);
  * Loads one namespace, or returns null when the file does not exist.
  *
  * Null rather than a throw: every namespace added to `en` is absent from the
- * other nine locales until someone translates it, and that gap is ordinary
+ * other locales until someone translates it, and that gap is ordinary
  * rather than exceptional. i18next's `fallbackLng` already handles it by
  * serving English for those keys. Failing the load instead would take down the
  * whole language over one absent file.

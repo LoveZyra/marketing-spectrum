@@ -1,9 +1,8 @@
 /**
  * i18n configuration.
  *
- * Translation files are discovered and loaded by `resource-registry.ts` rather
- * than listed here as imports — see that file for why the hand-written list was
- * a bug and not just a chore. This module is only the i18next wiring.
+ * Translation files are discovered and loaded by `resource-registry.ts`, not
+ * imported here; this module is only the i18next wiring.
  */
 
 import i18n from 'i18next';
@@ -32,21 +31,14 @@ const DEFAULT_LANGUAGE = 'zh-CN';
 /**
  * Where an *explicit* pick from the language selector is recorded.
  *
- * This key, not `userLanguage`, is what `resolveInitialLanguage` reads — and
- * the distinction is the whole point. i18next writes `userLanguage` on every
- * `changeLanguage`, including the one `init` itself performs, so every browser
- * that had ever loaded the app already held `userLanguage: "en"` from the old
- * default. Keying the initial language off that would have pinned every
- * existing user to English forever and made this constant a no-op for
- * everyone but a fresh browser.
- *
- * The trade-off, stated plainly: someone who had explicitly chosen a language
- * before this key existed also has no record of it and gets moved to the
- * default once. Re-picking it writes this key and is then honoured for good.
+ * This key, not `userLanguage`, is what `resolveInitialLanguage` reads:
+ * `userLanguage` is rewritten on every language change (see the
+ * `languageChanged` handler below), including the one `init` itself performs,
+ * so it cannot tell a deliberate pick from whatever the default was then.
  */
 const LANGUAGE_CHOICE_STORAGE_KEY = 'userLanguageChoice';
 
-/** i18next's detector cache. Written by us, authoritative for nothing. */
+/** Language cache written on every language change; nothing reads it back. */
 const LANGUAGE_CACHE_STORAGE_KEY = 'userLanguage';
 
 const isSupportedLanguage = (language) =>
@@ -55,9 +47,9 @@ const isSupportedLanguage = (language) =>
 /**
  * Returns `localStorage`, or `null` where there isn't one.
  *
- * `typeof` rather than a try/catch around the access: under the test runner
- * and SSR the identifier is simply not declared, and a bare reference is a
- * ReferenceError rather than something a property-access guard would catch.
+ * `typeof` covers the test runner and SSR, where the identifier is not declared
+ * at all and a bare reference would be a ReferenceError; the try/catch covers
+ * browsers that throw on access when storage is blocked.
  */
 const readStorage = () => {
   try {
@@ -146,29 +138,18 @@ const lazyResourceBackend = {
 };
 
 /**
- * Initializes i18next and resolves once the active language is usable.
+ * 首屏只加载当前语言。
  *
- * Callers must await this before rendering. `useSuspense` is off — this app has
- * no Suspense boundary anywhere in its tree, so a component suspending on a
- * translation load would white-screen it rather than show a fallback. Awaiting
- * the initial load here means nothing ever needs to suspend: by first render
- * the active language and the English fallback are both in memory, and later
- * language switches keep displaying the previous language until the new one has
- * finished loading.
- */
-/**
- * hl(动态 P3 首屏):**首屏只加载当前语言**。
+ * i18next 在 init 时会把 `fallbackLng` 的全部 namespace 一起拉下来,而默认语言是 zh-CN,
+ * 每个访客首屏都要多下一整套英文。zh-CN 对 en 是完整的(有测试钉住「每个 namespace 在
+ * 每个语种下都能解析」),首屏用不到那套英文。
  *
- * i18next 在 init 时会把 `fallbackLng` 的全部 namespace 一起拉下来 —— 默认语言是 zh-CN,
- * 于是每个访客首屏都要多下一整套英文(108KB 源文件)。zh-CN 对 en 是完整的(有测试钉住
- * 「每个 namespace 在每个语种下都能解析」),首屏根本用不到那套英文。
+ * 所以 init 时先不挂 fallback,只装当前语言;init 完成后在后台把 en 拉下来,再把 `fallbackLng`
+ * 挂上(LanguageUtils / Translator 持有的是同一个 options 对象,改这一处即生效),并发一次
+ * `loaded` 让已挂载的组件按新 fallback 重渲。当前语言就是 en 时不用再拉,直接挂上。
  *
- * 做法:init 时先不挂 fallback,只装当前语言;init 完成后**后台**把 en 拉下来,拉到了再把
- * `fallbackLng` 挂上(LanguageUtils / Translator 持有的是同一个 options 对象,改这一处即生效),
- * 并发一次 `loaded` 让已挂载的组件按新 fallback 重渲。当前语言就是 en 时什么都不用做。
- *
- * 代价:某个不完整的小语种在 en 到达前那几十毫秒里会把缺的键渲染成键路径。zh-CN 没有缺键,
- * 而选了小语种的用户本来就要等它自己的文件 —— 两个请求几乎同时回来。
+ * 代价:不完整的小语种在 en 到达前那几十毫秒里会把缺的键渲染成键路径。zh-CN 没有缺键,
+ * 而选了小语种的用户本来就要等它自己的文件,两个请求几乎同时回来。
  * `fallbackReady` 给测试与需要确定性的调用方等这一步。
  */
 let fallbackReady = Promise.resolve();
@@ -194,6 +175,17 @@ const attachFallbackLanguage = () => {
 /** 等 fallback 语言(en)挂好 —— 只有测试和"必须确定回退可用"的地方需要等。 */
 export const whenFallbackReady = () => fallbackReady;
 
+/**
+ * Initializes i18next and resolves once the active language is usable.
+ *
+ * Callers must await this before rendering. `useSuspense` is off: the app's
+ * Suspense boundaries only wrap lazily loaded panels, not the whole tree, so a
+ * component suspending on a translation load could white-screen the app rather
+ * than show a fallback. Awaiting the initial load here means nothing needs to
+ * suspend: by first render the active language is in memory (English follows
+ * in the background, see above), and later language switches keep displaying
+ * the previous language until the new one has finished loading.
+ */
 export const initI18n = () =>
   i18n
     .use(lazyResourceBackend)
@@ -227,13 +219,11 @@ export const initI18n = () =>
       },
 
       // Inert while `lng` is supplied — i18next only runs detection when it is
-      // not. Configured anyway, and configured to read the *choice* key with
-      // caching off, so that the two code paths can never disagree: were `lng`
-      // ever dropped in a refactor, the detector would resolve exactly what
-      // `resolveInitialLanguage` resolves instead of reviving the old
-      // `userLanguage` cache and snapping every existing browser to English.
+      // not. Configured anyway to read the *choice* key with caching off, so
+      // that were `lng` ever dropped, the detector would resolve exactly what
+      // `resolveInitialLanguage` resolves rather than the `userLanguage` cache.
       // `caches: []` because a detector write would stamp a choice the user
-      // never made, and an unasked-for choice is permanent by design.
+      // never made, and a recorded choice is permanent by design.
       detection: {
         order: ['localStorage'],
         lookupLocalStorage: LANGUAGE_CHOICE_STORAGE_KEY,
@@ -263,9 +253,9 @@ i18n.on('languageChanged', (language) => {
   }
 
   try {
-    // Compatibility cache only — nothing reads it back (see
-    // LANGUAGE_CHOICE_STORAGE_KEY for why the initial language must not).
-    // Kept so that rolling back to an older build does not lose the language.
+    // Nothing reads this back (see LANGUAGE_CHOICE_STORAGE_KEY for why the
+    // initial language must not); it is written so that rolling back to an
+    // older build does not lose the language.
     localStorage.setItem(LANGUAGE_CACHE_STORAGE_KEY, language);
   } catch (error) {
     console.error('Failed to save language preference:', error);

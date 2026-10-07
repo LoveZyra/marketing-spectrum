@@ -1,5 +1,5 @@
 /**
- * hn(B6):模型目录的共用规则 —— 服务端(目录校验、下发厂商)与前端(选择器图标、设置页)同一份。
+ * 模型目录的共用规则:服务端(目录校验、下发厂商)与前端(选择器图标、设置页)同一份。
  *
  * 纯函数、零依赖;放在仓库根的 shared/,两棵树都能 import。
  */
@@ -21,7 +21,7 @@ export type ModelVendorInfo = {
 };
 
 /**
- * 9 家,**顺序即分组顺序**。
+ * 9 家,顺序即分组顺序。
  * 自动识别见 `detectModelVendor` —— 那边另有自己的匹配顺序(先匹配先得)。
  */
 export const MODEL_VENDORS: readonly ModelVendorInfo[] = Object.freeze([
@@ -46,7 +46,7 @@ export function getModelVendor(id: string | null | undefined): ModelVendorInfo |
 /**
  * 按模型名猜厂商 —— 规则取自 LobeHub 的 modelConfig,只留这 9 家。
  *
- * **不分大小写、按下面的顺序先匹配先得**:`DeepSeek-R1-Distill-Qwen-32B` 这类名字里两家都有,
+ * 不分大小写、按下面的顺序先匹配先得:`DeepSeek-R1-Distill-Qwen-32B` 这类名字里两家都有,
  * 靠顺序归到 DeepSeek(蒸馏的是 Qwen 的底座,但出品的是 DeepSeek)。
  * `^o\d(-|$)`:o1 / o3 / o4-mini 这类 OpenAI 推理模型;v2 的 `^o[134]-` 匹配不到单独的 `o3`。
  * 认不出来返回 null(前端画首字母徽标;root 可在目录里手动指定)。
@@ -93,7 +93,7 @@ export function isValidModelId(value: unknown): value is string {
  */
 export const CONTEXT_WINDOW_MIN = 100_000;
 export const CONTEXT_WINDOW_MAX = 10_000_000;
-/** CLI 的自动压缩触发线 = 有效窗口 − 这么多(实测 2.1.285:200000→167000、128000→95000)。 */
+/** CLI 的自动压缩触发线 = 有效窗口 − 这么多(200000 → 167000、128000 → 95000)。 */
 export const AUTO_COMPACT_MARGIN = 33_000;
 
 /** `128000` → `128K`,`1000000` → `1M`(选择器上的窗口角标)。 */

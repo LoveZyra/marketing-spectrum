@@ -1,9 +1,9 @@
 /**
- * gy:上传技能 —— 把浏览器选中的一个文件夹变成 `POST /api/skillwhet/skills/upload` 的载荷。
+ * 上传技能:把浏览器选中的一个文件夹变成 `POST /api/skillwhet/skills/upload` 的载荷。
  *
  * 载荷形状与 SkillWhet `ManagedStore.import_upload` 对齐:`{ name, files: [{ rel, content_b64 }] }`。
- * 这里只做**前置**把关(SKILL.md 必须在根、数量与体积上限、不许 `.evo/`),服务端再校一遍
- * 并做路径穿越检查 —— 前端拦是为了少一次 30 MiB 的白传。
+ * 这里只做前置把关(定位 SKILL.md 所在的技能根、目录名合法、数量与体积上限、滤掉 `.evo/` 等噪音目录),
+ * 服务端再校一遍并做路径穿越检查;前端先拦是为了省掉一次最多 30 MiB 的白传。
  */
 import { swText } from './sw-text';
 
@@ -14,7 +14,7 @@ export const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
 export type UploadFile = { rel: string; content_b64: string };
 export type UploadBundle = {
   name: string; files: UploadFile[]; totalBytes: number; hasUnitTests: boolean; pythonFiles: number;
-  /** hl(动态 P3):SKILL.md 不在所选文件夹的根,而在这个子目录里 —— 页面上提示,而不是悄悄拿子目录名当技能名 */
+  /** SKILL.md 不在所选文件夹的根、而在这个子目录里;页面据此明确提示技能名取自子目录 */
   nestedRoot?: string;
   /** 所选文件夹自己的名字(与 name 不同时才有意义) */
   pickedFolder?: string;
@@ -39,7 +39,7 @@ const SKIP_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.evo', '.pyte
 
 /**
  * 从选中的文件里找 skill 根(含 SKILL.md 的最浅目录),裁掉根前缀,过滤噪音目录。
- * 只接受**一个**skill;一次选了多个 SKILL.md 就报错让用户分开传。
+ * 只接受一个 skill:还有 SKILL.md 不在这个根之下时报错,让用户分开传。
  */
 export async function buildUploadBundle(selected: File[]): Promise<UploadBundle> {
   const files = (selected as BrowserFile[]).map((file) => ({ file, rel: relativePathOf(file) }));

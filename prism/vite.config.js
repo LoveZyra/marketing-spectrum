@@ -5,10 +5,10 @@ import react from '@vitejs/plugin-react'
 import { getConnectableHost, normalizeLoopbackHost } from './shared/networkHosts.js'
 
 /**
- * KaTeX 只保留 woff2 字体(cp 轮,G2)。
+ * KaTeX 只保留 woff2 字体。
  *
  * katex.min.css 的每个 @font-face 都列了 woff2 / woff / ttf 三份 src,Vite 会把
- * 被引用到的**全部** 60 个字体文件拷进 dist —— 其中 woff/ttf 合计约 876 KB,
+ * 被引用到的全部 60 个字体文件拷进 dist —— 其中 woff/ttf 合计约 876 KB,
  * 而现代浏览器永远只取列表里第一个能用的格式(woff2),那 40 个文件一次也不会
  * 被请求。这里把 src 列表裁到只剩 woff2,dist 里就只留 20 个 woff2(约 292 KB)。
  *
@@ -31,7 +31,7 @@ function katexWoff2Only() {
 }
 
 /**
- * v2.0.0:构建时把版本号与发布信息写进前端(设置 → 关于)。版本号来自 package.json;
+ * 构建时把版本号与发布信息写进前端(设置 → 关于)。版本号来自 package.json;
  * 日期与提交号来自包里的 RELEASE.json(scripts/release.mjs 打包时生成,不进 git),
  * 它的版本号对不上 package.json 时不用(前端 releaseInfo.ts 再按同一规则校验一次)。
  */
@@ -120,10 +120,10 @@ export default defineConfig(({ mode }) => {
             const localeMatch = /[\\/]src[\\/]i18n[\\/]locales[\\/]([^\\/]+)[\\/]/.exec(id)
             if (localeMatch) return `locale-${localeMatch[1]}`
 
-            // hl(P3 首屏 / 09-24 审计 P3):rollup 的 CommonJS 互操作助手是个**虚拟模块**
-            // (`\0commonjsHelpers.js`),不在 node_modules 下 —— 下面那条 vendor-helpers 规则
-            // 管不到它,于是它按"谁先够到"被折进了 vendor-markdown,vendor-react 反过来 import
-            // vendor-markdown,登录页就得先下 450KB 的 markdown + KaTeX。放进小小的 helpers 块。
+            // rollup 的 CommonJS 互操作助手是个虚拟模块(`\0commonjsHelpers.js`),不在 node_modules 下,
+            // 下面那条 vendor-helpers 规则管不到它;不单独放的话它会按"谁先够到"被折进 vendor-markdown,
+            // vendor-react 反过来 import vendor-markdown,登录页就得先下 450KB 的 markdown + KaTeX。
+            // 所以放进小小的 helpers 块。
             if (id.includes('commonjsHelpers')) return 'vendor-helpers'
 
             if (!id.includes('node_modules')) return undefined
@@ -145,14 +145,13 @@ export default defineConfig(({ mode }) => {
             }
             if (/node_modules[\\/]@xterm[\\/]/.test(id)) return 'vendor-xterm'
             /*
-             * G3:AppContent 一个块 675 kB,里面最大的两坨与"应用逻辑"无关 ——
              * markdown 渲染管线(react-markdown + remark/rehype + katex + 一大堆
-             * micromark/mdast/unist 小包)和图标集。把它们拆出去有两个实打实的
-             * 好处:两者几乎从不变,浏览器缓存能一直命中(AppContent 每次发版都变);
-             * 而且它们各自被多个懒加载面板共享,拆出来之后不会被复制进每一个。
+             * micromark/mdast/unist 小包)和图标集单独成块:它们与应用逻辑无关、几乎从不变,
+             * 拆出来浏览器缓存能一直命中(AppContent 每次发版都变);而且它们被多个懒加载
+             * 面板共享,拆出来之后不会被复制进每一个。
              *
-             * 匹配的是**包目录**而不是 import 语句 —— markdown 那条链上有三十多个
-             * 上游小包,逐个列出来必然漏,而漏掉的那个会被折回 AppContent。
+             * 匹配的是包目录而不是 import 语句 —— markdown 那条链上有三十多个小包,
+             * 逐个列出来必然漏,漏掉的那个会被折回 AppContent。
              */
             if (/node_modules[\\/](react-markdown|remark-.*|rehype-.*|micromark.*|mdast-.*|unist-.*|hast-.*|katex|property-information|space-separated-tokens|comma-separated-tokens|character-entities.*|decode-named-character-reference|bail|trough|vfile.*|unified|is-plain-obj|zwitch|longest-streak|ccount|markdown-table|escape-string-regexp|devlop|html-void-elements|parse-entities|stringify-entities|character-reference-invalid|is-.*-character|estree-.*)[\\/]/.test(id)) {
               return 'vendor-markdown'

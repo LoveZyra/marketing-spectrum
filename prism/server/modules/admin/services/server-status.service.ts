@@ -1,8 +1,8 @@
 /**
  * 服务器状态采集(root 面板):负载/内存/磁盘/运行时长/版本 + Jupyter + 网关连通。
  *
- * 网关探测只打 BASE_URL 的源站拿连通性和延迟,**从不携带鉴权 token**;
- * 401/404 都算"可达"——我们量的是网络这一跳,不是账号有效性。
+ * 网关探测只打 BASE_URL 的源站拿连通性和延迟,从不携带鉴权 token;
+ * 401/404 都算"可达"——量的是网络这一跳,不是账号有效性。
  */
 
 import { execFile } from 'node:child_process';
@@ -34,7 +34,7 @@ export type GatewayStatus = {
 export type ServerStatus = {
   now: string;
   appVersion: string | null;
-  /** v2.0.0:「v2.0.0 · 日期 · 提交号」;没有 RELEASE.json 时只有版本号。 */
+  /** 发布标识「v版本号 · 日期 · 提交号」;没有 RELEASE.json 时只有版本号。 */
   appRelease: string | null;
   nodeVersion: string;
   processUptimeSec: number;

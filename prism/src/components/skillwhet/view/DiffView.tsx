@@ -4,13 +4,13 @@ import { useTranslation } from 'react-i18next';
 import type { StagingDiff } from '../lib/types';
 
 /**
- * gz:代码与文档 —— staging 的 `proposed/` 对副本当前状态的逐文件 unified diff,服务端算好、这里只上色。
- * 左边文件条(+/− 计数),右边正文;没有 diff = 这份 staging 与副本一致(通常是"未改进,staged S₀")。
+ * 「代码与文档」:staging 的 `proposed/` 相对 diff 底(`base`)的逐文件 unified diff,服务端算好、这里只上色。
+ * 左边文件条(+/− 计数),右边正文;没有 diff = 这份 staging 没有改动(通常是"未改进,staged S₀")。
  */
 export default function DiffView({ diffs, base = 'copy' }: { diffs: StagingDiff[]; base?: 'base' | 'backup' | 'copy' }) {
   const { t } = useTranslation('skillwhet');
   const [active, setActive] = useState(0);
-  // hd:底不是"副本当前内容"了 —— 采纳 / 发布之后也照样看得到这份 staging 当初改了什么
+  // 底是 base / backup 时,采纳 / 发布之后也照样看得到这份 staging 当初改了什么;copy 才是对比副本当前内容。
   const caption = base === 'base'
     ? t('diff.baseTraining', { defaultValue: '对比:训练开始时的副本 → 这份 staging' })
     : base === 'backup'

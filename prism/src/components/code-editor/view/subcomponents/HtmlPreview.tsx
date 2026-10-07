@@ -8,7 +8,7 @@ type HtmlPreviewProps = {
   isLoading: boolean;
   /** True when the editor buffer differs from what is on disk. */
   hasUnsavedChanges: boolean;
-  /** hl(P3 文件组):票过期了 —— iframe 里已经是 401,给「重新加载」。 */
+  /** 预览票已过期:之后的请求会被拒(401),给一条提示和「重新加载」。 */
   expired?: boolean;
   onReload: () => void;
   labels: {
@@ -65,8 +65,7 @@ export default function HtmlPreview({
 
   return (
     <div className="flex h-full flex-col">
-      {/* hl 复核 P3-6:票过期只影响**之后**的请求(页面里的相对资源、脚本发的请求),已经渲染出来
-          的内容照样能看 —— 所以不再把整块换成「已过期」,只加一条提示与「重新加载」。 */}
+      {/* 票过期只影响之后的请求(页面里的相对资源、脚本发的请求),已渲染的内容照样能看,所以只加一条提示与「重新加载」,不把整块换掉 */}
       {expired && (
         <div role="status" className="flex items-center justify-between gap-2 border-b border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300">
           <span>{labels.expiredNotice ?? '预览链接已过期'}</span>

@@ -10,7 +10,7 @@ import { playChatCompletionSound, playNotificationSound } from '../../../utils/n
 import type { MarkSessionIdle, MarkSessionProcessing } from '../../../hooks/useSessionProtection';
 import { isCompactionActivity } from '../utils/compactionProgress';
 import { createDropWarner, learnRunSession, resolveEventSid } from '../utils/eventRouting';
-import { describeDroppedQueueMessage } from '../utils/serverQueue';
+import { describeDroppedQueueMessage, planQueueCancelled } from '../utils/serverQueue';
 import {
   isSessionGoneProtocolError, removedInfoFromFrame, removedInfoFromNotFound,
   takeQueuedTextForRemoval, type SessionRemovedInfo,
@@ -18,6 +18,24 @@ import {
 import type { PendingPermissionRequest } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import { observeServerTime } from '../../../stores/serverClock';
+
+/**
+ * 拿来估服务器时钟偏差的帧(见 stores/serverClock)。
+ *
+ * 只认网关现发的控制帧:它们的时间戳就是服务端发帧那一刻,也不进重放缓冲。
+ * 运行帧可能是断线后补发的旧帧,时间戳不代表"现在"。`chat_subscribed` 是订阅的回执,
+ * 切会话、重连都会来,不必等用户发消息才有样本。
+ */
+const CLOCK_SAMPLE_KINDS = new Set([
+  'chat_ack',
+  'chat_subscribed',
+  'chat_queued',
+  'chat_queue_cancelled',
+  'chat_queue_flushed',
+  'chat_merged_withdrawn',
+  'chat_merged_delivered',
+]);
 
 const isActionablePermissionRequest = (request: { toolName?: unknown } | null | undefined): boolean => {
   return request?.toolName !== 'ExitPlanMode' && request?.toolName !== 'exit_plan_mode';
@@ -26,9 +44,9 @@ const isActionablePermissionRequest = (request: { toolName?: unknown } | null | 
 /**
  * 这一帧该不该推进 `lastSeq`(重连/切回来时的补发游标)。
  *
- * 规则是"只为**留下来的**帧推进"。permission 那两种帧是唯一的例外,而这个例外
+ * 规则是"只为留下来的帧推进"。permission 那两种帧是唯一的例外,而这个例外
  * 不是洁癖:它们既不进 store(见 `shouldPersist`),又会在不属于当前所看会话时
- * 被直接丢弃 —— 却照样推进过游标。后果是一条**永远回不来**的审批请求:切回那个
+ * 被直接丢弃 —— 却照样推进过游标。后果是一条永远回不来的审批请求:切回那个
  * 会话时 `chat.subscribe` 带的 `lastSeq` 已经越过它,`replayEvents` 不补发,
  * 而没有任何地方存过它。整页刷新反倒能救回来(游标随 ref 一起清零),页内切换永远不能。
  */
@@ -36,21 +54,19 @@ export const advancesReplayCursor = (kind: unknown): boolean =>
   kind !== 'permission_request' && kind !== 'permission_cancelled';
 
 /**
- * F16:**这一帧是不是已经处理过了。**
+ * 这一帧是不是已经处理过了。
  *
- * `seq` 在一轮(run)内单调递增,所以"同一个 runId 下 seq 不大于水位"就是重复。
- * 重复会发生,而且不是异常路径:
- *   - 断线重连按补发游标要帧,而游标**故意**不为审批帧推进(见
- *     `advancesReplayCursor`),于是补发窗口会盖住一批已经收到的帧;
- *   - 订阅重叠(旧 socket 还没关、新 socket 已经开始补发)时整段重放。
+ * `seq` 在一轮(run)内单调递增,所以同一个 runId 下 seq 不大于水位就是重复。
+ * 重复是正常路径,不是异常:
+ *   - 断线重连按补发游标要帧,而游标故意不为审批帧推进(见 `advancesReplayCursor`),
+ *     补发窗口会盖住一批已经收到的帧;
+ *   - 订阅重叠(旧 socket 还没关、新 socket 已开始补发)时整段重放。
  *
- * 重复一帧 `stream_delta` 就是把同一段正文再拼一次(累积器是追加语义),
- * 重复一帧工具事件就是屏幕上并排两份 —— 而这两种都要等服务端行落库、
- * `pruneRealtimeSupersededByServer` 才收得掉。
+ * 重复一帧 `stream_delta` 会把同一段正文再拼一次(累积器是追加语义),重复一帧工具事件
+ * 会在屏幕上并排两份,两者都要等服务端行落库、`pruneRealtimeSupersededByServer` 才收得掉。
  *
- * 只对**会推进游标的帧**判重:审批帧不推进游标,按水位判会把它们全判成重复,
- * 那正是 dv 那轮修过的反面(审批帧照旧要送到界面上)。
- * 换轮(runId 不同)时 seq 从 0 重来,一律不算重复。
+ * 只对会推进游标的帧判重(由调用方保证):审批帧不推进游标,按水位判会把它们全判成重复,
+ * 而审批帧必须照常送到界面上。换轮(runId 不同)时 seq 从 0 重来,一律不算重复。
  */
 export function isDuplicateFrame(
   seen: { runId: string | null; seq: number } | undefined,
@@ -63,20 +79,20 @@ export function isDuplicateFrame(
 }
 
 /**
- * F17:**回放够不够把这一轮补齐** —— 冷订阅同样要判。
+ * 回放够不够把这一轮补齐,冷订阅同样要判。
  *
  * 服务端的重放是"从缓冲现有的第一条开始发",而缓冲会按条数/字节被裁。
  * ack 因此带上 `earliestBufferedSeq`:它比我们已经收到的位置还靠后,
  * 说明中间那段永远不会来了,只能回落 REST(权威来源)补一次。
  *
- * fj 那版的判据要求 `cursor.runId === ack.runId` —— 也就是**必须已经收过这一轮的帧**。
- * 于是两种"冷"的情况整个漏掉,而它们恰恰是最常见的:
- *   - **压根没有游标**:回合是在别的标签页 / 定时任务里起的,这个页面第一次订阅它;
- *   - **游标属于上一轮**:上一轮看完了,新一轮在我们没看的时候起了。
- * 两种情况下我们对这一轮**一帧都没有**,而缓冲若已经裁掉开头(`earliest > 0`),
+ * 判据不能要求 `cursor.runId === ack.runId`(必须已经收过这一轮的帧),
+ * 否则最常见的两种"冷"情况会整个漏掉:
+ *   - 压根没有游标:回合是在别的标签页 / 定时任务里起的,这个页面第一次订阅它;
+ *   - 游标属于上一轮:上一轮看完了,新一轮在我们没看的时候起了。
+ * 两种情况下我们对这一轮一帧都没有,而缓冲若已经裁掉开头(`earliest > 0`),
  * 回放补不回来 —— 界面上就是"这一轮的前半段凭空消失",而且没有任何提示。
  *
- * 收成一条:**我们对这一轮覆盖到哪儿**(冷订阅 = -1,什么都没有),
+ * 所以只看一件事:我们对这一轮覆盖到哪儿(冷订阅 = -1,什么都没有),
  * 缓冲的第一条要是接不上,就补拉。
  */
 export function needsReplayCatchUp(
@@ -127,33 +143,34 @@ interface UseChatRealtimeHandlersArgs {
   /** prism: post-turn changed-files summary relative to the checkpoint. */
   onChangedFiles?: (payload: { sessionId: string | null; checkpointId: string | null; files: unknown[]; truncated?: boolean; cwd?: string | null }) => void;
   /**
-   * F7:服务端排队状态变了(收下/撤销/续发)。
+   * 服务端排队状态变了(收下 / 撤销 / 续发)。
    *
-   * 与 composer 自己那份浏览器内的排队是两回事:这一份**存在服务端**,所以
-   * 刷新页面、换设备、甚至关掉标签页之后它都还在,也因此必须由服务端的帧来
-   * 驱动显示,不能靠本地状态推断。
+   * 与 composer 自己那份浏览器内的排队是两回事:这一份存在服务端,刷新页面、
+   * 换设备、关掉标签页之后都还在,所以显示必须由服务端的帧驱动,不能靠本地状态推断。
    */
   onServerQueueChange?: (sessionId: string, queued: { preview: string; enqueuedAt: string; redacted?: boolean } | null) => void;
   /** 排队被中止带走时把正文退回输入框;回填成功返回 true(输入框非空时不覆盖)。 */
   onServerQueueReturned?: (sessionId: string, content: string) => boolean;
+  /** 这个标签页发出过这个 `clientMessageId` 吗(见 WebSocketContext 的 `wasSentHere`)。 */
+  wasSentHere?: (clientMessageId: string) => boolean;
   /**
-   * F09:服务端确认收下了某个 `clientMessageId`。
+   * 服务端确认收下了某个 `clientMessageId`。
    *
-   * 这是"发出去了"的**唯一**权威信号 —— `socket.send()` 返回 true 只代表本地
+   * 这是"发出去了"的唯一权威信号 —— `socket.send()` 返回 true 只代表本地
    * 没抛异常。收到它之前,那条命令一直留在 outbox 里,重连后会带着同一个 id
    * 重投(服务端按 id 去重,所以重投不会产生第二条消息)。
    */
   onSendAcked?: (sessionId: string, clientMessageId: string, mergedUuid?: string | null) => void;
-  /** ho(ho-1):插话(合流消息)的去向 —— 撤回了 / 已被模型读到。 */
+  /** 插话(合流消息)的去向:撤回了 / 已被模型读到。 */
   onMergedOutcome?: (sessionId: string, outcome: { type: 'withdrawn' | 'delivered'; mergedUuids: string[]; clientMessageIds: string[]; reason?: string }) => void;
-  /** ho(hq-1):后台任务条(全量替换)。 */
+  /** 后台任务条(全量替换)。 */
   onBackgroundTasks?: (sessionId: string, tasks: Array<{ taskId: string; taskType: string; description: string }>) => void;
   /**
-   * gk:这条会话已被永久删除(服务端推的 `session_removed`),或者发送时发现它已经不在了
+   * 这条会话已被永久删除(服务端推的 `session_removed`),或者发送时发现它已经不在了
    * (`chat.send` 的 `SESSION_NOT_FOUND`)。界面据此切「会话已被删除」态。
    */
   onSessionRemoved?: (sessionId: string, info: SessionRemovedInfo) => void;
-  /** gk:被删的会话又回来了(`session_restored`,或侧栏的 `session_upserted`)—— 撤掉「已被删除」态。 */
+  /** 被删的会话又回来了(`session_restored`,或侧栏的 `session_upserted`):撤掉「已被删除」态。 */
   onSessionRestored?: (sessionId: string) => void;
 }
 
@@ -190,6 +207,7 @@ export function useChatRealtimeHandlers({
   onChangedFiles,
   onServerQueueChange,
   onServerQueueReturned,
+  wasSentHere,
   onSendAcked,
   onMergedOutcome,
   onBackgroundTasks,
@@ -208,20 +226,19 @@ export function useChatRealtimeHandlers({
   // notification sound before React finishes a rerender.
   const pendingPermissionRequestsRef = useRef(pendingPermissionRequests);
 
-  // dk:runId → sessionId 的归属映射与丢帧告警。effect 重跑(依赖变化)不清空 ——
-  // 映射跨订阅有效,正跑着的回合换个渲染周期不该失忆。
+  // runId → sessionId 的归属映射与丢帧告警。effect 重跑(依赖变化)不清空:
+  // 映射跨订阅有效,正跑着的回合不能因为换了渲染周期就丢掉归属。
   const runSessionMapRef = useRef(new Map<string, string>());
   const warnDroppedRef = useRef(createDropWarner());
-  // dm:每会话上次因 seq 空洞触发 REST 补拉的时刻(节流用)。
+  // 每会话上次因 seq 空洞触发 REST 补拉的时刻(节流用)。
   const gapRefreshAtRef = useRef(new Map<string, number>());
   /**
-   * dv:**丢帧判定**专用的 seq 水位(与补发游标 `lastSeqRef` 分开)。
+   * 丢帧判定专用的 seq 水位,与补发游标 `lastSeqRef` 分开。
    *
-   * 服务端给**每一帧**都分配 seq(含 permission),而 `advancesReplayCursor`
-   * 故意不为审批帧推进补发游标 —— 于是紧随审批之后的那一帧必然满足
-   * `seq > known.seq + 1`,被当成丢帧:每弹一次工具审批就误触发一次全量
-   * `refreshFromServer`(5 秒节流也挡不住每次审批各来一发),重连重放时同样
-   * 必中。水位分开之后,补发语义不变,而丢帧判定按真实序号走。
+   * 服务端给每一帧都分配 seq(含 permission),而 `advancesReplayCursor` 故意不为审批帧
+   * 推进补发游标。共用游标的话,紧随审批之后的那一帧必然满足 `seq > known.seq + 1`,
+   * 每弹一次工具审批、每次重连重放都会被误判成丢帧,触发一次全量 `refreshFromServer`。
+   * 分开之后补发语义不变,丢帧判定按真实序号走。
    */
   const gapSeqRef = useRef(new Map<string, { runId: string | null; seq: number }>());
 
@@ -235,32 +252,31 @@ export function useChatRealtimeHandlers({
         return;
       }
 
+      if (CLOCK_SAMPLE_KINDS.has(msg.kind)) observeServerTime(msg.timestamp);
+
       const activeViewSessionId = activeViewSessionIdRef.current;
       /**
-       * dk:归属改为「自带 sessionId → 按 runId 查映射 → 查不到就是 null」。
-       * **不再兜底到"当前正在看的会话"** —— 那个兜底正是"别的会话的折叠时间轴
-       * 钉在每个页面顶端、F5 才消失"的根因:后台回合的边角帧没带会话 id,
-       * 全被记到你正看的页面头上,而服务端 transcript 不认它们,永远清不掉。
+       * 归属顺序:自带 sessionId → 按 runId 查映射 → 查不到就是 null。
+       * 不兜底到当前正在看的会话:后台回合的边角帧没带会话 id,兜底会把它们记到正看的页面上,
+       * 而服务端 transcript 不认这些帧,刷新之前永远清不掉。
        * 归属不明的帧只当控制帧,该丢的丢并 warn;唯一例外是 protocol_error
        * (对本客户端刚发出的动作的直接回话),在它自己的分支里单独兜底。
        */
       learnRunSession(runSessionMapRef.current, msg);
       const sid = resolveEventSid(runSessionMapRef.current, msg);
 
-      // 补发游标。**必须连 runId 一起记** —— seq 是每轮从 0 重新开始的,
-      // 只记 seq 的话:第 1 轮跑到 40,第 2 轮在 20 处断线重连,带着 40 去要补发,
-      // `seq > 40` 一条都匹配不上,第 2 轮已发生的内容全部丢失,而且整轮游标都
-      // 不会推进 —— 此后每次重连都命中同一个空洞。轮次一换,游标从头算。
-      // (dk 起 sid 一定是真实归属 —— 之前兜底到"正看的会话"时,后台帧会把
-      // 别的会话的 runId+seq 写进当前会话的游标,补发从此对不上号。)
+      // 补发游标必须连 runId 一起记:seq 每轮从 0 重新开始。只记 seq 的话,第 1 轮跑到 40、
+      // 第 2 轮在 20 处断线重连,带着 40 去要补发,`seq > 40` 一条都匹配不上,第 2 轮已发生的
+      // 内容全部丢失,而且整轮游标都不会推进,此后每次重连都命中同一个空洞。轮次一换,游标从头算。
+      // sid 必须是真实归属(不兜底到正看的会话),否则后台帧会把别的会话的 runId+seq
+      // 写进当前会话的游标。
       if (sid && typeof msg.seq === 'number') {
         const runId = typeof msg.runId === 'string' ? msg.runId : null;
 
-        // dm:seq 跳号 = 中间有帧没送到(重放缓冲被字节预算裁掉,或超窗断线)。
-        // 此前这种丢失是**静默**的 —— 用户只是"感觉少了点什么"。REST 是权威
-        // 来源,拉一次尾窗把窟窿补上,把"静默丢内容"变成"多一次刷新"。
+        // seq 跳号 = 中间有帧没送到(重放缓冲被字节预算裁掉,或超窗断线)。
+        // REST 是权威来源,拉一次尾窗把缺口补上,免得内容静默丢失。
         // 5 秒节流:一个洞后面往往跟着一串跳号帧,补一次就够。
-        // dv:按**全部帧**的水位判定(审批帧也占号,见 gapSeqRef 的说明)。
+        // 按全部帧的水位判定(审批帧也占号,见 gapSeqRef 的说明)。
         const seen = gapSeqRef.current.get(sid);
         const sameSeenRun = seen && seen.runId === runId;
         if (sameSeenRun && msg.seq > seen.seq + 1) {
@@ -270,14 +286,14 @@ export function useChatRealtimeHandlers({
             void sessionStore.refreshFromServer(sid);
           }
         }
-        // F16:水位快照要在更新**之前**取(下面那句会把它推到这一帧)。
+        // 判重必须用更新前的水位快照(下面那句会把水位推到这一帧)。
         const alreadyApplied = advancesReplayCursor(msg.kind) && isDuplicateFrame(seen, runId, msg.seq);
 
         if (!sameSeenRun || msg.seq > seen.seq) {
           gapSeqRef.current.set(sid, { runId, seq: msg.seq });
         }
 
-        // 补发游标:仍然只为**留下来的**帧推进(审批帧的例外见 advancesReplayCursor)。
+        // 补发游标:仍然只为留下来的帧推进(审批帧的例外见 advancesReplayCursor)。
         if (advancesReplayCursor(msg.kind)) {
           const known = lastSeqRef.current.get(sid);
           const sameRun = known && known.runId === runId;
@@ -301,17 +317,15 @@ export function useChatRealtimeHandlers({
           if (!sid) return;
 
           /**
-           * fj:首帧缺口 —— 重放缓冲已经把我们要的那段裁掉了。
+           * 首帧缺口:重放缓冲已经把我们要的那段裁掉了。
            *
-           * 服务端的重放是"从缓冲现有的第一条开始发",而缓冲会按条数/字节被裁。
-           * 客户端此前只靠 seq 跳号检测,而首帧缺口在跳号检测里**是看不见的**
-           * (发来的那一串本身是连续的)—— 那段内容就静默丢了。
-           *
-           * ack 现在带上缓冲还剩的最早 seq:比我们的游标还大,说明中间那段没了,
+           * 服务端的重放从缓冲现有的第一条开始发,而缓冲会按条数 / 字节被裁;
+           * 发来的那一串本身是连续的,seq 跳号检测看不见这种缺口。
+           * ack 带上缓冲还剩的最早 seq:比我们的游标还大,说明中间那段没了,
            * 直接回落 REST 全量补一次(REST 永远是权威来源)。
            *
-           * F17:判据收进 `needsReplayCatchUp` —— 冷订阅(没有游标、或游标属于
-           * 上一轮)此前整个漏判,见那个函数的说明。
+           * 判据在 `needsReplayCatchUp` 里;冷订阅(没有游标、或游标属于上一轮)同样要判,
+           * 见那个函数的说明。
            */
           const earliest = typeof msg.earliestBufferedSeq === 'number' ? msg.earliestBufferedSeq : null;
           const cursor = lastSeqRef.current.get(sid);
@@ -334,7 +348,7 @@ export function useChatRealtimeHandlers({
             });
           }
 
-          // F7:服务端排队状态随 ack 一起回来 —— 刷新后"有一条在等"这件事
+          // 服务端排队状态随 ack 一起回来 —— 刷新后"有一条在等"这件事
           // 不能只活在发起它的那个标签页里。
           onServerQueueChange?.(
             sid,
@@ -359,10 +373,10 @@ export function useChatRealtimeHandlers({
 
         case 'protocol_error': {
           console.error('[Chat] Protocol error:', msg.code, msg.error);
-          // 直接回话类帧:没带会话 id 时归到正在看的会话**展示**是合理的 ——
+          // 直接回话类帧:没带会话 id 时归到正在看的会话展示是合理的 ——
           // 它就是对这个客户端刚发出的动作的回应。只用于展示,不进游标。
           const errorSid = sid || activeViewSessionId;
-          // ho(ho-1):撤回插话没撤到(已经被模型读到了)—— 只是一句提示,回合照常在跑,不能停转圈
+          // 撤回插话没撤到(已经被模型读到了):只是一句提示,回合照常在跑,不能停转圈
           if (msg.code === 'MERGED_NOT_CANCELLABLE') {
             emitToast({ message: String(msg.error || '') || i18n.t('chat:merged.tooLate') });
             if (errorSid && typeof msg.mergedUuid === 'string') {
@@ -371,11 +385,10 @@ export function useChatRealtimeHandlers({
             return;
           }
           /**
-           * gk:`chat.send` 撞到"会话不存在" → 这条会话已经被删了(或你已无权访问)。
+           * `chat.send` 撞到「会话不存在」:这条会话已经被删了(或你已无权访问)。
            *
-           * 不再把那句给开发者看的英文原样塞进对话、也不再给「重发上一条」(重发只会再撞
-           * 一次 —— 2026-09-14 生产截图里就是这样两条红字)。切成「会话已被删除」态,
-           * 顺手把挂在这条死会话上的排队消息清掉,免得后台续发空转。
+           * 不把给开发者看的英文错误塞进对话,也不提供「重发上一条」(重发只会再撞一次)。
+           * 切成「会话已被删除」态,顺手把挂在这条死会话上的排队消息清掉,免得后台续发空转。
            */
           if (errorSid && isSessionGoneProtocolError({ code: msg.code, request: msg.request })) {
             onSessionIdle?.(errorSid);
@@ -386,11 +399,11 @@ export function useChatRealtimeHandlers({
           }
           if (errorSid) {
             // 多数 protocol_error 意味着这一轮压根没开起来(也就不会有 complete),
-            // 所以要顺手把转圈停掉。**但有两个 code 恰恰相反**:
+            // 所以要顺手把转圈停掉。但有两个 code 恰恰相反:
             //   QUEUE_FULL —— 是在 startRun 返回 null(回合正跑着)且已有排队时发的;
             //   SESSION_HELD_BY_SHELL —— 终端正接管着这段对话,回合也在跑。
-            // 这两种情况下标成空闲,会让转圈消失、停止按钮跟着失效,而回合还在跑
-            // (和 da 修掉的是同一类"界面进入了没有出口的状态")。
+            // 这两种情况下标成空闲,会让转圈消失、停止按钮跟着失效,而回合还在跑,
+            // 界面就进入了没有出口的状态。
             const runStillAlive = msg.code === 'QUEUE_FULL' || msg.code === 'SESSION_HELD_BY_SHELL';
             if (!runStillAlive) {
               onSessionIdle?.(errorSid);
@@ -407,25 +420,23 @@ export function useChatRealtimeHandlers({
           return;
         }
 
-        // F09:服务端收下了(已登记回合 / 已收进排队 / 或本来就收过)。
+        // 服务端收下了(已登记回合 / 已收进排队 / 或本来就收过)。
         case 'chat_ack': {
           const ackSid = sid || activeViewSessionId;
           const ackId = typeof msg.clientMessageId === 'string' ? msg.clientMessageId : null;
           if (!ackSid || !ackId) return;
           /**
-           * ga:**清盘要在这里做,不能只交给 composer。**
+           * 清盘要在这里做,不能只交给 composer。
            *
-           * `onSendAcked` 落到 composer 的 `handleSendAcked`,而全应用只有**一个**
-           * `ChatInterface` 实例,挂在当前正看的那条会话上。后台会话(自动续发
-           * 那条路的服务对象)的 outbox 在内存里是空的 → 身份判断永远不成立 →
-           * `clearQueuedMessage` 永远不执行。记录留在盘上,而认领对自己盖的戳
-           * 恒返回 true,于是**这条会话每跑完一轮就重投一次**:10 分钟内被服务端
-           * 幂等门挡着只是空转,过了 10 分钟去重键过期,**这条消息被真的再跑一遍**,
-           * 此后每 10 分钟一次,无限持续。
+           * `onSendAcked` 落到 composer 的 `handleSendAcked`,而全应用只有一个 `ChatInterface`
+           * 实例,挂在当前正看的会话上。后台会话(自动续发的对象)的 outbox 在内存里是空的,
+           * 身份判断永远不成立,`clearQueuedMessage` 永远不执行;记录留在盘上,而认领对自己盖的戳
+           * 恒返回 true,这条会话就会每跑完一轮重投一次:10 分钟内被服务端幂等门挡着只是空转,
+           * 去重键过期后这条消息会被真的再跑一遍,此后每 10 分钟一次。
            *
-           * 这个处理器是**应用级**的(所有会话的帧都从这里过),放在这里才覆盖得全。
-           * 身份判断照样有:盘上那条的幂等键要和 ACK 对得上才清 ——
-           * 服务端会为同一条命令发两次 accepted,而这期间用户可能已经排了新的一条。
+           * 这个处理器是应用级的(所有会话的帧都从这里过),放在这里才覆盖得全。
+           * 身份判断照样要做:盘上那条的幂等键要和 ACK 对得上才清,
+           * 因为服务端会为同一条命令发两次 accepted,而这期间用户可能已经排了新的一条。
            */
           try {
             const stored = readQueuedMessage(ackSid);
@@ -433,12 +444,12 @@ export function useChatRealtimeHandlers({
           } catch {
             // 存储不可用不该把这一帧带崩。
           }
-          // ho(ho-1):这一条是合流进 CLI 队列的 —— 气泡上挂「模型读到前可撤回」
+          // 这一条合流进了 CLI 队列:气泡上挂「模型读到前可撤回」
           onSendAcked?.(ackSid, ackId, msg.merged === true && typeof msg.mergedUuid === 'string' ? msg.mergedUuid : null);
           return;
         }
 
-        // ho(ho-1):插话撤回了(停止时 CLI 撤掉 / 用户点了撤回)或已被模型读到(撤不回了)
+        // 插话撤回了(停止时 CLI 撤掉 / 用户点了撤回)或已被模型读到(撤不回了)
         case 'chat_merged_withdrawn':
         case 'chat_merged_delivered': {
           if (!sid) return;
@@ -455,7 +466,7 @@ export function useChatRealtimeHandlers({
           return;
         }
 
-        // ho(hq-1):后台任务全量表(输入框上方那一条)
+        // 后台任务全量表(输入框上方那一条)
         case 'background_tasks': {
           if (!sid) return;
           const tasks = Array.isArray(msg.tasks)
@@ -467,7 +478,7 @@ export function useChatRealtimeHandlers({
           return;
         }
 
-        // F7:服务端排队(chat.send 撞上在跑的回合时收下的那一条)。
+        // 服务端排队(chat.send 撞上在跑的回合时收下的那一条)。
         case 'chat_queued': {
           if (!sid) return;
           onServerQueueChange?.(sid, {
@@ -485,22 +496,29 @@ export function useChatRealtimeHandlers({
           if (msg.kind !== 'chat_queue_cancelled') return;
 
           /**
-           * 被中止带走 / 续发没能成立的那条:**正文退回输入框**(见服务端的
-           * `dropPendingSend`)。回填成功就什么都不用再说 —— 东西还在用户手上。
+           * 被中止带走 / 续发没能成立的那条:正文退回输入框(见服务端的 `dropPendingSend`)。
+           * 回填成功就什么都不用再说,东西还在用户手上。
            *
-           * ga:回填**经常不成立**(不在看这条会话、输入框里已经有字),而 fz 把
-           * "正文已退回输入框"写死在文案里。文案改由 `describeDroppedQueueMessage`
-           * 按**实际结果**决定,退不回去就把原文抄进提示里。
+           * 回填经常不成立(不在看这条会话、输入框里已经有字),所以提示文案由
+           * `describeDroppedQueueMessage` 按实际结果决定,退不回去就把原文抄进提示里。
+           *
+           * 只有确实发过这条的标签页才回填(判据见 `planQueueCancelled`):同一个人的另一个标签页
+           * 也会收到正文,不该被灌进那边的输入框,但提示里照样抄原文。这条没有发出去,它的本地回声
+           * 一并撤掉;帧上没带正文(过期作废)时,提示里抄的是撤掉的那条回声的原文。
            */
-          const droppedContent = typeof msg.content === 'string' ? msg.content : '';
+          const plan = planQueueCancelled(
+            { content: msg.content, clientMessageId: msg.clientMessageId },
+            wasSentHere ?? (() => false),
+          );
+          const unsentEcho = plan.dropEchoOf ? sessionStore.dropUnsentEcho(sid, plan.dropEchoOf) : null;
           const returnedToComposer = Boolean(
             (msg.reason === 'aborted' || msg.reason === 'undeliverable')
-            && droppedContent
-            && onServerQueueReturned?.(sid, droppedContent),
+            && plan.refill
+            && onServerQueueReturned?.(sid, plan.refill),
           );
           const notice = describeDroppedQueueMessage(
             typeof msg.reason === 'string' ? msg.reason : '',
-            droppedContent,
+            plan.original || unsentEcho?.content || '',
             returnedToComposer,
           );
           if (notice) {
@@ -519,21 +537,21 @@ export function useChatRealtimeHandlers({
         }
 
         /**
-         * gk:会话被永久删除了(进了最近删除)。侧栏那半由 useProjectsState 处理;
-         * 这里管对话区:停转圈、清掉这条会话的排队、切「会话已被删除」态。
-         */
-        /**
-         * gl:会话从最近删除里恢复了 —— 撤掉「已被删除」态。
+         * 会话从最近删除里恢复了:撤掉「已被删除」态。
          *
          * 这一条必须独立于下面 `session_upserted` 那一路:侧栏那条广播带着
          * `if (row.isArchived) return` 的闸门,归档态的会话恢复时根本不发,
-         * 于是页面会永远停在删除态(gk 的实测缺陷)。
+         * 只靠它的话页面会一直停在删除态。
          */
         case 'session_restored': {
           if (sid) onSessionRestored?.(sid);
           return;
         }
 
+        /**
+         * 会话被永久删除了(进了最近删除)。侧栏那半由 useProjectsState 处理;
+         * 这里管对话区:停转圈、清掉这条会话的排队、切「会话已被删除」态。
+         */
         case 'session_removed': {
           if (!sid) return;
           onSessionIdle?.(sid);
@@ -545,7 +563,7 @@ export function useChatRealtimeHandlers({
 
         // Sidebar/global events — owned by useProjectsState.
         case 'session_upserted':
-          // gk:恢复之后它会再次 upsert —— 撤掉「已被删除」态(没标过的会话这一步是空操作)。
+          // 恢复之后它会再次 upsert:撤掉「已被删除」态(没标过的会话这一步是空操作)。
           if (sid) onSessionRestored?.(sid);
           return;
         case 'loading_progress':
@@ -578,7 +596,7 @@ export function useChatRealtimeHandlers({
           }, 100));
         }
         // 不再对非活跃会话额外 appendRealtime 原始 delta:上面的 100ms 定时器
-        // 会对**任意** sid(包括后台会话)调 updateStreaming,把累积文本写成一条
+        // 会对任意 sid(包括后台会话)调 updateStreaming,把累积文本写成一条
         // `__streaming_<sid>` 消息。再追加一份原始 delta,等于同一段内容存两份 ——
         // 切回该会话时就看到"碎片气泡 + 累积行"两套(fetch 不剪 realtime,碎片
         // 一直留到下次 refresh)。累积消息才是唯一正确表示。
@@ -591,7 +609,8 @@ export function useChatRealtimeHandlers({
           if (t) { clearTimeout(t); streamTimerRef.current.delete(sid); }
           const buffered = accumulatedStreamRef.current.get(sid);
           if (buffered) sessionStore.updateStreaming(sid, buffered, provider);
-          sessionStore.finalizeStreaming(sid);
+          // 提交的正文用这一帧的服务器时间打戳(见 streamCommitTimestamp)
+          sessionStore.finalizeStreaming(sid, msg.timestamp);
           accumulatedStreamRef.current.delete(sid);
         }
         return;
@@ -612,7 +631,7 @@ export function useChatRealtimeHandlers({
           checkpointId: typeof msg.checkpointId === 'string' ? msg.checkpointId : null,
           files: Array.isArray(msg.files) ? msg.files : [],
           truncated: Boolean(msg.truncated),
-          // dr:工作面板要把 git 相对路径拼绝对,与落库基线同构。
+          // 工作面板用它把 git 相对路径拼成绝对路径,与落库基线同构。
           cwd: typeof msg.cwd === 'string' ? msg.cwd : null,
         });
         return;
@@ -644,7 +663,7 @@ export function useChatRealtimeHandlers({
             const buffered = accumulatedStreamRef.current.get(sid);
             if (buffered) {
               sessionStore.updateStreaming(sid, buffered, provider);
-              sessionStore.finalizeStreaming(sid);
+              sessionStore.finalizeStreaming(sid, msg.timestamp);
             }
             accumulatedStreamRef.current.delete(sid);
           }
@@ -659,7 +678,7 @@ export function useChatRealtimeHandlers({
             setPendingPermissionRequests([]);
           }
 
-          // hq(复审五轮):这一轮完了 —— 回合在跑时发出、被排到后面的回声从现在起算下一轮(进度区数回合用)
+          // 这一轮完了:回合在跑时发出、被排到后面的回声从现在起算下一轮(进度区数回合用)
           if (sid) sessionStore.clearSentDuringTurn(sid);
 
           if (msg.aborted) {
@@ -712,7 +731,7 @@ export function useChatRealtimeHandlers({
               setPendingPermissionRequests(nextPendingPermissionRequests);
             }
           }
-          // ho(ho-3):后台子代理要的审批不对应任何回合 —— 不点亮转圈(没有 complete 会来把它关掉)
+          // 后台子代理要的审批不对应任何回合:不点亮转圈(没有 complete 会来把它关掉)
           if (sid && msg.background !== true) {
             onSessionProcessing?.(sid);
           }
@@ -732,34 +751,32 @@ export function useChatRealtimeHandlers({
         }
 
         case 'status': {
-          // dn-B1:「常驻进程被回收」的通知。这个帧带的是 status/content 而不是
-          // text,原来整条被静默丢弃 —— F14 的用户可见半边从没活过,用户只感到
-          // "这条会话今天特别卡"。只对正在看的会话提示;后台会话下一条消息
-          // 慢几秒本来也无从感知。
+          // 「常驻进程被回收」的通知。这个帧带的是 status/content 而不是 text,
+          // 要在这里单独处理,否则会被静默丢掉。只对正在看的会话提示;
+          // 后台会话下一条消息慢几秒本来也无从感知。
           if (msg.status === 'runtime_evicted') {
             if (sid && sid === activeViewSessionId && typeof msg.content === 'string' && msg.content) {
               emitToast({ message: msg.content });
             }
             break;
           }
-          // ho(hq-3 / hq-4):CLI 的提醒(warning / suggestion 级)与失败原因的人话 —— 弹一句,不进历史
+          // CLI 的提醒(warning / suggestion 级)与失败原因的人话:弹一句,不进历史
           if (msg.status === 'cli_notice') {
             if (sid && sid === activeViewSessionId && typeof msg.content === 'string' && msg.content) {
               emitToast({ message: msg.content });
             }
             break;
           }
-          // ho(hq-3):网关重试结束,活动指示器上那句"网关繁忙,第 n 次重试"清掉
+          // 网关重试结束:清掉活动指示器上那句"网关繁忙,第 n 次重试"
           if (msg.statusClear === true) {
             if (sid) onSessionProcessing?.(sid, { statusText: null, statusKind: null, compaction: null, canInterrupt: true });
             break;
           }
-          // dk:只有**正在看的这条会话**的用量帧才写进顶栏 —— 之前不看 sid,
-          // 后台会话(定时任务、另一个标签页跑着的回合)的 token_budget 会把
-          // 当前页面的用量芯片刷成别的会话的数字,来回跳。
+          // 只有正在看的这条会话的用量帧才写进顶栏;否则后台会话(定时任务、另一个标签页
+          // 跑着的回合)的 token_budget 会把当前页面的用量芯片刷成别的会话的数字。
           if (msg.text === 'token_budget' && msg.tokenBudget && sid && sid === activeViewSessionId) {
-            // costUsd 只在 result 帧上出现;中途的 usage 帧没有它。整体替换会把
-            // 已经拿到的费用抹掉,所以缺席时沿用上一次的值(F4)。
+            // costUsd 只在 result 帧上出现,中途的 usage 帧没有它。整体替换会把
+            // 已经拿到的费用抹掉,所以缺席时沿用上一次的值。
             setTokenBudget((previous: Record<string, unknown> | null) => {
               const next = msg.tokenBudget as Record<string, unknown>;
               const previousCost = previous && typeof previous === 'object' ? (previous as Record<string, unknown>).costUsd : undefined;
@@ -768,10 +785,9 @@ export function useChatRealtimeHandlers({
                 : next;
             });
           } else if (msg.text === 'token_budget') {
-            // dv:后台会话的用量帧走到这里(上面那支要求 sid === 正在看的会话)
-            // —— 原来会落进下面的兜底,把 statusText 设成字面量 "token_budget",
-            // 切进那条会话时活动指示器上明晃晃写着 "token_budget"。它不是状态
-            // 文案,丢掉即可(顶栏数字本来就只认当前会话)。
+            // 后台会话的用量帧走到这里(上面那支要求 sid === 正在看的会话)。它不是状态文案,
+            // 直接丢掉;落进下面的兜底会把 statusText 设成字面量 "token_budget"。
+            // 顶栏数字本来就只认当前会话。
             break;
           } else if (msg.text && sid) {
             onSessionProcessing?.(sid, {
@@ -814,6 +830,7 @@ export function useChatRealtimeHandlers({
     onChangedFiles,
     onServerQueueChange,
     onServerQueueReturned,
+    wasSentHere,
     onSendAcked,
     onMergedOutcome,
     onBackgroundTasks,

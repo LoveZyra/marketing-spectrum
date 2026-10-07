@@ -1,5 +1,6 @@
 /**
- * Git checkpoint service (ported from claude-web-ui 2.0 `git-v2` checkpoints).
+ * Git checkpoint service.
+ * 部分实现源自 Claude Code Web(Apache-2.0),已修改;版权与许可见 NOTICE。
  *
  * Before every Claude turn that runs inside a Git repository, a checkpoint of
  * the full working-tree state is captured WITHOUT touching the working tree:
@@ -7,27 +8,31 @@
  *      changes (empty when the tree is clean).
  *   2. A dedicated ref (`refs/prism/checkpoints/<id>`) pins that commit so
  *      git GC can never collect it.
- *   3. Untracked files are snapshotted (copied) into the checkpoint store.
- *      When PRISM_CHECKPOINT_INCLUDE_IGNORED=1, gitignored files are
- *      snapshotted too (same byte budget, default OFF).
+ *   3. Untracked files are snapshotted into the checkpoint store: copied, or
+ *      hard-linked to the previous checkpoint's copy when size, mtime and
+ *      inode are unchanged. When PRISM_CHECKPOINT_INCLUDE_IGNORED=1,
+ *      gitignored files are snapshotted too (same byte budget, default OFF).
  *
  * Restore is transactional: a safety checkpoint of the CURRENT state is taken
  * first; if any restore step fails, the safety checkpoint is applied to put
  * the tree back exactly where the user was when they clicked "rollback".
  *
  * Safety invariants (see the individual functions for details):
- *   - A checkpoint whose untracked enumeration or snapshot was truncated is
- *     marked `incomplete`; restoring it NEVER deletes untracked files (the
- *     keep-set cannot be trusted) and requires an explicit `force`.
+ *   - A checkpoint whose untracked enumeration or snapshot was truncated or
+ *     partly failed is marked `incomplete`; restoring it NEVER deletes
+ *     untracked files (the keep-set cannot be trusted) and requires an
+ *     explicit `force`.
  *   - Restore refuses (409-style result) when commits were made after the
  *     checkpoint, unless forced — `git reset --hard` would silently move the
  *     branch pointer past them.
  *   - Restore aborts (422-style result) when the pre-restore safety
  *     checkpoint cannot be created while HEAD exists.
  *   - All mutating operations on the same directory (realpath-keyed)
- *     serialize through an in-process promise-chain mutex.
+ *     serialize through an in-process promise-chain mutex. Chat turns do not
+ *     take that lock, so restore and revertFile re-check inside it that no
+ *     turn is running (409 DIRECTORY_BUSY).
  *
- * Store layout:  ~/.prism/checkpoints/<checkpointId>/
+ * Store layout:  <getCheckpointRoot()>/<checkpointId>/  (default ~/.prism/checkpoints)
  *   meta.json            checkpoint metadata (session, cwd, head, stash, ...)
  *   untracked/<path>     snapshot of every untracked file at checkpoint time
  */
@@ -50,8 +55,8 @@ const MAX_UNTRACKED_BYTES = 200 * 1024 * 1024; // 200MB snapshot budget per chec
 const DIFF_FILE_LIMIT = 80_000; // per-file unified diff cap (chars)
 const DIFF_TURN_LIMIT = 240_000; // whole-turn diff cap (chars)
 /**
- * dv:为了数行数而整份读进内存的上限。超过这个大小的新增文件只报路径,
- * 不报行数 —— 见 changedFilesSince 里的说明。
+ * 为了数行数而整份读进内存的文件大小上限。超过它的新增文件只报路径,
+ * 行数报 null(见 changedFilesSince 里的说明)。
  */
 const COUNT_LINES_MAX_BYTES = 2 * 1024 * 1024;
 const CHECKPOINT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // prune checkpoints older than 7 days
@@ -62,7 +67,7 @@ const REUSE_SCAN_LIMIT = 200; // newest checkpoint dirs scanned when looking for
 /** Reasons a checkpoint snapshot can be incomplete (meta.incompleteReason). */
 export const INCOMPLETE_TOO_MANY_UNTRACKED = 'too_many_untracked';
 export const INCOMPLETE_UNTRACKED_BYTES_BUDGET = 'untracked_bytes_budget';
-/** dv:个别未跟踪文件没能快照下来(被删/无权限/磁盘满)。 */
+/** 个别未跟踪文件没能快照下来(被删 / 无权限 / 磁盘满)。 */
 export const INCOMPLETE_SNAPSHOT_FAILED = 'untracked_snapshot_failed';
 
 /** `cp-<base36 毫秒>-<hex>` → 毫秒时间戳;不是 checkpoint 目录名就返回 null。 */
@@ -298,10 +303,9 @@ export function assessSnapshotCompleteness({
     return { incomplete: true, reason: INCOMPLETE_UNTRACKED_BYTES_BUDGET };
   }
   /**
-   * dv:哪怕只有一个文件没快照成功,keep-set 就不再可信 —— 回滚时它既不会被
-   * 删(在 keep-set 里)也不会被还原(不在 stored 里),工作区留着 agent 那
-   * 一版而接口报成功。判为 incomplete 之后,回滚走"不删未跟踪 + 需要显式
-   * force"那条更保守的路,与文件头的事务性承诺一致。
+   * 哪怕只有一个文件没快照成功,keep-set 就不再可信:回滚时它既不会被删(在 keep-set 里)
+   * 也不会被还原(不在 stored 里),工作区留着 agent 那一版而接口报成功。判为 incomplete
+   * 之后,回滚走"不删未跟踪 + 需要显式 force"的保守路径。
    */
   if (failedCount > 0) {
     return { incomplete: true, reason: INCOMPLETE_SNAPSHOT_FAILED };
@@ -317,9 +321,9 @@ export function assessSnapshotCompleteness({
  * Snapshot untracked files into the checkpoint store.
  * Symlinks are re-created as symlinks; regular files are copied.
  *
- * E9 —— 增量快照:每回合都全量 copyFile 一遍 untracked,在带 node_modules /
- * 构建产物的仓库里就是每轮几百 MB 的纯浪费。这里带上一份「上一份 checkpoint
- * 存过什么」的索引(`reuse`),同一路径只要 **size + mtimeMs + inode 三者全同**
+ * 增量快照:每回合都全量 copyFile 一遍 untracked,在带 node_modules /
+ * 构建产物的仓库里就是每轮几百 MB 的纯浪费。所以带上一份「上一份 checkpoint
+ * 存过什么」的索引(`reuse`),同一路径只要 size + mtimeMs + inode 三者全同
  * 就用硬链接指向上一份的副本:没有读写、没有额外磁盘,内容与 copy 逐字节相同。
  * 判据比 git 自己的 stat 缓存还严一档(git 只看 size+mtime),因为多存一个
  * inode 几乎不要钱,却能挡住"改完再改回同样大小、mtime 被 touch 回去"这种
@@ -330,18 +334,19 @@ export function assessSnapshotCompleteness({
  * 里的那份照样在;restore 走的是 copyFile(store → 工作区),也不会把 store 的
  * inode 带进工作区。
  *
- * @returns {{ stored: Array, totalBytes: number, budgetExhausted: boolean, linked: number }}
+ * @returns {{ stored: Array, totalBytes: number, budgetExhausted: boolean, linked: number, failed: string[] }}
  *   `budgetExhausted` is true when MAX_UNTRACKED_BYTES stopped the snapshot
- *   before every listed file's content was saved. 复用成硬链接的字节**不计入**
+ *   before every listed file's content was saved. 复用成硬链接的字节不计入
  *   预算 —— 预算管的是这份 checkpoint 真正占的磁盘,而硬链接一个字节不占,
- *   且那份内容确实已经完整存下(不能因此判 incomplete)。
+ *   且那份内容确实已经完整存下(不能因此判 incomplete)。`failed` 是快照失败的
+ *   文件(相对路径),调用方据此判 incomplete。
  */
 async function snapshotUntracked(cwd, checkpointDir, paths, { startBytes = 0, markIgnored = false, reuse = null } = {}) {
   const stored = [];
   let totalBytes = startBytes;
   let budgetExhausted = false;
   let linked = 0;
-  /** dv:快照失败的文件(见下方 catch)—— 调用方据此判 incomplete。 */
+  /** 快照失败的文件(见下方 catch),调用方据此判 incomplete。 */
   const failed = [];
 
   for (const relPath of paths) {
@@ -390,12 +395,9 @@ async function snapshotUntracked(cwd, checkpointDir, paths, { startBytes = 0, ma
       await fs.copyFile(source, target);
       stored.push(entry);
     } catch (error) {
-      // dv:失败的文件要**记名**。原来只 warn 一声就过,而它仍留在
-      // `meta.untracked`(keep-set)里 —— 于是 restore 时两头落空:
-      // removeUntrackedCreatedAfter 因为它在 keep-set 里不删,
-      // restoreUntrackedSnapshot 因为它不在 stored 里不还原,工作区就留着
-      // agent 改过的那一版,而接口报 ok:true。与文件头"Restore is
-      // transactional"的承诺不符。现在报上去,由调用方并入 incomplete 判定。
+      // 失败的文件必须记名上报:它仍在 keep-set(`meta.untracked`)里,只 warn 不报的话,
+      // restore 时既不删(在 keep-set 里)也不还原(不在 stored 里),工作区留着 agent 改过的
+      // 那一版而接口报 ok:true。由调用方并入 incomplete 判定。
       failed.push(relPath);
       log.warn(`[Checkpoint] Skipping untracked snapshot for ${relPath}:`, error.message);
     }
@@ -487,7 +489,7 @@ async function createCheckpointLocked(cwd, context = {}) {
     }
   }
 
-  // 3. Snapshot untracked files.(E9:能硬链就不拷贝,见 snapshotUntracked)
+  // 3. Snapshot untracked files.(能硬链就不拷贝,见 snapshotUntracked)
   const untracked = await untrackedPaths(cwd);
   const listedUntracked = untracked.slice(0, MAX_UNTRACKED_FILES);
   await fs.mkdir(checkpointDir, { recursive: true });
@@ -752,13 +754,12 @@ export async function restoreCheckpoint(id, options = {}) {
 
   return withCwdLock(cwd, async () => {
     /**
-     * dv:**进锁之后**再确认一次"没有回合在跑"。
+     * 进锁之后再确认一次"没有回合在跑"。
      *
-     * 路由层那次检查发生在拿锁之前,而这之后还要算改动清单、做安全 checkpoint
-     * (含 200MB 预算的未跟踪快照)才真正 `reset --hard` —— 中间几秒到几分钟。
-     * 聊天回合并不走 cwd 锁,所以那段窗口里任何人 `chat.send`,都能让 CLI 与
-     * `reset --hard` 同时写同一棵树:CLI 刚写完的文件被抹掉,或者留下半新半旧
-     * 的树,而回滚接口报成功。这里复查一次把窗口压到与 reset 相邻。
+     * 路由层那次检查在拿锁之前,之后还要算改动清单、做安全 checkpoint(含 200MB 预算的
+     * 未跟踪快照)才真正 `reset --hard`,中间可能几秒到几分钟。聊天回合不走 cwd 锁,这段
+     * 窗口里有人 `chat.send`,CLI 就会和 `reset --hard` 同时写同一棵树:CLI 刚写完的文件
+     * 被抹掉,或者留下半新半旧的树,而回滚接口报成功。
      */
     if (typeof options.assertNotBusy === 'function') {
       const busy = await options.assertNotBusy(meta);
@@ -822,16 +823,12 @@ export async function restoreCheckpoint(id, options = {}) {
     }
 
     /**
-     * fj:**紧贴 `applyCheckpoint` 再复查一次。**
+     * 紧贴 `applyCheckpoint` 再复查一次。
      *
-     * 上面那次复查已经把窗口从"路由层"压到了"进锁之后",但它和真正动树之间
-     * 还夹着两件耗时的事:`commitsSinceCheckpoint`(要跑 git log)和
-     * **安全 checkpoint**(含 200MB 预算的未跟踪快照,大仓库能到几十秒)。
-     * 聊天回合不走 cwd 锁,所以这段窗口里任何人 `chat.send`,CLI 就会和
-     * `reset --hard` 同时写同一棵树。
-     *
-     * 这一次复查之后就只剩 `applyCheckpoint` 本身了 —— 窗口压到最小。
-     * 复查失败时安全 checkpoint 已经建好,不会丢东西(它就是一个多余的还原点)。
+     * 进锁后的那次复查和真正动树之间还夹着两件耗时的事:`commitsSinceCheckpoint`
+     * (要跑 git log)和安全 checkpoint(含 200MB 预算的未跟踪快照,大仓库能到几十秒)。
+     * 这次复查之后就只剩 `applyCheckpoint` 本身。复查失败时安全 checkpoint 已经建好,
+     * 不会丢东西(只是多一个还原点)。
      */
     if (typeof options.assertNotBusy === 'function') {
       const busyNow = await options.assertNotBusy(meta);
@@ -958,14 +955,12 @@ export async function changedFilesSince(id) {
     let additions = null;
     try {
       /**
-       * dv:先 stat 看大小,超过阈值就不读。
+       * 先 stat 看大小,超过 COUNT_LINES_MAX_BYTES 就不读。
        *
-       * 这里原来是无上限 `readFile` + `split('\n')`,只为数一个行数 ——
-       * agent 生成一个几百 MB 的日志/CSV/dump 且没被 .gitignore 盖住的话,
-       * **此后每个回合**的改动汇总都会把它整份读进内存(一份 Buffer + 一份
-       * string + 一个百万级数组),直到它被提交或删掉;`/changes` 与
-       * `/restore` 两条路由走同一段代码,可被反复触发。行数只是展示用的
-       * 附加信息,拿不到就报 null(前端本来就按 null 处理)。
+       * 行数只是展示用的附加信息,拿不到就报 null(前端按 null 处理)。不设上限的话,agent
+       * 生成的几百 MB 日志 / CSV / dump 只要没被 .gitignore 盖住,每个回合的改动汇总都会把它
+       * 整份读进内存,直到它被提交或删掉;`/changes` 与 `/restore` 两条路由走同一段代码,
+       * 可被反复触发。
        */
       const stat = await fs.stat(path.join(cwd, relPath));
       if (stat.size <= COUNT_LINES_MAX_BYTES) {
@@ -1042,7 +1037,7 @@ export async function revertFile(id, relPath, options = {}) {
   }
 
   return withCwdLock(cwd, async () => {
-    // dv:同 restore —— 进锁后复查一次"没有回合在跑"(见那边的说明)。
+    // 同 restoreCheckpoint:进锁后复查一次"没有回合在跑"(见那里的说明)。
     if (typeof options.assertNotBusy === 'function') {
       const busy = await options.assertNotBusy(meta);
       if (busy) return { ok: false, status: 409, code: 'DIRECTORY_BUSY', ...busy };
@@ -1089,14 +1084,12 @@ export async function pruneCheckpoints() {
 
   for (const meta of all) {
     /**
-     * du:没有会话 id 的 checkpoint 按 **cwd** 分桶,不再挤进一个全局
-     * `'unknown'` 桶。
+     * 没有会话 id(appSessionId、sessionId 都为空)的 checkpoint 按 cwd 分桶。
      *
-     * `sessionId` 只在回合**成功**时由 updateCheckpointSession 回填 ——
-     * 一次性回退、回合失败或中止的那些 checkpoint 永远是 null。多人服务器上
-     * 它们此前全落进同一个桶,按全局时间倒序数到第 40 个就删:A 用户几分钟前
-     * 那次失败回合的回滚点,会被 B 用户的新 checkpoint 挤掉(还在 TTL 内就
-     * 被静默销毁)。按 cwd 分桶后,每个项目各数各的,不同用户不同项目互不影响。
+     * `sessionId` 只在回合成功时由 updateCheckpointSession 回填,一次性回退、回合失败或
+     * 中止留下的 checkpoint 永远是 null。把它们都放进一个全局桶的话,多人服务器上按时间
+     * 倒序数满 MAX_CHECKPOINTS_PER_SESSION 个就删,别人的新 checkpoint 会把还在 TTL 内的
+     * 回滚点挤掉。按 cwd 分桶后各项目各数各的。
      */
     const key = meta.appSessionId || meta.sessionId || `cwd:${meta.cwd || 'unknown'}`;
     if (!bySession.has(key)) bySession.set(key, []);

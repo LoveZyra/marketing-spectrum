@@ -3,15 +3,12 @@ import { describe, expect, test } from 'vitest';
 import { abortDiscardsPendingSend, canAbortActivity } from './useChatSessionState';
 
 /**
- * da:停止按钮不再被 `canInterrupt` 锁死。
+ * 停止按钮不受 `canInterrupt` 限制。
  *
- * 事故现场:自动压缩发 `canInterrupt: false`,停止按钮却只按 isLoading 渲染 ——
- * 于是按钮可见、可点、按下去什么都不发生,而且没有任何反馈。用户盯着一个
- * 转了 20 分钟的"正在压缩"束手无策。服务端的中止逻辑一直是完整的。
- *
- * 这里盯死两件事:
- *   1. **任何**在跑的状态都必须可中止 —— 包括压缩这种 canInterrupt=false 的;
- *   2. canInterrupt 仍然有用,但只用来告诉用户"这一下会连消息一起取消"。
+ * 自动压缩期间会发 `canInterrupt: false`;服务端的中止逻辑对它同样有效,前端不能因此让停止按钮失效。
+ * 这里钉住两件事:
+ *   1. 任何在跑的状态都必须可中止,包括压缩这种 canInterrupt=false 的;
+ *   2. canInterrupt 只用来提示用户"这一下会连消息一起取消"。
  */
 describe('中止闸门', () => {
   test('压缩中(canInterrupt=false)照样可以中止 —— 这就是当初卡死的那个状态', () => {

@@ -14,7 +14,8 @@
   "messageTypes": {
     "error": "錯誤",
     "tool": "工具",
-    "claude": "AI"
+    "claude": "AI",
+    "servedModelTitle": "這一輪實際服務的模型（來自回應中繼資料，非模型自述）"
   },
   "interactive": {
     "title": "互動式提示",
@@ -33,7 +34,6 @@
   },
   "input": {
     "placeholder": "輸入 / 叫用指令，@ 選取檔案，或向 {{provider}} 提問...",
-    "attachImages": "附加圖片",
     "send": "傳送",
     "stop": "停止",
     "hintText": {
@@ -51,7 +51,13 @@
     "checkpointsHint": "查看每一輪改動的快照,可回滾",
     "showAllCommandsHint": "在輸入框裡鍵入 / 也能喚起",
     "attach": "新增附件",
-    "attachHint": "圖片給模型看;其它類型存進專案交給智慧體(最大 500MB)"
+    "attachHint": "圖片給模型看;其它類型存進專案交給智慧體(最大 500MB)",
+    "dropHint": "放開即可新增附件",
+    "dropHintDetail": "圖片隨訊息一起送出,其他檔案存進專案裡",
+    "extractedChars": "已擷取正文 {{chars}} 字",
+    "docChars": "{{chars}} 字",
+    "modelAliasHint": "別名 {{alias}} · 實際模型 {{model}} · 點擊切換",
+    "fileMentionsLabel": "可提及的檔案"
   },
   "thinkingMode": {
     "selector": {
@@ -111,7 +117,8 @@
       "loadingAll": "正在載入全部訊息...",
       "allLoaded": "全部訊息已載入",
       "loadFailed": "這條會話的訊息沒能載入。",
-      "retryLoad": "重試"
+      "retryLoad": "重試",
+      "loadOlderFailed": "載入較早的訊息失敗,請稍後重試。"
     }
   },
   "shell": {
@@ -190,7 +197,8 @@
     "deny": "拒絕",
     "allowRemember": "允許並記住",
     "allowSaved": "已記住",
-    "allowOnce": "允許一次"
+    "allowOnce": "允許一次",
+    "ruleSuffix": " · 規則 {{rule}}"
   },
   "activity": {
     "read": "讀取 {{target}}",
@@ -217,7 +225,8 @@
       "todo": "更新任務清單 {{count}} 次",
       "mcp": "外部工具 {{count}} 次",
       "tool": "其它工具 {{count}} 次",
-      "thinking": "思考 {{count}} 次"
+      "thinking": "思考 {{count}} 次",
+      "narration": "說明 {{count}} 段"
     },
     "foldedCount": "+{{count}}",
     "collapseRun": "收合"
@@ -233,7 +242,8 @@
     "expandAllWithCount": "展開全部 · {{count}} 行",
     "collapse": "收合",
     "copy": "複製",
-    "copied": "已複製"
+    "copied": "已複製",
+    "diffHiddenLines": "還有 {{count}} 行未顯示 —— 完整內容請開啟檔案查看。"
   },
   "checkpoint": {
     "changedFilesTitle": "本輪變更"
@@ -261,7 +271,9 @@
     "earlierSteps": "{{count}} 個更早的步驟",
     "earlierStepsHide": "收合更早的步驟",
     "progressCollapse": "收合進度",
-    "progressExpand": "展開進度"
+    "progressExpand": "展開進度",
+    "downloadFailed": "下載失敗(HTTP {{status}})",
+    "untitledTask": "任務 #{{id}}"
   },
   "skills": {
     "invokedBadge": "技能"
@@ -321,7 +333,52 @@
   },
   "commandResult": {
     "models": {
-      "privateModels": "我的私有模型"
+      "privateModels": "我的私有模型",
+      "probedJustNow": "剛剛實測",
+      "probedMinutesAgo": "{{count}} 分鐘前實測",
+      "probedHoursAgo": "{{count}} 小時前實測",
+      "probedDaysAgo": "{{count}} 天前實測",
+      "probeFailedHttp": "探測失敗(HTTP {{status}})",
+      "probeFailed": "探測失敗",
+      "probedLabel": "實測",
+      "probeMismatch": "⚠ 實測與設定不一致:閘道把「{{configured}}」改寫成了「{{probed}}」",
+      "probeVerified": "實測一致",
+      "probeError": "實測失敗:{{error}}",
+      "unknownReason": "未知原因",
+      "configSource": "來源:{{source}}(settings.json,即時)",
+      "probeAliasesTitle": "對每個別名各發一次最小請求,讀出閘道實際使用的模型",
+      "probeStale": "模型設定(settings.json)在上次實測後已變更 —— 下方「實測」行可能過期。"
+    },
+    "ledgerRuns": "{{count}} 輪"
+  },
+  "commandMenu": {
+    "groups": {
+      "frequent": "常用",
+      "builtin": "內建指令",
+      "cli": "CLI 指令",
+      "skill": "技能",
+      "project": "專案指令",
+      "user": "使用者指令",
+      "other": "其他指令"
+    },
+    "empty": "暫無可用指令",
+    "ariaLabel": "可用指令"
+  },
+  "subagent": {
+    "stepError": "出錯"
+  },
+  "composer": {
+    "notice": {
+      "queueDroppedAborted": "排隊中的那則訊息隨本輪中止一起取消了,沒有送出。",
+      "queueDroppedUndeliverable": "排隊中的那則訊息沒能送出(這個工作階段的狀態在等待期間變了)。",
+      "queueDroppedExpired": "排隊中的那則訊息等待超過 30 分鐘,已作廢,沒有送出。",
+      "queueDroppedOriginal": "原文(可複製)——",
+      "queuedImagesNotRestored": "排隊時附帶的圖片沒能恢復,請重新新增後再送出。"
     }
+  },
+  "toolMetric": {
+    "linesAdded": "+{{count}} 行",
+    "matches": "{{count}} 處",
+    "lines": "{{count}} 行"
   }
 }

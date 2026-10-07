@@ -5,10 +5,8 @@ import { useTheme, UI_THEMES, type UiTheme } from '../../../contexts/ThemeContex
 import { cn } from '../../../lib/utils';
 
 /**
- * 快速设置面板里的主题切换 —— 一个三档分段控件。
- *
- * 这里原来是一枚「深色模式」开关。浅色分成两种材质之后开关表达不了三个值,
- * 而快速面板的空间又放不下设置页那种带预览的卡片,所以收成图标 + 短名的分段控件。
+ * 快速设置面板里的主题切换:三档分段控件(两种浅色材质 + 深色),布尔开关表达不了三个值。
+ * 面板放不下设置页那种带预览的卡片,所以只用图标 + 短名。
  */
 
 const ICONS: Record<UiTheme, typeof FileText> = {

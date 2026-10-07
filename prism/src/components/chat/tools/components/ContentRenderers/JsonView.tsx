@@ -19,18 +19,17 @@ interface JsonViewProps {
 }
 
 /**
- * JSON 着色 —— 只分三档(键 / 字符串 / 字面量),不做彩虹高亮:
- * 设计系统只有一个强调色,颜色在这里是用来分层的,不是用来装饰的。
- */
-/**
- * fj:超过这个体量就不着色了 —— 直接一段纯文本。
+ * 超过这个长度就不着色,直接输出纯文本。
  *
- * 每个 token 一个 `<span>`,原来没有任何上限:一条返回大 JSON 的 MCP 工具
- * (而 `Default.result.defaultOpen` 是 true,所有未知工具的返回**默认全量挂载**)
- * 一次点击就生成几万个 DOM 节点,主线程冻住数秒。着色是锦上添花,不值这个价。
+ * 着色时每个 token 一个 `<span>`:返回大 JSON 的 MCP 工具会一次生成几万个 DOM 节点、
+ * 卡住主线程数秒,而未知工具的返回默认展开(`Default.result.defaultOpen`)。着色不值这个代价。
  */
 const MAX_COLORIZED_CHARS = 20_000;
 
+/**
+ * JSON 着色 —— 只分三档(键 / 字符串 / 字面量),不做彩虹高亮:
+ * 设计系统只有一个强调色,颜色在这里是用来分层的,不是用来装饰的。
+ */
 export const JsonView: React.FC<JsonViewProps> = ({ text, className }) => {
   const tooLargeToColorize = text.length > MAX_COLORIZED_CHARS;
   const tokens = useMemo(

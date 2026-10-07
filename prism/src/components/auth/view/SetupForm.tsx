@@ -52,7 +52,7 @@ function validateSetupForm(formState: SetupFormState): string | null {
 }
 
 /**
- * Account setup / registration form.
+ * First-run account setup form.
  * Uses `autoComplete="new-password"` on password fields so that password
  * managers recognise this as a registration flow and offer to save the new
  * credentials after submission.

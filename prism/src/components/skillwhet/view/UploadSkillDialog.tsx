@@ -11,9 +11,9 @@ import { unwrap } from '../lib/types';
 import { Badge } from './StatusStrip';
 
 /**
- * gy:上传技能 —— 选一个文件夹(根上要有 SKILL.md),浏览器侧先把关,再整包 base64 送上去。
+ * 上传技能:选一个文件夹(SKILL.md 应在根上,在子目录里时明确提示),浏览器侧先把关,再整包 base64 送上去。
  *
- * 任何登录用户都能传(D6);传上来的副本只有上传者本人与 root 能动。卡上会提示:
+ * 任何登录用户都能传;传上来的副本只有上传者本人与 root 能动。对话框会提示:
  * 没有 `tests/unit/` 的 skill,代码快环只能靠 G0–G3,建议带上测试;纯文档 skill 只走慢环。
  */
 export default function UploadSkillDialog({ onClose, onUploaded }: { onClose: () => void; onUploaded: () => Promise<void> }) {
@@ -25,7 +25,7 @@ export default function UploadSkillDialog({ onClose, onUploaded }: { onClose: ()
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
   const [uploading, setUploading] = useState(false);
-  // hl(动态 P3):包里的 tasks.json 校验失败时原来对话框不显示 —— 把 serve 回的 tasks 报告摆出来
+  // 包里的 tasks.json 没能(全部)入库时,把 serve 回的 tasks 报告留在对话框里
   const [tasksNote, setTasksNote] = useState<string | null>(null);
   useModalKeyboard(dialogRef, { onClose });
 

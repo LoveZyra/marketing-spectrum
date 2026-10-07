@@ -10,19 +10,11 @@ type ProviderLoginModalProps = {
   customCommand?: string;
 };
 
-// This pair used to dispatch over the provider to pick a login command
-// (`cursor-agent login`, `codex login`, `opencode auth login`) and a modal
-// title. Claude is the only CLI this build drives, so both are constants.
-//
-// Note that Codex was the only branch that read `IS_PLATFORM` here — it swapped
-// in `--device-auth` when running hosted. Claude's login command is the same
-// either way, so that flag is no longer consulted in this file.
+// Claude is the only CLI Prism drives, so the login command and modal title are
+// constants; the command is the same whether or not Prism runs hosted.
 const CLAUDE_LOGIN_COMMAND = 'claude --dangerously-skip-permissions /login';
 const CLAUDE_LOGIN_TITLE = 'Claude CLI Login';
 
-// `provider` and `isAuthenticated` used to be props here. `provider` picked the
-// login command; `isAuthenticated` was already destructured as `_isAuthenticated`
-// and never read, so it did nothing before this change either.
 export default function ProviderLoginModal({
   isOpen,
   onClose,

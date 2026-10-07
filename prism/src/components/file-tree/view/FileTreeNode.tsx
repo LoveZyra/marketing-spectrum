@@ -33,22 +33,20 @@ type FileTreeNodeProps = {
   renameInputRef?: RefObject<HTMLInputElement>;
   operationLoading?: boolean;
   /**
-   * F9:拖放到**指定文件夹**。
-   *
-   * `handleItemDragOver` / `handleItemDrop` 在 useFileTreeUpload 里写好了但从来
-   * 没接到任何节点上 —— 于是拖进来的文件永远落在项目根,拖到哪个文件夹上都一样。
-   * 这两个回调把"悬停在哪个目录上"告诉上传逻辑。
+   * 拖放到指定文件夹:这两个回调把"悬停在哪个目录上"告诉上传逻辑
+   * (useFileTreeUpload 的 `handleItemDragOver` / `handleItemDrop`),
+   * 没接上的话拖进来的文件一律落在项目根。
    */
   onItemDragOver?: (event: React.DragEvent, itemPath: string) => void;
   onItemDrop?: (event: React.DragEvent, itemPath: string) => void;
   /** 当前拖放目标路径 —— 命中的那个目录会高亮,让人知道文件会落在哪。 */
   dropTarget?: string | null;
-  /** F9:多选。选中集合由上层持有(跨渲染保持),整棵树共用一份。 */
+  /** 多选。选中集合由上层持有(跨渲染保持),整棵树共用一份。 */
   selectedPaths?: ReadonlySet<string>;
   onToggleSelect?: (item: FileTreeNodeType, event: React.MouseEvent) => void;
   selectionMode?: boolean;
   /**
-   * hl(动态 P2-10):被截断的目录展开后多一行「…还有更多」,点击把这个目录单独列一遍。
+   * 被截断的目录展开后多一行「…还有更多」,点击把这个目录单独列一遍。
    * 文案由上层翻译好传进来 —— 这个组件是 memo 的,不订阅 i18n。
    */
   onLoadMore?: (item: FileTreeNodeType) => void;
@@ -111,9 +109,9 @@ function TreeItemIcon({ item, isOpen, renderFileIcon, symlinkLabel }: TreeItemIc
 }
 
 /**
- * memo:大目录下每个节点都是一次完整渲染。此前 FileTree 里任何无关状态(toast、
- * 搜索框击键、上传进度)一变,整棵树的每个节点都重渲一遍。浅比较挡住无关更新;
- * 展开/收起(expandedDirs 换新 Set)与重命名期间照常重渲,行为不变。
+ * memo:大目录下每个节点都是一次完整渲染,FileTree 里无关状态(toast、搜索框击键、
+ * 上传进度)一变不该让整棵树重渲。浅比较挡住无关更新;展开 / 收起(expandedDirs 换新 Set)
+ * 与重命名期间照常重渲。
  */
 function FileTreeNode({
   item,
@@ -153,7 +151,7 @@ function FileTreeNode({
   const isDirectory = item.type === 'directory';
   const isOpen = isDirectory && expandedDirs.has(item.path);
   const hasChildren = Boolean(isDirectory && item.children && item.children.length > 0);
-  // hl(动态 P2-10):没列全的目录即便 children 为空也要展开出「…还有更多」那一行。
+  // 没列全的目录即便 children 为空也要展开出「…还有更多」那一行。
   const isTruncated = Boolean(isDirectory && item.truncated && onLoadMore);
   const isLoadingMore = Boolean(loadingSubtrees?.has(item.path));
   const isRenaming = renamingItem?.path === item.path;
@@ -177,16 +175,15 @@ function FileTreeNode({
       : viewMode === 'compact'
       ? 'group flex items-center justify-between py-[3px] pr-2 hover:bg-accent cursor-pointer rounded-sm transition-colors duration-100'
       : 'group flex items-center gap-1.5 py-[3px] pr-2 cursor-pointer rounded-sm hover:bg-accent transition-colors duration-100',
-    // 展开的目录行以前挂一条 2px 强调色左边条 —— 一棵树展开几层就是几根绿条,
-    // 而"这个目录开着"本来就有箭头方向在表达。边框保留但恒为透明,
-    // 只为占住那 2px,免得开合时整行左右跳动。
+    // 展开的目录不画强调色左边条("开着"已由箭头方向表达)。2px 左边框平时透明,
+    // 只在拖放悬停时着色;常驻占位免得行左右跳动。
     'border-l-2 border-transparent',
     // 行间分隔交给主题:纸构蓝图给一条次级发丝线(图纸的行格),
     // 另外两套什么都不加(见 index.css 的 .prism-row)。
     'prism-row',
-    // F9:拖放悬停在这个目录上 —— 让人看得见文件会落在哪。
+    // 拖放悬停在这个目录上 —— 让人看得见文件会落在哪。
     isDropTarget && 'bg-primary/[0.10] border-l-primary/40',
-    // F9:多选选中态。
+    // 多选选中态。
     isSelected && 'bg-primary/[0.08]',
   );
 
@@ -217,8 +214,8 @@ function FileTreeNode({
             }, 100);
           }}
           className="h-6 flex-1 text-sm"
-          // hl(P3 文件组):请求期间用 readOnly 而不是 disabled —— disabled 会让输入框失焦,
-          // 失焦又触发 onBlur 再确认一次;改名失败后焦点已经丢了,输入框就"卡死"在那里。
+          // 请求期间用 readOnly 而不是 disabled:disabled 会让输入框失焦,失焦又触发 onBlur
+          // 再确认一次;改名失败后焦点已经丢了,输入框就"卡死"在那里。
           readOnly={operationLoading}
           aria-busy={operationLoading}
         />
@@ -231,7 +228,7 @@ function FileTreeNode({
       className={rowClassName}
       style={{ paddingLeft: `${level * 16 + 4}px` }}
       onClick={(event) => {
-        // F9:选择模式下,或按住 Ctrl/Cmd/Shift 点击 —— 都是"选中",不是"打开"。
+        // 选择模式下,或按住 Ctrl/Cmd/Shift 点击 —— 都是"选中",不是"打开"。
         if (onToggleSelect && (selectionMode || event.ctrlKey || event.metaKey || event.shiftKey)) {
           event.preventDefault();
           event.stopPropagation();
@@ -240,16 +237,11 @@ function FileTreeNode({
         }
         onItemClick(item);
       }}
-      // F9:目录才接受拖放定位 —— 拖到文件上没有意义,反而会让人以为能"放进文件里"。
+      // 目录才接受拖放定位 —— 拖到文件上没有意义,反而会让人以为能"放进文件里"。
       onDragOver={isDirectory && onItemDragOver ? (event) => onItemDragOver(event, item.path) : undefined}
       onDrop={isDirectory && onItemDrop ? (event) => onItemDrop(event, item.path) : undefined}
     >
-      {/*
-        eo:表格视图下复选框必须**长在"名称"这一格里面**,不能作为兄弟节点插在前面。
-        这一行是 `grid grid-cols-12`,四格加起来正好 12(5+2+3+2);在它们前面多插
-        一个网格子项就变成 13 个,最后那格「权限」被挤到第二行 —— 用户实测:
-        「点了多选以后就出现换行,界面乱了」。放进名称格里,列宽和表头照旧对齐。
-      */}
+      {/* 表格视图(detailed)的复选框放在"名称"格里,不在这里:这一行是 grid-cols-12,四格正好 5+2+3+2,前面多插一个子项会把最后一格「权限」挤到第二行 */}
       {selectionMode && onToggleSelect && viewMode !== 'detailed' && (
         <input
           type="checkbox"

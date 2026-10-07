@@ -27,9 +27,9 @@ describe('SkillWhet 模型下拉的可选行', () => {
   });
 });
 
-describe('hq:SkillWhet 只用默认网关上、所有人可见的模型', () => {
+describe('SkillWhet 只用默认网关上、所有人可见的模型', () => {
   const shared = { value: 'glm-5.2', label: 'GLM 5.2', gatewayId: 0 };
-  const legacy = { value: 'deepseek-v4', label: 'DeepSeek V4' }; // 老服务端没有 gatewayId → 默认网关
+  const legacy = { value: 'deepseek-v4', label: 'DeepSeek V4' }; // 没有 gatewayId 的行按默认网关算
   const otherGateway = { value: 'or-claude', label: 'OR Claude', gatewayId: 3 };
   const mine = { value: 'my-model', label: 'My Model', gatewayId: 7, private: true };
   const minePrivateOnDefault = { value: 'my-default', label: 'Mine on default', gatewayId: 0, private: true };

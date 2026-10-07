@@ -1,10 +1,9 @@
 /**
- * 启动链里的一步:同步抛、异步 reject 都在这里接住并记日志,**永不向外抛**。
+ * 启动链里的一步:同步抛、异步 reject 都在这里接住并记日志,永不向外抛。
  *
- * hl 复核(P3):`server.listen` 回调里原来是一条直链 —— `await initializeSessionsWatcher()`
- * 一旦 reject,后面的营销诊断、SkillWhet serve、夜训、作业清理全部不会启动,日志里只剩一行
- * `[UNHANDLED]`(hl 起 unhandledRejection 不再退出进程,这种"半启动"更不容易被发现)。
- * 各段互不连坐:每段自己包一层,失败只影响它自己那块功能。
+ * `server.listen` 回调里的各段(会话监听、营销诊断、SkillWhet serve、夜训、作业清理等)
+ * 互不连坐:每段自己包一层,失败只影响它自己那块功能。写成一条直链的话,前面一段 reject
+ * 后面就全部不启动,而 unhandledRejection 只记日志不退出进程,这种"半启动"很难被发现。
  *
  * @param {string} label  日志里的名字
  * @param {() => unknown} fn  这一步;可返回 promise

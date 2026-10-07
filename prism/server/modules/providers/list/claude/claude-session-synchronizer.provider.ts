@@ -26,7 +26,7 @@ const TAIL_BYTES = 64 * 1024;
  *
  * 一次同步里,同一个文件的尾部会被读两遍:`extractLastActivityFromEnd`(取最后
  * 活动时间)和 `extractSessionAiTitleFromEnd`(取 AI 标题,会话还叫 Untitled 时
- * 每 3s 一次)。两次都是 stat+open+read(64KB)+切首行,读的是**同一段 64KB**。
+ * 每 3s 一次)。两次都是 stat+open+read(64KB)+切首行,读的是同一段 64KB。
  * 用指纹缓存把这一趟同步里的第二次读省掉;文件一变(mtime/size 变)即失效。
  * 只留很小的容量 —— 它是同一 pass 内的短时复用,不是长期缓存。
  */
@@ -102,9 +102,8 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       if (this.isSubagentTranscript(filePath)) {
         continue;
       }
-      // Prism 自己跑 CLI 留下的 transcript(模型探测)不是用户
-      // 的会话。**watcher 那边挡住了还不够** —— 全量同步是另一条路,漏在这儿的
-      // 表现是"运行时清清爽爽,重启之后侧栏里冒出几十个幽灵项目"。
+      // Prism 自己跑 CLI 留下的 transcript(模型探测、技能优化)不是用户的会话。
+      // 只靠 watcher 挡不够:全量同步是另一条路,漏在这里会在重启后让侧栏冒出一堆幽灵项目。
       if (isPrismInternalTranscript(filePath)) {
         continue;
       }
@@ -113,7 +112,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       if (!parsed) {
         continue;
       }
-      // gk:躺在最近删除里的会话,它的 transcript 不许再被索引成一条"新会话"。
+      // 在最近删除里的会话,它的 transcript 不能再被索引成一条"新会话"(详见 synchronizeFile)。
       if (sessionTrashDb.hasProviderSessionId(parsed.sessionId)) {
         continue;
       }
@@ -152,12 +151,12 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       return null;
     }
     /**
-     * gk:**在最近删除里的会话,transcript 不再索引。**
+     * 在最近删除里的会话,transcript 不再索引。
      *
-     * 永久删除把 transcript 搬走了,但删除后的几秒里常驻 CLI 退出时可能按老路径再写一个
-     * 空壳(2026-09-14 生产实例:362 字节、两行收尾记录)。空壳没有 `cwd` 行,
-     * `processSessionFile` 本来就会跳过;这道门挡的是**带 cwd 的**情况 —— 比如文件搬失败
-     * 留在了原地。不挡的话,删掉的会话会以一条"CLI 自己开的"新会话的样子回到侧栏。
+     * 删除时 transcript 已搬进回收站目录,但常驻 CLI 退出时可能按原路径再写一个空壳
+     * (两行收尾记录,几百字节)。空壳没有 `cwd` 行,`processSessionFile` 本来就会跳过;
+     * 这道门挡的是带 cwd 的情况,比如文件没搬走、留在了原地。不挡的话,删掉的会话会以
+     * 一条"CLI 自己开的"新会话的样子回到侧栏。
      */
     if (sessionTrashDb.hasProviderSessionId(parsed.sessionId)) {
       return null;
@@ -229,7 +228,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
    * `~/.claude/history.jsonl` 的 sessionId -> 显示名映射,按文件指纹缓存。
    *
    * 这个文件随用户全部历史无界增长,而同步器每个文件事件都会调一次(去抖后最长
-   * 3 秒一轮),原来每次都是全量读 + 逐行 JSON.parse。它只在有新会话被命名时才变,
+   * 3 秒一轮),每次全量读 + 逐行 JSON.parse 太贵。它只在有新会话被命名时才变,
    * mtime+size 足以判定。
    */
   private historyNameMapCache: { fingerprint: string; map: Map<string, string> } | null = null;
@@ -258,11 +257,10 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
    * 会话的「真实最后活动时间」= transcript 里最后一条真实消息(user/assistant)的
    * timestamp,而不是文件 mtime。
    *
-   * 为什么不能用 mtime(即 readFileTimestamps().updatedAt):点开一个会话会触发
-   * 预热(`claude --resume`),SDK 会**碰一下这个 JSONL 的 mtime 却不追加任何消息**
-   * (实测行数不变、mtime 变成点击时刻)。侧栏按 updated_at 排序,于是"只是点一下、
-   * 没说话"也会把会话顶到最前 —— 这正是用户报的乱序。改用最后一条 user/assistant
-   * 消息的时间后:预热碰 mtime 不影响排序,真正发过话才会前移。
+   * 不能用 mtime(即 readFileTimestamps().updatedAt):点开一个会话会触发预热
+   * (`claude --resume`),SDK 会碰一下这个 JSONL 的 mtime 却不追加任何消息。侧栏按
+   * updated_at 排序,用 mtime 的话"只是点一下、没说话"也会把会话顶到最前;用最后一条
+   * user/assistant 消息的时间,预热不影响排序,真正发过话才会前移。
    *
    * 只读尾部 64KB(消息在文件末尾),从后往前找第一条 user/assistant 且带合法
    * timestamp 的行。找不到(空会话 / 尾部无对话行)就回 undefined,调用方回落到 mtime。
@@ -281,10 +279,9 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     sessionId: string
   ): Promise<string | undefined> {
     try {
-      // 只读文件尾部(标题事件总在末尾附近)。这个尾读与 extractLastActivityFromEnd
-      // 读的是同一段 64KB,共用 readJsonlTailCached 的指纹缓存,一次同步里不会把
-      // 同一段读两遍。原来是把整份 transcript 读进来切行全 parse,24MB 会话每 3s
-      // 135ms + 上万临时数组元素。
+      // 只读文件尾部(标题事件总在末尾附近),大 transcript 不整份读进来切行全 parse。
+      // 与 extractLastActivityFromEnd 读的是同一段 64KB,共用 readJsonlTailCached 的
+      // 指纹缓存,一次同步里不会把同一段读两遍。
       const content = await readJsonlTailCached(filePath);
       const lines = content.split(/\r?\n/);
 
@@ -332,8 +329,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
  * 别的行(queue-operation / mode / custom-title / summary / system compact_boundary
  * 等)是元数据,不代表"发生了会话",一律跳过。找不到回 undefined。
  *
- * 抽成纯函数是为了能脱离文件 I/O 单测 —— 这正是「点一下不该改排序、真发过话才改」
- * 这条规则的核心判断。
+ * 抽成纯函数是为了脱离文件 I/O 单测「点一下不该改排序、真发过话才改」这条规则。
  */
 export function pickLastActivityTimestamp(content: string): string | undefined {
   const lines = content.split(/\r?\n/);

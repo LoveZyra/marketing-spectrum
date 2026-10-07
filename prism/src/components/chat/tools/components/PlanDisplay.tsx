@@ -41,11 +41,8 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
   const { t } = useTranslation('chat');
   const permissionCtx = usePermission();
 
-  // 只认领**属于这张卡**的待批请求 —— 按计划正文匹配。
-  //
-  // 修前:每张 PlanDisplay 都全局 find 任意一个 pending 的 ExitPlanMode 请求,
-  // 不与自身内容对应。于是会话里有旧计划时,新请求一来,所有旧计划卡都会长出
-  // Build/Revise 按钮,点旧卡的 Build 批的却是新计划。
+  // 只认领属于这张卡的待批请求,按计划正文匹配。会话里可能还有旧计划卡;
+  // 不按正文对应的话,新请求一来所有旧卡都会出现按钮,点旧卡批准的却是新计划。
   const normalizePlan = (value: unknown): string =>
     (typeof value === 'string' ? value : '').replace(/\\n/g, '\n').trim();
   const thisPlan = normalizePlan(content);
@@ -60,10 +57,9 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
   const handleBuild = () => {
     if (pendingRequest && permissionCtx) {
       permissionCtx.handlePermissionDecision(pendingRequest.requestId, { allow: true });
-      // do:「开始实施」= 从计划模式切出来。批准后 CLI 在本回合内继续执行,
-      // 但 composer 的档位是**下一条消息**的 —— 不切的话,下一句追问又进计划
-      // 模式,agent 只出计划不动手,用户以为"点了开始却还在计划"。
-      // 用事件解耦:档位 state 住在 useChatProviderState,那边接。
+      // 「开始实施」还要把输入框的档位切出计划模式:批准只让 CLI 在本回合内继续执行,
+      // 档位却作用于下一条消息;不切的话下一句追问又进计划模式,只出计划不动手。
+      // 档位 state 在 useChatProviderState,这里发事件由那边处理。
       try {
         window.dispatchEvent(new CustomEvent('prism:plan-approved'));
       } catch { /* 无 window 的环境(测试)忽略 */ }
@@ -101,7 +97,6 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
           </CollapsibleTrigger>
         </CardHeader>
 
-        {/* Collapsible content */}
         <CollapsibleContent>
           <CardContent className="px-4 pb-4 pt-3">
             {content ? (
@@ -138,7 +133,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
           </CardContent>
         </CollapsibleContent>
 
-        {/* Footer — always visible when permission is pending */}
+        {/* Footer sits outside the collapsible part: the buttons stay visible while a request is pending */}
         {pendingRequest && (
           <CardFooter className="justify-end gap-2 border-t border-border px-4 pb-3 pt-3">
             <Button

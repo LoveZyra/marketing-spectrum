@@ -13,17 +13,16 @@ export type FileTreeItem = {
   modified?: string | null;
   isSymlink?: boolean;
   /**
-   * hl(P3 文件组):软链**指向**的类型。树上按目标类型显示(指向目录的软链画成
-   * 文件夹、可展开),`isSymlink` 仍为真让前端画角标。悬空软链没有这个字段。
+   * 软链指向的类型。树上按目标类型显示(指向目录的软链画成文件夹、可展开),
+   * `isSymlink` 仍为真让前端画角标。悬空软链没有这个字段。
    */
   symlinkTarget?: 'directory' | 'file';
   permissions?: string;
   permissionsRwx?: string;
   children?: FileTreeItem[];
   /**
-   * hl(动态 P2-10):这个目录的内容**没有列全** —— 要么条目预算在它这里用完了,
-   * 要么它已到深度上限。前端据此画「…还有更多」并按 `?path=` 懒加载它。
-   * 以前预算耗尽的目录只是 `children: []`,与真正的空目录无法区分。
+   * 这个目录的内容没有列全:要么条目预算在它这里用完了,要么它已到深度上限。
+   * 前端据此画「…还有更多」并按 `?path=` 懒加载它,不会把它和真正的空目录混为一谈。
    */
   truncated?: boolean;
 };
@@ -37,8 +36,8 @@ export type FileTreeBudget = {
   remaining: number;
   truncated: boolean;
   /**
-   * hl(动态 P2-10):被列的那个根目录**自己的直接子项**被截断了。根没有节点可打标,
-   * 所以单独记一位,路由用响应头(X-Prism-Root-Truncated)告诉前端。
+   * 被列的那个根目录自己的直接子项被截断了。根没有节点可打标,所以单独记一位,
+   * 路由用响应头(X-Prism-Root-Truncated)告诉前端。
    */
   rootTruncated?: boolean;
 };
@@ -154,7 +153,7 @@ async function buildItem(dirPath: string, entry: Dirent): Promise<{ item: FileTr
       // Mark symlinks so UI can distinguish them
       if (stats.isSymbolicLink()) {
         item.isSymlink = true;
-        // hl(P3 文件组):软链按目标类型显示。指向目录的软链此前被当成文件,点开就是 EISDIR。
+        // 软链按目标类型显示:指向目录的软链若当成文件,点开就是 EISDIR。
         try {
           const target = await fsPromises.stat(itemPath);
           item.symlinkTarget = target.isDirectory() ? 'directory' : 'file';
@@ -204,18 +203,16 @@ type PendingDirectory = {
 /**
  * Project tree walk with an optional entry budget.
  *
- * hl(动态 P2-10):原来的实现是深度优先 + 各目录并发扣预算 —— 先 readdir 完的目录先拿到
- * 名额,5000+ 条目的项目里哪个小目录被显示成「空目录」全看磁盘抖动,而且被砍掉的内容
- * 无路可达。现在改成**逐层广度优先、按目录顺序串行扣减**:
- *   - 同一层的目录先全部 readdir(并发,只是 I/O),然后**按排序后的固定顺序**逐个扣预算,
+ * 逐层广度优先、按目录顺序串行扣预算:
+ *   - 同一层的目录先全部 readdir(并发,只是 I/O),再按排序后的固定顺序逐个扣预算,
  *     所以同样的目录树每次得到同样的结果;
  *   - 浅层永远优先于深层:第 1 层的目录都列出来了才轮到第 2 层;
- *   - 名额用完的目录不再是 `children: []`,而是 `truncated: true`,前端画「…还有更多」,
- *     点击按 `?path=` 单独列它(再给 5000 名额);
+ *   - 名额用完的目录打 `truncated: true`,前端画「…还有更多」,点击按 `?path=` 单独列它
+ *     (再给一份完整名额);
  *   - 到了深度上限、还没进去看的目录同样打 `truncated`。
- * 不带 budget 时(/api/browse-filesystem)行为与以前一致:不打标,深度上限之外不列。
+ * 不带 budget 时(/api/browse-filesystem)不打标,深度上限之外不列。
  *
- * `showHidden` 沿用旧签名,历来没有实际过滤(保留以免改动调用方)。
+ * `_showHidden` 不做任何过滤,只为保持调用方的签名。
  */
 export async function getFileTree(
   dirPath: string,

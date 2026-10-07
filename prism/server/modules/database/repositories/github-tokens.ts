@@ -1,7 +1,7 @@
 /**
  * GitHub tokens repository.
  *
- * Backward-compatible helper layer over generic credentials storage.
+ * Thin helper layer over the generic credentials storage.
  * Tokens are stored in `user_credentials` with `credential_type = 'github_token'`.
  */
 
@@ -77,8 +77,8 @@ export const githubTokensDb = {
    * a `github_token` compatibility field.
    *
    * `credential_value` is stored encrypted, so both it and the compatibility
-   * field are decrypted here — callers (project clone) feed the value
-   * straight into a git remote URL and would otherwise send ciphertext.
+   * field are decrypted here — a caller feeding the value straight into a git
+   * remote URL would otherwise send ciphertext.
    */
   getGithubTokenById(userId: number, tokenId: number): GithubTokenLookup | null {
     const db = getConnection();
@@ -122,7 +122,7 @@ export const githubTokensDb = {
     return credentialsDb.deleteCredential(userId, tokenId);
   },
 
-  // Legacy alias used by existing routes
+  // Alias of updateGithubToken.
   toggleGithubToken(userId: number, tokenId: number, isActive: boolean): boolean {
     return githubTokensDb.updateGithubToken(userId, tokenId, isActive);
   },

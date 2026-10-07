@@ -5,12 +5,12 @@ import { isValidModelId } from '../../../../shared/modelVendors.js';
 import { DEFAULT_MODEL_ALLOWLIST } from './budget.js';
 
 /**
- * hn(B7):**SkillWhet 的模型从模型目录选,不再只有别名。**
+ * SkillWhet 的模型从模型目录选。
  *
- * SkillWhet 的 Python 端本来就收任意模型名(`claude -p --model <名>`),限制全在 Prism:
- * - 非 root:`PRISM_SKILLWHET_MODEL_ALLOWLIST` **配了就只认它**(原语义,条目可以写目录里的网关名);
- *   **没配** = 三个别名 haiku / sonnet / opus + 模型目录里上架的条目 —— 与对话"能选什么"一致;
- * - root:不受限(沿用 hl),但名字仍要过字符集(它要进 argv,不能以 `-` 开头)。
+ * SkillWhet 的 Python 端接受任意模型名(`claude -p --model <名>`),限制全在 Prism:
+ * - 非 root:配置了 `PRISM_SKILLWHET_MODEL_ALLOWLIST` 就只认它(条目可以写目录里的网关名);
+ *   没配置 = 三个别名 haiku / sonnet / opus + 模型目录里上架的条目,与对话里能选的一致;
+ * - root:不受限,但名字仍要过字符集校验(它要进 argv,不能以 `-` 开头)。
  */
 export const SKILLWHET_MODEL_KEYS = ['fast_model', 'slow_model', 'eval_model', 'target_model'] as const;
 
@@ -27,9 +27,9 @@ export function allowedSkillWhetModels(budget: Budget, root: boolean): string[] 
 }
 
 /**
- * hq:**SkillWhet 只能用默认网关(settings.json)上、没限人的目录模型。** SkillWhet 是另一个进程,
- * 它里面的 `claude -p` 只读 settings.json —— 挂在别的网关上的模型它连不上,
- * 限了「可用人员」的模型也不该借 SkillWhet 绕过去。
+ * SkillWhet 只能用默认网关(settings.json)上、未限定可用人员的目录模型:SkillWhet 是另一个进程,
+ * 里面的 `claude -p` 只读 settings.json,连不上挂在别的网关上的模型;
+ * 限定了「可用人员」的模型也不能借 SkillWhet 绕过去。
  */
 export function skillWhetCatalogModels(): string[] {
   return claudeModelCatalog.listEnabled()
@@ -44,7 +44,7 @@ export function isSkillWhetModelAllowed(model: string, budget: Budget, root: boo
 }
 
 /**
- * 夜训配置里**在目录中、但已下架**的模型(key=名字)。夜训计划是 root 配的(root 不受目录限制),
+ * 夜训配置里在目录中、但已下架的模型(key=名字)。夜训计划是 root 配的(root 不受目录限制),
  * 所以只拦"明确下架"的:目录里压根没有的名字照旧放行;不自动换成别的模型 —— 换模型会改变训练结论。
  */
 export function disabledCatalogModelsIn(config: Record<string, unknown>): string[] {
@@ -65,8 +65,8 @@ async function realModelOf(model: string): Promise<string> {
 }
 
 /**
- * **评估 ≠ 提议,按真名比。** 此前按字符串比,`opus`(→ glm-5.2)与 `glm-5.2` 被当成两个模型放过,
- * 实际是同一个模型给自己的提议打分(SkillEvo 的 Generator ≠ Evaluator 约束)。
+ * 评估模型必须与提议模型不同(SkillEvo 的 Generator ≠ Evaluator 约束),且按真名比较:
+ * 别名可能映射到目录里的另一个名字(如 `opus` → `glm-5.2`),按字符串比会放过同一个模型给自己的提议打分。
  * 没填的角色按 SkillWhet 的默认补上再比。返回冲突说明,没冲突返回 null。
  */
 export async function proposerEvaluatorConflict(config: Record<string, unknown>): Promise<string | null> {

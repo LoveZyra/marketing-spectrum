@@ -10,10 +10,6 @@ type AccountContentProps = {
   onLogin: () => void;
 };
 
-// This used to take an `agent` prop and index a four-entry palette map with it,
-// so that Cursor rendered purple, Codex grey and OpenCode zinc. Claude is the
-// only agent left, so the map had one entry and the prop had one value: the
-// blue palette is inlined below.
 export default function AccountContent({ authStatus, onLogin }: AccountContentProps) {
   const { t } = useTranslation('settings');
 

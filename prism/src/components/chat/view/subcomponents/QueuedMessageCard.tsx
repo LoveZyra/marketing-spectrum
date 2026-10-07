@@ -8,7 +8,7 @@ interface QueuedMessageCardProps {
   onEdit?: () => void;
   onDelete: () => void;
   /**
-   * ho:「立即发送」(send now)—— 不等这一轮结束,现在就插进去(模型在下一个工具间隙看到它)。
+   * 「立即发送」(send now):不等这一轮结束,现在就插进去(模型在下一个工具间隙看到它)。
    * 省略即不显示(服务端那条、带图片的那条都不给)。
    */
   onSendNow?: () => void;

@@ -32,14 +32,14 @@ type ConfigView = {
 type ConfigResponse = { data?: ConfigView; error?: string; details?: string };
 
 /**
- * 模型页(root)。hn 起分两块(hq 起最上面再加一块):
- * 0. **网关**(`GatewaysAdminSection`,hq)—— 默认网关(settings.json)+ 共享网关 + 成员 key + 私有网关开关;
- *    放在目录前面:目录条目要挂到这里的网关上;
- * 1. **模型目录**(`ModelCatalogSection`)—— 用户在 /models 里能选的网关模型,带窗口、档位、图标、实测;
- * 2. **子代理模型**(`SubagentModelCard`,ho)—— 子代理跟随主模型 / 默认用某个目录模型 / 强制;
- *    放在目录与别名之间:选项来自上面的目录,"跟随主模型"时又要靠下面的别名映射解析;
- * 3. **子代理用的别名**(本组件原来的内容)—— 可视化编辑 settings.json 的别名映射与 default 档。
- *    保存 = 原子写回文件;已有的热感知让下一条消息直接用新映射,无需重启;实测缓存同时被置 stale。
+ * 模型页(root),自上而下四块:
+ * 1. 网关(`GatewaysAdminSection`):默认网关(settings.json)+ 共享网关 + 成员 key + 私有网关开关;
+ *    放在目录前面,因为目录条目要挂到这里的网关上;
+ * 2. 模型目录(`ModelCatalogSection`):用户在 /models 里能选的网关模型,带窗口、档位、图标、实测;
+ * 3. 子代理模型(`SubagentModelCard`):子代理跟随主模型 / 默认用某个目录模型 / 强制;
+ *    放在目录与别名之间:选项来自上面的目录,「跟随主模型」时又要靠下面的别名映射解析;
+ * 4. 子代理用的别名(本组件自身):可视化编辑 settings.json 的别名映射与 default 档。
+ *    保存即原子写回文件;热感知让下一条消息直接用新映射,无需重启;实测缓存同时置为 stale。
  */
 export default function ModelMappingSettingsTab() {
   const { t } = useTranslation('settings');
@@ -118,11 +118,7 @@ export default function ModelMappingSettingsTab() {
     }
   };
 
-  /*
-    gn:与其余设置页同口径 —— 页面这一层不设宽度上限,由弹窗的宽度决定。
-    三个页签原来各设各的(xl / 2xl / 3xl),而别的页签一个都没有,弹窗放宽之后
-    就是三种不同的右边留白(2026-09-15 用户逐个截图报过来)。
-  */
+  /* 与其余设置页一致:页面这一层不设宽度上限,由弹窗的宽度决定。 */
   return (
     <div className="space-y-6">
       <GatewaysAdminSection />
@@ -169,9 +165,8 @@ export default function ModelMappingSettingsTab() {
       )}
 
       <div className="space-y-3 rounded-lg border border-border p-4">
-        {/* 档名与环境变量名放在输入框**上面**一行:这些变量名有 30 个字符,
-            塞进左侧 88px 的列里必然压到输入框上(实测就是这么糊在一起的)。
-            提到上面之后,所有输入框左边界对齐,变量名也不用再截断。 */}
+        {/* 档名与环境变量名放在输入框上面一行:变量名长达 30 个字符,放进左侧窄列会压到输入框上;
+            放在上面则所有输入框左边界对齐,变量名也不必截断。 */}
         {ALIASES.map((alias) => (
           <div key={alias} className="min-w-0">
             <div className="mb-1 flex min-w-0 items-baseline gap-2">

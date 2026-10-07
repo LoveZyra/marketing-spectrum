@@ -1,9 +1,8 @@
 import type { SVGProps } from 'react';
 
 /**
- * ee:模型芯片的标记 —— 参考用户给的三色六边形拼块,重画成与 lucide 同一套笔画的
- * 线图标(24 视窗、2px 描边、圆角、currentColor):三个六边形按参考图的位置成簇
- * (左上 / 右 / 左下),14px 下仍能看出是三块,不像位图那样糊成一团,也随主题变色。
+ * 模型芯片的通用标记:三个六边形成簇(左上 / 右 / 左下),画成与 lucide 同一套笔画的
+ * 线图标(24 视窗、2px 描边、圆角、currentColor),14px 下仍能看出是三块,也随主题变色。
  */
 export default function ModelMark({ className = 'h-3.5 w-3.5', ...props }: SVGProps<SVGSVGElement>) {
   return (

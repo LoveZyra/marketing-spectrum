@@ -7,11 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { methodOverrideMiddleware, resolveOverriddenMethod } from '@/shared/method-override.js';
 
 /**
- * ea:方法隧道。
- *
- * 用户实测:定时任务「启用/暂停」开关(PATCH)在公司 Windows 机器上点了没反应,
- * Mac 正常 —— 只放行 GET/POST 的企业代理把 PATCH 拦了。前端改发
- * POST + X-HTTP-Method-Override,服务端在路由之前改回真实方法。
+ * 方法隧道:只放行 GET/POST 的企业代理会拦下 PATCH / PUT / DELETE。前端改发
+ * POST + X-HTTP-Method-Override(或 `?_method=`),服务端在路由之前改回真实方法。
  *
  * 纯函数那几条钉判定规则;真 HTTP 那几条钉"改写发生在路由之前"——
  * 这一点拿函数单独调是测不出来的,必须让 express 真的按 req.method 去路由。

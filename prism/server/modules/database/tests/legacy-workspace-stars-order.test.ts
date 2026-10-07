@@ -8,27 +8,16 @@ import { describe, it, expect } from 'vitest';
 import { closeConnection, getConnection, initializeDatabase } from '@/modules/database/index.js';
 
 /**
- * workspace 时代的收藏必须能升上来。
+ * workspace 表里的收藏必须能迁进 project_stars。钉的是迁移顺序:
  *
- * ## 这条钉的是**迁移顺序**
+ * `addProjectStarsTable` 的搬迁读 `SELECT … FROM projects WHERE isStarred = 1`,而 workspace
+ * 表的数据要等 `migrateLegacyWorkspaceTableIntoProjects` 跑完才进 projects。顺序反了,
+ * 搬迁就读到空表;而搬迁严格一次性(判据是 project_stars 表存不存在),下次启动不会重试,
+ * 有登录用户时侧栏只认 project_stars,收藏就永久丢了。
  *
- * `addProjectStarsTable` 的搬迁读 `SELECT … FROM projects WHERE isStarred = 1`,
- * 而 workspace 时代的数据在 `migrateLegacyWorkspaceTableIntoProjects` 跑完之前
- * 还躺在 `workspace_original_paths` 里。两个函数原来的调用顺序是反的 ——
- * 搬迁读到一张空表,一条都没搬。
- *
- * 更糟的是搬迁**严格一次性**(`if (existing) return`,判据是 project_stars 表存不存在),
- * 所以下次启动永不重试:老库升上来之后旧的 isStarred 列还在,但有登录用户时侧栏
- * 只认 project_stars —— 界面上**收藏全没了**,而且再也回不来。
- *
- * 实测过两种顺序:旧的 0 条、新的 2 条。
- *
- * ## 为什么需要 PRISM_ROOT_USERS
- *
- * 搬迁的两条分支是「有 owner 就给 owner」「没 owner 就给每个 root」。
- * 从 workspace 表升上来的项目 owner 一律是 NULL(那个时代还没有归属概念),
- * 所以走的是第二条 —— 没有配 root 就没有收件人,0 条是**正确行为**,不是这条要抓的 bug。
- * 因此这个用例必须设置 PRISM_ROOT_USERS,否则它会因为错误的原因变绿。
+ * 必须设置 PRISM_ROOT_USERS:搬迁对有 owner 的项目给 owner、没 owner 的给每个 root,
+ * 而从 workspace 表迁上来的项目 owner 一律是 NULL。没配 root 时两种顺序都是 0 条
+ * (这是正确行为),用例就区分不出顺序对错。
  */
 describe('workspace 时代的收藏升级', () => {
   it('迁移顺序正确时,老库的收藏会搬进 project_stars', async () => {

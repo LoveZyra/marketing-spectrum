@@ -32,8 +32,8 @@ const router = express.Router();
 /**
  * 这次上传该落到哪个目录。
  *
- * `projectId` 走 **query** 而不是 multipart 字段:multer 是流式解析的,
- * `req.body` 要等整个 body 收完才齐,而 `destination` 在**第一个文件字节到达前**
+ * `sessionId` / `projectId` 走 query 而不是 multipart 字段:multer 是流式解析的,
+ * `req.body` 要等整个 body 收完才齐,而 `destination` 在第一个文件字节到达前
  * 就要给出答案。放 query 里就不依赖字段与文件在 multipart 里的先后顺序。
  *
  * 解析不出可见项目时回落全局目录 —— 会话还没落到项目上是正常状态,不能因此
@@ -42,20 +42,13 @@ const router = express.Router();
 function resolveUploadTarget(req: express.Request): { dir: string; projectPath: string | null } {
   const viewer = readRequestViewer(req);
 
-  /**
-   * A7:**会话说了算,不是侧栏说了算。**
+  /*
+   * 会话说了算,不是侧栏说了算:优先按 `sessionId`(见前端 `attachmentQuery`)取会话的项目。
    *
-   * 这个函数原来只看前端传的 `projectId`(侧栏选中的那个项目),于是落盘目录来自
-   * `projects.project_path`,而 `chat.send` 那道图片门比的是 `sessions.project_path`
-   * —— 两个不同来源的值。只要对不齐,图片就落在门看不到的地方:**页面上显示得
-   * 好好的**(前端按侧栏 projectId 走 files/content 取原图),**模型却一张都收不到**,
-   * 除了服务端一行 warn 之外没有任何线索。
-   *
-   * root 尤其容易踩:它对所有项目可见,所以上传一定会落进某个项目的 `attachments/`
-   * (普通用户看不见的项目会回落全局目录,反而三道门都认)。
-   *
-   * 请求本来就带着 `sessionId`(见前端的 `attachmentQuery`),优先按它解析:
-   * 落盘目录与那道门从此是同一个来源。可见性照旧要过 —— 会话看不见就不给用它的项目。
+   * `chat.send` 的图片门比对的是 `sessions.project_path`。落盘目录若取自侧栏选中的项目
+   * (`projects.project_path`),两者一旦对不齐,图片就落在门看不到的地方:页面上照常显示
+   * (前端按侧栏 projectId 走 files/content 取原图),模型却一张都收不到,只留一行服务端 warn。
+   * root 对所有项目可见,最容易踩到。可见性照旧要过:看不见的会话不能借用它的项目。
    */
   const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
   if (sessionId) {
@@ -97,14 +90,16 @@ const upload = multer({
     }
   },
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB
+    fileSize: 5 * 1024 * 1024,
     files: 5,
   },
 });
 
 /**
- * Stores chat image attachments in the global `~/.prism/assets` folder and
- * returns their absolute paths for use in provider prompts and chat history.
+ * Stores chat image attachments (in the session's project `attachments/` folder,
+ * or the global `~/.prism/assets` fallback) and returns their absolute paths for
+ * use in provider prompts and chat history. Quota is checked up front against
+ * Content-Length and again per file once it has landed.
  */
 router.post('/images', (req, res) => {
   const viewer = readRequestViewer(req);
@@ -172,18 +167,13 @@ router.get('/images/:filename', async (req, res) => {
     return res.status(400).json({ error: 'Invalid asset filename' });
   }
 
-  /**
-   * fj:归属校验。
-   *
-   * 这条路由只挂了 `authenticateToken` —— 任何登录用户拿到文件名就能读到图片,
-   * 而图片是别人聊天里贴的截图。文件名是 multer 生成的随机串、枚举不出来,
-   * 但"猜不到"不是访问控制。
-   *
-   * 判据用现成的附件台账(`attachments` 表本来就记了 user_id):
+  /*
+   * 归属校验。这条路由只挂了 `authenticateToken`,而图片是别人聊天里贴的截图;
+   * 文件名带随机后缀、难以枚举,但"猜不到"不是访问控制。判据用附件台账(attachments.user_id):
    *   - 台账里有、且是自己的 → 放行;
    *   - 台账里有、是别人的 → 404(与"不存在"同形,不给存在性探针);
-   *   - **台账里没有 → 放行**。本次加固之前落盘的历史文件没有记账行,
-   *     一刀切会让老会话里的图全变裂图。root 一律放行。
+   *   - 台账里没有 → 放行:台账建立前落盘的文件没有记账行,一律拒绝会让老会话里的图全变裂图。
+   * root 一律放行。
    */
   const owner = attachmentsDb.ownerOf(resolved);
   const viewer = readRequestViewer(req);
@@ -199,8 +189,8 @@ router.get('/images/:filename', async (req, res) => {
     return res.status(404).json({ error: 'Asset not found' });
   }
 
-  // 类型来自白名单,不来自 `mime.lookup(任意扩展名)`。白名单之外的一律按
-  // 二进制附件下发 —— 本次加固之前落盘的历史文件可能仍带着上传方选定的扩展名。
+  // 类型来自白名单,不由 `mime.lookup(任意扩展名)` 猜。白名单之外的一律按
+  // 二进制附件下发 —— 早期落盘的文件可能仍带着上传方选定的扩展名。
   const inlineType = inlineContentTypeForFile(resolved);
   const contentType = inlineType ?? 'application/octet-stream';
   res.setHeader('Content-Type', contentType);

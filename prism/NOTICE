@@ -1,3 +1,12 @@
+Prism
+Copyright 2026 the Prism contributors
+
+Prism is a modified version of CloudCLI UI (https://github.com/siteboon/claudecodeui).
+It is not the original CloudCLI UI software. Prism is licensed under the GNU Affero
+General Public License v3.0 or later (AGPL-3.0-or-later); see the LICENSE file,
+including the additional terms under Section 7.
+
+--------------------------------------------------------------------------------
 CloudCLI UI
 Copyright 2025-2026 Siteboon AI B.V. and contributors
 
@@ -11,6 +20,18 @@ Contributions by Siteboon AI B.V. prior to commit 004135ef were originally
 published under GPL-3.0 and are hereby relicensed to AGPL-3.0-or-later.
 Contributions by other authors prior to that commit remain under GPL-3.0
 and are incorporated into this work as permitted by GPL-3.0 Section 13.
+
+--------------------------------------------------------------------------------
+Claude Code Web (claude-web-ui)
+Copyright (c) 2025-present heng1234
+https://github.com/heng1234/claude-web
+
+Portions of the following files are derived from Claude Code Web and have been
+modified: server/claude-sdk.js (persistent runtime layer),
+server/routes/checkpoints.js, server/routes/documents.js,
+server/services/agent-loop.js and server/services/git-checkpoint.js.
+Those portions are licensed under the Apache License, Version 2.0; a copy of the
+license is in LICENSES/Apache-2.0.txt.
 
 --------------------------------------------------------------------------------
 Third-party assets

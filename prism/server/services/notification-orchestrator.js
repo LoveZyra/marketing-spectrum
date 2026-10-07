@@ -1,5 +1,4 @@
 export {
-  buildNotificationPayload,
   createNotificationEvent,
   notifyUserIfEnabled,
   notifyRunStopped,

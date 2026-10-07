@@ -13,7 +13,7 @@ let tempDir: string;
 beforeAll(async () => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-display-log-'));
   // 必须是 DATABASE_PATH:连接层只认这个变量(见 connection.ts 的 resolveDatabasePath)。
-  // 设错变量的后果不是"测试失败",而是**测试写进真库** —— 用例之间互相看得见,
+  // 设错变量的后果不是"测试失败",而是测试写进真库 —— 用例之间互相看得见,
   // 幂等那条今天就是这么假绿又假红的。
   process.env.DATABASE_PATH = path.join(tempDir, 'auth.db');
   const db = await import('@/modules/database/index.js');
@@ -54,11 +54,11 @@ describe('显示日志:什么该留下', () => {
     }
   });
 
-  it('dr:changed_files 改为落库(工作面板认非 Write 写盘的唯一证据;落库时剥 diff)', () => {
+  it('changed_files 落库(工作面板认非 Write 写盘的唯一证据;落库时剥 diff)', () => {
     expect(isDurableDisplayMessage({ kind: 'changed_files' })).toBe(true);
   });
 
-  it('dt:files_reverted 落库(回滚/还原后产出面板与磁盘对齐的依据)', () => {
+  it('files_reverted 落库(回滚/还原后产出面板与磁盘对齐的依据)', () => {
     expect(isDurableDisplayMessage({ kind: 'files_reverted' })).toBe(true);
   });
 
@@ -122,7 +122,6 @@ describe('显示日志:没有 id 的消息', () => {
   });
 });
 
-// bx / E 组:解析缓存(E1)与批量事务(E2)。
 describe('显示日志:解析缓存与批量写', () => {
   it('append 后 listForSession 反映最新内容(指纹失效,不吃旧缓存)', () => {
     sessionMessagesDb.append('s-cache', message({ id: 'c1', sessionId: 's-cache', content: '一' }));

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Load env vars before other imports execute. load-env.js also runs the
-// one-time ~/.cloudcli -> ~/.prism data-dir migration, which must precede any
-// import that opens the data dir (middleware/auth.js opens the auth DB).
+// Must stay the first import: load-env.js fills process.env from .env and sets the
+// default DATABASE_PATH, and the imports below read them at load time
+// (middleware/auth.js opens the auth DB).
 import './load-env.js';
 import fs from 'fs';
 import path from 'path';
@@ -33,7 +33,7 @@ import { NightlyScheduler, SkillWhetClient, createSkillWhetRouter } from '@/modu
 import { getConnectableHost } from '../shared/networkHosts.js';
 
 import { notifyRunFailed } from './services/notification-orchestrator.js';
-import { findAppRoot, getModuleDir, getDataDir, migrateLegacyDataDir } from './utils/runtime-paths.js';
+import { findAppRoot, getModuleDir, getDataDir } from './utils/runtime-paths.js';
 import {
     queryClaudeSDK,
     prewarmClaudeSession,
@@ -105,8 +105,7 @@ const __dirname = getModuleDir(import.meta.url);
 // The server source runs from /server, while the compiled output runs from /dist-server/server.
 // Resolving the app root once keeps every repo-level lookup below aligned across both layouts.
 const APP_ROOT = findAppRoot(__dirname);
-// 安装方式固定为 npm(tar 包部署)。原来靠探测 APP_ROOT/.git 自动判定 —— 那条路径
-// 已随 git 功能一并移除,残留的 .git 目录不该再改变服务行为。
+// 安装方式固定为 npm(tar 包部署),不探测 APP_ROOT/.git:残留的 .git 目录不应改变服务行为。
 const installMode = 'npm';
 // Version of the RUNNING code, captured once at startup (deliberately not
 // re-read per request: after an update, package.json is newer than this
@@ -118,11 +117,11 @@ const RUNNING_VERSION = (() => {
         return null;
     }
 })();
-// v2.0.0:同一时刻再取一次发布信息(包里 RELEASE.json 的日期与提交号;从源码跑时没有)。
+// 同一时刻取发布信息(包里 RELEASE.json 的日期与提交号;从源码跑时没有)。
 const RUNNING_RELEASE = readReleaseInfo(APP_ROOT);
 
 log.info('SERVER_PORT from env:', process.env.SERVER_PORT);
-// hm(A3.4):启动时删掉的会话标记(见 load-env.js)。
+// 启动时删掉的继承会话标记(见 load-env.js)。
 const scrubbedSessionMarkers = scrubbedSessionMarkersAtStartup();
 if (scrubbedSessionMarkers.length > 0) {
     log.info(`清掉了继承来的 Claude 会话标记:${scrubbedSessionMarkers.join(', ')}(否则 Prism 起的 CLI 会被当成子会话、不写 transcript)`);
@@ -157,15 +156,15 @@ const wss = createWebSocketServer(server, {
     chat: {
         spawnFns: { claude: queryClaudeSDK },
         abortFns: { claude: abortClaudeSDKSession },
-        // gc:真合流 —— 会话忙着时把用户这条话直接推进 CLI 的命令队列,
-        // 而不是攒在 Prism 自己的排队里等这一轮跑完。不成立时自动退回排队。
+        // 合流:会话忙着时把用户这条话直接推进 CLI 的命令队列,而不是攒在 Prism 自己的排队里
+        // 等这一轮跑完;不成立时自动退回排队。
         mergeFns: { claude: mergeUserMessage },
-        // ho(ho-1):撤回一条还在 CLI 队列里的合流消息
+        // 撤回一条还在 CLI 队列里的合流消息
         cancelMergedFns: { claude: cancelMergedMessage },
         getToolApprovalSessionId,
         resolveToolApproval,
         getPendingApprovalsForSession,
-        // F14:打开一段对话即预热它的常驻运行时,把冷启动塞进"读上文 + 打字"
+        // 打开一段对话即预热它的常驻运行时,把冷启动塞进"读上文 + 打字"
         // 那几秒里,而不是让用户按下回车之后再等。
         prewarmSession: prewarmClaudeSession,
     },
@@ -175,7 +174,7 @@ const wss = createWebSocketServer(server, {
         // 终端接管一段对话前,先把 chat 那边的常驻 runtime 放掉:一个持有者,
         // 而且 dispose 的收尾保证 transcript 完整落盘,终端 resume 才不会少一截。
         releaseConversation: (providerSessionId) => releaseClaudeSession(providerSessionId),
-        // hm(A3.3):接管命令的 `--permission-mode` 过与对话同一份策略(bypass 名单、root 下的 bypass)。
+        // 接管命令的 `--permission-mode` 过与对话同一份策略(bypass 名单、root 下的 bypass)。
         policeTakeoverPermissionMode: (requestedMode, actorUsername) => {
             const policed = applyServerToolPolicy(requestedMode, [], actorUsername, []);
             if (describeBypassUnderRoot(policed.permissionMode)) {
@@ -202,39 +201,38 @@ const wss = createWebSocketServer(server, {
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 
-// F14:常驻进程被名额挤掉时,给还在看那段对话的人推一条状态帧。
+// 常驻进程被名额挤掉时,给还在看那段对话的人推一条状态帧。
 // claude-sdk 不认识 websocket 层,由组合根接线。
 setRuntimeEvictionNotifier(broadcastRuntimeEvicted);
 
 /**
- * gk:永久删除一条会话之前先收掉它空闲着的常驻 runtime。
- *
- * 2026-09-14 的事故:行和 transcript 删掉之后,常驻 CLI 又活了半小时,被回收时按老路径
- * 写了两行收尾记录,同名文件"复活"成一个空壳。`releaseClaudeSession` 对"回合在飞"
- * 返回 released:false,删除路径据此拒绝(409)。同样由组合根接线 —— providers 不认识 claude-sdk。
+ * 永久删除一条会话之前先收掉它空闲着的常驻 runtime:否则行和 transcript 删掉之后常驻 CLI
+ * 还活着,被回收时会往原路径写收尾记录,同名 transcript 以空壳形式"复活"。
+ * `releaseClaudeSession` 对回合在飞 / 后台任务在跑返回 released:false,删除路径据此拒绝(409)。
+ * 由组合根接线:providers 不依赖 claude-sdk。
  */
 setSessionRuntimeReleaser((providerSessionId) => releaseClaudeSession(providerSessionId));
 
 /**
- * gb:CLI 自己发起的那一轮(后台子代理完成通知、会话内定时任务)交给观测回合接住。
- * 同样由组合根接线 —— claude-sdk 不认识 run 注册表。不接线时行为退回改动前
- * (只计数、丢弃),所以这一行是这个功能的总开关。
+ * CLI 自己发起的那一轮(后台子代理完成通知、会话内定时任务)交给观测回合接住。
+ * 由组合根接线:claude-sdk 不依赖 run 注册表。不接线时这些帧只计数、丢弃,
+ * 所以这一行就是这个功能的总开关。
  */
 setOrphanTurnHook(observeOrphanFrames);
-// hn(B2):runtime 被丢弃(换窗口重建、淘汰、回收)时,它开着的观测回合就地收掉。
+// runtime 被丢弃(换窗口重建、淘汰、回收)时,它开着的观测回合就地收掉。
 setRuntimeDisposedHook(forgetObservedRun);
-// ho(ho-1):合流消息的去向(停止时被撤 / 用户撤回 / 已送达)—— 落库那一行标记、在线端气泡跟着变。
+// 合流消息的去向(停止时被撤 / 用户撤回 / 已送达):落库的那一行打标记,在线端的气泡跟着变。
 setMergedMessageHook(handleMergedMessageEvent);
-// ho(hq-1):后台任务全量表变了 —— 推给正在看这段对话的人(输入框上方的后台任务条)。
+// 后台任务全量表变了:推给正在看这段对话的人(输入框上方的后台任务条)。
 setBackgroundTasksHook(broadcastBackgroundTasks);
-// ho(ho-3):主回合结束后,后台子代理要的审批送给正在看这段对话的人(不接线 = 原来的直接拒)。
+// 主回合结束后,后台子代理要的审批送给正在看这段对话的人(不接线则直接拒绝)。
 setBackgroundApprovalWriterFactory(backgroundApprovalWriter);
 
 // Behind nginx/Caddy the socket address is the proxy's. Opt-in only: trusting
 // X-Forwarded-For unconditionally would let any direct client forge a fresh
 // source IP per request and walk straight through the rate limiters below.
 if (TRUST_PROXY) {
-    // hj(审计 P2-5):`true` 让 req.ip 取 XFF 最左项(客户端可伪造);按层数信任才取对。
+    // `true` 会让 req.ip 取 XFF 最左项(客户端可伪造);按层数信任才取对。
     app.set('trust proxy', trustProxyHops() || 1);
 }
 
@@ -262,45 +260,38 @@ app.use((req, res, next) => {
 });
 
 // CORS: PRISM_CORS_ORIGINS (comma-separated) restricts allowed origins;
-// unset keeps the historical permissive behavior (documented LAN/mobile use).
+// unset allows any origin (documented LAN/mobile use).
 const corsOrigins = (process.env.PRISM_CORS_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
-// gzip/deflate。放在所有路由之前,静态资源和 API 一起覆盖。
-//
-// 值得的理由不在静态资源(866 kB 的入口块传成 253 kB 已经很可观),而在 API:
-// `/api/providers/sessions/:id/messages` 在三千轮的会话上响应体是 42 MB,
-// 未压缩直接过网;transcript 是 JSON,压缩比在 8–15 倍量级。
+// gzip/deflate。放在所有路由之前,静态资源和 API 一起覆盖。主要收益在 API:
+// `/api/providers/sessions/:id/messages` 在长会话上响应体可达几十 MB,transcript 是 JSON,
+// 压缩比在 8–15 倍量级。
 //
 // threshold 1024:比这更小的响应压缩收益抵不过两边的 CPU。
 // 已经压过的内容(Content-Encoding 已设)compression 自己会跳过。
-// hj(审计 P2-1):**下载直传口不压缩。** 压缩会去掉 Content-Length、改成分块传输,
-// 浏览器下载栏就只剩「已下载 XX MB」没有百分比 —— csv / txt / json / md 这类最常下的
-// 文本文件,gw 做的原生进度条一直不生效。下载本来就是要原样落盘的字节,压它没有意义。
+// 下载直传口不压缩:压缩会去掉 Content-Length、改成分块传输,浏览器下载栏就没有百分比;
+// 下载本来就是要原样落盘的字节,压它没有意义。
 app.use(compression({
     threshold: 1024,
-    // 用 originalUrl 不用 path:compression 的 filter 在**第一次写响应时**才调,那时请求已经进了
+    // 用 originalUrl 不用 path:compression 的 filter 在第一次写响应时才调,那时请求已经进了
     // `app.use('/api/downloads', router)`,req.url / req.path 被挂载点剥成了 `/file`。
     filter: (req, res) => ((req.originalUrl || '').startsWith('/api/downloads/') ? false : compression.filter(req, res)),
 }));
 
 app.use(cors({
     ...(corsOrigins.length > 0 ? { origin: corsOrigins } : {}),
-    exposedHeaders: ['X-Refreshed-Token', 'X-Prism-Truncated'],
+    exposedHeaders: ['X-Refreshed-Token', 'X-Prism-Truncated', 'ETag'],
 }));
 
-// dj:/api 一律禁缓存。这些 JSON 响应此前没有任何 Cache-Control 却带着 ETag,
-// 浏览器磁盘缓存会把响应头(含 X-Refreshed-Token 静默续期头)一起存下;后续同
-// URL 命中 304 时,按 RFC 7234 缓存里未被替换的旧头要合并回响应 —— 于是 A 账号
-// 时代缓存下来的续期令牌,能在 B 账号登录后"复活"并把 B 的会话整个换成 A。
-// 线上表现:退出 root 后无论登谁,最终都跳回 root;网络面板只看得到 304,
-// 看不到被合并进来的头,极难排查。三件事一起断根:
-//   * no-store —— 浏览器与合规代理都不再存 /api 响应,毒源断掉;
-//   * Vary: Authorization —— 兜住只认 Vary 的中间层缓存,按用户分键;
-//   * etag 关掉 —— /api 不再产生可供"304 合并"的响应(动态 JSON 上 ETag 本来
-//     就没有收益,反而让历史毒缓存一直靠 304 续命)。静态资源走 express.static
-//     自己的 ETag/Cache-Control,不受这个 app 级开关影响。
+// /api 一律禁缓存。带 ETag 的 JSON 响应若被浏览器缓存,响应头(含 X-Refreshed-Token 静默续期头)
+// 会一起存下;之后同一 URL 命中 304 时,按 RFC 7234 缓存里未被替换的旧头要合并回响应,
+// A 账号缓存下来的续期令牌就会在 B 登录后生效,把 B 的会话换成 A。三件事一起防:
+//   * no-store:浏览器与合规代理都不存 /api 响应;
+//   * Vary: Authorization:兜住只认 Vary 的中间层缓存,按用户分键;
+//   * 关掉 etag:/api 不产生可供 304 合并的响应(动态 JSON 上 ETag 本来就没有收益)。
+//     静态资源走 express.static 自己的 ETag/Cache-Control,不受这个 app 级开关影响。
 // SSE / 预览等自设缓存头的路由在各自 handler 里后写,照旧生效。
 app.set('etag', false);
 app.use('/api', (req, res, next) => {
@@ -309,18 +300,16 @@ app.use('/api', (req, res, next) => {
     next();
 });
 
-// ea:方法隧道 —— 前端把 PATCH/PUT/DELETE 一律作为 POST + X-HTTP-Method-Override
-// 发出,这里在**任何路由之前**把 req.method 改回真实方法。只放行 GET/POST 的
-// 企业代理(用户 Windows 机器实测:定时任务的启停开关 PATCH 发不出去)从此
-// 挡不住这三种请求。见 shared/method-override.ts。必须在所有 router 之前。
+// 方法隧道:前端把 PATCH/PUT/DELETE 一律作为 POST + X-HTTP-Method-Override 发出,这里把
+// req.method 改回真实方法,只放行 GET/POST 的企业代理就挡不住这三种请求。
+// 见 shared/method-override.ts。必须在所有 router 之前。
 app.use('/api', methodOverrideMiddleware());
 // 启动日志留一行:线上排查"隧道到底生效没有"时 grep 这一句即可。
 log.info(`方法隧道已启用:POST + X-HTTP-Method-Override / ?_method → PATCH/PUT/DELETE`);
 
-// dm:慢请求日志。阈值毫秒,PRISM_SLOW_REQUEST_MS 覆盖,0 关闭,默认 2000。
-// 只记一行 —— 方法、路径、状态码、耗时、用户。SSE 常开连接不算慢,跳过。
-// 单线程服务器上,一个 2s 的请求就是所有人排队 2s;这行日志让"最近变卡了"
-// 的排查从猜路由变成看日志。
+// 慢请求日志。阈值毫秒,PRISM_SLOW_REQUEST_MS 覆盖,0 关闭,默认 2000。
+// 只记一行:方法、路径、状态码、耗时、用户;SSE 常开连接不算慢,跳过。
+// 单线程服务器上一个 2s 的请求就是所有人排队 2s,排查卡顿时靠这行日志定位路由。
 const SLOW_REQUEST_MS = (() => {
     const parsed = parseInt(process.env.PRISM_SLOW_REQUEST_MS ?? '', 10);
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : 2000;
@@ -389,16 +378,16 @@ if (recsysProxyRouter) {
 // 从根上杜绝"反代指 8092、服务听 8091"这类两边日志都正常的故障。默认不配=不启动。
 const maService = createMaServiceFromEnv(process.env, console);
 
-// gy:技能优化(SkillWhet)。`PRISM_SKILLWHET_ENABLE=1` 才挂整层;`PRISM_SKILLWHET_AUTOSTART=1`
+// 技能优化(SkillWhet)。`PRISM_SKILLWHET_ENABLE=1` 才挂整层;`PRISM_SKILLWHET_AUTOSTART=1`
 // 再由 Prism 拉起 `whet serve`(照 ma-service 那套:healthz、退避重启、退出一起收)。
-// 不配就一个字不打、一条路由不挂、轨上没有那一格 —— 与 ma / recsys 同一规矩。
+// 不启用时不起服务,/api/skillwhet 只回 404(见下方挂载处),前端轨上也就没有那一格。
 const skillWhetConfig = resolveSkillWhetConfig(process.env, console);
 const skillWhetService = createSkillWhetServiceFromConfig(skillWhetConfig, console, process.env);
-// he:夜训调度器 —— 只在技能优化挂载时跑;一个 skill 都没纳入就什么都不做(D3:默认零纳入)。
+// 夜训调度器 —— 只在技能优化挂载时跑;默认一个 skill 都不纳入,没纳入就什么都不做。
 const skillWhetNightly = skillWhetConfig.enabled
     ? new NightlyScheduler({ client: new SkillWhetClient({ baseUrl: skillWhetConfig.baseUrl, token: skillWhetConfig.token }) })
     : null;
-// hl:SkillWhet home 的 jobs/ 保留策略(PRISM_SKILLWHET_JOBS_RETENTION_DAYS,默认 90 天)—— 只在挂载时起。
+// SkillWhet home 的 jobs/ 保留策略(PRISM_SKILLWHET_JOBS_RETENTION_DAYS,默认 90 天),只在挂载时起。
 let skillWhetJobsPruner = null;
 
 // Public system endpoints (no authentication): GET /health (unchanged) and
@@ -413,17 +402,18 @@ app.use(createSystemPublicRouter({
 // Editor preview reads: GET /preview/:ticket/*. Authorized by a 5-minute
 // ticket in the path because the sandboxed iframe sends no credentials.
 app.use(createPreviewPublicRouter({ rateLimiter: apiRateLimiter }));
-// hj:上面两个公开路由只有 GET、不需要请求体,排在 /api 限流之前 —— /api/ready 是 Docker 的
+// 上面两个公开路由只有 GET、不需要请求体,排在 /api 限流之前:/api/ready 是 Docker 的
 // HEALTHCHECK,同机反代时全员共用一个 IP 桶,排在限流之后的话桶一满健康检查就 429、容器被判不健康。
 
-// hj(审计 P2-3):**限流挪到解析请求体之前**,请求体上限按「像不像登录用户」分两档。
+// /api 限流,排在解析请求体之前。Prism 默认绑 0.0.0.0(手机和局域网里的其他机器要能访问),
+// 限流是这个选择必须配的缓解措施;它也排在 validateApiKey 之前,未认证的洪泛同样受限。
+// 静态资源与 SPA 兜底不限流,只限 API。
 //
-// 原来 50MB 的 JSON 解析排在限流(原第 376 行)和鉴权之前:未登录的请求也能让服务器解析
-// 50MB(实测 34MB 对象体阻塞事件循环 1.25 秒),限流拦不住。现在:
-//   - 先过 /api 限流;
+// 请求体上限按「像不像登录用户」分两档:解析大 JSON 会阻塞事件循环(34MB 对象体约 1.25 秒),
+// 不能让未登录的请求触发。
 //   - 带着能验签的 JWT(或存在的 API key)→ 50MB(保存大文件、长对话要用);
 //   - 其余(未登录、伪造的令牌)→ 1MB,注册 / 登录 / 票据接口都远用不到这么多。
-// 真正的鉴权照旧在各路由上。urlencoded 没有任何接口需要大表单,统一 1MB。
+// 真正的鉴权仍在各路由上。urlencoded 没有任何接口需要大表单,统一 1MB。
 app.use('/api', apiRateLimiter);
 const jsonBodyType = (req) => {
     // Skip multipart/form-data requests (for file uploads like images)
@@ -436,14 +426,6 @@ app.use((req, res, next) => (hasVerifiableCredential(req) ? largeJsonParser : sm
 app.use(express.urlencoded({ limit: '1mb', extended: true }));
 
 
-
-// Rate limiting on every /api route.
-//
-// Prism binds 0.0.0.0 by default so phones and other LAN machines can reach
-// it; this is the mitigation that choice requires. Deliberately mounted
-// before validateApiKey so unauthenticated floods are capped too. Static
-// assets and the SPA fallback are not limited — only the API surface is.
-// (hj:/api 限流已挪到解析请求体之前,见上。)
 
 // Optional API key validation (if configured)
 app.use('/api', validateApiKey);
@@ -493,7 +475,7 @@ app.post('/api/providers/:provider/sessions/:sessionId/prewarm', authenticateTok
         }
 
         const body = req.body || {};
-        // hn(B2):选择框里是不在目录里 / 已下架的模型 → 不预热(静默;真发消息时 chat.send 会明说)。
+        // 选择框里是不在目录里 / 已下架的模型时不预热(静默;真发消息时 chat.send 会明确报错)。
         if (typeof body.model === 'string' && !(await claudeModelCatalog.isUsable(body.model, modelViewerFor(req.user?.id ?? null, req.user?.username ?? null)))) {
             return res.json({ success: true, warmed: false, reason: 'model_not_allowed' });
         }
@@ -506,8 +488,8 @@ app.post('/api/providers/:provider/sessions/:sessionId/prewarm', authenticateTok
             toolsSettings: body.toolsSettings,
             model: body.model,
             effort: body.effort,
-            // hq:按点开会话的这个人预热(网关 key、「可用人员」、私有模型)—— 否则预热出来的 runtime 用的是默认 key,
-            // 第一条真消息因为网关指纹不同又得重建一次;私有模型 / 限人模型干脆预热失败
+            // 按点开会话的这个人预热(网关 key、「可用人员」、私有模型):否则预热出来的 runtime 用的是默认 key,
+            // 第一条真消息因为网关指纹不同又得重建一次,私有模型 / 限人模型则直接预热失败。
             actorUserId: req.user?.id ?? null,
             actorUsername: req.user?.username ?? null,
         });
@@ -523,12 +505,8 @@ app.post('/api/providers/:provider/sessions/:sessionId/prewarm', authenticateTok
  * GET  /api/providers/:provider/sessions/:sessionId/runtime
  * POST /api/providers/:provider/sessions/:sessionId/runtime/release
  *
- * ef:「常驻会话」从**猜**变成**可读可控**。
- *
- * 顶栏原来靠前端自己记"我这一页见过它在跑"来显示常驻状态 —— 刷新即忘,而且
- * 只能显示、不能关。这两个接口把常驻池的实情交出去:GET 报在不在 / 忙不忙 /
- * 哪个模型 / 空闲多久,POST release 释放(正在跑的回合不释放,照实回 reason)。
- * 打开常驻走既有的 prewarm 接口,不再另开一个。
+ * 顶栏「常驻会话」的状态与开关。GET 照实报常驻池的情况:在不在 / 忙不忙 / 哪个模型 / 空闲多久;
+ * POST release 释放(正在跑的回合不释放,照实回 reason)。打开常驻走 prewarm 接口。
  *
  * 归属校验与 prewarm 同一套:能看见这段会话才能查、才能释放。
  */
@@ -537,10 +515,8 @@ app.get('/api/providers/:provider/sessions/:sessionId/runtime', authenticateToke
         return res.json({ success: true, resident: false, reason: 'unsupported_provider' });
     }
     try {
-        // 归属校验用的是**应用侧会话 id**(即路由参数)。会话行的主键列叫
-        // `session_id`,行上根本没有 `id` —— eh 之前这里写成 `session.id`,
-        // 于是永远拿 undefined 去校验、永远 404,前端把它读成"未常驻":
-        // 点开常驻成功了,菜单里那行还是显示「未开」。
+        // 归属校验用应用侧会话 id(即路由参数)。会话行的主键列叫 `session_id`,行上没有 `id`;
+        // 拿 `session.id` 去校验永远是 undefined、永远 404,前端会把它读成"未常驻"。
         const appSessionId = String(req.params.sessionId || '');
         const session = sessionsDb.getSessionById(appSessionId);
         if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
@@ -584,8 +560,8 @@ app.post('/api/providers/:provider/sessions/:sessionId/runtime/release', authent
 });
 
 /**
- * ho(hq-1):后台任务条 —— 停掉一个后台任务 / 把正在跑的前台命令转到后台。
- * 归属校验与上面 runtime 状态同一套:能看见这段会话才能动它的任务(与"谁都能按停止"同口径)。
+ * 后台任务条(停掉一个后台任务 / 把正在跑的前台命令转到后台)与撤销文件改动共用的会话解析。
+ * 归属校验与上面 runtime 状态同一套:能看见这段会话就能动它的任务(与"谁都能按停止"同口径)。
  */
 function resolveClaudeRuntimeSession(req, res) {
     if (req.params.provider !== 'claude') {
@@ -631,8 +607,8 @@ app.post('/api/providers/:provider/sessions/:sessionId/runtime/background', auth
 });
 
 /**
- * ho(hq-2):非 git 目录「撤销这一轮之后的文件改动」。`dryRun: true`(默认)只列出会动哪些文件。
- * 能看见这段会话就能退 —— 与 git 检查点的还原同口径;有回合在跑时 409。
+ * 非 git 目录「撤销这一轮之后的文件改动」。`dryRun: true`(默认)只列出会动哪些文件。
+ * 能看见这段会话就能退,与 git 检查点的还原同口径;有回合在跑时 409。
  */
 app.post('/api/providers/:provider/sessions/:sessionId/runtime/rewind-files', authenticateToken, async (req, res) => {
     try {
@@ -641,8 +617,8 @@ app.post('/api/providers/:provider/sessions/:sessionId/runtime/rewind-files', au
         const turnUuid = typeof req.body?.turnUuid === 'string' ? req.body.turnUuid : '';
         const dryRun = req.body?.dryRun !== false;
         /*
-         * 复审修正:与预热、git 检查点还原同一套闸门。
-         * - 终端正接管着这段对话 → 不许(没有常驻 runtime 时下面会预热一个 CLI resume 同一段 transcript = 双写);
+         * 与预热、git 检查点还原同一套闸门:
+         * - 终端正接管着这段对话 → 不许(没有常驻 runtime 时下面会预热一个 CLI resume 同一段 transcript,造成双写);
          * - 这段对话在跑 → 409;
          * - 真撤销时同一目录下别的会话 / 一次性回合 / 定时任务在跑 → 409(会和它同时改同一棵树)。
          */
@@ -658,19 +634,19 @@ app.post('/api/providers/:provider/sessions/:sessionId/runtime/rewind-files', au
                 return res.status(409).json({ success: false, ok: false, reason: 'cwd_busy', error: `同一目录下另一段对话(${activeRun.sessionId})正在跑,等它停下再撤销` });
             }
         }
-        // hq:actor —— 没有常驻进程时按点「撤销」的人拉起(网关 key 按人)
+        // 带上操作者:没有常驻进程时按点「撤销」的人拉起(网关 key 按人)。
         const rewindOptions = {
             cwd: session.project_path ?? null,
             runId: session.session_id,
             actorUserId: req.user?.id ?? null,
             actorUsername: req.user?.username ?? null,
         };
-        // 真撤销的回包里 CLI 不列文件(实测 filesChanged 为空)—— 先预览一次拿到会动哪些文件,落 files_reverted 用
+        // CLI 真撤销的回包里不列文件(filesChanged 为空),所以先预览一次拿到会动哪些文件,落 files_reverted 用。
         let previewFiles = null;
         if (!dryRun) {
             const preview = await rewindClaudeFiles(session.provider_session_id, turnUuid, { ...rewindOptions, dryRun: true })
                 .catch((error) => ({ ok: false, reason: 'error', error: error?.message || String(error) }));
-            // 预览都不成(没常驻 / 没开检查点 / 在跑 / 退不了)—— 真撤销也不会成,直接回,别再预热一次(复审三轮)
+            // 预览都不成(没常驻 / 没开检查点 / 在跑 / 退不了)时真撤销也不会成,直接回,别再预热一次。
             if (!preview?.ok) {
                 if (preview?.reason === 'busy') return res.status(409).json({ success: false, ...preview, error: '这段对话正在跑,等这一轮结束再撤销' });
                 return res.json({ success: true, ...preview, dryRun: false });
@@ -684,8 +660,8 @@ app.post('/api/providers/:provider/sessions/:sessionId/runtime/rewind-files', au
         if (!dryRun && result.ok && touched.length > 0) {
             try {
                 const base = session.project_path || '';
-                // 只收撤销后**已经不在了**的文件(这一轮之后新建的)—— 与 git 检查点只收"新增"同口径;
-                // 改过的老文件还在盘上,不能从更早几轮的产出里一起抹掉(复审二轮)
+                // 只收撤销后已经不在了的文件(这一轮之后新建的),与 git 检查点只收"新增"同口径;
+                // 改过的老文件还在盘上,不能从更早几轮的产出里一起抹掉。
                 const removed = touched
                     .map((file) => (path.isAbsolute(file) || !base ? file : path.join(base, file)))
                     .filter((absolute) => !fs.existsSync(absolute));
@@ -717,12 +693,11 @@ app.use('/api/projects', createPreviewRouter({ authenticateToken }));
 // Projects API Routes (protected)
 app.use('/api/projects', authenticateToken, projectModuleRoutes);
 
-// 定时任务(cj 轮):CRUD + 立即运行 + Claude 直建票据通道。
+// 定时任务:CRUD + 立即运行 + Claude 直建票据通道。
 app.use('/api/tasks', createTasksRouter({ authenticateToken }));
 
-// gy:技能优化。未启用时挂一个真 404(JSON)—— 不接的话 /api/skillwhet/* 会掉到 SPA 的
-// catch-all 回 200 + index.html,前端虽然也能把它当"没有"(解析失败兜底),但 curl 排查时
-// 看到一坨 HTML 只会让人以为路由坏了。
+// 技能优化。未启用时挂一个真 404(JSON):不接的话 /api/skillwhet/* 会掉到 SPA 的 catch-all,
+// 回 200 + index.html;前端靠解析失败兜底也能当成"没有",但 curl 排查时看到 HTML 只会以为路由坏了。
 if (skillWhetConfig.enabled) {
     app.use('/api/skillwhet', createSkillWhetRouter({
         authenticateToken,
@@ -743,7 +718,7 @@ app.use('/api/admin', createAdminRouter({
   requireRoot,
   runningVersion: RUNNING_VERSION,
   runningRelease: RUNNING_RELEASE.label,
-  // F6:常驻池快照注入(admin 模块不直接 import claude-sdk.js)。
+  // 常驻池快照注入(admin 模块不直接 import claude-sdk.js)。
   runtimePool: getRuntimePoolStats,
 }));
 
@@ -754,10 +729,10 @@ app.use('/api/assets', authenticateToken, assetsRoutes);
 app.use('/api/attachments', authenticateToken, attachmentUsageRoutes);
 // 过期附件清扫:启动跑一次,之后每小时一轮。只删台账记过的文件。
 startAttachmentSweeper();
-// F8:归档保留期清扫。**默认关**(PRISM_ARCHIVE_RETENTION_DAYS 未配或为 0)——
-// 永久删除不可逆,不能因为升级了一版就悄悄开始删用户的东西。
+// 归档保留期清扫。默认关(PRISM_ARCHIVE_RETENTION_DAYS 未配或为 0):到期的归档会被
+// 永久删除(先进最近删除),这种事必须由运维显式打开。
 startArchiveRetentionSweeper({
-    // gk:归档保留期到点 = 进最近删除(不再直接真删),再过 PRISM_TRASH_RETENTION_DAYS 才清扫。
+    // 归档保留期到点 = 进最近删除(不直接真删),再过 PRISM_TRASH_RETENTION_DAYS 才清扫。
     deleteSession: (sessionId) => sessionsService.deleteOrArchiveSessionById(sessionId, {
         force: true,
         deletedFromDisk: true,
@@ -782,7 +757,7 @@ app.get('/api/claude/context-usage', authenticateToken, async (req, res) => {
     try {
         const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
         if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
-        // 归属校验:相邻的 prewarm 有,这两条 /api/claude/* 当初漏了。
+        // 归属校验与相邻的 prewarm 一致:看不到这段会话就当它不存在。
         if (!canViewerSeeSession(sessionId, readRequestViewer(req))) {
             return res.status(404).json({ error: 'Session not found' });
         }
@@ -812,25 +787,29 @@ app.get('/api/claude/slash-commands', authenticateToken, async (req, res) => {
     }
 });
 
-// Session usage endpoints (protected): fork-point at its original position;
-// token-usage moved up next to it (no route in between matches that path).
+// Usage endpoints (protected): fork-point, token-usage, /api/usage/records and
+// /api/usage/summary. Routers mounted above may run their auth on some of these
+// paths first, but none of them answers them, so the position here does not
+// change which handler responds.
 app.use(createUsageRouter({ authenticateToken }));
 
-// Remaining feature routers, mounted in the pre-refactor order. All are JWT
-// protected except /api/agent (API-key auth for the external agent endpoint).
+// Remaining feature routers. JWT protected except /api/agent (API keys, for the
+// external agent endpoint) and /api/downloads (short-lived download tickets, see
+// below). Where two routers share a prefix, the order below decides which one
+// matches; those spots carry their own comments.
 app.use('/api/commands', authenticateToken, commandsRoutes);
 app.use('/api/settings', authenticateToken, settingsRoutes); // includes notification-preferences
-// ei:会话产出文件读取。必须排在 providerRoutes **前面** —— 那个路由器里有
+// 会话产出文件读取。必须排在 providerRoutes 前面 —— 那个路由器里有
 // `/sessions/:sessionId` 一类的通配段,会把 `/sessions/:id/output` 先吃掉。
 app.use('/api/providers', createSessionOutputsRouter({ authenticateToken }));
 
 /*
- * 「交给浏览器自己下」的直传口。**这三条不带登录态**,认的是一张 5 分钟失效、
+ * 「交给浏览器自己下」的直传口。这三条不带登录态,认的是一张 5 分钟失效、
  * 只指向一个目标的下载票 —— 一次普通导航设不了 Authorization 头,凭据只能进 URL
  * (EventSource 和沙箱预览撞的是同一堵墙,解法也一样)。
  *
- * **必须挂在 /api/downloads,不能挂在 /api/projects 下。** 上面那句
- * `app.use('/api/projects', authenticateToken, projectModuleRoutes)` 是**前缀中间件**,
+ * 必须挂在 /api/downloads,不能挂在 /api/projects 下。 上面那句
+ * `app.use('/api/projects', authenticateToken, projectModuleRoutes)` 是前缀中间件,
  * 排在文件路由前面:任何 /api/projects/... 的请求都要先过它,一条靠票据的链接会被
  * 直接 401,而且失败形态和"票过期"一模一样,极难排查。换个前缀就与注册顺序彻底无关,
  * 顺带把"无认证面"收敛成一个可以一眼数清的前缀。
@@ -841,24 +820,13 @@ app.use('/api/providers', authenticateToken, providerRoutes);
 app.use('/api/agent', agentRoutes);
 
 /*
- * gp:**dist 必须排在 public 前面。**
+ * dist 必须排在 public 前面。否则 `public/` 里任何与构建产物同名的文件都会盖掉真正的应用,
+ * 比如手工拷进去的旧构建(`index.html` + `assets/`):发布包里没有这两个路径,`tar --overwrite`
+ * 删不掉它们。症状是根地址 `/`、`/index.html` 由 public 先答、拿到旧前端,而无扩展名的深链走
+ * 下面的 `app.get('*')` 拿到 dist/index.html,同一台机器"有时新版有时老版"。
  *
- * 这两行原来是反的,于是 `public/` 里任何一个与构建产物同名的文件都会把真正的
- * 应用**盖掉**。2026-09-15 在测试环境上就是这么坏的:`public/` 里躺着一份
- * **2026-09-02 的旧构建**(`index.html` + `assets/`,谁手工拷进去的已不可考),
- * 而发布包里没有这两个路径,`tar --overwrite` 永远删不掉它 ——
- *
- *   - 打开 `http://host:8080/` 或 `/index.html` → public 那层先答 → **两周前的前端**;
- *   - 打开 `/session/xxx` 这种无扩展名深链 → 走到下面的 `app.get('*')` → dist/index.html
- *     → **当天的前端**。
- *
- * 同一台机器上"有时新版有时老版",就是这么来的:取决于你进的是根地址还是深链。
- * 而且 public 这层没有 setHeaders,老快照还是 `max-age=0` + 弱 ETag,
- * 在网络面板里只看得到 200/304,看不出自己吃的是哪一份。
- *
- * 调成 dist 优先之后:构建产物(含 vite 从 public/ 复制进去的那份静态资源)先答,
- * public 只兜底"构建之后才丢进去的文件"。再加 `index: false`,让它连
- * `/` 的目录索引都不接。
+ * dist 优先时,构建产物(含 vite 从 public/ 复制进去的那份静态资源)先答,public 只兜底
+ * "构建之后才丢进去的文件";public 那层再加 `index: false`,连 `/` 的目录索引都不接。
  */
 // Static files after API routes; HTML uncached, hashed assets cached hard.
 app.use(express.static(path.join(APP_ROOT, 'dist'), {
@@ -903,9 +871,9 @@ app.get('*', (req, res) => {
 // global error middleware must be last
 //
 // 错误体形状统一:全站 245 处手写响应都是 `{ error: "<字符串>" }`,而所有前端消费
-// 方(api.js、文件树、侧栏、向导…)读的也都是 `data.error` 当字符串。AppError 这条
-// 分支原先把 `error` 写成 `{code,message,details}` 对象 —— 同名字段一边字符串一边
-// 对象,前端 `data.error` 直接渲染就得到 "[object Object]"。这里对齐成:`error` 恒为
+// 方(api.js、文件树、侧栏、向导…)读的也都是 `data.error` 当字符串。AppError 若把
+// `error` 写成 `{code,message,details}` 对象,同名字段就一边字符串一边对象,前端
+// `data.error` 直接渲染会得到 "[object Object]"。所以这里对齐成:`error` 恒为
 // 字符串(消息),结构化信息放同级的 `code` / `details`。
 app.use((err, req, res, next) => {
   if (err instanceof AppError) {
@@ -917,9 +885,8 @@ app.use((err, req, res, next) => {
     });
   }
 
-  // hj:请求体解析失败(太大 / JSON 写坏 / 编码不认)是客户端的错,不是服务端的 500 ——
-  // body-parser 自己带着 4xx 的 status 和 `type`。原来一律 500 并打一条 ERROR 带堆栈:
-  // 未登录的人发一个超限请求体,日志里就多一条看着像故障的 ERROR。
+  // 请求体解析失败(太大 / JSON 写坏 / 编码不认)是客户端的错,不是服务端的 500:
+  // body-parser 自己带着 4xx 的 status 和 `type`,照它回,也不打 ERROR 日志。
   if (err && typeof err.type === 'string' && typeof err.status === 'number' && err.status >= 400 && err.status < 500) {
     const message = err.type === 'entity.too.large'
       ? 'Request body too large'
@@ -952,9 +919,9 @@ const buildLocalServerMarker = () => ({
 
 // ── Graceful shutdown ────────────────────────────────────────────────────────
 /**
- * hl(静态 P2-25):此前是 8s,而 prism.sh 6s 就 kill -9,两个受管子进程又各串行等 4s ——
- * 两个都开着时数据库关闭那一步永远轮不到。现在:子进程并行停(最多 4s),这里 12s,
- * prism.sh 等 15s;并且硬退出前也会同步关一次数据库(见 hardExitTimer)。
+ * 硬退出窗口 12s:要容得下受管子进程的 TERM 宽限(并行停,最多 4s)和随后的数据库关闭。
+ * prism.sh 在 TERM 之后等 15s 才 kill -9,这个窗口必须比它短。硬退出前也会同步关一次数据库
+ * (见 hardExitTimer)。
  */
 const SHUTDOWN_HARD_EXIT_MS = 12_000;
 let shutdownInProgress = false;
@@ -980,8 +947,8 @@ async function shutdown(signal) {
 
     const hardExitTimer = setTimeout(() => {
         log.error('[Shutdown] Cleanup exceeded time limit — forcing exit');
-        // hl(静态 P2-25):就算前面哪一步卡死了,数据库也要关干净 —— close 是同步的,
-        // 几毫秒的事;不关的话 WAL 留在需要恢复的状态上,下次启动多一次恢复。
+        // 就算前面哪一步卡死了,数据库也要关干净:close 是同步的,几毫秒的事;
+        // 不关的话 WAL 留在需要恢复的状态上,下次启动多一次恢复。
         try { stopDatabaseBackups(); closeConnection(); } catch (err) {
             log.error('[Shutdown] database close on hard exit failed:', err?.message || err);
         }
@@ -1005,9 +972,9 @@ async function shutdown(signal) {
         wss.close();
     });
 
-    // F14c:优雅关停(部署重启)时,给每个**在跑**的会话补一条「回合被中断」——
-    // 落进显示日志,重启后打开会话即见,且它是收尾错误行,cb 轮的「重发上一条
-    // 消息」按钮会自动出现,一键续上。强杀(kill -9)写不了,认了。
+    // 优雅关停(部署重启)时,给每个在跑的会话补一条「回合被中断」,落进显示日志:
+    // 重启后打开会话即见;它是收尾错误行,「重发上一条消息」按钮会自动出现,一键续上。
+    // 强杀(kill -9)时写不了。
     await shutdownStep('task scheduler stop', () => stopTaskScheduler());
 
     await shutdownStep('interrupted-run markers', () => {
@@ -1050,15 +1017,15 @@ async function shutdown(signal) {
     await shutdownStep('sessions watcher close', () => closeSessionsWatcher());
     // 受管子进程(营销诊断、SkillWhet serve)。放在这儿(而不是最后)是因为它们可能正在
     // 跑一单几十分钟的活,SIGTERM 之后要给一点收尾时间,别挤到硬退出的窗口末尾去。
-    // hl(静态 P2-25):**并行**停 —— 各自最多等 4s TERM 宽限,串行就是 8s,数据库关闭
-    // 那步永远轮不到。夜训调度器只是清定时器,顺带并进来。
+    // 并行停:各自最多等 4s TERM 宽限,串行就是 8s,会挤掉数据库关闭那一步。
+    // 夜训调度器与作业清理只是清定时器,顺带并进来。
     await shutdownStep('child services stop', () => Promise.allSettled([
         shutdownStep('ma service stop', () => maService?.stop()),
         shutdownStep('skillwhet nightly stop', () => skillWhetNightly?.stop()),
         shutdownStep('skillwhet jobs pruner stop', () => skillWhetJobsPruner?.stop()),
         shutdownStep('skillwhet service stop', () => skillWhetService?.stop()),
     ]));
-    // Runtime services — the same set the pre-refactor handler stopped.
+    // Local server marker (local-server.json in the data dir).
     await shutdownStep('server marker removal', () => removeLocalServerMarker(LOCAL_SERVER_MARKER_PATH));
     // Database last so every step above could still use it. Stop the backup
     // timer first — an incremental `db.backup()` firing mid-close would reopen the handle.
@@ -1072,23 +1039,19 @@ process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
 
 /**
- * 进程级兜底。**这是一台多用户服务器**,一个人的一次意外不该把所有人的会话、
- * 终端和定时任务一起带走。
+ * 进程级兜底。这是一台多用户服务器,一个人的一次意外不该把所有人的会话、终端和定时任务一起带走。
+ * Node 的 `--unhandled-rejections` 默认是 `throw`:不挂这两个监听器,任何一个没 catch 的
+ * promise、任何一个没挂监听器的流 error 都会让整个进程退出。
  *
- * package.json 要求 node >= 22,而 Node >= 15 的 `--unhandled-rejections` 默认是
- * `throw` —— 也就是说在补上这两条之前,任何一个没 catch 的 promise、任何一个没挂
- * 监听器的流 error,都是**整机退出**。
- *
- * 两种事故分开对待(hl,静态 P1-13):
+ * 两种情况分开对待:
  *
  * - `uncaughtException`:同步栈上抛出来没人接,状态已经不可信(半开的事务、半写的
- *   transcript)。带着不可信的状态继续服务,比重启一次更糟 —— 走 `shutdown()` 退出,
- *   让数据库、备份定时器、子进程收尾(裸崩会把 WAL 留在需要恢复的状态上),然后交给
- *   prism.sh 的守护循环拉起来。`shutdown` 自己有硬退出窗口,所以不会卡死在这里。
- * - `unhandledRejection`:**只记日志,不退出。** 一个没 catch 的 promise 几乎总是某个
- *   请求 / 某个会话自己的事(它那条链路已经断了),让所有人一起断线并不能让谁的状态
- *   更可信 —— 而在 Node 22 的默认下它和 uncaughtException 同样是整机退出。审计时线上
- *   多次"全员掉线"都是这一类。日志里带 `[UNHANDLED]` 前缀,排障时 grep 它。
+ *   transcript),带着它继续服务比重启一次更糟。走 `shutdown()` 退出,让数据库、备份定时器、
+ *   子进程收尾(裸崩会把 WAL 留在需要恢复的状态上),再交给 prism.sh 的守护循环拉起来。
+ *   `shutdown` 自己有硬退出窗口,不会卡死在这里。
+ * - `unhandledRejection`:只记日志,不退出。没 catch 的 promise 几乎总是某个请求 / 某个会话
+ *   自己的事(它那条链路已经断了),让所有人一起断线并不能让谁的状态更可信。日志带
+ *   `[UNHANDLED]` 前缀,排障时 grep 它。
  */
 const fatal = (kind) => (error) => {
   log.error(`[FATAL] ${kind}:`, error);
@@ -1125,11 +1088,6 @@ function warnAboutStalePublicBuild() {
 
 async function startServer() {
     try {
-        // Data-dir migration safety net: the effective call runs in load-env.js
-        // before any import can open the auth DB; this one is an idempotent
-        // no-op unless startup order ever changes.
-        migrateLegacyDataDir();
-
         // Initialize authentication database
         await initializeDatabase();
 
@@ -1139,27 +1097,22 @@ async function startServer() {
         backfillProjectOwners();
 
         /**
-         * gk:最近删除的清扫。默认 30 天(PRISM_TRASH_RETENTION_DAYS;显式 0 = 永不自动清)。
+         * 最近删除的清扫。默认 30 天(PRISM_TRASH_RETENTION_DAYS;显式 0 = 永不自动清)。
          * 启动跑一次(停机期间积压的最多),之后每 6 小时一轮。
          *
-         * **必须在 initializeDatabase 之后** —— 第一件事就是查 `session_trash`。
-         * 放在模块顶层时,首次升级那一次开机它必定撞 `no such table` 并被吞掉,
-         * 于是"启动跑一次"在最需要它的那一次(升级后第一次开机)从来没跑过。
+         * 必须在 initializeDatabase 之后:第一件事就是查 `session_trash`。放在模块顶层的话,
+         * 升级后第一次开机会撞上 `no such table` 并被吞掉,"启动跑一次"就落空了。
          */
         startTrashSweeper();
 
         /*
-         * gp:`public/` 里如果躺着一份旧构建,开机时喊一声。
-         *
-         * 挂载顺序已经改成 dist 优先(见上面那段),所以这份残留不再能盖掉应用;
-         * 但它仍然是"部署包永远删不掉、又占着盘"的东西 —— 而且下次谁把顺序改回去,
-         * 症状会一模一样地回来(根地址是两周前的前端,深链是新的)。
-         * 与其让人再查一次,不如开机就把路径念出来。
+         * `public/` 里如果躺着一份旧构建,开机时把路径报出来。dist 排在 public 前面(见静态资源挂载处),
+         * 这份残留盖不掉应用,但发布包删不掉它、又占着盘;一旦挂载顺序被改回去,根地址就会变成旧前端。
          */
         warnAboutStalePublicBuild();
 
-        // F14:给「回合跑到一半被重启打断」的会话补一条「请重发」标记。
-        // **必须在这一刻做** —— 判据是"日志最后一条是用户消息",而正在流式输出
+        // 给「回合跑到一半被重启打断」的会话补一条「请重发」标记。
+        // 必须在这一刻做 —— 判据是"日志最后一条是用户消息",而正在流式输出
         // 的会话看起来一模一样;进程刚起来时不存在这种会话,晚一秒都可能误伤。
         markInterruptedTurnsOnStartup();
 
@@ -1174,8 +1127,8 @@ async function startServer() {
             log.warn('');
         }
 
-        // hj(审计 P0-2):名单里**还没注册**的名字,谁先注册谁就是 root(注册即 approved)。
-        // 部署时写好名单、本人还没来注册的那段时间,这是一个谁都能捡的管理员位。
+        // 名单里还没注册的名字,谁先注册谁就是 root(注册即 approved)。部署时写好名单、本人还没来
+        // 注册的那段时间,这是一个谁都能捡的管理员位,所以启动时逐个提醒。
         for (const rootName of listRootUsernames()) {
             if (!userDb.getUserByUsername(rootName)) {
                 log.warn(`PRISM_ROOT_USERS 里的「${rootName}」还没有注册(或已停用)—— 谁先用这个名字注册,谁就是管理员。请本人尽快注册,或从名单里去掉。`);
@@ -1186,7 +1139,7 @@ async function startServer() {
         const distIndexPath = path.join(APP_ROOT, 'dist', 'index.html');
         const isProduction = fs.existsSync(distIndexPath);
 
-        // v2.0.0:第一眼就知道跑的是哪个版本(部署后核对用)
+        // 先打出运行中的版本(部署后核对用)。
         log.info(`Prism ${RUNNING_RELEASE.label ?? '(版本号读不到)'}`);
         log.info(`Using Claude Agents SDK for Claude integration`);
         log.raw('');
@@ -1225,7 +1178,7 @@ async function startServer() {
             /**
              * 清掉 Prism 自己跑 CLI 留下的幽灵项目行(目前只剩模型探测那一种)。
              *
-             * 忽略判据只挡住"新的进不来",挡不住**已经在库里的** —— 侧栏是直接
+             * 忽略判据只挡住"新的进不来",挡不住已经在库里的 —— 侧栏是直接
              * 读表的。这一步按真实路径清账,每次启动跑一次(判据很窄,平时是空转)。
              */
             try {
@@ -1240,7 +1193,7 @@ async function startServer() {
                 log.warn('Could not write local server marker:', error.message);
             });
 
-            // 启动横幅走 log.raw():这几行的**排版本身就是内容**,
+            // 启动横幅走 log.raw():这几行的排版本身就是内容,
             // 每行前面挂上时间戳和级别只会把框线冲垮。日志分级管的是流水,
             // 不管这种一次性的招牌。
             log.raw('');
@@ -1253,18 +1206,17 @@ async function startServer() {
             log.raw(`${c.tip('[TIP]')}  Run "prism status" for full configuration details`);
             log.raw('');
 
-            // hl 复核(P3):下面各段各自兜底、互不连坐 —— 会话监听起不来,营销诊断 / 技能优化 /
-            // 作业清理照样要起(见 utils/startup-step.js)。
-            // 受管子进程先发起(不 await:它们要等 healthz,慢的时候几十秒,不该拖着启动流程;
-            // 起不来也只是对应的 /api/ma/*、/api/skillwhet/* 不可用,Prism 其余功能不受影响)。
-            // hm:~/.claude/settings.json 自检(只 warn,不改文件;日志前缀「claude 设置自检」)。
+            // 下面各步各自兜底、互不连坐:会话监听起不来,营销诊断 / 技能优化 / 作业清理照样要起
+            // (见 utils/startup-step.js)。受管子进程不 await:它们要等 healthz,慢的时候几十秒,
+            // 不该拖着启动流程;起不来也只是对应的 /api/ma/*、/api/skillwhet/* 不可用。
+            // ~/.claude/settings.json 自检只 warn,不改文件(日志前缀「claude 设置自检」)。
             await runStartupStep('claude settings self-check', () => runClaudeSettingsSelfCheck(log), log);
-            // hq(复审 P1):上一个进程留下的带 key 的 flag 设置文件(它的 CLI 子进程早已退出)
+            // 清掉上一个进程留下的带 key 的 flag 设置文件(它的 CLI 子进程早已退出)。
             await runStartupStep('flag settings sweep', () => {
                 const removed = sweepStaleFlagSettingsFiles();
                 if (removed > 0) log.info(`[网关] 清掉上一个进程留下的 ${removed} 个 flag 设置文件`);
             }, log);
-            // hn(B1):模型目录首次播种(按 settings.json 的别名映射;播过一次就不再播,见 seedModelCatalogOnce)。
+            // 模型目录首次播种(按 settings.json 的别名映射;播过一次就不再播,见 seedModelCatalogOnce)。
             await runStartupStep('model catalog seed', async () => {
                 const { seeded, added } = await seedModelCatalogOnce();
                 if (seeded) {
@@ -1274,7 +1226,7 @@ async function startServer() {
                 }
             }, log);
             void runStartupStep('ma service start', () => maService?.start(), log);
-            // gy:技能优化的 serve 同样不 await、起不来只影响 /api/skillwhet/*。
+            // 技能优化的 serve 同样不 await,起不来只影响 /api/skillwhet/*。
             void runStartupStep('skillwhet service start', () => skillWhetService?.start(), log);
             await runStartupStep('skillwhet nightly start', () => skillWhetNightly?.start(), log);
             await runStartupStep('skillwhet jobs pruner start', () => {

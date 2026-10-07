@@ -9,24 +9,20 @@ import {
 } from './messageWindow';
 
 /**
- * ga(回归):**位置恢复被控制器自己的跟底写掐死。**
+ * 回归:位置恢复不能被控制器自己的跟底写掐掉。
  *
- * fz 给 `stepScrollRestore` 加了第四条放弃条件"等待期间用户滚过了就让位",
- * 理由写的是「恢复期间我们一个 scrollTop 都不写,所以不会有程序化滚动混进来」。
- * 那句话是错的:恢复挂在 `wait` 上时 `followBottom` 仍是 true,控制器每次
- * commit 都在写 `scrollTop = scrollHeight`,浏览器随之派发 scroll,
- * `handleScroll` 把"用户滚过了"置真 —— 下一次 commit 直接放弃。
- * **只要恢复需要等超过一帧,就必然被自己掐死。**
+ * `stepScrollRestore` 有一条放弃条件"等待期间用户滚过了就让位"。恢复挂在 `wait` 上时
+ * `followBottom` 仍是 true,控制器每次 commit 都在写 `scrollTop = scrollHeight`,浏览器随之
+ * 派发 scroll;如果 `handleScroll` 把这种事件也算成"用户滚过了",下一次 commit 就会直接放弃,
+ * 只要恢复需要等超过一帧就必然失败。
  *
- * 上一轮的教训是"手搓一个字面量喂给纯函数不算证明"。所以这里不单测判据,
- * 而是把**控制器 + 滚动事件这一对**照真实顺序跑一遍:
+ * 只拿手写的字面量喂纯函数证明不了这件事,所以这里把控制器 + 滚动事件这一对照真实顺序跑一遍:
  *
  *   commit → stepScrollRestore → (wait) → 跟底写 scrollTop → 派发 scroll
  *   → handleScroll 决定 userMoved → 下一次 commit …
  *
  * `simulate` 就是这条循环的骨架,两个写点都按真实代码那样"写完读回来记账"。
- * 把 `isUserInitiatedScroll` 换回 fz 那条"有事件就算用户滚的",第一个用例
- * 立刻红 —— 这才是这条修复的反证。
+ * 把 `isUserInitiatedScroll` 换成"有事件就算用户滚的",第一个用例立刻红。
  */
 
 type FakeContainer = {
@@ -51,9 +47,9 @@ type SimulateOptions = {
   spotRowKey: string;
   /** 每次 commit 时这些行的标识。 */
   rowKeysAt: string[][];
-  /** 用户在第几次 commit **之后**自己滚了一下(0 起),-1 = 从不。 */
+  /** 用户在第几次 commit 之后自己滚了一下(0 起),-1 = 从不。 */
   userScrollsAfterCommit?: number;
-  /** 判断"这一下是谁滚的"用的函数 —— 反证时可以换成 fz 那个版本。 */
+  /** 判断"这一下是谁滚的"用的函数;反证时换成别的实现,看断言会不会红。 */
   decideUserScrolled?: (scrollTop: number, lastProgrammatic: number | null) => boolean;
 };
 
@@ -155,7 +151,7 @@ describe('位置恢复 × 控制器跟底写(真实顺序)', () => {
     expect(result.finalScrollTop).not.toBe(4300);
   });
 
-  it('反证:换回 fz 那条"有滚动事件就算用户滚的",同一条路立刻放弃', () => {
+  it('反证:换成"有滚动事件就算用户滚的",同一条路立刻放弃', () => {
     const result = simulate({
       rowCounts: STAGED_ROWS,
       spotRowKey: 'row-40',

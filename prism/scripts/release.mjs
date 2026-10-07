@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Prism 发版脚本(v2.0.0 起)。规则见 scripts/release-lib.mjs 与项目文档《版本号规范》。
+ * Prism 发版脚本。规则见 scripts/release-lib.mjs 与项目文档《版本号规范》。
  *
  *   node scripts/release.mjs fingerprint [--root <目录>]
  *       打印一棵树的三个指纹(依赖 / schema / migrations)。部署前在服务器上对一下,就知道要不要装依赖、备份库。
@@ -55,7 +55,7 @@ function argValue(name) {
   const index = process.argv.indexOf(name);
   if (index < 0) return undefined;
   const value = process.argv[index + 1];
-  // 复审(P3):`--date` 后面忘了写值时,别把下一个参数吞进来、也别悄悄当没给
+  // 选项后面漏写值时报错:既不把下一个参数当成值吞掉,也不悄悄当作没给
   if (value === undefined || value.startsWith('--')) fail(`${name} 后面要跟一个值`);
   return value;
 }
@@ -69,7 +69,7 @@ function previousRelease(version) {
   const tagged = git(['rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`], { allowFail: true })?.trim() || null;
   const head = git(['rev-parse', 'HEAD']).trim();
   if (tagged && tagged !== head) fail(`${tag} 已经发过(标签指着 ${tagged.slice(0, 7)},不是 HEAD)—— 号不复用,换一个版本号`);
-  // 复审(P3):浅克隆 / 标签没拉全时会悄悄当成「第一个版本」放行(上一版、升级标记都成 null)—— 直接拦下
+  // 浅克隆里标签可能不全,会被误当成「第一个版本」放行(上一版、升级标记都成 null),所以直接拦下
   if (git(['rev-parse', '--is-shallow-repository']).trim() === 'true') fail('这是浅克隆,找不全上一版 —— 先 git fetch --unshallow --tags');
   const merged = git(['tag', '--merged', 'HEAD', '--list', 'v*']).split('\n').filter(Boolean);
   const previousTag = pickPreviousTag(merged, version);
@@ -218,7 +218,7 @@ function fingerprint() {
       return null;
     }
   };
-  // 复审(P3):在子目录里跑(或 --root 指错)时别悄悄打出一排 null
+  // 在子目录里跑(或 --root 指错)时直接报错,而不是打出一排 null
   if (readFile('package.json') == null) fail(`${root} 下没有 package.json —— 在 Prism 的安装目录里跑,或用 --root 指过去`);
   const prints = treeFingerprints(readFile);
   let version = null;

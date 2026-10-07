@@ -9,8 +9,8 @@ import type { SkillWhetData } from '../SkillWhetPage';
 import { Badge, type Tone } from './StatusStrip';
 
 /**
- * gy:经验 Wiki(只读)—— 每个副本 `.evo/wiki/` 里的 patterns 与 logs。
- * 第一期没有训练,这里多半是空的;bootstrap 之后才会有内容。写入是训练的事,不在页面上编辑。
+ * 经验 Wiki(只读):每个副本 `.evo/wiki/` 里的 patterns 与 logs。
+ * 训练过才有内容;写入是训练的事,不在页面上编辑。
  */
 const STATUS_TONE: Record<WikiStatus, Tone> = { supported: 'ok', hypothesis: 'muted', disputed: 'warn', retired: 'muted' };
 const STATUS_ORDER: WikiStatus[] = ['supported', 'hypothesis', 'disputed', 'retired'];
@@ -28,8 +28,8 @@ function useStatusLabel() {
 }
 
 /**
- * he:每条经验一张卡 —— 状态(假设 / 已证实 / 有争议 / 已退休)、范围、反例、修订号。
- * 已退休的默认不显示(它们也不再进提议模型的提示)。0.4.x 的 serve 不回 index,退回原来的纯文本卡。
+ * 每条经验一张卡:状态(假设 / 已证实 / 有争议 / 已退休)、范围、反例、修订号。
+ * 已退休的默认不显示(它们也不再进提议模型的提示)。0.4.x 的 serve 不回 index,退回纯文本卡。
  */
 function PatternCard({ p }: { p: WikiPattern }) {
   const { t } = useTranslation('skillwhet');

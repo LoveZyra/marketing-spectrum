@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { authenticatedFetch } from '../../../utils/api';
 
 /**
- * gy:技能优化整层挂没挂上。
+ * 技能优化整层是否启用。
  *
  * 服务端 `PRISM_SKILLWHET_ENABLE` 不配 → 路由不存在 → `/api/skillwhet/status` 404;
  * 轨上那一格与移动端顶部标签都据此不画。答案在一次会话生命周期里不会变
@@ -49,13 +49,6 @@ export function loadSkillWhetStatus(force = false): Promise<SkillWhetStatus> {
     return status;
   });
   return cache.inflight;
-}
-
-/** 测试用:清掉缓存。 */
-export function resetSkillWhetStatusCache(): void {
-  cache.status = null;
-  cache.loaded = false;
-  cache.inflight = null;
 }
 
 export function useSkillWhetStatus(): { status: SkillWhetStatus | null; loaded: boolean; reload: () => Promise<SkillWhetStatus> } {

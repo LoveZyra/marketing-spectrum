@@ -4,12 +4,10 @@ import type { Pluggable } from 'unified';
 /**
  * KaTeX, loaded only for content that actually contains maths.
  *
- * `katex.mjs` is ~594 kB — after the syntax highlighter, the largest thing that
- * was in the entry chunk — and it was pulled in by two `remarkMath` /
- * `rehypeKatex` imports so that the small minority of messages containing `$x$`
- * would render. Now the plugins (and the stylesheet, which also drags font
- * files) are fetched the first time a message needs them, and the module-level
- * promise means every later message reuses that one fetch.
+ * `katex.mjs` is ~600 kB and only a small minority of messages contain `$x$`,
+ * so the plugins (and the stylesheet, which also drags font files) are fetched
+ * the first time a message needs them; the module-level promise means every
+ * later message reuses that one fetch.
  */
 
 type MathPlugins = { remarkMath: Pluggable; rehypeKatex: Pluggable };
@@ -23,7 +21,7 @@ export function loadKatexPlugins(): Promise<MathPlugins> {
       import('remark-math'),
       import('rehype-katex'),
       // The stylesheet is injected at runtime, which puts it after index.css in
-      // the cascade — the same order the static import in main.jsx guaranteed.
+      // the cascade so it can override the Tailwind layers.
       import('katex/dist/katex.min.css'),
     ]).then(([remark, rehype]) => {
       loaded = {

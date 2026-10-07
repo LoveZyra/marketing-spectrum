@@ -13,9 +13,9 @@ type Props = {
 };
 
 /**
- * 编辑器标签条(F10)。
+ * 编辑器标签条。
  *
- * 只在开着**两个以上**文件时出现 —— 一个标签的标签条只是白占一行高度,而侧栏
+ * 至少开着两个文件才出现 —— 只有一个标签的标签条白占一行高度,而侧栏
  * 编辑器本来就窄。
  *
  * 中键点击关闭(与浏览器、VS Code 一致);标签上的 ✕ 只在悬停或活动时显形,
@@ -23,7 +23,7 @@ type Props = {
  */
 export default function EditorTabs({ files, activePath, onSelect, onClose }: Props) {
   const { t } = useTranslation('codeEditor');
-  // hl(P3 文件组):活动标签有未保存改动时画 ●(只有活动标签挂着编辑器,后台标签没有脏态)。
+  // 活动标签有未保存改动时画 ●(只有活动标签挂着编辑器,后台标签没有脏态)。
   const dirty = useSyncExternalStore(subscribeEditorDirty, isEditorDirty, () => false);
   if (files.length < 2) return null;
 

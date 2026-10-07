@@ -27,21 +27,14 @@ const SESSION_ROW_COLUMNS =
 const SQLITE_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
 /**
- * ga:**同一个项目,可能写成两个不一样的字符串。**
+ * 同一个项目可能写成两个不同的字符串:app 行存的是调用方给的路径,监视器那一行取的是
+ * CLI 子进程的 `process.cwd()`,符号链接已被内核解析掉。项目路径里只要有一段是软链
+ * (`/home` → `/var/home`、macOS 的 `/tmp`、工作区挂载到别处),原样字符串比就会把真正的
+ * 监视器合并误判成跨项目:`provider_session_id` 一直是 NULL,每一轮都是没有上文的新对话,
+ * 工具审批、预热、终端接管、编辑重跑全部失效,用户侧没有任何提示。
  *
- * `assignProviderSessionId` 的"同项目才合并"判据原来是原样字符串比,而两边的
- * 来源根本不是一处:app 行存的是调用方给的路径,监视器那一行取的是 CLI 子进程
- * 的 `process.cwd()` —— **内核已经把符号链接解析掉了**。只要项目路径里有任何
- * 一段是软链(`/home` → `/var/home`、macOS 的 `/tmp`、把工作区挂到别处的部署),
- * 两行就是"同一个项目、不同的字符串",于是真正的监视器合并被判成跨项目攻击。
- *
- * 误挡的后果比漏挡更严重:`provider_session_id` 永远是 NULL → 每一轮都是一段
- * 全新对话,模型完全没有上文;工具审批点不动、预热 / 终端接管 / 编辑重跑全部
- * 永久失效,而用户侧零提示。
- *
- * 所以先规范化字符串,再落到盘上解一次软链;路径不存在(测试、项目已删)时
- * realpath 会抛,退回规范化后的字符串比 —— 判据只会比原来更宽,不会更松到
- * 让"两个真的不同的项目"相等。
+ * 所以先规范化字符串,再落盘解一次软链;路径不存在(测试、项目已删)时 realpath 会抛,
+ * 退回规范化后的字符串比。两个真正不同的项目不会因此被判成相等。
  */
 function realProjectPath(projectPath: string): string {
   try {
@@ -52,7 +45,7 @@ function realProjectPath(projectPath: string): string {
 }
 
 function isSameProjectPath(a: string | null, b: string | null): boolean {
-  // gh:任一侧为空就不算同一项目 —— 两个还没归属的行不该因为"都是空"被并成一行。
+  // 任一侧为空就不算同一项目:两个还没归属的行不该因为都是空被并成一行。
   if (!a || !b) return false;
   if (a === b) return true;
   const normalizedA = normalizeProjectPath(a);
@@ -131,20 +124,13 @@ export const sessionsDb = {
 
     if (existing) {
       /**
-       * fj:**不再把 `isArchived` 写回 0。**
-       *
-       * 这是"磁盘发现会话"的 upsert,watcher 的每个 `change` 事件都会走到这里。
-       * 无条件解档的后果:
-       *   1. 归档面板里的会话是可以直接点开的,而打开任意会话 400ms 后会发
-       *      prewarm、prewarm 跑 `claude --resume` —— 按本仓自己的注释,它"会碰
-       *      一下这个 JSONL 的 mtime 却不追加任何消息" → chokidar `change`
-       *      → 这里 → **它自己跑回了活跃列表**;
-       *   2. 归档一条正在流式输出的会话,transcript 持续追加,3 秒内必然被重新
-       *      索引解档。
-       * 用户把会话丢进回收站只是想再看一眼内容,回来发现它又在侧栏里,反复归档也没用。
-       *
-       * 复活改由调用方显式做(`updateSessionIsArchived(id, false)`)。
-       * `projectsDb.createProjectPath` 的 ON CONFLICT 早就是这个写法,这里是对齐它。
+       * 这里不碰 `isArchived`。这是"磁盘发现会话"的 upsert,watcher 的每个 `change` 事件都会
+       * 走到这里;若顺手解档,归档就形同虚设:
+       *   1. 打开归档会话 400ms 后会 prewarm,`claude --resume` 会碰 JSONL 的 mtime 却不追加
+       *      消息 → chokidar `change` → 这里 → 会话自己跑回活跃列表;
+       *   2. 正在流式输出的会话被归档后,transcript 持续追加,很快就会被重新索引解档。
+       * 解档由调用方显式调 `updateSessionIsArchived(id, false)`,与 `projectsDb.createProjectPath`
+       * 的 ON CONFLICT 写法一致。
        */
       cachedPrepare(db,
         `UPDATE sessions SET
@@ -210,10 +196,9 @@ export const sessionsDb = {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
 
-    // owner 必须在这里落下去。`createProjectPath` 的第三参默认 null,而 null 的
-    // 含义是"无主"(2026-08-14 起:非公共目录仅 root 可见,公共目录下全员可见)——
-    // 少传这一个参数,新项目要么创建者自己都看不见,要么意外对全服务器公开。
-    // 已存在的项目走 ON CONFLICT,owner 不会被改;所以**第一次落行就得带对 owner**。
+    // owner 必须在这里落下去。`createProjectPath` 的第三参默认 null,即"无主"(非公共目录
+    // 仅 root 可见,公共目录下全员可见);少传它,新项目要么创建者自己看不见,要么对全服务器公开。
+    // 已存在的项目走 ON CONFLICT,owner 不会被改,所以第一次落行就得带对 owner。
     projectsDb.createProjectPath(normalizedProjectPath, null, ownerUserId);
 
     cachedPrepare(db,
@@ -233,11 +218,8 @@ export const sessionsDb = {
    * are adopted and the duplicate row is removed. Runs in a transaction so
    * the sidebar can never observe both rows at once.
    *
-   * ga:**返回值 = 这条映射到底落库了没有。** fz 的跨项目守卫走的是 `return`,
-   * 于是"被拒绝"和"写成功了"对调用方长得一模一样 —— 而调用方
-   * (`recordProviderSessionId`)紧跟着照样把映射写进内存,那段代码自己的注释
-   * 写的却是"先落库、成功了再改内存"。内存说有、库里是 NULL,本轮不会有第二帧
-   * 再试,谁都不知道。
+   * 返回值表示映射是否真的落库:合并守卫拒绝时返回 false 而不是抛异常,调用方
+   * (`recordProviderSessionId`)据此决定是否改内存,避免内存里认了映射而库里还是 NULL。
    */
   assignProviderSessionId(sessionId: string, providerSessionId: string): boolean {
     const db = getConnection();
@@ -252,25 +234,17 @@ export const sessionsDb = {
         .get(providerSessionId, providerSessionId, sessionId) as SessionRow | undefined;
 
       /**
-       * fz(安全):**合并只允许发生在同一个项目里。**
+       * 合并只允许发生在同一个项目里。
        *
-       * 这段合并存在的唯一理由写在上面的注释里:文件监视器可能先于本次映射
-       * 把同一份 transcript 索引成了一行 —— 那一行与本行**必然同项目**
-       * (transcript 就落在那个项目目录下)。
-       *
-       * 而这个 DELETE 原本不带任何校验,于是它成了一条越权删除的落点:
-       * 攻击者在自己的会话里把 `newSessionId` 塞成别人的会话 id
-       * (`chat.send` 的 options 当时是整包透传的,见 pickClientRuntimeOptions),
-       * 运行时把这个 id 当成自己的 transcript id 回灌上来,这里就把**别人那一行
-       * 删掉**、并把它的 transcript 路径和名字并进攻击者自己那行。
-       *
-       * 跨项目正是攻击必需的条件(同项目会被 CLI 的 "already in use" 挡掉),
-       * 所以判据用"同项目才合并"既堵死了这条路,又一点不影响真正的监视器场景。
-       * 两处一起改:那边收窄入口,这里收窄后果 —— 只改一处就是又一次只堵一半。
+       * 监视器抢先索引的那一行必然与本行同项目(transcript 就落在项目目录下)。不校验的话,
+       * 这里的 DELETE 就是越权删除的落点:伪造的会话 id 被运行时回灌上来,别人那一行会被删掉,
+       * 其 transcript 路径和名字并进本行。跨项目正是这种攻击的必要条件(同项目会被 CLI 的
+       * "already in use" 挡掉),所以"同项目才合并"既堵住它,又不影响真正的监视器场景。
+       * 入口一侧由 pickClientRuntimeOptions 收窄,两处缺一不可。
        */
       const current = cachedPrepare(db, 'SELECT project_path FROM sessions WHERE session_id = ?')
         .get(sessionId) as { project_path?: string | null } | undefined;
-      // ga:软链会让"同一个项目"写成两个字符串,见 isSameProjectPath。
+      // 软链会让同一个项目写成两个字符串,见 isSameProjectPath。
       const samePath = isSameProjectPath(duplicate?.project_path ?? null, current?.project_path ?? null);
 
       if (duplicate && !samePath) {
@@ -284,16 +258,10 @@ export const sessionsDb = {
       }
 
       /**
-       * gk:**只吞"监视器裸行"。**
-       *
-       * 这段合并存在的唯一理由(见上)是监视器抢先把同一份 transcript 索引成了一行 ——
-       * 那一行的样子是固定的:`session_id = provider_session_id`(按 provider id 建的键)、
-       * 还没有任何显示日志。一条有人聊过的真会话不长这样。
-       *
-       * 此前判据只看"是不是另一行":同项目里任何一条会话,只要它的 id 被这次映射
-       * 认领,就会被连行删掉(显示日志还留着,成了孤儿,启动时被清理 —— 证据也没了)。
-       * 2026-09-14 生产排查时把它列成了一条"理论上能吞掉真会话"的路,这里堵上。
-       * 不满足的一律不删、不并、不认领,只打 warn —— 与跨项目的处理一致。
+       * 只吞"监视器裸行"。监视器抢先建的那一行样子固定:`session_id = provider_session_id`
+       * (按 provider id 建键),且没有任何显示日志;有人聊过的真会话不长这样。
+       * 只看"是不是另一行"的话,同项目里任何一条被认领 id 的会话都会被连行删掉,显示日志成了孤儿。
+       * 不满足条件的一律不删、不并、不认领,只打 warn,与跨项目的处理一致。
        */
       if (duplicate) {
         const bareWatcherRow = duplicate.session_id === duplicate.provider_session_id;
@@ -342,9 +310,9 @@ export const sessionsDb = {
   },
 
   /**
-   * do:只给**还没名字**的会话落名 —— 首条消息时客户端随 options 带来的
+   * 只给还没名字的会话落名 —— 名字是首条消息时客户端随 options 带来的
    * sessionSummary(技能调用会被换成「技能名:参数」)。已有名字(用户改过、
-   * 或早前落过)一律不动,所以它永远不会覆盖人工命名。
+   * 或早前落过)一律不动,所以永远不会覆盖人工命名。
    */
   setSessionCustomNameIfEmpty(sessionId: string, customName: string): void {
     const db = getConnection();
@@ -371,19 +339,17 @@ export const sessionsDb = {
   },
 
   /**
-   * hl(动态 P2-6):**这条会话是谁发起的** —— 显示日志里第一条用户消息的 `senderUserId`。
+   * 这条会话的发起人:显示日志里第一条用户消息的 `senderUserId`。
    *
-   * `sessions` 表没有"创建者"一列(会话挂在项目上,归属看项目)。但归档 / 还原 / 永久删
-   * 需要"这是不是我自己开的对话"这一维:共享项目里协作者开的会话,项目 owner 能删,他自己
-   * 反而不能;反过来协作者却能把别人的会话归档掉(归档是全局的)。
-   * 显示日志的用户行(网页 `origin:'web'`、外部 API `origin:'api'`)都带发送者 id,
-   * 从这里反查,不加列、不迁移。磁盘上发现的老会话没有显示日志 → null(回落到 owner / root)。
+   * `sessions` 表没有创建者一列(会话的归属看项目),而归档 / 还原 / 永久删除需要区分
+   * "是不是我自己开的对话"。显示日志的用户行(网页 `origin:'web'`、外部 API `origin:'api'`)
+   * 都带发送者 id,从这里反查,不用加列。磁盘上发现的会话没有显示日志,返回 null
+   * (权限回落到 owner / root)。
    *
-   * 只扫最前面几十行:第一条用户消息一定在开头;整段读出来解析对长会话是无谓的开销。
+   * 只扫最前面几十行:第一条用户消息一定在开头。
    *
-   * hl 复核:**日志被裁剪过(超上限、最早那批被物理删掉)就返回 null。** 裁剪后剩下的
-   * "第一条用户消息"可能是协作者中途发的,拿它当发起人等于把永久删除权交给了他。
-   * 确定不了首条就按"未知发起人"走保守路径(只剩 owner / root)。
+   * 日志被裁剪过(最早那批已物理删除)时也返回 null:剩下的"第一条用户消息"可能是协作者
+   * 中途发的,拿它当发起人等于把永久删除权交给了他。
    */
   getSessionInitiatorUserId(sessionId: string): number | null {
     const db = getConnection();
@@ -454,49 +420,22 @@ export const sessionsDb = {
   },
 
   /**
-   * Archived rows are intentionally queried separately so the caller can render
-   * them in a dedicated view without reintroducing them into active session lists.
-   */
-  getArchivedSessions(): SessionRow[] {
-    const db = getConnection();
-    const rows = cachedPrepare(db,
-        `SELECT ${SESSION_ROW_COLUMNS}
-         FROM sessions
-         WHERE isArchived = 1
-         ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC`
-      )
-      .all() as SessionRow[];
-
-    return normalizeSessionRows(rows);
-  },
-
-  /**
-   * 归档会话分页 + **可见性下推 SQL**(E10)。
+   * 超过保留期的归档会话,最旧的在前,供归档保留期清扫使用。
+   * 判据下推到 SQL:取最新的一页回来再按 cutoff 过滤,永远够不到该清的那些
+   * (见 archive-retention.service 的说明)。
    *
-   * 原来是"全表捞回来 → 每行跑一次 canViewerSeeSession"。那一次判定自己又要
-   * 三次查询(会话行 / 项目行 / 授权名单),归档攒到几百条,打开一次归档面板
-   * 就是上千次查询;而且过滤发生在 JS 侧,根本没法分页 —— 先分页再过滤,每页
-   * 剩几条全看运气。这里把同一条规则下推进 SQL(见 visibility-sql.ts),
-   * 一次查询出页,一次查询出总数。
-   *
-   * 会话没有自己的 owner,它挂在项目上,所以 LEFT JOIN 项目行。项目行**可能
-   * 不存在**(会话先被 watcher 索引、项目还没落行),此时 owner 为 NULL,判定
-   * 回落到"会话自己记的路径在不在公共目录下" —— 与 JS 侧同义。会话路径为空
-   * 时仅 root 可见,也与 JS 侧那条 `ownerUserId: -1` 同义。
-   */
-  /**
-   * fj:超过保留期的归档会话 —— **最旧的在前**。
-   *
-   * 归档保留期清扫专用。判据下推到 SQL,而不是"取最新的一页回来再按 cutoff 过滤"
-   * (那样永远够不到该清的那些,见 archive-retention.service 的说明)。
+   * 到期起点取归档时间与最后活动时间中较晚的那个:刚归档的旧会话也至少留满保留期,
+   * 归档前还在聊的会话按最后活动算。两列可能一个是 `YYYY-MM-DD HH:MM:SS`、一个是 ISO 串,
+   * 先各自 `datetime()` 归一再取 MAX,否则会按字符串比;没有归档时间的行回落到最后活动时间。
    */
   getExpiredArchivedSessions(cutoffIso: string, limit: number): string[] {
     const db = getConnection();
+    const anchor = "MAX(COALESCE(datetime(archived_at), ''), datetime(COALESCE(updated_at, created_at)))";
     const rows = cachedPrepare(db,
       `SELECT session_id FROM sessions
        WHERE isArchived = 1
-         AND datetime(COALESCE(updated_at, created_at)) < datetime(?)
-       ORDER BY datetime(COALESCE(updated_at, created_at)) ASC
+         AND ${anchor} < datetime(?)
+       ORDER BY ${anchor} ASC, session_id ASC
        LIMIT ?`
     ).all(cutoffIso, limit) as Array<{ session_id: string }>;
     return rows.map((row) => row.session_id);
@@ -511,29 +450,27 @@ export const sessionsDb = {
   },
 
   /**
-   * 可见会话的**分页**查询 —— 归档面板与外部 API 共用。
+   * 可见会话的分页查询,归档面板与外部 API 共用。
    *
    * `archived` 三档:`'only'`(归档面板)、`'exclude'`(默认列表)、
    * `'include'`(外部 API 的 `?includeArchived=1`)。
    *
-   * ## 为什么外部 API 也要走这条
+   * 可见性规则下推进 SQL(见 visibility-sql.ts),一次查询出页、一次 COUNT 出总数。
+   * 不能整表取回再逐行 `canViewerSeeSession()`:它每行都要查库,而 better-sqlite3 是同步的,
+   * 几千条会话就会把事件循环按住几百毫秒;先取后滤也没法正确分页。
    *
-   * `GET /api/agent/sessions` 原来是 `getAllSessions()` **整表捞出来**,再在 JS 侧
-   * 逐行 `canViewerSeeSession()` 过滤 —— 而那个函数每行要查库。better-sqlite3 是
-   * **同步**的,所以 4000 条会话 = 4000+ 次同步查询把**事件循环整个按住**:
-   * 实测 219ms 内所有人的 WebSocket 帧、所有请求全部停摆,而这只是一次列表调用。
+   * 会话没有自己的 owner,归属看项目,所以 LEFT JOIN 项目行。项目行可能还不存在
+   * (会话先被 watcher 索引),此时 owner 为 NULL,判定回落到会话路径是否在公共目录下;
+   * 会话路径为空时仅 root 可见。两条都与 JS 侧(`canViewerSeeSession`)同义。
    *
-   * 而且先捞后过滤根本没法分页(先分页再过滤,每页剩几条全看运气),
-   * 所以它连 `total` 都得靠捞全表才能算。
-   *
-   * 下推之后同样的数据量实测 2.18ms,并且 `total` 由 SQL 的 COUNT 直接给。
-   * 这正是归档面板当初做过的同一件事(见上一个方法的注释)—— 那次只改了归档这一处。
+   * `projectPath` 非空时只取这个项目的会话(定时任务表单的会话下拉用),与可见性叠加;
+   * 比较前按落库时的口径规范化。
    */
   getVisibleSessionsPage(
     scope: VisibilityScope,
     limit: number,
     offset: number,
-    options: { archived?: 'only' | 'exclude' | 'include' } = {},
+    options: { archived?: 'only' | 'exclude' | 'include'; projectPath?: string } = {},
   ): { rows: SessionRow[]; total: number } {
     const db = getConnection();
 
@@ -552,6 +489,11 @@ export const sessionsDb = {
       });
       where += ` AND TRIM(COALESCE(s.project_path, '')) <> '' AND ${visibility.sql}`;
       params = visibility.params;
+    }
+    const projectPath = normalizeProjectPath(options.projectPath ?? '');
+    if (projectPath) {
+      where += ' AND s.project_path = ?';
+      params = [...params, projectPath];
     }
 
     const from = `FROM sessions s LEFT JOIN projects p ON p.project_path = s.project_path WHERE ${where}`;
@@ -615,25 +557,14 @@ export const sessionsDb = {
   },
 
   /**
-   * 批量版:一次取**多个项目各自的首页会话**(E7)。
+   * 批量取多个项目各自的首页会话,避免项目列表逐个项目查询(N+1)。
+   * 用窗口函数 `ROW_NUMBER() OVER (PARTITION BY project_path ORDER BY …)` 一次取回所有项目的
+   * 前 limit 条,排序与 `getSessionsByProjectPathPage` 逐字一致。
    *
-   * 项目列表原来是每个项目三次查询(首页 / 计数 / 授权),项目一多就是典型的
-   * N+1 —— 30 个项目 = 90 次 prepare+执行。这里用窗口函数
-   * `ROW_NUMBER() OVER (PARTITION BY project_path ORDER BY …)` 一次把所有项目的
-   * 前 limit 条捞回来,排序与 `getSessionsByProjectPathPage` **逐字一致**。
+   * 只服务 offset=0(项目列表的默认形态);翻页仍走单项目那条。
    *
-   * 只服务 offset=0(项目列表的默认形态);翻页仍走单项目那条,不做复杂化。
-   */
-  /**
-   * `includeArchived` 是 ff 轮加的,给**归档项目列表**用。
-   *
-   * 归档列表原来走的是"每个项目一次查询"的老路(N+1),240 个归档项目就是 240 次;
-   * 而且它不分页 —— `getSessionsByProjectPathIncludingArchived` 把每个项目的**全部**
-   * 会话读进内存再拼成响应。活跃列表在 E7 轮已经批量化过了,归档这条**当时漏了**。
-   *
-   * 这里选择给已有方法加一个参数,而不是另写一份 `...IncludingArchived` 的批量方法:
-   * 这个仓库在 A-2 上栽过 —— 同一条判据写两遍,过一阵就漂开,漂出来的缝就是 bug。
-   * 归档与非归档的区别只有 WHERE 里那一句,不值得为它复制一份窗口函数。
+   * `includeArchived` 给归档项目列表用。归档与非归档只差 WHERE 里一句,所以用参数区分,
+   * 不另写一份批量方法:同一条判据写两份,迟早漂开。
    */
   getFirstSessionsForProjectPaths(
     projectPaths: string[],
@@ -732,14 +663,23 @@ export const sessionsDb = {
   /**
    * Soft-delete and restore both use the same flag update so callers keep the
    * row, metadata, and file path intact while toggling visibility.
+   *
+   * 归档时记下 `archived_at`(已经是归档状态的再归档一次不刷新,保留期不因重复操作延长),
+   * 解档时置 NULL。SET 里的 CASE 读的是改之前的 isArchived / archived_at。
    */
   updateSessionIsArchived(sessionId: string, isArchived: boolean): void {
     const db = getConnection();
+    const flag = isArchived ? 1 : 0;
     cachedPrepare(db,
       `UPDATE sessions
-       SET isArchived = ?
+       SET isArchived = ?,
+           archived_at = CASE
+             WHEN ? = 0 THEN NULL
+             WHEN isArchived = 1 AND archived_at IS NOT NULL THEN archived_at
+             ELSE CURRENT_TIMESTAMP
+           END
        WHERE session_id = ?`
-    ).run(isArchived ? 1 : 0, sessionId);
+    ).run(flag, flag, sessionId);
   },
 
   deleteSessionById(sessionId: string): boolean {

@@ -89,6 +89,8 @@
   "notifications": {
     "title": "Notifications",
     "description": "Control which notification events you receive.",
+    "loadFailed": "Couldn't load your notification preferences. The switches below are disabled so your saved settings aren't overwritten.",
+    "retryLoad": "Retry",
     "sound": {
       "title": "Sound",
       "description": "Play a short tone when a chat run finishes or needs tool approval.",
@@ -210,6 +212,9 @@
     },
     "newButton": "New API Key",
     "empty": "No API keys created yet.",
+    "loadFailed": "Couldn't load your API keys. Please retry.",
+    "refreshFailed": "Couldn't refresh your API keys. The list below is from the last successful load and may be out of date.",
+    "retryLoad": "Retry",
     "list": {
       "created": "Created:",
       "lastUsed": "Last used:"
@@ -233,6 +238,8 @@
         "howToCreate": "How to create a GitHub Personal Access Token →"
       },
       "empty": "No GitHub tokens added yet.",
+      "loadFailed": "Couldn't load your GitHub tokens. Please retry.",
+      "refreshFailed": "Couldn't refresh your GitHub tokens. The list below is from the last successful load and may be out of date.",
       "added": "Added:",
       "confirmDelete": "Are you sure you want to delete this GitHub token?"
     },
@@ -316,10 +323,6 @@
     "actions": {
       "edit": "Edit server",
       "delete": "Delete server"
-    },
-    "managed": {
-      "badge": "Managed",
-      "hint": "Managed by Prism."
     },
     "addServer": "Add {{provider}} MCP Server",
     "refreshingScopes": "Refreshing project scopes…",
@@ -652,13 +655,20 @@
     "loading": "Loading…",
     "empty": "No usage recorded in this period. It appears after your first turn.",
     "scopedHint": "Showing your own usage only",
-    "footnote": "Cost is the billed value returned with each turn. It is not the /cost number on the chat page — that one is current context size; this is cumulative spend. \"Input\" excludes cache; cached tokens are under \"Cache read\" (billed at about a tenth). Token counts recorded before the hj release are incomplete — the gateway reports usage at the end of the stream, which older versions missed; costs are unaffected.",
+    "footnote": "Cost is the billed value returned with each turn. It is not the /cost number on the chat page — that one is current context size; this is cumulative spend. \"Input\" excludes cache; cached tokens are under \"Cache read\" (billed at about a tenth). Token counts in older records may be incomplete — the gateway reports usage at the end of the stream, which earlier versions missed; costs are unaffected.",
     "by": {
       "day": "By day",
       "username": "By user",
       "project_path": "By project",
       "model": "By model",
       "source": "By source"
+    },
+    "sources": {
+      "chat": "Chat",
+      "compact": "Auto-compact",
+      "task": "Scheduled tasks",
+      "api": "External API",
+      "background": "Background"
     },
     "columns": {
       "key": "Dimension",
@@ -845,6 +855,25 @@
       "needKey": "Enter a key",
       "keyTooLong": "The key can’t exceed {{max}} characters",
       "keyWhitespace": "The key contains spaces or line breaks — probably picked up while pasting; remove them and save again"
+    }
+  },
+  "about": {
+    "tagline": "An agent workbench for shared algorithms and analytics",
+    "visionTitle": "Vision",
+    "vision": "Just as a prism splits a beam of light into its full spectrum, Prism breaks complex algorithm and data problems down into clear, executable, traceable intelligent workflows.",
+    "pillars": {
+      "entry": {
+        "title": "One entry point",
+        "body": "algorithm R&D, data analysis and multi-agent collaboration in one place"
+      },
+      "trusted": {
+        "title": "Trusted execution",
+        "body": "every round of changes is visible, auditable and can be rolled back in one click"
+      },
+      "reuse": {
+        "title": "Build and reuse",
+        "body": "your team's algorithm assets and analysis methods keep accumulating here"
+      }
     }
   }
 }

@@ -3,7 +3,7 @@ import { describe, test, expect, beforeEach } from 'vitest';
 import { emitToast, subscribeToast } from './toastBus';
 
 /**
- * by / D3:toast 事件总线。组件与非组件(如 api.js 的 401 拦截)共用它。
+ * toast 事件总线。组件与非组件(如 api.js 的 401 拦截)共用它。
  * 关键契约:订阅者收到 emit;订阅前 emit 的会在订阅时补发(backlog);退订后不再收。
  */
 describe('toastBus', () => {

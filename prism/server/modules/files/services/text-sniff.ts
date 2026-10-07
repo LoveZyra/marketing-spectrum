@@ -1,16 +1,15 @@
 import { promises as fsPromises } from 'node:fs';
 
 /**
- * hk(审计 P1-6 / P2-7 / P2-8):编辑器读写前,先看一眼文件**是不是能安全当 UTF-8 文本编辑的**。
+ * 编辑器读写前,先看一眼文件是不是能安全当 UTF-8 文本编辑的。
  *
- * 原来编辑器只按扩展名判二进制:`.pkl / .npy / .pt / .parquet / .h5`、没有扩展名的文件、GBK 编码的
- * csv / txt 都被 `readFile(…, 'utf8')` 读进来,非法字节变成替换字符 U+FFFD;用户按一次 Ctrl+S,
- * 整个文件就被写成替换字符 —— 不可逆(探针:8 字节变 14 字节)。算法团队这类文件很多。
+ * 只按扩展名判不够:`.pkl / .npy / .pt / .parquet / .h5`、没有扩展名的文件、GBK 编码的
+ * csv / txt 按 UTF-8 读进来,非法字节会变成替换字符 U+FFFD,保存一次整个文件就不可逆地坏了。
  *
  * 判据:
- * - **二进制**:前 8KB 里有 NUL 字节(与 git / grep 同一判据);
- * - **非 UTF-8 文本**:整份按 UTF-8 严格解码失败 —— 多半是 GBK(国内 Excel 导出的 csv 默认就是);
- * - **换行符**:CRLF 行占多数就记为 crlf,保存时还原(CodeMirror 一律按 \n 存,改一个字整份变 LF)。
+ * - 二进制:前 8KB 里有 NUL 字节(与 git / grep 同一判据);
+ * - 非 UTF-8 文本:整份按 UTF-8 严格解码失败,多半是 GBK(国内 Excel 导出的 csv 默认就是);
+ * - 换行符:CRLF 行占多数就记为 crlf,保存时还原(CodeMirror 一律按 \n 存,改一个字整份变 LF)。
  */
 
 /** 编辑器最多打开多大的文件。超了返回 413,只给下载 —— 几百 MB 的日志整份读进内存再 JSON 序列化会拖住整个服务。 */
@@ -32,7 +31,7 @@ export type TextSniff = {
 
 export function sniffText(buffer: Buffer): TextSniff {
   // PowerShell 重定向、Excel「Unicode 文本」都是 UTF-16LE 带 BOM:每个 ASCII 字符后面跟一个 NUL,
-  // 按 NUL 判会被当成二进制。先认 BOM(复核指出)。
+  // 按 NUL 判会被当成二进制,所以先认 BOM。
   if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
     return { binary: false, utf8: false, utf16: 'le', lineEnding: 'lf' };
   }
@@ -69,7 +68,7 @@ function detectLineEnding(buffer: Buffer): 'lf' | 'crlf' {
  * 非 UTF-8 文本解码给人看(只读)。
  *
  * 不能「UTF-8 一失败就整份按 GBK」:截出来的样本、正在写的训练日志(8KB 一刷,末尾常停在半个汉字上)
- * 只坏一两个字节,整份按 GBK 解就成了一屏「涓枃鏃ュ織」(复核实测)。所以:
+ * 只坏一两个字节,整份按 GBK 解就成了一屏乱码。所以:
  * - UTF-16 带 BOM → 按 UTF-16 解;
  * - 按 UTF-8 容错解,解得通的多字节字符不少于替换字符 → 就是坏了几个字节的 UTF-8,照 UTF-8 显示;
  * - 否则 GBK 严格解得通 → GBK(国内 Excel 导出的 csv);

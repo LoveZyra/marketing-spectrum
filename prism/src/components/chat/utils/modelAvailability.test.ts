@@ -18,7 +18,7 @@ describe('hq 模型能不能用', () => {
 
   it('「去填 key」只给填了 key 就能用的;网关停用 / 不见了不给', () => {
     expect(canFixWithKey(catalog('a', noKey))).toBe(true);
-    // hq:有原因码时按码判 —— 网关停用即使原因里写了 key 也不给入口
+    // 有原因码时按码判 —— 网关停用即使原因里写了 key 也不给入口
     expect(canFixWithKey(catalog('a', { available: false, unavailableCode: 'no_key', unavailableReason: '…' }))).toBe(true);
     expect(canFixWithKey(catalog('a', { available: false, unavailableCode: 'gateway_disabled', unavailableReason: 'key 相关' }))).toBe(false);
     expect(canFixWithKey(catalog('a', { available: false, unavailableCode: 'gateway_missing' }))).toBe(false);

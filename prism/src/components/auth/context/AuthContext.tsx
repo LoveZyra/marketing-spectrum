@@ -43,12 +43,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [needsSetup, setNeedsSetup] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /**
-   * hl(动态 P3「每条请求打两遍」):登录 / 注册刚拿到的会话**不再重新核验一遍**。
+   * 登录 / 注册刚拿到的会话跳过下一次状态核验:响应里已经带了 user,无需再核验。
    *
-   * `checkAuthStatus` 依赖 `token`,login 之后 token 变了 → effect 重跑 → `setIsLoading(true)`
-   * → ProtectedRoute 换成加载页,**整个 AppContent 卸载**;/auth/user 回来再挂一次 ——
-   * 首屏那 18 个 /api 请求(项目列表、运行中会话、偏好……)于是每条都打两遍,
-   * 中间还闪一下加载页。登录响应里本来就带 user,核验是多余的。
+   * `checkAuthStatus` 依赖 `token`,登录后 token 变化会让 effect 重跑并 `setIsLoading(true)`,
+   * ProtectedRoute 随之换成加载页、整个 AppContent 卸载再挂载:首屏的 /api 请求
+   * (项目列表、运行中会话、偏好……)全部重发一遍,中间还闪一下加载页。
    */
   const skipNextStatusCheckRef = useRef(false);
 
@@ -120,8 +119,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     void checkAuthStatus();
   }, [checkAuthStatus]);
 
-  // 全局 401 兜底:api.js 拿到 401(令牌过期/被撤销)会派发这个事件,这里清会话
-  // 跳回登录。不调登出端点 —— 令牌已经无效,再打一枪没意义。
+  // 全局 401 兜底:api.js 收到 401(令牌过期 / 被撤销)时派发这个事件,这里清会话跳回登录。
+  // 不调登出端点:令牌已经无效,再调一次没有意义。
   useEffect(() => {
     if (IS_PLATFORM) return;
     const onExpired = () => clearSession();
@@ -129,11 +128,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return () => window.removeEventListener('prism:session-expired', onExpired);
   }, [clearSession]);
 
-  // dj:同一浏览器的其他标签页换了账号/退出时,本页跟上 —— 此前旧标签页会
-  // 继续挂着旧账号的界面,而它发出去的请求其实已经带着新账号的令牌,身份错位。
-  // storage 事件只在**其他**标签页触发,不会响应本页自己的写入。
-  // 同一用户的静默续期(localStorage 已被写入方更新)刻意不动 React 状态,
-  // 避免 WebSocket 因 token 变化整个重连。
+  // 同一浏览器的其他标签页换了账号或退出时,本页跟着切换:否则本页还挂着旧账号的界面,
+  // 发出的请求却已带上新账号的令牌,身份错位。storage 事件只在其他标签页写入时触发。
+  // 同一用户的静默续期(写入方已更新 localStorage)刻意不动 React 状态,免得 WebSocket 因 token 变化整个重连。
   useEffect(() => {
     if (IS_PLATFORM) return;
     const onStorage = (event: StorageEvent) => {
@@ -215,28 +212,24 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const logout = useCallback(() => {
     /**
-     * dv:以 **localStorage 里那张**为准,React state 只作兜底。
+     * 要作废的令牌以 localStorage 里那张为准,React state 只作兜底。
      *
-     * 静默续期(`X-Refreshed-Token`)与改密都只更新 localStorage,刻意不动
-     * React state —— 于是这里捕获的 `token` 可能是好几轮之前那张。改密之后
-     * 服务端 token_version 已经 +1,旧令牌**连同本会话一起作废**,拿它去打
-     * logout 必 401 —— 登出事件依然进不了审计日志,正是上面那行注释声称
-     * 已经修掉的坑换条路径复活。
+     * 静默续期(`X-Refreshed-Token`)与改密都只更新 localStorage、刻意不动 React state,
+     * 所以这里捕获的 `token` 可能已经过时;改密后服务端 token_version 已加一,旧令牌随之作废,
+     * 拿它调 logout 必然 401,登出事件就进不了审计日志。
      */
     let tokenToInvalidate: string | null = token;
     try {
       const stored = localStorage.getItem('auth-token');
       if (stored) tokenToInvalidate = stored;
     } catch { /* 隐私模式等取不到就用 state 里那张 */ }
-    // hl(动态 P1-7 / 09-24 P1-5):登出清掉本机草稿与时间戳 —— 此前只清令牌,下一个在这台
-    // 浏览器登录的人会把上一个人的草稿正文推成自己的。
-    // hl 复核 P3-7:同步键**不**在这里清(同一个人再登录不必整页重载);换人时由主人标记在拉取前清。
+    // 登出时清掉本机草稿与时间戳,否则下一个在这台浏览器登录的人会把上一个人的草稿当成自己的推上去。
+    // 同步键不在这里清(同一个人再登录不必整页重载);换人时由主人标记在拉取前清。
     clearLocalAccountStateOnLogout();
     clearSession();
 
     if (tokenToInvalidate) {
-      // 本地已清,localStorage 里没有令牌了;把捕获的旧令牌显式带上,登出
-      // 事件才能落进服务端审计日志(此前这一枪永远 401,从没记上过)。
+      // 本地令牌已清,必须显式带上捕获的令牌,登出事件才能记进服务端审计日志。
       void api.auth.logout({ token: tokenToInvalidate }).catch((caughtError: unknown) => {
         console.error('Logout endpoint error:', caughtError);
       });

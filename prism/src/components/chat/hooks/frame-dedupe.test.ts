@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { advancesReplayCursor, isDuplicateFrame } from './useChatRealtimeHandlers';
 
 /**
- * F16:重复帧不再被处理第二遍。
+ * 重复帧不能被处理第二遍。
  *
- * 重复不是异常路径:补发游标**故意**不为审批帧推进,于是重连后的补发窗口
+ * 重复不是异常路径:补发游标故意不为审批帧推进,于是重连后的补发窗口
  * 会盖住一批已经收到的帧;订阅重叠时更是整段重放。重复一帧 `stream_delta`
  * 就是把同一段正文再拼一次(累积器是追加语义),重复一帧工具事件就是
  * 屏幕上并排两份 —— 而这两种都要等服务端行落库才收得掉。
@@ -27,7 +27,7 @@ describe('isDuplicateFrame', () => {
     expect(isDuplicateFrame({ runId: 'run-1', seq: 10 }, 'run-1', 3)).toBe(true);
   });
 
-  it('换了一轮 → seq 从 0 重来,**一律不算重复**', () => {
+  it('换了一轮 → seq 从 0 重来,一律不算重复', () => {
     // 这一条是关键:seq 是每轮从 0 开始的。只按 seq 判会把新一轮的开头全丢掉。
     expect(isDuplicateFrame({ runId: 'run-1', seq: 40 }, 'run-2', 0)).toBe(false);
     expect(isDuplicateFrame({ runId: 'run-1', seq: 40 }, 'run-2', 20)).toBe(false);
@@ -39,8 +39,8 @@ describe('isDuplicateFrame', () => {
 });
 
 describe('判重只作用于会推进游标的帧', () => {
-  it('审批帧不参与判重 —— 否则 dv 修过的那条又会回来', () => {
-    // 审批帧占 seq 号但**故意**不推进补发游标,因此它们的 seq 天然落在水位之下。
+  it('审批帧不参与判重', () => {
+    // 审批帧占 seq 号但故意不推进补发游标,因此它们的 seq 天然落在水位之下。
     // 若按水位判重,切回会话时的审批请求会被整体丢掉,而那是一条永远回不来的请求。
     expect(advancesReplayCursor('permission_request')).toBe(false);
     expect(advancesReplayCursor('permission_cancelled')).toBe(false);

@@ -9,10 +9,8 @@ import {
 } from '../services/skill-survey.service.js';
 
 /**
- * gy:效果调查卡的判定 —— 纯函数,不碰库。
- *
- * 钉住《方案》6.2b 的每一条:只对调过 Skill 的网页回合、只给发起人、按回合确定性抽样、
- * 同 skill 冷却、已答过的不再弹、关掉开关不弹。
+ * 效果调查卡的判定(纯函数,不碰库)。逐条钉住:只对调过 Skill 的网页回合、只给发起人、
+ * 按回合确定性抽样、同 skill 冷却、已答过的不再弹、关掉开关不弹。
  */
 const msg = (partial: Partial<NormalizedMessage>): NormalizedMessage => ({
   id: 'x', sessionId: 's', timestamp: '2026-09-23T02:00:00.000Z', provider: 'claude', kind: 'text', ...partial,

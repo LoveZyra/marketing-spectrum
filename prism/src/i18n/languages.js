@@ -1,11 +1,9 @@
 /**
- * Supported Languages Configuration
+ * Languages offered in the language selector.
  *
- * This file contains the list of supported languages for the application.
- * Each language includes:
- * - value: Language code (e.g., 'en', 'zh-CN')
- * - label: Display name in English
- * - nativeName: Native language name for display
+ * - value: language code; must match a directory under `locales/` exactly (e.g. 'en', 'zh-CN')
+ * - label: English name
+ * - nativeName: name shown in the selector
  */
 
 export const languages = [
@@ -61,28 +59,3 @@ export const languages = [
   },
 ];
 
-/**
- * Get language object by value
- * @param {string} value - Language code
- * @returns {Object|undefined} Language object or undefined if not found
- */
-export const getLanguage = (value) => {
-  return languages.find(lang => lang.value === value);
-};
-
-/**
- * Get all language values
- * @returns {string[]} Array of language codes
- */
-export const getLanguageValues = () => {
-  return languages.map(lang => lang.value);
-};
-
-/**
- * Check if a language is supported
- * @param {string} value - Language code to check
- * @returns {boolean} True if language is supported
- */
-export const isLanguageSupported = (value) => {
-  return languages.some(lang => lang.value === value);
-};

@@ -32,11 +32,11 @@ export type CreateProjectPayload = {
   customName?: string;
   visibility?: ProjectVisibilityChoice;
   sharedUserIds?: number[];
-  /** fh:从模板创建。空字符串/不传 = 空目录(原来的行为)。 */
+  /** 从模板创建。空字符串 / 不传 = 空目录。 */
   templateId?: string;
 };
 
-/** fh:服务器上的一个项目模板(`PRISM_PROJECT_TEMPLATES_DIR` 下的一棵目录树)。 */
+/** 服务器上的一个项目模板(`PRISM_PROJECT_TEMPLATES_DIR` 下的一棵目录树)。 */
 export type ProjectTemplate = {
   id: string;
   name: string;
@@ -57,7 +57,7 @@ export type CreateProjectResponse = {
   error?: string | CreateProjectApiError;
   details?: string;
   message?: string;
-  /** hl:路径命中已归档项目 → 服务端还原了它(而不是新建)。 */
+  /** 路径命中已归档项目 → 服务端还原了它(而不是新建)。 */
   revived?: boolean;
 };
 

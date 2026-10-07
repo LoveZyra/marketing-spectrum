@@ -11,25 +11,21 @@ type MainContentTitleProps = {
   activeTab: AppTab;
   selectedProject: Project;
   selectedSession: ProjectSession | null;
-  /** 当前会话在服务端挂着常驻运行时 —— 进标题的悬停提示,不再单独占一枚胶囊。 */
+  /** 当前会话在服务端挂着常驻运行时:显示常驻芯片,并写进标题的悬停提示。 */
   isPersistentSession?: boolean;
-  /** ef:就地重命名(设计稿标题右侧那支铅笔)。没给就不出现铅笔。 */
+  /** 就地重命名(设计稿标题右侧那支铅笔)。不传就不显示铅笔。 */
   onRenameSession?: (sessionId: string, summary: string) => Promise<boolean> | boolean;
 };
 
-// Cursor sessions were titled from `name`; Claude sessions only carry a summary.
 function getSessionTitle(session: ProjectSession): string {
   return (session.summary as string) || 'New Session';
 }
 
 /**
- * 顶栏标题块。
+ * 顶栏标题块:一行 15px / 600 的标题 + 常驻芯片 + 项目名芯片。
  *
- * ef:两行收成一行 —— 15px / 600 的标题 + 项目名芯片。原来第二行那串等宽坐标
- * (项目 · 路径 · 会话短 id)每个会话都要看一遍,但真正要用到路径的时候一年没几次;
- * 现在收进标题的悬停提示,顶栏省下 24px,主区更宽松。常驻会话也不再单独占一枚
- * 胶囊,同样进提示。标题右侧一支铅笔:就地改名(Enter 保存 / Esc 取消)——
- * 以前改名只能去侧栏悬停找那支笔。
+ * 路径、会话短 id、常驻状态这些很少用到的坐标收进标题的悬停提示,不占顶栏高度。
+ * 标题右侧的铅笔就地改名(Enter 保存 / Esc 取消)。
  */
 export default function MainContentTitle({
   activeTab,
@@ -146,9 +142,8 @@ export default function MainContentTitle({
         </button>
       )}
       {/*
-        eh:常驻会话要**看得见**。菜单里那行只有点开才看得到,而"这段对话在服务端
-        挂着运行时"是会影响下一轮快慢、也占着常驻名额的状态 —— 给它一枚常驻芯片,
-        和项目芯片并排(主色底 + 图钉),一眼能认出来。
+        常驻状态要一眼可见:菜单里那行要点开才看得到,而「这段对话在服务端挂着运行时」
+        会影响下一轮快慢、也占着常驻名额。所以给一枚常驻芯片(主色底 + 图钉),与项目芯片并排。
       */}
       {isPersistentSession && (
         <span

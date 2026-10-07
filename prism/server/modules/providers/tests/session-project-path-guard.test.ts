@@ -5,14 +5,13 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 /**
- * dz:`POST /api/providers/sessions` 的 projectPath 两道门。
+ * `POST /api/providers/sessions` 的 projectPath 两道门。
  *
- * 实测(修前,非 root 用户):POST {projectPath:"/"} → 201,`projects` 表多出
- * 一行 owner = 调用者的 `/`,文件树接口随即列出服务器根目录。这里把四种路径
- * × 两种身份钉死。
+ * 不设防时,非 root 用户 POST {projectPath:"/"} 会在 `projects` 表里多出一行 owner = 调用者的 `/`,
+ * 文件树接口随即列出服务器根目录。这里把四种路径 × 两种身份钉死。
  *
- * WORKSPACES_ROOT / PRISM_PUBLIC_WORKSPACE / PRISM_ROOT_USERS 都是模块加载时读的,
- * 所以必须在 import 之前设好 —— vi.hoisted 就是干这个的。
+ * WORKSPACES_ROOT / PRISM_PUBLIC_WORKSPACE / PRISM_ROOT_USERS 都在模块加载时读取,
+ * 必须在 import 之前设好,所以用 vi.hoisted。
  */
 const env = vi.hoisted(() => {
   const { mkdtempSync, mkdirSync } = require('node:fs') as typeof import('node:fs');

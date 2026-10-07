@@ -3,7 +3,7 @@ import * as React from 'react';
 import { commitNumber, parseTyping, stepNumber, type NumberRule } from './numberInput';
 
 /**
- * hh:能正常打字的数字输入框。规则见 `numberInput.ts`:打字时不改写你的文字,离开时才夹到范围里。
+ * 能正常打字的数字输入框。规则见 `numberInput.ts`:打字时不改写你的文字,离开时才夹到范围里。
  *
  * `value` 是上层保存的数(`null` = 空、用 placeholder 的默认值);`onChange` 在打字过程中收到
  * 读得出的数(未夹取),离开时收到最终夹取后的数。外面改了 `value`(比如切换 skill 重置表单)
@@ -34,8 +34,8 @@ export const NumberInput = React.forwardRef<HTMLInputElement, NumberInputProps>(
         autoComplete="off"
         value={text}
         placeholder={placeholder}
-        // hl(09-24 静态 P3):aria-valuemin/max 原来挂在一个 textbox 上(无效属性)。它的行为本来就是
-        // spinbutton(↑/↓ 步进、有上下限),声明出来并带上当前值。
+        // 行为是 spinbutton(↑/↓ 步进、有上下限),声明出来并带上当前值;
+        // aria-valuemin/max 挂在默认的 textbox 角色上是无效属性。
         role="spinbutton"
         aria-valuenow={value ?? undefined}
         aria-valuetext={value === null ? placeholder : undefined}
@@ -47,7 +47,7 @@ export const NumberInput = React.forwardRef<HTMLInputElement, NumberInputProps>(
           if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
             event.preventDefault();
             const delta = (Number(step) || 1) * (event.key === 'ArrowUp' ? 1 : -1);
-            // 空框从 placeholder 显示的默认值起步(原来从 0 / min 起)。
+            // 空框从 placeholder 显示的默认值起步。
             const done = stepNumber(text, value, delta, { min, max, integer, fallback, placeholder });
             setText(done.text);
             onChange(done.value);

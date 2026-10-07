@@ -1,5 +1,7 @@
 /**
- * Checkpoint REST API (ported from claude-web-ui 2.0).
+ * Checkpoint REST API.
+ *
+ * 部分实现源自 Claude Code Web(Apache-2.0),已修改;版权与许可见 NOTICE。
  *
  * GET    /api/checkpoints?sessionId=&cwd=      list checkpoints
  * GET    /api/checkpoints/:id                  checkpoint metadata
@@ -44,7 +46,7 @@ const router = express.Router();
  *   2. 拿不到就退回 `meta.cwd`;
  *   3. 再由项目 owner 走与侧栏一致的那条判定。
  *
- * **路径没登记成项目时返回 false(仅 root)**,而不是沿用"owner 为空 = 公共"。
+ * 路径没登记成项目时返回 false(仅 root),而不是沿用"owner 为空 = 公共"。
  * 那条规则是给项目列表用的,让人看见一个条目;这里放行的却是
  * `git reset --hard` 加删除未跟踪文件。同一个默认值放在这里就成了:任何人都能
  * 抹掉任何一个尚未登记目录里的未提交改动。
@@ -169,20 +171,11 @@ router.get('/:id/changes', async (req, res) => {
 });
 
 /**
- * dt:回滚/还原成功后往会话显示日志落一条 `files_reverted` 反向帧。
+ * 进锁后复查"这棵树上没有回合在跑"。
  *
- * 不落它,工作面板与磁盘永久漂移:文件被回滚删掉,产出列表还挂着,点开
- * 404。checkpoint meta 存的 sessionId 是 provider 原生 id,经 sessions 表
- * 反查应用侧会话 id;反查不到(极端)就跳过 —— 名帧是锦上添花,不拦回滚。
- * paths 只收**当时为新增**的文件(修改类回滚不影响"产出"语义)。
- */
-/**
- * dv:进锁后复查"这棵树上没有回合在跑"。
- *
- * 与路由入口那次检查同源,但由 checkpoint 服务在**拿到 cwd 锁之后**调用 ——
- * 入口检查与真正的 `reset --hard` 之间隔着算改动清单、做安全快照等好几秒,
- * 聊天回合又不走 cwd 锁,那段窗口里发一条消息就能和回滚同时写同一棵树。
- * 返回 undefined 表示可以继续;返回对象则作为 409 的载荷。
+ * 与路由入口那次检查同源,但由 checkpoint 服务在拿到 cwd 锁之后调用:入口检查与真正的
+ * `reset --hard` 之间隔着算改动清单、做安全快照等好几秒,聊天回合又不走 cwd 锁,那段窗口里
+ * 发一条消息就能和回滚同时写同一棵树。返回 undefined 表示可以继续;返回对象则作为 409 的载荷。
  */
 function makeBusyAssertion() {
   return async (meta) => {
@@ -203,6 +196,13 @@ function makeBusyAssertion() {
   };
 }
 
+/**
+ * 回滚 / 还原成功后往会话显示日志落一条 `files_reverted` 反向帧。
+ *
+ * 不落它,工作面板与磁盘永久漂移:文件被回滚删掉,产出列表还挂着,点开 404。
+ * checkpoint meta 存的 sessionId 是 provider 原生 id,经 sessions 表反查应用侧会话 id;
+ * 反查不到(极端)就跳过,这一帧不拦回滚。paths 只收当时为新增的文件(修改类回滚不影响"产出"语义)。
+ */
 function appendFilesRevertedFrame(meta, relPaths) {
   try {
     if (!relPaths || relPaths.length === 0) return;

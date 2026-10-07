@@ -7,12 +7,12 @@ import { disabledCatalogModelsIn } from './model-policy.js';
 import type { SkillWhetClient } from './skillwhet-client.js';
 
 /**
- * he:夜训调度器(《实施计划》P4-03)。
+ * 夜训调度器。
  *
  * 每分钟看一次 `skillwhet_nightly_plan`:
  *   1. 收尾 —— 上次起的夜训作业结束了就记结果;跑完没收益累加 `consecutive_noop`,
  *      到 3 自动移出夜训并审计 `skillwhet_nightly_autopause`;
- *   2. **串行** —— 还有夜训作业在排队 / 在跑就什么都不起;
+ *   2. 串行 —— 还有夜训作业在排队 / 在跑就什么都不起;
  *   3. 挑一个:已纳入、此刻在它的时窗里、这一晚还没处理过,按上次夜训时间最早的先;
  *      · 上次是被中断的、SkillWhet 那边还有对得上的 checkpoint → 带 `resume` 续跑(不看任务门槛);
  *      · 否则自上次夜训起新进库的可判分任务 < `min_new_tasks` → 记 `skipped_no_new_tasks`;
@@ -20,12 +20,12 @@ import type { SkillWhetClient } from './skillwhet-client.js';
  *      · 同一 skill 已有别的作业在跑(手动起的)→ 记 `skipped_busy`;
  *   4. 起作业(`origin: nightly`),一次 tick 只起一个。
  *
- * 时窗是**服务器本地时间**,可以跨零点。"一晚"是当天中午到次日中午(记当天的日期)——
+ * 时窗是服务器本地时间,可以跨零点。"一晚"是当天中午到次日中午(记当天的日期)——
  * 所有 skill 共用这一个口径:一晚只跑一次、一晚合计预算都按它算,不随各自时窗漂移
  * (A 22:00–02:00、B 01:00–05:00 属于同一晚;把时窗往后挪也不会同一晚跑两次)。
  * 时窗到点时还没跑完的作业不杀(它有自己的费用 / 时长上限),没轮到的 skill 排明晚。
  *
- * 纳入是 root 对**那一份副本**的批准:副本被移除 / 重新上传 / 重新导入后身份(`copy_id`)对不上,
+ * 纳入是 root 对那一份副本的批准:副本被移除 / 重新上传 / 重新导入后身份(`copy_id`)对不上,
  * 或上传来源的副本 G1 安全门不是 PASS,这一晚不跑并自动移出(非 root 起训练同样要 G1 PASS)。
  * 夜训只产出 staging:采纳、发布永远是人的事。
  */
@@ -194,9 +194,8 @@ export class NightlyScheduler {
       for (const { plan, w } of due) {
         const skill = plan.skill_name;
         /**
-         * hl(动态 P2-15):`retry=true` 的原因(手动作业占着 / 上传来源 G1 没过)不把这一晚记成"已处理",
-         * 时窗内下一分钟再试 —— 原来 `skipped_busy` 记整晚,手动作业跑完也不补;G1 当晚修好也不跑。
-         * 每分钟重试会重复写同一条结果:只在结果或说明变了才落库、才打日志。
+         * `retry=true` 的原因(手动作业占着 / 上传来源 G1 没过)不把这一晚记成"已处理",时窗内下一分钟再试,
+         * 手动作业跑完或 G1 当晚修好后还能补跑。每分钟重试会重复得出同一条结果:只在结果或说明变了才落库、打日志。
          */
         const skip = (result: NightlyResult, detail: string, retry = false, keepInterrupted = false) => {
           // 被打断、还没续上的:结果仍记"被打断",下一晚接着试续跑(说明里写这一晚为什么没跑)
@@ -234,7 +233,7 @@ export class NightlyScheduler {
         }
 
         /**
-         * hn(B7):配置里的模型在目录里被下架了 → 这一晚不跑(不自动换模型:训练结论与模型绑定;时窗内也不重试,
+         * 配置里的模型在目录里被下架了 → 这一晚不跑(不自动换模型:训练结论与模型绑定;时窗内也不重试,
          * 等 root 改配置或重新上架)。放在续跑判断之前,且保留"被打断":重新上架后接着续,不重跑已完成的轮次。
          */
         const retired = disabledCatalogModelsIn(parsePlanConfig(plan));
@@ -261,7 +260,7 @@ export class NightlyScheduler {
         }
 
         // 一晚合计预算
-        // hf2:计划里 root 填的单次上限可以高于 .env(到硬上限),留空才用 .env 的
+        // 计划里 root 填的单次上限可以高于 .env(到夜训硬上限为止),留空才用 .env 的
         const reserve = Math.min(plan.max_cost_usd ?? budget.maxCostUsd, budget.nightlyHardMaxCostUsd);
         const spent = jobs
           .filter((j) => j.origin === 'nightly' && nightKey(new Date(j.created_at)) === w.night)

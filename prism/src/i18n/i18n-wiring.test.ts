@@ -29,25 +29,22 @@ const loadFlat = async (language: string, namespace: string) =>
  * End-to-end check on the i18next wiring, as opposed to the registry's own
  * unit tests.
  *
- * The registry can be correct and the app still ship an English-only UI — that
- * is precisely what happened to French, where the files were on disk, valid,
- * and never reached i18next. Only actually asking for a translated string
+ * The registry can be correct and the app still ship an English-only UI if the
+ * files never reach i18next. Only actually asking for a translated string
  * proves the backend, the namespace list and the lazy loader are connected.
  */
 describe('i18next serves the translations that exist on disk', () => {
   beforeAll(async () => {
     await initI18n();
-    // hl:en 现在是 init 之后后台补挂的(首屏只装当前语言),这里等它到位再断言回退。
+    // en 在 init 之后才由后台补挂(首屏只装当前语言),等它到位再断言回退。
     await whenFallbackReady();
   });
 
   /**
-   * Two separate claims, and they used to be one: that init resolves a usable
-   * bundle, and that the bundle it resolves is the *default* language rather
-   * than the fallback. Collapsing them hid the interesting case — with no
-   * stored choice (which is what the runner has, having no localStorage at
-   * all) the app must open in Chinese, while English stays reachable as the
-   * per-key fallback for everything Chinese has not translated.
+   * Two separate claims: init resolves a usable bundle, and that bundle is the
+   * *default* language rather than the fallback. With no stored choice (the
+   * runner has no localStorage at all) the app must open in Chinese, while
+   * English stays reachable.
    */
   test('init opens in the default language, with no key leaking through', async () => {
     assert.equal(i18n.language, DEFAULT_LANGUAGE);
@@ -58,9 +55,8 @@ describe('i18next serves the translations that exist on disk', () => {
   });
 
   /**
-   * The French regression, stated as an assertion. Before the registry, this
-   * returned 'Save': `fr` had every namespace translated and a picker entry,
-   * but no import, so i18next had never heard of it.
+   * A locale whose files are on disk must actually be served: French resolves
+   * to French, not to the English fallback.
    */
   test('French resolves to French', async () => {
     await i18n.changeLanguage('fr');
@@ -70,11 +66,8 @@ describe('i18next serves the translations that exist on disk', () => {
   });
 
   /**
-   * 原来这里钉的是"每个语种都必须有 tasks.json" —— 那个 namespace 随任务功能
-   * 整体移除了。留下的这条守的是同一类问题的一般形式:任何一个 namespace 只要
-   * 在 en 里存在,就必须能在每个语种里被解析出来(缺文件时回退英文,而不是渲染
-   * 成 key 路径)。当年 `.gitignore` 把 tasks.json 一起忽略掉、七个语种整个
-   * namespace 静默丢失,就是这条要拦的。
+   * 任何一个 namespace 只要在 en 里存在,就必须能在每个语种里被解析出来(缺文件时回退英文,
+   * 而不是渲染成 key 路径)。拦的是某个语种整个 namespace 文件静默缺失(例如被 `.gitignore` 误伤)。
    */
   test('每个 namespace 在每个语种下都能解析,不会渲染成 key 路径', async () => {
     for (const language of languagesIn(resourceIndex)) {
@@ -88,10 +81,10 @@ describe('i18next serves the translations that exist on disk', () => {
   });
 
   /**
-   * Locales are allowed to lag: roughly a thousand keys across the nine
-   * non-English locales are untranslated, and `fallbackLng` is what makes that
-   * a partial translation rather than a broken screen. The gap is found at run
-   * time rather than hard-coded so that translating it does not fail the test.
+   * Locales are allowed to lag: plenty of keys in the non-English locales are
+   * untranslated, and `fallbackLng` is what makes that a partial translation
+   * rather than a broken screen. The gap is found at run time rather than
+   * hard-coded so that translating it does not fail the test.
    */
   test('an untranslated key falls back to English rather than rendering its path', async () => {
     let checked = 0;
@@ -132,10 +125,9 @@ describe('i18next serves the translations that exist on disk', () => {
   });
 
   /**
-   * Lazy loading is the other half of the change: switching language has to
-   * fetch, and the fetch has to have finished by the time `changeLanguage`
-   * resolves. If it had not, every string would render as its key for a frame
-   * on each switch.
+   * With lazy loading, switching language has to fetch, and the fetch has to
+   * have finished by the time `changeLanguage` resolves; otherwise every string
+   * would render as its key for a frame on each switch.
    */
   test('a language switch resolves only once its resources are usable', async () => {
     await i18n.changeLanguage('zh-CN');
@@ -153,7 +145,7 @@ describe('i18next serves the translations that exist on disk', () => {
  * than merely absent. A bundle that drops `{{count}}` renders "Showing of 40
  * tasks"; one that misspells `{{projectName}}` renders the placeholder itself.
  * Neither throws, and both are invisible to anyone who does not read that
- * language — which is every reviewer, for at least eight of the ten.
+ * language — which is every reviewer, for most of the locales.
  */
 describe('placeholders survive translation', () => {
   const PLACEHOLDER = /\{\{\s*([^}\s,]+)/g;
@@ -199,13 +191,10 @@ describe('placeholders survive translation', () => {
 /**
  * Which language a browser opens in.
  *
- * The rule looks trivial and is not: the app shipped an English default for
- * long enough that every browser that ever loaded it holds
- * `userLanguage: "en"` — written by i18next's own detector cache on the init
- * that set the default in the first place. A default flip that keys off that
- * value reaches nobody but a first-time visitor, and reads as broken to
- * everyone else. Hence a second key that only a human click writes, and these
- * tests pinning which key wins.
+ * `userLanguage` is rewritten on every language change, including the one init
+ * performs, so it cannot tell a choice from the default. Only
+ * `userLanguageChoice`, written by a human pick in the selector, counts; these
+ * tests pin which key wins.
  */
 describe('initial language resolution', () => {
   const storageOf = (entries: Record<string, string>) => ({
@@ -225,10 +214,8 @@ describe('initial language resolution', () => {
   });
 
   /**
-   * The regression this whole mechanism exists for. `userLanguage: "en"` is
-   * what an existing install carries, and it was never a choice — reading it
-   * would pin every current user to English through a default change they were
-   * supposed to receive.
+   * `userLanguage` is a cache of whatever was last displayed, never a choice;
+   * reading it would pin a browser to that language instead of the default.
    */
   test("i18next's own cache is not mistaken for a choice", () => {
     assert.equal(
@@ -246,9 +233,9 @@ describe('initial language resolution', () => {
   });
 
   /**
-   * A locale can leave `languages` — it happened to none yet, but the picker
-   * list is the contract and a stale value must not become a language i18next
-   * has no bundles for, which renders every string as its key path.
+   * A locale can leave `languages`. The picker list is the contract, and a
+   * stale value must not become a language i18next has no bundles for, which
+   * renders every string as its key path.
    */
   test('a stored language that is no longer supported falls back to the default', () => {
     assert.equal(resolveInitialLanguage(storageOf({ userLanguageChoice: 'kl' })), DEFAULT_LANGUAGE);

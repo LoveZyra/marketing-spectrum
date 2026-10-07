@@ -21,7 +21,6 @@
     "noSessions": "No sessions yet",
     "loadingSessions": "Loading sessions...",
     "unnamed": "Unnamed",
-    "loading": "Loading...",
     "runningMeta": "Running · {{age}}",
     "messageCount": "{{count}} msgs"
   },
@@ -78,7 +77,9 @@
     "restoreSessionError": "Error restoring session. Please try again.",
     "bulkDeleteConfirm": "Permanently delete the {{count}} selected archived sessions? They go to Recently Deleted first and can be restored during the retention period.",
     "emptyTrashConfirm": "Emptying the archive moves {{count}} archived sessions to Recently Deleted (only those in projects you own are affected). They can be restored during the retention period. Continue?",
-    "bulkActionFailed": "Bulk action failed, please try again."
+    "bulkActionFailed": "Bulk action failed, please try again.",
+    "bulkRestoreShortfall": "Restored {{done}} of {{requested}} selected sessions (not permitted or no longer archived: {{skipped}}; failed: {{failed}}).",
+    "bulkDeleteShortfall": "Deleted {{done}} of {{requested}} selected sessions (not permitted or no longer archived: {{skipped}}; failed: {{failed}})."
   },
   "search": {
     "modeProjects": "Projects",
@@ -87,6 +88,13 @@
     "searching": "Searching...",
     "noResults": "No results found",
     "tryDifferentQuery": "Try a different search query",
+    "failedTitle": "Search didn't finish",
+    "ticketFailed": "Couldn't reach the search service. Please try again later.",
+    "interrupted": "The search was interrupted. Please try again.",
+    "interruptedAt": "The search was interrupted after scanning {{scanned}}/{{total}} projects. Please try again.",
+    "incomplete": "Incomplete results: the search was interrupted.",
+    "incompleteAt": "Incomplete results: the search was interrupted after scanning {{scanned}}/{{total}} projects.",
+    "retry": "Retry",
     "modeRunning": "Running",
     "modeArchived": "Archived",
     "switchMode": "Switch search scope",
@@ -149,7 +157,15 @@
       "permissions": "Permissions",
       "owner": "Change owner",
       "delete": "Archive or delete",
-      "exit": "Exit selection"
+      "exit": "Exit selection",
+      "sessionCount": "{{count}} sessions",
+      "sessionCount_one": "{{count}} session",
+      "archiveExplain": "<strong>Archive</strong>: only hides them from the active list. You can restore them from Archived at any time; nothing is deleted.",
+      "deleteExplain": "<danger>Delete all data</danger>: removes the session history and attachment folders of the selected projects (projects: {{projectCount}}; sessions in total: {{sessionCount}}). <strong>This cannot be undone.</strong> The project folders and the code in them are not deleted.",
+      "permissionsNote": "Only projects you own (or every project, for root) are changed; the rest are skipped and listed in the result.",
+      "chooseOwner": "Choose a user…",
+      "noOwner": "No owner",
+      "noOwnerNote": "With “No owner”, a project is visible to everyone only if it lives under the public directory (<code>PRISM_PUBLIC_WORKSPACE</code>); otherwise only root can see it. This change is recorded in the audit log."
     }
   },
   "archived": {

@@ -2,10 +2,10 @@ import { CheckSquare, ShieldCheck, Square, Star, StarOff, Trash2, UserCog, X } f
 import { useTranslation } from 'react-i18next';
 
 /**
- * 多选工具条(eo)。只在多选态下出现,钉在项目列表上方。
+ * 多选工具条。只在多选态下出现,钉在项目列表上方。
  *
- * 按钮排布刻意把**删除放到最右、并且是唯一带危险色的那个** —— 侧栏窄,几个
- * 小按钮挨在一起,收藏和删除长得一样时手滑的代价不对等。
+ * 删除刻意放在最右,并且是唯一带危险色的按钮:侧栏窄,几个小按钮挨在一起,
+ * 收藏和删除长得一样时手滑的代价不对等。
  */
 export default function ProjectBulkToolbar({
   selectedCount, totalCount, allSelected, busy, canChangeOwner,

@@ -5,19 +5,17 @@ import type { NormalizedMessage } from '../../../stores/useSessionStore';
 import { normalizedToChatMessages } from './useChatMessages';
 
 /**
- * ge:**子代理卡里那条嵌套时间轴。**
+ * 子代理卡里那条嵌套时间轴。
  *
  * SDK 的 `Options.forwardSubagentText` 原话:
  *
  * > By default, only tool_use/tool_result blocks from subagents are emitted
  * > (enough for a heartbeat counter). When true, the full subagent conversation
- * > is forwarded **so consumers can render a nested transcript**.
+ * > is forwarded so consumers can render a nested transcript.
  *
- * Prism 此前把它钉成 `false`,理由是"子代理的 prompt 会以 user 帧发过来,
- * 聊天里凭空冒出用户消息"。那个理由现在不成立了 —— 两道判据各自都挡得住,
- * 而这一份测试就是那两道判据的反证:
+ * 打开后子代理的 prompt 也会以 user 帧发过来。这里钉住前端的两道判据:
  *
- *   1. 子代理的正文/思考**不出顶层**(尤其不许变成用户气泡);
+ *   1. 子代理的正文/思考不出顶层(尤其不许变成用户气泡);
  *   2. 它们要归进父卡的 `childTools`,按到达顺序和工具步骤串成一条时间轴。
  */
 let seq = 0;
@@ -36,7 +34,7 @@ const PARENT = 'toolu_parent';
 const container = () => msg({ kind: 'tool_use', toolName: 'Task', toolId: PARENT, toolInput: { description: '审计:滚动与折叠' } });
 
 describe('forwardSubagentText 打开之后', () => {
-  it('子代理的正文与思考**归进卡片**,不出顶层', () => {
+  it('子代理的正文与思考归进卡片,不出顶层', () => {
     const rows = normalizedToChatMessages([
       container(),
       msg({ kind: 'thinking', parentToolUseId: PARENT, content: '先看看滚动控制器' }),
@@ -55,10 +53,10 @@ describe('forwardSubagentText 打开之后', () => {
     expect(children[1].toolResult?.content).toBe('ok');
   });
 
-  it('**绝不许变成用户气泡** —— 这正是当初关掉它的那个 bug', () => {
+  it('绝不许变成用户气泡', () => {
     const rows = normalizedToChatMessages([
       container(),
-      // 子代理被派活时的那句 prompt,历史上就是它冒充过用户发言
+      // 子代理被派活时的那句 prompt 以 user 帧到达,不能被当成用户发言
       msg({ kind: 'text', parentToolUseId: PARENT, role: 'user', content: 'Reply with exactly the text AGENT_OK' }),
     ]);
     expect(rows.filter((row) => row.type === 'user')).toHaveLength(0);
@@ -98,11 +96,10 @@ describe('forwardSubagentText 打开之后', () => {
 });
 
 /**
- * ge:**SDK 选项真的打开了没有。**
+ * SDK 选项真的打开了没有。
  *
- * 上面那几条证明"打开之后前端处理得对",但只要 `claude-sdk.js` 里还钉着
- * `forwardSubagentText = false`,子代理的正文与思考就一帧都不会来 ——
- * "判据写对了、数据到不了它"的又一种形状。读源码钉住。
+ * 上面那几条证明"打开之后前端处理得对",但只要 `claude-sdk.js` 里没打开
+ * `forwardSubagentText`,子代理的正文与思考就一帧都不会来。读源码钉住。
  */
 describe('SDK 选项的接线', () => {
   it('forwardSubagentText 打开(两条路径都要)', async () => {

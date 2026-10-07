@@ -1,4 +1,4 @@
-import { Edit3, Globe, Lock, Plus, Server, Terminal, Trash2, Zap } from 'lucide-react';
+import { Edit3, Globe, Plus, Server, Terminal, Trash2, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { McpProject, McpProvider, McpScope, ProviderMcpServer } from '../types';
@@ -46,11 +46,6 @@ const getServerKey = (server: ProviderMcpServer): string => (
   `${server.provider}:${server.scope}:${server.workspacePath || 'global'}:${server.name}`
 );
 
-// 曾经有一类"由 Prism 自己写入的托管 MCP 服务器"(浏览器功能的开关会自动增删
-// 它),它们在列表里是只读的。浏览器功能整体移除后不再有任何托管服务器 ——
-// 现在列表里的每一条都是用户自己加的,一律可编辑可删除。
-const isManagedServer = (): boolean => false;
-
 function ConfigLine({ label, children }: { label: string; children: string }) {
   if (!children) {
     return null;
@@ -88,12 +83,6 @@ export default function McpServers({ selectedProvider, currentProjects }: McpSer
   const description = t('mcpServers.description.claude', {
     defaultValue: `Model Context Protocol servers provide additional tools and data sources to ${providerName}`,
   });
-  // There used to be a second "Add Global MCP Server" entry beside this one,
-  // which wrote the same server to Claude, Cursor, Codex and OpenCode at once.
-  // With Claude the only provider it did exactly what this button does, except
-  // it refused SSE — the transports had been narrowed to what all four had in
-  // common. Two buttons, one of them quietly worse.
-  // dr:全中文界面里这颗按钮一直是英文硬拼串 —— 走 i18n,与同屏文案一致。
   const addButtonLabel = t('mcpServers.addServer', {
     defaultValue: '添加 {{provider}} MCP 服务器',
     provider: providerName,
@@ -138,88 +127,62 @@ export default function McpServers({ selectedProvider, currentProjects }: McpSer
           <div className="py-8 text-center text-muted-foreground">{t('mcpServers.loading', { defaultValue: '正在加载 MCP 服务…' })}</div>
         )}
 
-        {servers.map((server) => {
-          const managed = isManagedServer();
-
-          return (
-            <div key={getServerKey(server)} className="rounded-lg border border-border bg-card p-4">
-              <div className="flex items-start justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    {!managed && getTransportIcon(server.transport)}
-                    <span className="font-medium text-foreground">{server.name}</span>
-                    {!managed && (
-                      <>
-                        <Badge variant="outline" className="text-xs">
-                          {server.transport || 'stdio'}
-                        </Badge>
-                        <Badge variant="outline" className="text-xs">
-                          {getScopeLabel(server.scope)}
-                        </Badge>
-                        {server.projectDisplayName && (
-                          <Badge variant="outline" className="max-w-full truncate text-xs">
-                            {server.projectDisplayName}
-                          </Badge>
-                        )}
-                      </>
-                    )}
-                    {managed && (
-                      <Badge variant="outline" className="gap-1 text-xs text-muted-foreground">
-                        <Lock className="h-3 w-3" />
-                        {t('mcpServers.managed.badge', { defaultValue: 'Managed' })}
-                      </Badge>
-                    )}
-                  </div>
-
-                  <div className="space-y-1 text-sm text-muted-foreground">
-                    {!managed && (
-                      <>
-                        <ConfigLine label={t('mcpServers.config.command')}>{server.command || ''}</ConfigLine>
-                        <ConfigLine label={t('mcpServers.config.url')}>{server.url || ''}</ConfigLine>
-                        <ConfigLine label={t('mcpServers.config.args')}>{(server.args || []).join(' ')}</ConfigLine>
-                        {server.env && Object.keys(server.env).length > 0 && (
-                          <ConfigLine label={t('mcpServers.config.environment')}>
-                            {Object.entries(server.env).map(([key, value]) => `${key}=${maskSecret(value)}`).join(', ')}
-                          </ConfigLine>
-                        )}
-                      </>
-                    )}
-                    {managed && (
-                      <div className="text-xs text-muted-foreground">
-                        {t('mcpServers.managed.hint', {
-                          defaultValue: 'Managed by Prism.',
-                        })}
-                      </div>
-                    )}
-                  </div>
+        {/* 列表里的每一条都是用户自己加的(没有托管服务器),一律可编辑可删除。 */}
+        {servers.map((server) => (
+          <div key={getServerKey(server)} className="rounded-lg border border-border bg-card p-4">
+            <div className="flex items-start justify-between">
+              <div className="min-w-0 flex-1">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  {getTransportIcon(server.transport)}
+                  <span className="font-medium text-foreground">{server.name}</span>
+                  <Badge variant="outline" className="text-xs">
+                    {server.transport || 'stdio'}
+                  </Badge>
+                  <Badge variant="outline" className="text-xs">
+                    {getScopeLabel(server.scope)}
+                  </Badge>
+                  {server.projectDisplayName && (
+                    <Badge variant="outline" className="max-w-full truncate text-xs">
+                      {server.projectDisplayName}
+                    </Badge>
+                  )}
                 </div>
 
-                {!managed && (
-                  <div className="ml-4 flex items-center gap-2">
-                    <Button
-                      onClick={() => openForm(server)}
-                      variant="ghost"
-                      size="sm"
-                      className="text-muted-foreground hover:text-foreground"
-                      title={t('mcpServers.actions.edit')}
-                    >
-                      <Edit3 className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      onClick={() => deleteServer(server)}
-                      variant="ghost"
-                      size="sm"
-                      className="text-muted-foreground hover:text-foreground"
-                      title={t('mcpServers.actions.delete')}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                )}
+                <div className="space-y-1 text-sm text-muted-foreground">
+                  <ConfigLine label={t('mcpServers.config.command')}>{server.command || ''}</ConfigLine>
+                  <ConfigLine label={t('mcpServers.config.url')}>{server.url || ''}</ConfigLine>
+                  <ConfigLine label={t('mcpServers.config.args')}>{(server.args || []).join(' ')}</ConfigLine>
+                  {server.env && Object.keys(server.env).length > 0 && (
+                    <ConfigLine label={t('mcpServers.config.environment')}>
+                      {Object.entries(server.env).map(([key, value]) => `${key}=${maskSecret(value)}`).join(', ')}
+                    </ConfigLine>
+                  )}
+                </div>
+              </div>
+
+              <div className="ml-4 flex items-center gap-2">
+                <Button
+                  onClick={() => openForm(server)}
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-foreground"
+                  title={t('mcpServers.actions.edit')}
+                >
+                  <Edit3 className="h-4 w-4" />
+                </Button>
+                <Button
+                  onClick={() => deleteServer(server)}
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-foreground"
+                  title={t('mcpServers.actions.delete')}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
               </div>
             </div>
-          );
-        })}
+          </div>
+        ))}
 
         {!isLoading && !isLoadingProjectScopes && servers.length === 0 && (
           <div className="py-8 text-center text-muted-foreground">{t('mcpServers.empty')}</div>

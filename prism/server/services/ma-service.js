@@ -1,25 +1,20 @@
 /**
- * 营销诊断服务的进程托管 —— 让「起 Prism」顺带把诊断服务也起起来。
+ * 营销诊断服务的进程托管:起 Prism 时顺带把诊断服务也拉起来。
  *
- * 背景:诊断服务(ma_api_c.py / ma_api_b.py)是个独立的 Python 进程,只听回环。
- * 对外靠 routes/ma-proxy.js 把 Prism 8080 的 /api/ma/* 转过去 —— 因为公司网关
- * 只转发 8080,而 8080 是 Prism 的。
+ * 诊断服务(ma_api_c.py / ma_api_b.py)是独立的 Python 进程,只听回环;对外靠
+ * routes/ma-proxy.js 把 Prism 端口上的 /api/ma/* 转过去,因为公司网关只转发 8080,
+ * 而 8080 是 Prism 的。
  *
- * 在这个模块出现之前,部署要分两步:先在某个 shell 里 export 一堆 MA_* 再
- * nohup 起 Python,然后另起一个 shell export PRISM_MA_API_TARGET 再起 Prism。
- * 两步之间有三种常见的踩法,而且都不会立刻报错:
- *   · 端口写岔了(反代指 8092,服务听 8091)—— 症状是 502,但看日志两边都"正常"
- *   · Python 那个 shell 关了,服务跟着没了 —— Prism 还活着,接口静默变 502
- *   · 机器重启,只有 Prism 有开机自启 —— 同上
- * 所以这里把它收成一件事:进程由 Prism 拉起、日志并到 Prism 的日志、Prism 退出
- * 时一起收掉;监听地址**从 PRISM_MA_API_TARGET 反推**,反代和服务不可能再对不上。
+ * 托管的含义:进程由 Prism 拉起、日志并进 Prism 的日志、Prism 退出时一起收掉;监听
+ * 地址从 PRISM_MA_API_TARGET 反推,反代和服务的端口不会对不上。两边分开部署时常见的
+ * 失败(端口写岔、起服务的 shell 关了、机器重启后只有 Prism 自启)都表现为接口静默
+ * 502,两边日志却都"正常"。
  *
- * 仍然是**默认关闭**的:PRISM_MA_API_AUTOSTART 不配就什么都不做,Prism 的行为
- * 和以前逐字节一致。这一点和反代本身的口径保持一致(PRISM_MA_API_TARGET 不配
- * 就整个不挂载),原因也一样 —— 绝大多数装 Prism 的人根本不跑这个诊断服务。
+ * 默认关闭:PRISM_MA_API_AUTOSTART 不配就什么都不做。这与反代本身一致
+ * (PRISM_MA_API_TARGET 不配就整个不挂载):大多数部署不跑这个诊断服务。
  *
  * 环境变量:
- *   PRISM_MA_API_AUTOSTART   诊断服务入口的**绝对路径**(…/ma_api_c.py)。不配=不启动
+ *   PRISM_MA_API_AUTOSTART   诊断服务入口的绝对路径(…/ma_api_c.py)。不配 = 不启动
  *   PRISM_MA_API_TARGET      反代目标,同时决定子进程的 MA_API_HOST/MA_API_PORT
  *   PRISM_MA_API_PYTHON      解释器,默认 python3
  *   PRISM_MA_API_ALLOW_NO_KEY=1  允许在没有 MA_API_KEY 的情况下自启(默认拒绝)
@@ -55,8 +50,7 @@ export function probeHealth(host, port, timeoutMs = 1_500) {
 }
 
 /**
- * 把环境变量翻成一份启动方案,或者说明白为什么不启动。
- * 单独抽出来是为了能不碰进程地测 —— 这里每一条拒绝都是一个真实的部署事故。
+ * 把环境变量翻成一份启动方案,或者说明不启动的原因。单独抽出来是为了不起进程就能测。
  *
  * @returns {{ok: true, script, cwd, python, host, port, label}
  *          |{ok: false, reason: string, message: string, silent?: boolean}}
@@ -165,8 +159,8 @@ export function createMaServiceSupervisor(plan, {
     host: plan.host,
     port: plan.port,
     spawnChild({ info }) {
-      // 监听地址从反代目标反推,不给子进程自己发挥的余地 —— 这正是要根除的那类事故:
-      // 反代指着 8092,服务因为环境里残留的 MA_API_PORT 听在 8091,两边日志都"正常"。
+      // 监听地址从反代目标反推,覆盖环境里可能残留的 MA_API_HOST / MA_API_PORT:
+      // 否则反代指着一个端口、服务听在另一个,两边日志都"正常",接口却是 502。
       const childEnv = { ...env, MA_API_HOST: plan.host, MA_API_PORT: String(plan.port) };
       info(`拉起 ${plan.python} ${plan.script}(cwd=${plan.cwd},监听 ${plan.label})`);
       return spawnFn(plan.python, [plan.script], {

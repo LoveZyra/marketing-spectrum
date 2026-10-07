@@ -146,8 +146,8 @@ function Tooltip({
     return () => document.removeEventListener('pointerdown', handlePointerDown, true);
   }, [isVisible]);
 
-  // 定位必须在**同一帧**完成 —— 用 useLayoutEffect 而不是 rAF。
-  // 以前是先渲染在待定坐标、下一帧再挪过去,浮层于是从屏幕角上滑进来。
+  // 定位必须在同一帧完成,用 useLayoutEffect 而不是 rAF:先渲染在待定坐标、
+  // 下一帧再挪过去的话,浮层会从屏幕角上滑进来。
   useLayoutEffect(() => {
     if (!isVisible) {
       setTooltipStyle(null);

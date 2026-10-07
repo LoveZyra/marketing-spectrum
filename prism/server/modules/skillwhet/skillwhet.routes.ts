@@ -21,13 +21,15 @@ import { listRollbacks, publishManagedCopy, rollbackPublished } from './services
 import { SkillWhetClient } from './services/skillwhet-client.js';
 
 /**
- * gy:`/api/skillwhet/*` —— 技能优化(SkillWhet)的平台侧接口,第一期:体检 / 技能资产 / 任务集。
+ * `/api/skillwhet/*`:技能优化(SkillWhet)的平台侧接口 —— 体检、技能资产、任务集、训练作业、夜训、
+ * staging / 采纳 / 发布 / 回滚、反馈收件箱、从会话挖任务。
  *
- * 权限线(《实施计划》D6 与 F2):
- *   · 读(status / skills / gate / facts / contract / wiki / provenance / ledger / tasks 列表 / validate):登录即可;
- *   · 从技能库导入副本、bootstrap、任务入库、移除技能库来源的副本:root;
- *   · 上传自己的 skill:登录即可;移除 / 给它导数据:上传者本人或 root。
- * serve 那边不认识用户,所以**这里就是全部的权限判断**;转发时不透传任何用户凭证。
+ * 权限线:
+ *   · 列表与状态(status / skills / tasks 列表 / validate / jobs):登录即可;
+ *     副本内部(体检结果 / 事实 / 契约 / wiki / 出处 / 台账 / drift / staging 详情):技能库来源登录即可,上传来源只给上传者本人或 root;
+ *   · 动副本(移除 / bootstrap / 任务入库 / 起训练 / 采纳):技能库来源只有 root,上传来源是上传者本人或 root;
+ *   · 上传自己的 skill:登录即可;从技能库导入副本、发布 / 回滚、夜训计划、反馈收件箱、从会话挖任务:root。
+ * serve 那边不认识用户,所以这里就是全部的权限判断;转发时不透传任何用户凭证。
  *
  * 整层只有在 `PRISM_SKILLWHET_ENABLE=1` 时才会被 index.js 挂上;没挂就是 404,前端据此藏轨位。
  */
@@ -97,7 +99,7 @@ const audit = (req: Request, event: Parameters<typeof auditLogDb.record>[0]['eve
 };
 
 /**
- * ha(审计 P5):反馈统计按看的人裁剪 —— 看不见的项目:名字 / id 不给,合成一行「其他项目」;
+ * 反馈统计按看的人裁剪 —— 看不见的项目:名字 / id 不给,合成一行「其他项目」;
  * 最近待优化点只留看得见的项目里的(root 全给);"偏差项目"只列有名字的。
  */
 type ProjectRow = { project_id: string | null; project_name: string | null; answered: number; good: number; neutral: number; bad: number };
@@ -123,8 +125,8 @@ function scopedFeedbackStats(stats: SkillFeedbackStats, visible: Map<string, str
 }
 
 /**
- * hl(复核 P2-5):上传来源的 skill 是私人的 —— 非上传者本人(且非 root)只看得到每道门通过 / 未通过的结论;
- * 体检结果里的 findings / detail(G4 崩溃时带着 ≤300 字的测试输出)不给。技能库来源照旧全给。
+ * 上传来源的 skill 是私人的 —— 非上传者本人(且非 root)只看得到每道门通过 / 未通过的结论;
+ * 体检结果里的 findings / detail(G4 崩溃时带着 ≤300 字的测试输出)不给。技能库来源全给。
  */
 const mayReadInternals = (user: RequestUser | null, status: { source?: unknown; uploaded_by?: unknown }): boolean =>
   Boolean(user) && (isRoot(user) || status.source !== 'upload' || status.uploaded_by === user?.username);
@@ -157,7 +159,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
 
   router.use(deps.authenticateToken);
   // 30 MiB 上限的上传 base64 后约 40 MiB,再加 JSON 外壳 —— 与 serve 侧 MAX_BODY(48 MiB)同口径。
-  // 只给上传那一条路;其余路由沿用全局的小 body 上限(gz 审计 #16)。
+  // 只给上传那一条路;其余路由用 1mb 的小 body 上限。
   router.use('/skills/upload', express.json({ limit: '48mb' }));
   router.use(express.json({ limit: '1mb' }));
 
@@ -254,9 +256,9 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
   }));
 
   /**
-   * hl(静态 P2-22):谁能读这份副本的内部(体检结果 / 事实 / 契约 / 经验 Wiki / 出处 / 台账 / drift)。
+   * 谁能读这份副本的内部(体检结果 / 事实 / 契约 / 经验 Wiki / 出处 / 台账 / drift)。
    * 技能库来源 → 登录即可(与列表口径一致,技能库本来全员可用);上传来源 → 上传者本人或 root
-   * (上传的 skill 是私人的:副本里的测试能往 wiki 写任意内容,原来任何登录用户都读得到)。
+   * (上传的 skill 是私人的,而且副本里的测试能往 wiki 写任意内容)。
    */
   const assertMayRead = async (req: Request, name: string): Promise<{ user: RequestUser; status: ManagedStatus }> => {
     const user = requireUser(req);
@@ -276,7 +278,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
 
   router.post('/skills/:name/gate', asyncHandler(async (req, res) => {
     const name = parseSkillName(req.params.name);
-    // 体检会真的跑副本里的 tests/(G4 / G5):谁能动这份副本谁才能点(gz 审计 #1 / #12)
+    // 体检会真的跑副本里的 tests/(G4 / G5):谁能动这份副本谁才能点
     await assertMayMutate(req, name, '重跑体检');
     const data = await client.request('POST', `/skills/${encodeURIComponent(name)}/gate`, {}, 120_000);
     res.json(createApiSuccessResponse(data));
@@ -286,7 +288,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     const user = requireUser(req);
     const name = parseSkillName(req.params.name);
     const stats = messageFeedbackDb.statsBySkill(name);
-    // ha(F3-02):按项目分组。项目名只给看得见那个项目的人,别人看到的是"其他项目"
+    // 按项目分组。项目名只给看得见那个项目的人,别人看到的是"其他项目"
     const visible = new Map(projectsDb.getProjectPaths(isRoot(user) ? null : user.id)
       .map((row) => [row.project_id, row.custom_project_name || path.basename(row.project_path)]));
     res.json(createApiSuccessResponse(scopedFeedbackStats(stats, visible, isRoot(user))));
@@ -325,7 +327,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     await assertMayMutate(req, name, '移除副本');
     const data = await client.request('DELETE', `/skills/${encodeURIComponent(name)}`);
     audit(req, 'skillwhet_remove', name);
-    // he:夜训批准的是这份副本;副本没了,计划跟着移出(换一份同名的进来要 root 重新纳入)
+    // 夜训批准的是这份副本;副本没了,计划跟着移出(换一份同名的进来要 root 重新纳入)
     if (skillWhetNightlyDb.unenroll(name, null, '副本已移除,自动移出夜训')) audit(req, 'skillwhet_nightly_unenroll', `${name} 副本已移除`);
     res.json(createApiSuccessResponse(data));
   }));
@@ -362,7 +364,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     const skill = typeof req.query.skill === 'string' && req.query.skill ? parseSkillName(req.query.skill) : null;
     const full = req.query.full === '1' || req.query.full === 'true';
     if (full) {
-      // 任务全文里有用户原话(反馈 / 从会话挖出来的):只给能动这份副本的人(ha 审计 P1)
+      // 任务全文里有用户原话(反馈 / 从会话挖出来的):只给能动这份副本的人
       if (!skill) throw new AppError('full=1 要带 skill', { code: 'SKILLWHET_BAD_QUERY', statusCode: 400 });
       await assertMayMutate(req, skill, '看任务全文');
     }
@@ -371,14 +373,15 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     res.json(createApiSuccessResponse(data));
   }));
 
-  // ── gz · 训练作业 ───────────────────────────────────────────────────
+  // ── 训练作业 ────────────────────────────────────────────────────────
   /**
    * 起训练。谁能起:上传来源 → 上传者本人或 root;技能库来源 → root(assertMayMutate)。
-   * 非 root 还要过两道硬门:该副本最近一次体检 **G1 安全门 PASS**(训练会真的执行副本里的代码),
-   * 以及 **每人每天费用上限**(已完成作业的实际费用 + 在途作业的预算)。root 越过 G1 时审计带 g1_override。
-   * 预算三项(费用 / 时长 / 并发)先钳到 `.env` 的上限再转发;后端选择(mock)只有 root 能传。
+   * 非 root 还要过两道硬门:该副本最近一次体检 G1 安全门 PASS(训练会真的执行副本里的代码),
+   * 以及每人每天费用上限(已完成作业的实际费用 + 在途作业的预算)。root 越过 G1 时审计带 g1_override。
+   * 预算三项(费用 / 时长 / 并发)先钳到上限再转发(费用 / 时长:非 root 用 `.env` 上限,root 用硬上限);
+   * 后端选择(mock)只有 root 能传。
    */
-  // 同一个人并发提交两个作业,预算检查是先查后建:按人排成一串(gz 审计 #7)
+  // 同一个人并发提交两个作业时,预算检查是先查后建:按人排成一串
   const jobChains = new Map<number, Promise<unknown>>();
   const serializePerUser = async <T>(userId: number, fn: () => Promise<T>): Promise<T> => {
     const prev = jobChains.get(userId) ?? Promise.resolve();
@@ -392,7 +395,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
   };
 
   /**
-   * 起一次训练(新建训练表单与 he 的「从中断处续跑」共用):权限、G1、每日额度、参数钳制、审计。
+   * 起一次训练(新建训练表单与「从中断处续跑」共用):权限、G1、每日额度、参数钳制、审计。
    * `extraDetail` 只进审计。
    */
   const startTrain = async (req: Request, skill: string, rawArgs: unknown, extraDetail = '', extraTags: string[] = []) => {
@@ -404,8 +407,8 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     for (const key of ['fast_backend', 'slow_backend', 'eval_backend']) {
       if (key in args && !root) delete args[key];
     }
-    // hl(静态 P1-10):非 root 的四个模型都走白名单;原来 target_model 不受任何限制,配 runner=agent 就能让 rollout 走任意模型。
-    // hn(B7):白名单没配时 = 三个别名 + 模型目录里上架的条目(见 model-policy.ts);root 不受限,但名字要过字符集。
+    // 非 root 的四个模型都要在允许列表里,含 target_model(runner=agent 时 rollout 用它);
+    // 列表没配置时 = 三个别名 + 模型目录里上架的条目(见 model-policy.ts)。root 不受限,但名字要过字符集。
     for (const key of SKILLWHET_MODEL_KEYS) {
       if (!(key in args) || args[key] === undefined || args[key] === null || args[key] === '') continue;
       const value = String(args[key]);
@@ -419,7 +422,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
         );
       }
     }
-    // hn(B7):评估 ≠ 提议按真名比(别名换成它映射到的网关模型再比)。mock 后端不调模型,不查。
+    // 评估 ≠ 提议按真名比(别名换成它映射到的网关模型再比)。mock 后端不调模型,不查。
     const usesMock = ['fast_backend', 'slow_backend', 'eval_backend'].some((key) => args[key] === 'mock');
     if (!usesMock) {
       const conflict = await proposerEvaluatorConflict(args);
@@ -431,7 +434,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
       if (Number.isFinite(raw) && raw > cap) clamped.push(`${key} ${raw}→${cap}`);
       args[key] = Number.isFinite(raw) && raw > 0 ? Math.min(raw, cap) : fallback;
     };
-    // hf2:root 可以越过 .env 的单次上限(到硬上限为止,审计记 cost_override);非 root 钳到 .env
+    // root 可以越过 .env 的单次上限(到硬上限为止,审计记 cost_override);非 root 钳到 .env
     clampNum('max_cost_usd', root ? budget.hardMaxCostUsd : budget.maxCostUsd, budget.maxCostUsd);
     clampNum('max_minutes', (root ? budget.hardMaxHours : budget.maxHours) * 60, budget.maxHours * 60);
     clampNum('workers', budget.maxWorkers, Math.min(2, budget.maxWorkers));
@@ -461,7 +464,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
       const data = await client.request<{ job: JobRow; position: number }>('POST', '/jobs',
         { kind: 'train', skill, args, tags, origin: 'manual' }, 30_000);   // 这条路只起训练;挖任务 / 留出集各有各的门
       audit(req, 'skillwhet_job_start', `${skill} ${data.job.id}${extraDetail} args=${JSON.stringify(args).slice(0, 300)}${g1Override ? ' g1_override' : ''}${costOverride ? ` cost_override(env $${budget.maxCostUsd} / ${budget.maxHours}h)` : ''}`);
-      // 被钳过的参数原样告诉页面,不再悄悄按上限跑
+      // 被钳过的参数如实告诉页面,不悄悄按上限跑
       return { ...data, clamped };
     } catch (error) {
       audit(req, 'skillwhet_job_start', `${skill}${extraDetail} ${error instanceof Error ? error.message : String(error)}`, 'failure');
@@ -479,19 +482,18 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
   /** 当天(UTC)这个人的已用 + 在途费用。 */
   const spentToday = async (userId: number): Promise<number> => {
     const today = new Date().toISOString().slice(0, 10);
-    // hl(静态 P3):serve 的列表上限是 1000 条,原来 limit=5000 只是被悄悄截断;0.5.2 起按 since 过滤(倒序走到更早的就停),
-    // 一天之内 1000 条以内都算得全
+    // serve 的列表最多回 1000 条,并按 since 过滤(倒序走到更早的就停),一天之内 1000 条以内都算得全
     const data = await client.request<{ jobs: JobRow[] }>('GET', `/jobs?limit=1000&since=${encodeURIComponent(`${today}T00:00:00Z`)}`);
     let total = 0;
     for (const job of data.jobs) {
       if (jobOwnerId(job) !== userId || !String(job.created_at ?? '').startsWith(today)) continue;
-      // 留出集作业没有费用上限参数:非 pytest runner 的按单次上限预留(ha 审计 P2)
+      // 留出集作业没有费用上限参数:非 pytest runner 的按单次上限预留
       const reserve = Number(job.args?.max_cost_usd)
         || (job.kind === 'release_eval' && String(job.args?.runner ?? 'pytest') !== 'pytest' ? readBudget(env).maxCostUsd : 0);
       if (job.state === 'queued' || job.state === 'running') total += reserve;
-      // hl(静态 P2-23):排队中就取消的(从未 started)一分钱没花,不占额度
+      // 排队中就取消的(从未 started)一分钱没花,不占额度
       else if (job.state === 'cancelled' && !job.started_at) total += 0;
-      // 取消 / 失败 / 中断而没算出费用的,按预算上限保守计(gz 审计 #4)
+      // 取消 / 失败 / 中断而没算出费用的,按预算上限保守计
       else total += typeof job.cost_usd === 'number' ? job.cost_usd : reserve;
     }
     return total;
@@ -501,14 +503,14 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     const user = requireUser(req);
     const budget = readBudget(env);
     const spent = isRoot(user) ? 0 : await spentToday(user.id);
-    // hn(B7):非 root 能选的模型(root 为 null = 不限),训练 / 夜训表单的下拉按它过滤。
+    // 非 root 能选的模型(root 为 null = 不限),训练 / 夜训表单的下拉按它过滤。
     res.json(createApiSuccessResponse({ ...budget, spentToday: spent, isRoot: isRoot(user), allowedModels: allowedSkillWhetModels(budget, isRoot(user)) }));
   }));
 
   router.get('/jobs', asyncHandler(async (req, res) => {
     requireUser(req);
     const skill = typeof req.query.skill === 'string' && req.query.skill ? parseSkillName(req.query.skill) : null;
-    // he:总览的 14 天趋势要多拉一些(serve 默认只回 100 个)
+    // 总览的 14 天趋势要多拉一些(serve 默认只回 100 个)
     const limit = Math.min(1000, Math.max(1, Number.parseInt(String(req.query.limit ?? ''), 10) || 100));
     const query = [skill ? `skill=${encodeURIComponent(skill)}` : '', `limit=${limit}`].filter(Boolean).join('&');
     const data = await client.request('GET', `/jobs?${query}`);
@@ -536,7 +538,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
       // 挖任务作业的输出里有服务器路径与会话摘要:只给 root
       const { job } = await client.request<{ job: JobRow }>('GET', `/jobs/${parseJobId(req.params.id)}`);
       if ((job.kind ?? 'train') === 'harvest') throw new AppError('挖任务作业的日志只有 root 能看', { code: 'SKILLWHET_ROOT_ONLY', statusCode: 403 });
-      // hl(复核 P2-5):训练日志里有副本的测试输出 —— 上传来源的只给上传者本人
+      // 训练日志里有副本的测试输出 —— 上传来源的只给上传者本人
       await assertMayRead(req, job.skill);
     }
     const tail = Math.min(2000, Math.max(1, Number.parseInt(String(req.query.tail ?? '200'), 10) || 200));
@@ -554,8 +556,8 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     res.json(createApiSuccessResponse(data));
   }));
 
-  // ── he · 从中断处续跑 ─────────────────────────────────────────────
-  // 训练中重启了 Prism / serve,作业会被标成 interrupted;SkillWhet 0.5 每轮结束存一个 checkpoint,
+  // ── 从中断处续跑 ──────────────────────────────────────────────────
+  // 训练中重启了 Prism / serve,作业会被标成 interrupted;SkillWhet 每轮结束存一个 checkpoint,
   // 这里用原作业的参数加 resume 再起一次(权限、G1、额度与新建训练同一套)。夜训作业(没有发起人)只 root 能续。
   router.get('/skills/:name/checkpoint', asyncHandler(async (req, res) => {
     requireUser(req);
@@ -582,7 +584,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
       throw new AppError('现有的 checkpoint 不是这次作业留下的(是另一次训练的)—— 请到那次作业上续跑,或新建训练', { code: 'SKILLWHET_NO_CHECKPOINT', statusCode: 409 });
     }
     if (!ck.exists || !ck.matches) {
-      // hl(动态 P3):这次作业已经被续跑过(checkpoint 归了那个续跑作业、跑完即删)—— 说清楚,别说"一轮都没跑完"
+      // 这次作业可能已被续跑过(checkpoint 归了那个续跑作业、跑完即删):要如实说明,不能报成"一轮都没跑完"
       const later = (await client.request<{ jobs: JobRow[] }>('GET', `/jobs?skill=${encodeURIComponent(job.skill)}&limit=200`).catch(() => ({ jobs: [] as JobRow[] })))
         .jobs.find((j) => (j.tags ?? []).includes(`resume_of:${id}`));
       if (later) {
@@ -597,7 +599,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     res.json(createApiSuccessResponse(data));
   }));
 
-  // ── he · 夜训计划 ─────────────────────────────────────────────────
+  // ── 夜训计划 ──────────────────────────────────────────────────────
   const NIGHTLY_CONFIG_KEYS = new Set([
     'runner', 'fast_model', 'slow_model', 'eval_model', 'target_model', 'fast_iters', 'k', 'workers',
     'no_accept_rounds', 'gate_metric', 'no_slow_loop', 'judge_samples', 'test_dir',
@@ -645,7 +647,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     if (!Number.isInteger(minNew) || minNew < 0 || minNew > 1000) throw bad('新任务门槛 0–1000');
     const rawCost = body.max_cost_usd === undefined ? before?.max_cost_usd ?? null : body.max_cost_usd;
     const maxCost = rawCost === null || rawCost === '' ? null : Number(rawCost);
-    // hf2:夜训只 root 能设,单次上限可越过 .env 到硬上限;但不能超过一晚合计(否则每晚都排不上)
+    // 夜训只 root 能设,单次上限可越过 .env 到夜训硬上限;但不能超过一晚合计(否则每晚都排不上)
     const nightCap = Math.min(budget.nightlyHardMaxCostUsd, budget.nightlyMaxCostUsd);
     if (maxCost !== null && (!Number.isFinite(maxCost) || maxCost <= 0 || maxCost > nightCap)) {
       throw bad(`单次费用上限 0–${nightCap}(不能超过一晚合计 PRISM_SKILLWHET_NIGHTLY_MAX_COST_USD=$${budget.nightlyMaxCostUsd},也不能超过夜训硬上限 $${budget.nightlyHardMaxCostUsd});留空 = 用 .env 的单次上限 $${budget.maxCostUsd}`);
@@ -657,7 +659,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
       if (!NIGHTLY_CONFIG_KEYS.has(key)) throw bad(`夜训参数不支持 ${key}`);
       if (value === null || value === '' || value === undefined) continue;
       if (!['string', 'number', 'boolean'].includes(typeof value)) throw bad(`${key} 的值类型不对`);
-      // hn(B7):夜训里的模型此前不校验(v2 记下的缺口)。夜训只有 root 能设,所以只查名字合不合法。
+      // 夜训只有 root 能设,模型只查名字合不合法。
       if ((SKILLWHET_MODEL_KEYS as readonly string[]).includes(key) && !isSkillWhetModelAllowed(String(value), budget, true)) {
         throw bad(`${key}=${String(value)} 不是合法的模型名`);
       }
@@ -671,7 +673,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
       if (!status.bootstrapped) {
         throw new AppError('这个副本还没 bootstrap(冻结 S₀),夜训起不来 —— 先在技能资产里点 bootstrap', { code: 'SKILLWHET_NOT_BOOTSTRAPPED', statusCode: 409 });
       }
-      // hn(B7):按真名比(别名换成它映射到的网关模型),没填的角色按 SkillWhet 默认补上
+      // 评估 ≠ 提议:按真名比(别名换成它映射到的网关模型),没填的角色按 SkillWhet 默认补上
       const usesMock = ['fast_backend', 'slow_backend', 'eval_backend'].some((key) => config[key] === 'mock');
       const conflict = usesMock ? null : await proposerEvaluatorConflict(config);
       if (conflict) throw bad(conflict);
@@ -685,7 +687,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     res.json(createApiSuccessResponse({ plan: planView(row, true) }));
   }));
 
-  // ── gz · staging / 采纳 / 导出 ───────────────────────────────────────
+  // ── staging / 采纳 / 导出 ────────────────────────────────────────────
   const parseStagingId = (value: unknown): string => {
     const id = String(value ?? '');
     if (!/^[0-9]{8}-[0-9]{6}(-[0-9]+)?$/.test(id)) throw new AppError('staging id 不合法', { code: 'SKILLWHET_BAD_STAGING', statusCode: 400 });
@@ -698,7 +700,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
   }));
   router.get('/skills/:name/staging/:sid', asyncHandler(async (req, res) => {
     const name = parseSkillName(req.params.name);
-    await assertMayRead(req, name);            // hl(复核 P2-5):diff 与报告是副本内容,上传来源只给本人 / root
+    await assertMayRead(req, name);            // diff 与报告是副本内容,上传来源只给本人 / root
     res.json(createApiSuccessResponse(await client.request('GET', `/skills/${encodeURIComponent(name)}/staging/${parseStagingId(req.params.sid)}`, undefined, 30_000)));
   }));
   router.post('/skills/:name/staging/:sid/adopt', asyncHandler(async (req, res) => {
@@ -706,16 +708,16 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     const sid = parseStagingId(req.params.sid);
     await assertMayMutate(req, name, '采纳到副本');
     const body = (req.body ?? {}) as { force?: unknown; skip_release?: unknown };
-    // ha:force(未被接受 / 副本被改过)与 skip_release(没做留出集评估)是两个开关,互不连带
+    // force(未被接受 / 副本被改过)与 skip_release(没做留出集评估)是两个开关,互不连带
     const data = await client.request('POST', `/skills/${encodeURIComponent(name)}/staging/${sid}/adopt`,
       { force: body.force === true, skip_release: body.skip_release === true }, 60_000);
     audit(req, 'skillwhet_adopt', `${name} ${sid}${body.force === true ? ' force' : ''}${body.skip_release === true ? ' skip_release' : ''}`);
     res.json(createApiSuccessResponse(data));
   }));
-  /** 训练后的包(staging/proposed/,不含 .evo)—— 登录即可下,原样转发 serve 的 tar.gz。 */
+  /** 训练后的包(staging/proposed/,不含 .evo),原样转发 serve 的 tar.gz。 */
   router.get('/skills/:name/staging/:sid/export', asyncHandler(async (req, res) => {
     const name = parseSkillName(req.params.name);
-    await assertMayRead(req, name);            // hl(复核 P2-5):训练后的整包,上传来源只给本人 / root
+    await assertMayRead(req, name);            // 训练后的整包,上传来源只给本人 / root
     const sid = parseStagingId(req.params.sid);
     const { data, filename } = await client.requestRaw(`/skills/${encodeURIComponent(name)}/staging/${sid}/export`, 60_000);
     res.setHeader('Content-Type', 'application/gzip');
@@ -724,20 +726,20 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     res.end(data);
   }));
 
-  // ── gz · 发布 / 回滚(root)────────────────────────────────────────────
+  // ── 发布 / 回滚(root)─────────────────────────────────────────────────
   const rollbackRoot = path.join(config.home, 'rollback');
   const publish = async (req: Request, mode: 'replace' | 'new') => {
     const name = parseSkillName(req.params.name);
     const publisher = requireRoot(req, mode === 'new' ? '发布为新技能' : '发布到技能库');
     const status = await client.request<ManagedStatus & { adopted?: boolean; adopted_staging?: string | null; latest_staging?: string | null; imported_from?: string | null }>('GET', `/skills/${encodeURIComponent(name)}/status`);
-    // hd:被发布的是"副本当前内容来自的那份 staging",不一定是最新一份
+    // 被发布的是"副本当前内容来自的那份 staging",不一定是最新一份
     const publishedStaging = status.adopted_staging ?? status.latest_staging ?? null;
     if (!status.adopted) {
       throw new AppError('最近一次 staging 还没采纳到副本;先在版本页「采纳」', { code: 'SKILLWHET_NOT_ADOPTED', statusCode: 409 });
     }
     const liveDirForSkill = path.join(liveRoot, name);
     if (mode === 'replace') {
-      // 没有导入记录(纯上传、或从没 rebase 过)就没有 drift 可比 —— 替换会盖掉技能库里一个不相干的同名 skill(gz 审计 #6)
+      // 没有导入记录(纯上传、或从没 rebase 过)就没有 drift 可比 —— 替换会盖掉技能库里一个不相干的同名 skill
       const from = String(status.imported_from ?? '');
       if (!from || path.resolve(from) !== path.resolve(liveDirForSkill)) {
         throw new AppError(
@@ -756,7 +758,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     // 副本现在就是技能库那份:让 serve 重新钉 sha(上传来源顺带记下它的 live 位置)。失败不回滚发布,但要说出来
     let rebased = true;
     let rebaseError: string | null = null;
-    // hd:event=publish → serve 记一条发布记录(哪份 staging、谁、什么时候),版本页据此标「已发布」
+    // event=publish → serve 记一条发布记录(哪份 staging、谁、什么时候),版本页据此标「已发布」
     await client.request('POST', `/skills/${encodeURIComponent(name)}/rebase`, { live_dir: result.liveDir, event: 'publish', by: publisher.username, mode }).catch((error: unknown) => {
       rebased = false;
       rebaseError = error instanceof Error ? error.message : String(error);
@@ -776,7 +778,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     const rollbacks = listRollbacks(rollbackRoot, name).map((entry) => (isRoot(user) ? entry : { ts: entry.ts, files: entry.files }));
     res.json(createApiSuccessResponse({ rollbacks, liveExists: fs.existsSync(path.join(liveRoot, name, 'SKILL.md')) }));
   }));
-  // hd:发布 / 回滚记录(serve 记在自己的 home 里);登录即可看,发起人只给 root
+  // 发布 / 回滚记录(serve 记在自己的 home 里);登录即可看,发起人只给 root
   router.get('/skills/:name/publishes', asyncHandler(async (req, res) => {
     const name = parseSkillName(req.params.name);
     const user = requireUser(req);
@@ -794,13 +796,13 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     res.json(createApiSuccessResponse(result));
   }));
 
-  // ── gz · 任务集:从测试派生 / 来自反馈 ──────────────────────────────────
+  // ── 任务集:从测试派生 / 来自反馈 ───────────────────────────────────────
   router.post('/tasks/derive', asyncHandler(async (req, res) => {
     const body = (req.body ?? {}) as { skill?: unknown; test_dir?: unknown; val_fraction?: unknown; test_fraction?: unknown };
     const skill = parseSkillName(body.skill);
     const { user, status } = await assertMayMutate(req, skill, '从测试派生任务集');
     if (!isRoot(user)) {
-      // 派生会 import 副本里的测试模块(pytest --collect-only):非 root 同样要 G1 PASS(gz 审计 #1)
+      // 派生会 import 副本里的测试模块(pytest --collect-only):非 root 同样要 G1 PASS
       const gate = await client.request<GateCache>('GET', `/skills/${encodeURIComponent(skill)}/gate`);
       const problem = g1Problem(gate, '派生任务');
       if (problem) throw new AppError(problem, { code: 'SKILLWHET_G1_REQUIRED', statusCode: 403 });
@@ -843,7 +845,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
   }));
 
   /**
-   * 反馈 → 任务(A 路):期望结果 → `expected_output`(exact),只有待优化点 → `rubric`;
+   * 反馈 → 任务:期望结果 → `expected_output`(exact),只有待优化点 → `rubric`;
    * 好 / 一般 / 差 → outcome success / mixed / fail;打上 project / user 标签;入库后回填 task_id。
    */
   router.post('/feedback/inbox/accept', asyncHandler(async (req, res) => {
@@ -852,7 +854,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     const ids = Array.isArray(body.ids) ? body.ids.map((v) => Number(v)).filter((v) => Number.isInteger(v) && v > 0).slice(0, 200) : [];
     if (ids.length === 0) throw new AppError('ids 不能为空', { code: 'SKILLWHET_BAD_INBOX', statusCode: 400 });
     // 只收"收件箱里真会出现"的行:answered、没转过、有待优化点或期望结果;skill_hint 是用户自由文本,
-    // 必须过技能名校验(否则 `../x` 会变成 serve 侧的目录名 —— gz 审计 #2)
+    // 必须过技能名校验(否则 `../x` 会变成 serve 侧的目录名)
     const skipped: Array<{ id: number; reason: string }> = [];
     const rows = messageFeedbackDb.getByIds(ids).filter((row) => {
       if (row.task_id) { skipped.push({ id: row.id, reason: 'already_task' }); return false; }
@@ -878,7 +880,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
       });
       const data = await client.request<{ added: number; report?: { rows?: Array<{ row: number; task_id: string; ok: boolean; errors: string[] }> } }>(
         'POST', '/tasks', { skill, format: 'records', records, keep_passing: true, source: 'feedback', tags: [`accepted_by:${user.username}`] }, 60_000);
-      // 以 serve 的逐行报告为准;没有报告(老版本 serve)才按 added 数兜底。没被接受的行留在收件箱(gz 审计 #8)
+      // 以 serve 的逐行报告为准;serve 没回报告时才按 added 数兜底。没被接受的行留在收件箱
       const report = Array.isArray(data.report?.rows) ? data.report!.rows! : null;
       const okRows = new Set((report ?? []).filter((r) => r.ok).map((r) => r.task_id));
       for (const row of group) {
@@ -896,7 +898,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     res.json(createApiSuccessResponse({ accepted, skipped }));
   }));
 
-  // ── ha · 从会话里学:反馈叠加层 / 会话白名单 / harvest 作业 / release-eval ──────
+  // ── 从会话里学:反馈叠加层 / 会话白名单 / harvest 作业 / release-eval ───────────
 
   /** 与 sessions.service 的 visibilityScopeOf 同一判据(root = 全部,其余按项目可见性)。 */
   const scopeOf = (user: RequestUser) => (isRoot(user) ? { kind: 'all' as const } : { kind: 'user' as const, userId: user.id });
@@ -915,8 +917,8 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
   };
 
   /**
-   * 这个人**看得见**的 Claude 会话(可按项目路径与时间筛),附 transcript id。root 的可见范围 = 全部
-   * (与 sessions.service 的 visibilityScopeOf 同一判据)。分页取全,不在过滤前截断(ha 审计 P7)。
+   * 这个人看得见的 Claude 会话(可按项目路径与时间筛),附 transcript id。root 的可见范围 = 全部
+   * (与 sessions.service 的 visibilityScopeOf 同一判据)。分页取全,不在过滤前截断。
    */
   const visibleClaudeSessions = (user: RequestUser, projects: string[] | null, sinceMs: number | null) => {
     const out: Array<{ session_id: string; project_path: string; transcriptId: string; at: number }> = [];
@@ -954,7 +956,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
   const OVERLAY_BUDGET_BYTES = 8 * 1024 * 1024;
 
   /**
-   * 反馈叠加层(P3-01):某 skill 的投票 / 调查答复,按 **provider 会话 id**(= transcript 文件名)组织成
+   * 反馈叠加层:某 skill 的投票 / 调查答复,按 provider 会话 id(= transcript 文件名)组织成
    * `{ <sid>: [{ message_uuid, verdict, category, note, expected_output }] }`;原文先脱敏。
    * 只收 `sessions` 里那些会话的(调用方传的是白名单);对不上原生 uuid 的行(网关写的气泡)丢掉。
    */
@@ -1008,7 +1010,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
   }));
 
   /**
-   * 起一个 harvest 作业(root)。会话白名单 = **当前用户可见**且在**显式选定**的项目 / 时间窗里的 Claude
+   * 起一个 harvest 作业(root)。会话白名单 = 当前用户可见、且在显式选定的项目 / 时间窗里的 Claude
    * 会话的 transcript id(root 可见全部,所以项目不能省);叠加层只带这些会话里、这个 skill 的反馈。
    * `dry_run` 只列会话、零模型调用;真挖用 sonnet(root 可选 mock)。挖出来的东西先预览,入库另点。
    */
@@ -1039,7 +1041,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
     if (since) args.since = since.iso;
     if (body.backend === 'mock') args.backend = 'mock';
     if (typeof body.model === 'string' && body.model) {
-      // hn(B7):此前不校验(v2 记下的缺口)。harvest 只有 root 能起,只查名字合不合法。
+      // harvest 只有 root 能起,模型只查名字合不合法。
       if (!isSkillWhetModelAllowed(body.model, readBudget(env), true)) {
         throw new AppError(`model=${body.model} 不是合法的模型名`, { code: 'SKILLWHET_MODEL_NOT_ALLOWED', statusCode: 400 });
       }
@@ -1076,7 +1078,7 @@ export function createSkillWhetRouter(deps: SkillWhetRouterDeps): Router {
   }));
 
   /**
-   * release-once(S3-04):对一份 staging 做唯一一次留出集评估。权限同采纳(assertMayMutate);
+   * release-once:对一份 staging 做唯一一次留出集评估。权限同采纳(assertMayMutate);
    * 非 root 同训练:G1 PASS + 当日额度(非 pytest runner 按单次上限预留)。runner / 模型沿用产出这份
    * staging 的那次训练(从作业表里找;找不到就按 staging 报告里的 runner)。
    */

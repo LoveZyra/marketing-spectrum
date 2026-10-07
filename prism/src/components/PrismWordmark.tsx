@@ -10,7 +10,7 @@ interface PrismWordmarkProps {
 /**
  * 「棱镜」字标 —— 用的是设计目录里那张字形图。
  *
- * 不用 `<img>` 而是 **CSS mask + `currentColor`**:原图是纯黑字形,直接贴上去
+ * 不用 `<img>` 而是 CSS mask + `currentColor`:原图是纯黑字形,直接贴上去
  * 在深色画布上等于隐形。走遮罩之后颜色跟着文字色走,明暗两版自动各就各位,
  * 也省掉了再做一张白色版资产。
  */

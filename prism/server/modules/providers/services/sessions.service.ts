@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -46,8 +45,8 @@ import { AppError, sliceTailPage } from '@/shared/utils.js';
 const log = createLogger('providers');
 
 /**
- * gk:删除路径上"谁在做"。`Viewer` 之外多带 ip / user-agent,只为审计。
- * 清扫器这类没有人的调用传 null。
+ * 删除路径上的操作者:在 `Viewer` 之外多带 ip / user-agent,只用于审计。
+ * 清扫器等无人发起的调用传 null。
  */
 export type SessionActor = {
   userId: number | string | null;
@@ -57,10 +56,11 @@ export type SessionActor = {
 };
 
 /**
- * gk:删之前先收掉这条会话的常驻 runtime —— 由组合根注入(claude-sdk 不归这个模块管)。
+ * 删除前先收掉这条会话的常驻 runtime,由组合根注入(claude-sdk 不归这个模块管)。
  *
- * 返回 `released: false` 时删除**拒绝**:正跑着的进程留着,行和文件就不能动。
- * 没接线时视为"没有 runtime 要收"(单测、以及不带 SDK 的部署)。
+ * 返回 `released: false` 且 reason 为 `turn_in_flight` / `background_tasks` 时拒绝删除:
+ * 进程还在干活,行和文件就不能动;其他原因(如 dispose 出错)只记日志,照常删除。
+ * 未注入时视为没有 runtime 要收(单测、不带 SDK 的部署)。
  */
 type RuntimeReleaser = (providerSessionId: string) => Promise<{ released: boolean; reason?: string }>;
 let runtimeReleaser: RuntimeReleaser | null = null;
@@ -112,52 +112,128 @@ function recordSessionAudit(
 }
 
 /**
- * dq:右侧工作面板的数据帧(任务清单 + 产出文件的原料)。
+ * 右侧工作面板的数据帧(任务清单与产出文件的原料)。
  *
- * 面板此前只从**前端已加载的消息窗口**(首屏尾 20 条)折叠,长会话一刷新,
- * 早前回合的 TodoWrite/TaskCreate/Write 全部不在窗口里 —— 清单与产出凭空
- * 变少。这里从**全量历史**(显示日志优先,老会话回落 transcript 回放,与
- * fetchHistory 同源)把相关工具帧滤出来发给前端;折叠逻辑留在前端一份,
- * 服务端只发原料,不复制规则。
+ * 必须从全量历史取(与 fetchHistory 同源:显示日志优先,老会话回落 transcript 回放):
+ * 前端只加载尾部窗口,早前回合的 TodoWrite / TaskCreate / Write 不在窗口里,只靠窗口折叠,
+ * 清单和产出会变少。服务端只发原料,折叠规则只在前端保留一份。
+ *
+ * 原料只带折叠会读的字段(见 `slimWorkFrame`):Write 的整份正文之类前端用不到的大字段不下发。
  */
 export type SessionWorkFrame = {
   id?: string;
   timestamp?: string;
   /**
-   * 'tool' = 工具调用帧(默认);'changed_file' = checkpoint 改动清单里的
-   * 一个新增文件(dr) —— Bash/python 写盘没有 Write 帧,这是它们唯一的
-   * 落库证据。changed_file 帧的 toolInput 形如 { file_path: 绝对路径 }。
+   * 'tool' = 工具调用帧(默认);'changed_file' = checkpoint 改动清单里的一个新增文件:
+   * Bash / python 写盘没有 Write 帧,这是它们唯一的落库证据。
+   * changed_file 帧的 toolInput 形如 { file_path: 绝对路径 }。
    */
   kind?: 'tool' | 'changed_file';
   toolName: string;
+  /**
+   * 下发时只含前端折叠会读的字段(见 `WORK_FRAME_INPUT_FIELDS`):Write 只有 file_path,TaskCreate 只有 subject,
+   * TaskUpdate 只有 taskId / status / subject,TodoWrite 原样。
+   */
   toolInput: unknown;
+  /**
+   * 工具结果;结果还没落地时为 null。下发时 TaskCreate 的原样,其余只留开头一段
+   * (长度见 `MAX_FRAME_RESULT_CHARS`)。
+   */
   resultContent: string | null;
   resultIsError: boolean;
   /**
-   * hq:这一帧落在第几个用户回合(全量日志里从 1 数,插话不算新回合)。前端的进度时间轴靠它分辨
-   * "这一轮的当前步"与之前被停下的回合留下的 in_progress / pending —— 首屏只加载尾部 20 条,
-   * 窗口里常常看不到这一轮的那条用户消息,只靠前端数会丢掉回合信息。
+   * 这一帧落在第几个用户回合(全量日志里从 1 数,插话不算新回合)。前端进度时间轴靠它区分
+   * "这一轮的当前步"和此前被停下的回合遗留的 in_progress / pending:首屏只加载尾部窗口,
+   * 常常看不到这一轮的那条用户消息,前端自己数不出回合号。
    */
   turn?: number;
+  /** toolInput 删过字段(入参是解析不了的字符串时整个置 null)。 */
+  inputTrimmed?: boolean;
+  /** resultContent 只是开头一段。 */
+  resultTrimmed?: boolean;
 };
 
 const WORK_TOOL_NAMES: ReadonlySet<string> = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'Write']);
 
 /**
- * 纯函数:从一段 NormalizedMessage 历史里收集工作面板帧。
- * tool_result 是独立行(按 toolId 配对;子代理的 child 行同样在历史里,
- * 一并收 —— 子代理写的文件、立的任务也是这个会话的工作)。
- * changed_files 行(dr 起落库)展开为逐文件的 changed_file 帧:git 相对
- * 路径用帧上的 cwd 拼成绝对路径,与 Write 帧同构、可跨通路去重。
- */
-/**
- * ej:**一轮的产出**,按回合归到那条助手回答上。
+ * 各工具 toolInput 里前端会读的字段。
  *
- * 这是"对话正文下面那张产出卡"的**唯一数据源**。它必须由服务端从**全量显示
- * 日志**算出来,而不能由前端从"当前加载到的消息窗口"现推 —— 重进会话先渲染的
- * 是尾部窗口,窗口起点常落在某一轮工具流中间,前端推出来的结果会随着历史陆续
- * 补齐而变(用户实测:先「产出 2」,过一会儿变「产出 5」;加了截断保护之后变成
- * 先没有、过一会儿才出现)。挂到回合上之后,卡片和消息一起到达、此后不再变。
+ * 前端拿基线帧只做两件事(src/components/chat/utils 下的 taskChecklist 与 sessionOutputs):
+ * 任务清单读 TaskCreate 的 subject、TaskUpdate 的 taskId / status / subject;产出表读 Write 的 file_path。
+ * Write 的 content(整份文件)、Task* 的 description 等一概不读,却是载荷的大头。
+ * 不在表里的工具原样下发:TodoWrite 的清单折叠要读整份 todos。
+ */
+const WORK_FRAME_INPUT_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  Write: ['file_path'],
+  TaskCreate: ['subject'],
+  TaskUpdate: ['taskId', 'status', 'subject'],
+};
+
+/**
+ * 帧里 resultContent 的长度上限。
+ *
+ * 前端只解析 TaskCreate 的结果(任务号与任务名在 "Task #N created successfully: 任务名" 里),
+ * 这一种原样下发:它只有一句话,长短跟着入参里的 subject 走,截了清单上的任务名就变了。
+ * 其余工具前端只看结果在不在、是不是错误,只留开头一段:覆盖已有文件的 Write 结果里
+ * 可能带着一段 `cat -n` 片段,原样下发白占载荷。
+ */
+export const MAX_FRAME_RESULT_CHARS = 200;
+
+/** 结果要被前端整句解析的工具,结果不截。 */
+const RESULT_PARSED_TOOLS: ReadonlySet<string> = new Set(['TaskCreate']);
+
+function slimFrameInput(toolName: string, input: unknown): { value: unknown; trimmed: boolean } {
+  const fields = WORK_FRAME_INPUT_FIELDS[toolName];
+  if (!fields) return { value: input, trimmed: false };
+  let source = input;
+  if (typeof source === 'string') {
+    // 前端对象和 JSON 串都认:解析得了就按对象收窄,解析不了前端同样读不出东西。
+    try {
+      source = JSON.parse(source);
+    } catch {
+      return { value: null, trimmed: true };
+    }
+  }
+  if (source === null || source === undefined) return { value: null, trimmed: false };
+  if (typeof source !== 'object' || Array.isArray(source)) return { value: null, trimmed: true };
+  const picked: Record<string, unknown> = {};
+  let trimmed = false;
+  for (const [key, value] of Object.entries(source)) {
+    if (fields.includes(key)) picked[key] = value;
+    else trimmed = true;
+  }
+  return { value: picked, trimmed };
+}
+
+function previewResult(toolName: string, content: string | null): { value: string | null; trimmed: boolean } {
+  if (content === null || RESULT_PARSED_TOOLS.has(toolName) || content.length <= MAX_FRAME_RESULT_CHARS) {
+    return { value: content, trimmed: false };
+  }
+  // 切点落在代理对的前半个上就少切一位,不留半个字符。
+  const code = content.charCodeAt(MAX_FRAME_RESULT_CHARS - 1);
+  const end = code >= 0xd800 && code <= 0xdbff ? MAX_FRAME_RESULT_CHARS - 1 : MAX_FRAME_RESULT_CHARS;
+  return { value: content.slice(0, end), trimmed: true };
+}
+
+/** 下发前把一帧收成前端折叠真正要读的样子。 */
+function slimWorkFrame(frame: SessionWorkFrame): SessionWorkFrame {
+  const input = slimFrameInput(frame.toolName, frame.toolInput);
+  const result = previewResult(frame.toolName, frame.resultContent);
+  return {
+    ...frame,
+    toolInput: input.value,
+    resultContent: result.value,
+    ...(input.trimmed ? { inputTrimmed: true } : {}),
+    ...(result.trimmed ? { resultTrimmed: true } : {}),
+  };
+}
+
+/**
+ * 一轮的产出,按回合归到那条助手回答上。
+ *
+ * 这是对话正文下面那张产出卡的唯一数据源,必须由服务端从全量显示日志算出,不能由前端
+ * 从已加载的消息窗口现推:重进会话先渲染的是尾部窗口,起点常落在某一轮工具流中间,
+ * 现推的结果会随历史陆续补齐而变。挂到回合上之后,卡片和消息一起到达,此后不再变化。
  */
 export type TurnOutputFile = {
   /** 绝对路径 */
@@ -171,54 +247,164 @@ export type CollectedWorkFrames = {
   /**
    * 助手回答的消息 id → 这一轮写出来的文件。
    *
-   * **在帧数截断之前**按全量算好(和 revertedPaths 同一个道理):截断丢的是
+   * 按全量历史算,不受帧数截断影响(和 revertedPaths 同一个道理):截断丢的是
    * 载荷里的帧,不该让历史回合的产出卡跟着一起丢。
    */
   turnOutputs: Record<string, TurnOutputFile[]>;
-  /** hq:全量日志里的用户回合数(插话不算)。前端把它接在基线末尾,窗口里看不到这一轮的用户消息时也能对上回合号。 */
+  /** 全量日志里的用户回合数(插话不算)。前端把它接在回合基线末尾,窗口里看不到这一轮的用户消息时也能对上回合号。 */
   userTurns?: number;
   /**
-   * dt:至今仍处于"已回滚"状态的**绝对路径** —— files_reverted 落库后,
-   * 之前的产出帧已在本函数内删除,但前端窗口里的旧 Write 工具帧还会把
-   * 文件加回来,前端要拿这个集合做最终减法;回滚后重写的文件会从集合里
-   * 移除(时序折叠)。
+   * 仍处于"已回滚"状态的绝对路径。files_reverted 之前的产出帧已经不在 `frames` 里,
+   * 但前端窗口里的旧 Write 工具帧还会把文件加回来,前端要用这个集合做最终减法。
+   * 回滚后又重写的文件会从集合里移除(按时序折叠)。
    */
   revertedPaths: string[];
-  /** dw:帧数触顶、较早的帧未随本次响应下发(前端据此提示,别装作全都在)。 */
+  /** 帧数触顶,较早的帧没有随本次响应下发(前端据此提示,不假装全都在)。 */
   truncated?: boolean;
 };
 
 /**
- * dw:单次响应的帧数上限。
+ * 单次响应的帧数上限。
  *
- * 这个接口原本无条件回**整个会话**的工作帧:会话切换一次、每个回合结束再
- * 一次,长会话(几百次 Write + 几百个 Task 事件)每次都要把全量 toolInput
- * 重新序列化下发。工作面板本身没有任何清理机制(不按时间过期、不分页),
- * 所以载荷只会一直涨。
+ * 这个接口在会话切换和每个回合结束时都会被拉一次,而工作面板没有任何清理机制
+ * (不过期、不分页),长会话(几百次 Write + 几百个 Task 事件)的帧数只增不减。
+ * 每帧只带折叠要读的字段(见 `slimWorkFrame`),再给条数封顶,整份载荷就有上界。
  *
- * 截断保留**尾部**:清单的当前状态、最近的产出都在尾部,越新越要紧。
- * revertedPaths 在截断**之前**按全量算好,所以"某文件已被回滚"这条结论
- * 不会因为截断而丢失。
+ * 截断保留尾部:清单的当前状态、最近的产出都在尾部。revertedPaths 与 turnOutputs 按全量算好,
+ * "某文件已被回滚"这条结论不会因截断而丢失。
  */
 export const MAX_WORK_FRAMES = 1500;
 
-/** ej:回合产出映射的条数上限 —— 只是路径,比帧轻得多,但也不该无限涨。 */
+/** 回合产出映射的条数上限:只是路径,比帧轻得多,但也不能无限增长。 */
 export const MAX_TURN_OUTPUT_ENTRIES = 500;
 
 /**
- * ek:**单轮**的文件条数上限。
+ * 单轮的文件条数上限。
  *
- * 一轮批量任务写出几百个文件是真会发生的(用户那条会话一次三十几个)。卡片本身
- * 到几十行就已经读不动了,再多只是把载荷撑大。超出的部分不进卡片 —— 它们仍在
- * 右侧会话级产出表里,那张表本来就是用来翻的。
+ * 一轮批量任务写出几百个文件是会发生的;卡片到几十行就已经读不动,再多只是撑大载荷。
+ * 超出的部分不进卡片,仍在右侧会话级产出表里可以翻到。
  */
 export const MAX_FILES_PER_TURN = 50;
 
-function frameFilePath(frame: SessionWorkFrame): string | null {
-  const input = frame.toolInput as { file_path?: unknown } | null | undefined;
+function toolInputFilePath(toolInput: unknown): string | null {
+  const input = toolInput as { file_path?: unknown } | null | undefined;
   return typeof input?.file_path === 'string' ? input.file_path : null;
 }
 
+/** files_reverted 行列出的文件,拼成绝对路径(cwd 去掉末尾的分隔符;没有 cwd 时原样用)。 */
+function revertedPathsOf(message: NormalizedMessage): string[] {
+  const cwd = typeof message.cwd === 'string' && message.cwd ? message.cwd.replace(/[\\/]+$/, '') : '';
+  const paths = Array.isArray(message.paths) ? message.paths : [];
+  const absolutes: string[] = [];
+  for (const entry of paths) {
+    if (typeof entry !== 'string' || !entry.trim()) continue;
+    absolutes.push(cwd ? `${cwd}/${entry.trim()}` : entry.trim());
+  }
+  return absolutes;
+}
+
+/**
+ * changed_files 行里算作产出的文件,带 git 相对路径与用 cwd 拼好的绝对路径。
+ * 只算新增:修改 / 删除既有文件不是"产出了一个文件"。
+ */
+function addedFilesOf(message: NormalizedMessage): Array<{ relPath: string; absolute: string }> {
+  const cwd = typeof message.cwd === 'string' && message.cwd ? message.cwd : '';
+  const files = Array.isArray(message.files) ? message.files : [];
+  const added: Array<{ relPath: string; absolute: string }> = [];
+  for (const entry of files) {
+    const file = entry as { path?: unknown; status?: unknown; untracked?: unknown };
+    const relPath = typeof file.path === 'string' ? file.path.trim() : '';
+    if (!relPath) continue;
+    if (file.status !== 'added' && !file.untracked) continue;
+    added.push({ relPath, absolute: cwd ? `${cwd.replace(/[\\/]+$/, '')}/${relPath}` : relPath });
+  }
+  return added;
+}
+
+type PairedResult = { content?: string; isError?: boolean } | undefined;
+
+/**
+ * 从尾部倒着收工作面板帧,最多 `MAX_WORK_FRAMES` 个。
+ *
+ * 结果与"正着收齐所有帧、遇到 files_reverted 删掉此前同一文件的帧、最后切尾部"逐帧相同,
+ * 但手里最多只有上限那么多帧,不先全攒再切。倒着走时,走过的 files_reverted 都在当前这条消息
+ * 之后:路径在里面的帧最终会被删掉,直接不收。窗口满了以后又遇到一个留得下来的帧,说明更早
+ * 还有帧没下发,就是截断。回合号从全量的用户回合数往回减。
+ */
+function collectTailFrames(
+  messages: readonly NormalizedMessage[],
+  pairedResultOf: (message: NormalizedMessage) => PairedResult,
+  userTurns: number,
+): { frames: SessionWorkFrame[]; truncated: boolean } {
+  const tail: SessionWorkFrame[] = [];
+  const revertedLater = new Set<string>();
+  let turn = userTurns;
+  /** 收进这一帧(最终会被回滚删掉的不收);窗口已满、收不下时返回 false。 */
+  const keep = (frame: SessionWorkFrame): boolean => {
+    const filePath = toolInputFilePath(frame.toolInput);
+    if (filePath !== null && revertedLater.has(filePath)) return true;
+    if (tail.length >= MAX_WORK_FRAMES) return false;
+    tail.push(frame);
+    return true;
+  };
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.kind === 'files_reverted') {
+      for (const absolute of revertedPathsOf(message)) revertedLater.add(absolute);
+      continue;
+    }
+    if (message.kind === 'text') {
+      // 这条用户消息之前的帧属于上一个回合;插话不开新回合。
+      if (message.role === 'user' && !(message as { interjection?: boolean }).interjection) turn -= 1;
+      continue;
+    }
+    const turnField = turn > 0 ? { turn } : {};
+    if (message.kind === 'changed_files') {
+      const added = addedFilesOf(message);
+      for (let at = added.length - 1; at >= 0; at -= 1) {
+        const kept = keep({
+          id: typeof message.id === 'string' ? `${message.id}::${added[at].relPath}` : undefined,
+          timestamp: typeof message.timestamp === 'string' ? message.timestamp : undefined,
+          kind: 'changed_file',
+          toolName: 'Write',
+          toolInput: { file_path: added[at].absolute },
+          resultContent: 'checkpoint',
+          resultIsError: false,
+          ...turnField,
+        });
+        if (!kept) return { frames: tail.reverse(), truncated: true };
+      }
+      continue;
+    }
+    if (message.kind !== 'tool_use') continue;
+    const toolName = typeof message.toolName === 'string' ? message.toolName : '';
+    if (!WORK_TOOL_NAMES.has(toolName)) continue;
+    const paired = pairedResultOf(message);
+    const kept = keep({
+      id: typeof message.id === 'string' ? message.id : undefined,
+      timestamp: typeof message.timestamp === 'string' ? message.timestamp : undefined,
+      toolName,
+      toolInput: message.toolInput ?? null,
+      resultContent: typeof paired?.content === 'string' ? paired.content : null,
+      resultIsError: Boolean(paired?.isError),
+      ...turnField,
+    });
+    if (!kept) return { frames: tail.reverse(), truncated: true };
+  }
+  return { frames: tail.reverse(), truncated: false };
+}
+
+/**
+ * `collectWorkFrames`(纯函数)从一段 NormalizedMessage 历史里收集工作面板帧。
+ * tool_result 是独立行,按 toolId 配对;子代理的 child 行同样在历史里,一并收
+ * (子代理写的文件、立的任务也是这个会话的工作)。
+ * changed_files 行展开为逐文件的 changed_file 帧:git 相对路径用帧上的 cwd 拼成绝对路径,
+ * 与 Write 帧同构,可跨通路去重。
+ *
+ * 走两遍:正着走一遍算回合产出、仍处于已回滚状态的路径和用户回合数,这几样按全量算,
+ * 不受帧数上限影响;帧由 `collectTailFrames` 倒着只收下发的那一段,收完再收窄字段。
+ */
 export function collectWorkFrames(messages: readonly NormalizedMessage[]): CollectedWorkFrames {
   const resultByToolId = new Map<string, { content?: string; isError?: boolean }>();
   for (const message of messages) {
@@ -226,46 +412,33 @@ export function collectWorkFrames(messages: readonly NormalizedMessage[]): Colle
       resultByToolId.set(message.toolId, { content: message.content, isError: message.isError });
     }
   }
+  const pairedResultOf = (message: NormalizedMessage): PairedResult => message.toolResult
+    ?? (message.toolId ? resultByToolId.get(message.toolId) : undefined);
 
-  const frames: SessionWorkFrame[] = [];
   const reverted = new Set<string>();
   /**
-   * 回合归属:写入帧先攒着,**攒到这一轮结束**(下一条用户消息,或日志走完)
-   * 才整批挂到该轮**最后一条助手正文**上。
+   * 回合归属:写入帧先攒着,到这一轮结束(下一条用户消息,或日志走完)才整批挂到
+   * 该轮最后一条助手正文上。
    *
-   * ek 修:ej 的写法是"遇到助手正文就挂上去、清空",在真实会话里是错的 ——
-   * 一轮长任务里模型会在工具之间不停说话("任务 32 完成。任务 33:"),那些
-   * 过渡性正文同样是 `kind:'text' role:'assistant'`,于是产出被挂到了**中间那句**
-   * 上;而中间正文在前端会被吸进活动时间轴当 narration 行渲染(见
-   * toolGrouping 的 isAbsorbableNarration),根本不是那条独立的回答 —— 卡片就
-   * 谁也看不见,只能等前端从窗口现推的兜底路径慢慢补出来(用户实测:"最开始
-   * 没有产出文件,要过很久才有")。
-   *
-   * 前端的判据是"收尾的最终回答后面没有活动,永远保持大正文排版",所以这里
-   * 对应的锚点就是**这一轮最后一条助手正文**:记住它,到边界再结算。
+   * 不能遇到助手正文就挂:长任务里模型会在工具之间说过渡性的话("任务 32 完成。任务 33:"),
+   * 这些正文同样是 `kind:'text' role:'assistant'`,而前端会把它们吸进活动时间轴当 narration
+   * 行渲染(见 toolGrouping 的 isAbsorbableNarration),挂在上面的卡片谁也看不见。
+   * 前端的判据是"收尾的最终回答后面没有活动,保持大正文排版",对应的锚点就是
+   * 这一轮最后一条助手正文:记住它,到边界再结算。
    */
   const turnOutputs: Record<string, TurnOutputFile[]> = {};
   let pendingTurnFiles: TurnOutputFile[] = [];
-  /** 本轮至今最后一条**有内容的助手正文**的消息 id —— 结算时挂它。 */
+  /** 本轮至今最后一条有内容的助手正文的消息 id —— 结算时挂它。 */
   let pendingAnchorId = '';
-  let turnCount = 0;
-  /** hq:用户回合计数(见 SessionWorkFrame.turn)。 */
+  /** 用户回合计数(见 SessionWorkFrame.turn)。 */
   let userTurn = 0;
   /**
-   * fj:上限改成保留**最新**的若干轮,与 `frames` 的尾部截断同向。
-   *
-   * 原来是 `turnCount < MAX_TURN_OUTPUT_ENTRIES` —— 消息从旧到新遍历,计数一旦
-   * 到顶,后面所有轮都不再写入。方向和帧截断正好相反,于是长会话里"越老的回合
-   * 越有产出卡,最近刚跑完的这几轮反而什么都没有",而 `:255` 的注释说的正是
-   * 最新那一轮最要紧。(`dropPendingWrite` 还会 delete 键却不回退 `turnCount`,
-   * 实际能挂上的轮数比上限更少。)
-   *
-   * 现在满了就淘汰最早的那个键(Map/对象的键序就是插入序),先进先出。
+   * 回合产出超过 `MAX_TURN_OUTPUT_ENTRIES` 时淘汰最早的键(对象的键序就是插入序),
+   * 保留最新的若干轮,与帧的尾部截断同向:最近跑完的那几轮最要紧。
    */
   const flushTurn = () => {
     if (pendingAnchorId && pendingTurnFiles.length > 0) {
       turnOutputs[pendingAnchorId] = pendingTurnFiles;
-      turnCount += 1;
       const keys = Object.keys(turnOutputs);
       if (keys.length > MAX_TURN_OUTPUT_ENTRIES) {
         delete turnOutputs[keys[0]];
@@ -296,45 +469,20 @@ export function collectWorkFrames(messages: readonly NormalizedMessage[]): Colle
 
   for (const message of messages) {
     if (message.kind === 'files_reverted') {
-      const cwd = typeof message.cwd === 'string' && message.cwd ? message.cwd.replace(/[\\/]+$/, '') : '';
-      const paths = Array.isArray(message.paths) ? message.paths : [];
-      for (const entry of paths) {
-        if (typeof entry !== 'string' || !entry.trim()) continue;
-        const absolute = cwd ? `${cwd}/${entry.trim()}` : entry.trim();
+      // 此前这些文件的产出帧由 collectTailFrames 按时序删掉;之后的重写会重新入列。
+      for (const absolute of revertedPathsOf(message)) {
         reverted.add(absolute);
         dropPendingWrite(absolute);
-        // 时序:删掉此前收集的该文件产出帧;之后的重写会重新入列。
-        for (let index = frames.length - 1; index >= 0; index -= 1) {
-          if (frameFilePath(frames[index]) === absolute) frames.splice(index, 1);
-        }
       }
       continue;
     }
 
     if (message.kind === 'changed_files') {
-      const cwd = typeof message.cwd === 'string' && message.cwd ? message.cwd : '';
-      const files = Array.isArray(message.files) ? message.files : [];
-      for (const entry of files) {
-        const file = entry as { path?: unknown; status?: unknown; untracked?: unknown };
-        const relPath = typeof file.path === 'string' ? file.path.trim() : '';
-        if (!relPath) continue;
-        // 只算新增:修改/删除既有文件不是"产出了一个文件"。
-        if (file.status !== 'added' && !file.untracked) continue;
-        const absolute = cwd ? `${cwd.replace(/[\\/]+$/, '')}/${relPath}` : relPath;
+      for (const { absolute } of addedFilesOf(message)) {
         noteFileFrame(absolute);
         // Bash / python 写盘没有 Write 帧,checkpoint 的改动清单是它们唯一的证据;
         // 行数无从得知(这里只有路径),界面上就不显示写入量。
         notePendingWrite(absolute, null);
-        frames.push({
-          id: typeof message.id === 'string' ? `${message.id}::${relPath}` : undefined,
-          timestamp: typeof message.timestamp === 'string' ? message.timestamp : undefined,
-          kind: 'changed_file',
-          toolName: 'Write',
-          toolInput: { file_path: absolute },
-          resultContent: 'checkpoint',
-          resultIsError: false,
-          ...(userTurn > 0 ? { turn: userTurn } : {}),
-        });
       }
       continue;
     }
@@ -354,33 +502,21 @@ export function collectWorkFrames(messages: readonly NormalizedMessage[]): Colle
       continue;
     }
 
-    if (message.kind !== 'tool_use') continue;
-    const toolName = typeof message.toolName === 'string' ? message.toolName : '';
-    if (!WORK_TOOL_NAMES.has(toolName)) continue;
-    const paired = message.toolResult
-      ?? (message.toolId ? resultByToolId.get(message.toolId) : undefined);
-    const frame: SessionWorkFrame = {
-      id: typeof message.id === 'string' ? message.id : undefined,
-      timestamp: typeof message.timestamp === 'string' ? message.timestamp : undefined,
-      toolName,
-      toolInput: message.toolInput ?? null,
-      resultContent: typeof paired?.content === 'string' ? paired.content : null,
-      resultIsError: Boolean(paired?.isError),
-      ...(userTurn > 0 ? { turn: userTurn } : {}),
-    };
-    if (toolName === 'Write' && frame.resultContent !== null && !frame.resultIsError) {
-      const written = frameFilePath(frame);
-      noteFileFrame(written);
-      const input = message.toolInput as { content?: unknown } | null | undefined;
-      notePendingWrite(written, input?.content);
-    }
-    frames.push(frame);
+    // 结果已落地且没报错的 Write 才算写出了文件。
+    if (message.kind !== 'tool_use' || message.toolName !== 'Write') continue;
+    const paired = pairedResultOf(message);
+    if (typeof paired?.content !== 'string' || paired.isError) continue;
+    const written = toolInputFilePath(message.toolInput);
+    noteFileFrame(written);
+    notePendingWrite(written, (message.toolInput as { content?: unknown } | null | undefined)?.content);
   }
   // 日志走完 = 最后一轮的边界。刚跑完的这一轮全靠这一句才有卡片。
   flushTurn();
 
-  if (frames.length > MAX_WORK_FRAMES) {
-    return { frames: frames.slice(-MAX_WORK_FRAMES), revertedPaths: [...reverted], turnOutputs, truncated: true, userTurns: userTurn };
+  const tail = collectTailFrames(messages, pairedResultOf, userTurn);
+  const frames = tail.frames.map(slimWorkFrame);
+  if (tail.truncated) {
+    return { frames, revertedPaths: [...reverted], turnOutputs, truncated: true, userTurns: userTurn };
   }
   return { frames, revertedPaths: [...reverted], turnOutputs, userTurns: userTurn };
 }
@@ -404,7 +540,7 @@ type ArchivedSessionListItem = {
   isProjectArchived: boolean;
 };
 
-/** 归档会话列表的默认/最大页大小(E10:原来是一次性全量返回)。 */
+/** 归档会话列表分页的默认 / 最大页大小。 */
 const DEFAULT_ARCHIVED_PAGE_SIZE = 200;
 const MAX_ARCHIVED_PAGE_SIZE = 500;
 
@@ -419,22 +555,6 @@ function visibilityScopeOf(viewer: Viewer): VisibilityScope {
   if (isRootUser(viewer.username ?? undefined)) return { kind: 'all' };
   const userId = Number(viewer.userId);
   return { kind: 'user', userId: Number.isFinite(userId) ? userId : NO_SUCH_USER_ID };
-}
-
-/**
- * Removes one file if it exists.
- */
-async function removeFileIfExists(filePath: string): Promise<boolean> {
-  try {
-    await fsp.unlink(filePath);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') {
-      return false;
-    }
-    throw error;
-  }
 }
 
 /**
@@ -459,7 +579,7 @@ function resolveProjectDisplayName(
   return path.basename(projectPath) || projectPath;
 }
 
-/** gk:最近删除列表里的一条(给前端)。 */
+/** 最近删除列表里的一条(给前端)。 */
 export type TrashedSessionListItem = {
   sessionId: string;
   provider: LLMProvider;
@@ -514,36 +634,16 @@ function toTrashedListItem(row: SessionTrashRow, viewer: Viewer, retentionDays: 
 }
 
 /**
- * Application service for provider-backed session message operations.
+ * 页边界不许把一次工具调用和它的结果拆开:缺 `tool_use` 时往更早的方向扩边界,而不是丢掉页首的结果。
  *
- * Callers pass a provider id and this service resolves the concrete provider
- * class, keeping normalization/history call sites decoupled from implementation
- * file layout.
- */
-/**
- * F37:**页边界不许把一次工具调用和它的结果拆开** —— 往前挪,而不是往后丢。
+ * 分页按原始事件切,而调用与结果是两条独立事件。边界落在中间时,页首就是一条找不到
+ * `tool_use` 的结果:前端会跳过渲染它,上一页里对应的调用则显示成"没有结果"。
+ * 丢掉页首孤儿也有代价:调用方按服务端返回的条数推进 offset,少返回几条,下一页就与这一页
+ * 重叠,去重后净增可能为 0,上翻卡在原地。往前扩边界对游标是自洽的:窗口起点随之前移,
+ * 下一页正好接上,不重叠也不跳过。
  *
- * ## 事故
- *
- * 分页按原始事件切,而工具调用与它的结果是两条独立事件。边界正好落在中间时,
- * 这一页的第一条就是一个找不到 `tool_use` 的结果。前端为此专门写了"有 toolId
- * 却找不到调用就跳过渲染"的分支,于是那条结果**看不见**,上一页里对应的调用
- * 显示成"没有结果"。
- *
- * fj 的处理是**把那几条丢掉**(最多 8 条)。注释当时写的是"边界往前挪几条,
- * 把 tool_use 一起带进来",而代码做的是相反的事 —— 止血,不是修好。而且丢掉
- * 有一个不明显的代价:调用方按**服务端返回的条数**推进 offset,丢掉几条就意味着
- * 游标少走几格,下一页的窗口与这一页重叠,去重之后净增可能是 0 —— 上翻从此
- * 卡在同一个位置(fm 那轮在客户端把它识别成 `stalled` 并停下,但内容还是取不到)。
- *
- * ## 做法
- *
- * 往**更早**的方向扩边界,把缺的 `tool_use` 一起带进这一页。这对游标是自洽的:
- * `offset` 按返回条数推进,而窗口起点也相应前移,下一页正好接上,不重叠也不跳过。
- *
- * 上限 `MAX_GROUP_LOOKBACK`:一轮里调用与结果是紧邻的,挪太多等于把分页削掉。
- * 超过上限还配不上对(极少数畸形历史),退回"丢掉页首孤儿"的老行为 ——
- * 那时宁可少渲染几行,也不要把一整页拉成没有边界。
+ * 上限 `MAX_GROUP_LOOKBACK`:一轮里调用与结果是紧邻的,挪太多等于取消分页。上限内仍配不上对
+ * (极少数畸形历史)时才退回丢弃页首孤儿,宁可少渲染几行,也不把一整页拉成没有边界。
  */
 const MAX_GROUP_LOOKBACK = 24;
 
@@ -556,7 +656,7 @@ function toolIdOf(message: NormalizedMessage): string | null {
 /**
  * 这一页开头有几条 `tool_result` 是配不上对的 —— 需要从更早的行里补回多少条。
  *
- * `older` 是紧邻这一页、**更早**的那些行(oldest-first);返回要从 `older`
+ * `older` 是紧邻这一页、更早的那些行(oldest-first);返回要从 `older`
  * 末尾取几条拼到页首。取不到(超出上限 / older 不够)时返回 0,由调用方
  * 退回丢弃策略。
  */
@@ -613,16 +713,21 @@ function dropLeadingOrphanToolResults(messages: NormalizedMessage[]): Normalized
   return start === 0 ? messages : messages.slice(start);
 }
 
+/**
+ * Application service for provider-backed session message operations.
+ *
+ * Callers pass a provider id and this service resolves the concrete provider
+ * class, keeping normalization/history call sites decoupled from implementation
+ * file layout.
+ */
 export const sessionsService = {
   /**
-   * 这个访问者可见的会话**分页**列表(外部 API `GET /api/agent/sessions` 用)。
+   * 这个访问者可见的会话分页列表(外部 API `GET /api/agent/sessions` 用)。
    *
-   * 放在这一层是因为 `visibilityScopeOf`(Viewer → SQL 可见范围)住在这里 ——
-   * 路由层不该自己再拼一遍那条判据。仓库层只认 scope,不认 Viewer。
-   *
-   * 之前那条路由是 `getAllSessions()` 整表捞 + JS 侧逐行过滤,而过滤函数每行查库:
-   * better-sqlite3 是同步的,4000 条会话就是 4000+ 次同步查询把**事件循环整个按住**
-   * (实测 219ms,期间所有人的 WS 帧和请求全停)。下推之后 2.18ms。
+   * 放在这一层是因为 `visibilityScopeOf`(Viewer → SQL 可见范围)在这里,路由层不该
+   * 再拼一遍那条判据;仓库层只认 scope,不认 Viewer。可见性过滤必须下推到 SQL:
+   * better-sqlite3 是同步的,整表捞出再在 JS 侧逐行查库过滤,几千条会话就会把事件循环
+   * 按住几百毫秒,期间所有人的 WS 帧和请求全停。
    */
   listVisibleSessionsPage(
     viewer: Viewer,
@@ -646,12 +751,6 @@ export const sessionsService = {
   },
 
   /**
-   * Returns app-facing ids for provider runs that are currently processing.
-   *
-   * This is intentionally status-only: callers that only need sidebar activity
-   * indicators should not attach to chat streams or request replayed messages.
-   */
-  /**
    * 谁能看到这条会话。判定实现在 database 模块,这里只是转出去 —— providers 与
    * websocket 两侧必须用同一份,不能各写一份。
    */
@@ -674,6 +773,13 @@ export const sessionsService = {
     }
   },
 
+  /**
+   * Returns the provider runs that are currently processing (keyed by app-facing
+   * session id), limited to sessions this viewer can see.
+   *
+   * This is intentionally status-only: callers that only need sidebar activity
+   * indicators should not attach to chat streams or request replayed messages.
+   */
   listRunningSessions(viewer: Viewer): Array<{
     sessionId: string;
     provider: LLMProvider;
@@ -723,7 +829,7 @@ export const sessionsService = {
 
     const sessionId = randomUUID();
     sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, ownerUserId);
-    // hl(动态 P2-4):新建的会话记录也推给能看见它的人(此前要等第一条消息落 jsonl 才由 watcher 推)。
+    // 新建的会话立即推给能看见它的人,不等第一条消息落 jsonl 后由 watcher 推。
     void chatRunRegistry.announceSessionUpsert(sessionId).catch(() => { /* 推送失败不影响建会话 */ });
 
     return {
@@ -755,28 +861,24 @@ export const sessionsService = {
     }
 
     /**
-     * 优先读**自己的显示日志**,读不到才回落到 transcript 回放。
+     * 优先读自己的显示日志,读不到才回落到 transcript 回放。
      *
-     * transcript 是**模型的记忆**,不是对话记录 —— 里面混着子代理 sidechain、
+     * transcript 是模型的记忆,不是对话记录 —— 里面混着子代理 sidechain、
      * `isMeta` 行、技能正文注入、压缩摘要。拿它当显示模型,CLI 每加一种内部行
-     * 界面就漏一次。日志这条路径直接把当初推给前端的那条消息原样还回去,
-     * 中间**没有任何再解析、再判定的环节**,那一类问题结构上不会再出现。
+     * 界面就漏一次。日志这条路径直接把推给前端的那条消息原样还回去,
+     * 中间没有任何再解析、再判定的环节,那一类问题结构上不会出现。
      *
-     * 回落是必须的:这张表是这一轮才有的,之前的会话一行都没有。
-     * 老会话继续走 transcript(带着 `transcript-provenance` 的出处判定),
-     * 新会话从第一条消息起就走日志。
+     * 回落是必须的:这张表建立之前就有的会话,日志里一行都没有。
+     * 这类会话继续走 transcript(带着 `transcript-provenance` 的出处判定),
+     * 有日志的会话从第一条消息起就走日志。
      */
     /**
-     * fj:「日志有行」不等于「日志是权威」。
+     * 「日志有行」不等于「日志是权威」。
      *
-     * `trimSession` 会把超出 `PRISM_DISPLAY_LOG_MAX_PER_SESSION`(默认 2000)的
-     * 最早那批**物理删掉**。此前这里只判 `loggedCount > 0`,于是长会话被裁之后
-     * 仍然一律读日志 —— 早期几百上千条从界面永久消失,`total` 跟着变小,界面还
-     * 显示"已加载全部"。磁盘上的 jsonl 一直都在,只是应用再也不看它。
-     *
-     * 现在裁剪会盖戳,盖过戳且**确实有 transcript 可回落**时就走 transcript。
-     * 没有 transcript 的会话(纯新建、还没落盘)即使被裁也只能读日志 —— 那是
-     * 它仅有的记录,读残缺的也好过读不到。
+     * `trimSession` 会把超出 `PRISM_DISPLAY_LOG_MAX_PER_SESSION`(默认 2000)的最早那批物理删掉。
+     * 被裁过的日志若仍当权威,早期消息会从界面永久消失,`total` 跟着变小,界面还显示"已加载全部"。
+     * 所以裁剪会盖戳:盖过戳且确实有 transcript 可回落时走 transcript。没有 transcript 的会话
+     * (新建、尚未落盘)即使被裁也只能读日志,那是它仅有的记录,读残缺的也好过读不到。
      */
     const loggedCount = sessionMessagesDb.countForSession(sessionId);
     const logIsAuthoritative = loggedCount > 0
@@ -785,13 +887,12 @@ export const sessionsService = {
       const limit = options.limit ?? null;
       const offset = options.offset ?? 0;
 
-      // dn-O1:带 limit 的分页请求(首屏 / 上翻 / 每轮 complete 的尾窗刷新,
-      // 也就是**全部热路径**)改走 SQL 尾页,不再整段读出 + 全量 parse 再切。
-      // 活跃回合里每个 durable 帧落库都会打穿指纹缓存,此前每轮刷新都是一次
-      // 全量重读 —— 长会话(数千行)一轮省一次整段读盘。
+      // 带 limit 的分页请求(首屏 / 上翻 / 每轮 complete 的尾窗刷新,即全部热路径)走 SQL 尾页,
+      // 不整段读出、全量 parse 后再切:活跃回合里每个 durable 帧落库都会打穿指纹缓存,
+      // 长会话(数千行)每轮刷新都会变成一次整段读盘。
       if (limit !== null) {
         /**
-         * F37:**多取一段"更早的"用来补齐工具组**,再按边界切回去。
+         * 多取一段"更早的"用来补齐工具组,再按边界切回去。
          *
          * 多取的那段只在页首缺 `tool_use` 时才用得上;用不上就原样丢掉,
          * 这一页仍然是干净的 `limit` 条。
@@ -813,18 +914,6 @@ export const sessionsService = {
             total: extended.total,
             hasMore: extended.total - offset - natural.length > 0,
           };
-        /**
-         * fj:**页首不许是一条孤儿 `tool_result`。**
-         *
-         * 分页按原始事件切,而工具调用与它的结果是两条独立事件 —— 边界正好落在
-         * 中间时,这一页的第一条就是一个找不到 `tool_use` 的结果。前端为此专门
-         * 写了"有 toolId 却找不到调用就跳过渲染"的分支(`useChatMessages`),
-         * 于是那条结果**看不见**,而对应的调用在上一页里显示成"没有结果" ——
-         * 直到用户往上翻一页才自己拼回去。
-         *
-         * 边界往前挪几条,把 `tool_use` 一起带进来。上限 8 条:一轮里工具调用
-         * 与结果是紧邻的,挪太多等于把分页的意义削掉。
-         */
         // 补齐成功就不用再丢;上限内配不齐(极少数畸形历史)才退回丢弃。
         const trimmed = lookback > 0 ? page.messages : dropLeadingOrphanToolResults(page.messages);
         return {
@@ -879,10 +968,9 @@ export const sessionsService = {
   },
 
   /**
-   * dq:工作面板帧 —— 全量历史(与 fetchHistory 同源:显示日志优先、老会话
-   * transcript 回放)滤出 TodoWrite/TaskCreate/TaskUpdate/Write 的 tool_use
-   * 行并配好结果。只在会话切换与回合结束各拉一次;全量 parse 有指纹缓存,
-   * 空闲期命中,回合结束与尾窗刷新共享同一次重建。
+   * 工作面板帧:全量历史(与 fetchHistory 同源:显示日志优先,老会话回落 transcript 回放)
+   * 经 collectWorkFrames 收集。前端在会话切换、回合结束、回滚 / 还原之后各拉一次;
+   * 全量 parse 有指纹缓存,日志没变时直接命中,这里重建出的缓存之后的尾页请求也能复用。
    */
   async fetchWorkFrames(sessionId: string): Promise<CollectedWorkFrames> {
     const { messages } = await sessionsService.fetchHistory(sessionId, { limit: null, offset: 0 });
@@ -949,17 +1037,17 @@ export const sessionsService = {
    * Soft-delete mirrors the project behavior by toggling `isArchived` so the
    * row disappears from active lists but remains restorable.
    *
-   * gk:**永久删除 = 进最近删除**。行、显示日志、transcript 都搬进回收站
-   * (`PRISM_TRASH_RETENTION_DAYS`,默认 30 天后清扫),不再 DELETE / unlink;
-   * 删之前先收掉常驻 runtime;删完写审计、给所有还看得见它的 socket 推 `session_removed`。
-   * `deletedFromDisk` 仍然接受(`false` = transcript 留在原地不搬),默认搬。
+   * 永久删除即移入最近删除:行、显示日志、transcript 都搬进回收站(`PRISM_TRASH_RETENTION_DAYS`,
+   * 默认 30 天后清扫),不直接 DELETE / unlink。删除前先收掉常驻 runtime;删完写审计,
+   * 并给所有还看得见它的 socket 推 `session_removed`。`deletedFromDisk: false` 时 transcript
+   * 留在原地不搬,默认搬。
    */
   async deleteOrArchiveSessionById(
     sessionId: string,
     options: {
       force?: boolean;
       deletedFromDisk?: boolean;
-      /** gk:谁在删、从哪个入口 —— 只为审计与回收站里的"谁删的"。 */
+      /** 谁在删、从哪个入口:只用于审计与回收站里的"谁删的"。 */
       actor?: SessionActor | null;
       via?: TrashDeletedVia;
     } = {},
@@ -992,15 +1080,12 @@ export const sessionsService = {
     }
 
     /**
-     * fj:**跑着的会话不许硬删。**
+     * 正在跑回合的会话不许永久删除。
      *
-     * 此前删除与运行之间没有任何协调:行删掉了、transcript 也删了,而运行时
-     * 还在往那份已经不存在的 jsonl 里追加,writer 还在往一个没有主的 session_id
-     * 落显示日志(那张表刻意没建外键,所以孤儿行会一直留着)。收尾时
-     * `completeRunIfCurrent` 又去更新一行不存在的记录。
-     *
-     * 明确拒绝、并告诉用户怎么办,比"删了但后台还在跑"好 —— 后者的现场
-     * 极难解释:侧栏里没有这条会话,CPU 却在转,日志里还在刷它的输出。
+     * 删除与运行之间没有别的协调:行和 transcript 移走后,运行时仍会往已不存在的 jsonl 里追加,
+     * writer 仍会往无主的 session_id 落显示日志(那张表刻意没建外键,孤儿行会一直留着),
+     * 收尾时 `completeRunIfCurrent` 还会去更新一行不存在的记录。明确拒绝并告诉用户先停止,
+     * 比"侧栏里没有这条会话,后台却还在跑"好解释得多。
      */
     if (chatRunRegistry.isProcessing(sessionId)) {
       throw new AppError(
@@ -1010,14 +1095,10 @@ export const sessionsService = {
     }
 
     /**
-     * fl:**"在用"不只有"有 run 在跑"这一种。**
-     *
-     * fk 只挡住了 chat run,而另外两种同样会在删除之后继续往这条会话上写:
-     *   - **终端接管中**:PTY 里跑着 `claude --resume`,行删了、transcript 也删了,
-     *     它还在往一份不存在的文件里追加;
-     *   - **有排队消息**:回合一结束就会被 drain 出去,给一条已经不存在的会话
-     *     起新一轮。
-     * 两种都明确拒绝并说清楚该先做什么 —— 比"删了但后台还在动"好解释得多。
+     * "在用"不只有"有回合在跑"一种,下面两种同样会在删除之后继续往这条会话上写:
+     *   - 终端接管中:PTY 里跑着 `claude --resume`,还会往已不存在的文件里追加;
+     *   - 有排队消息:回合一结束就会被 drain 出去,给已不存在的会话起新一轮。
+     * 两种都明确拒绝,并说清楚该先做什么。
      */
     const shellHolder = currentConversationHolder(sessionId);
     if (shellHolder) {
@@ -1035,11 +1116,10 @@ export const sessionsService = {
     }
 
     /**
-     * gk:**先收 runtime,再动行和文件。**
+     * 先收 runtime,再动行和文件。
      *
-     * 2026-09-14 的事故里,行和 transcript 删掉之后,这条会话空闲着的常驻 CLI 又活了
-     * 半小时;被回收时它按老路径写了两行收尾记录,同名文件"复活"成一个空壳。
-     * fj 那道门只挡"正在跑回合",挡不住"空闲但常驻"。收不掉(回合在飞)就拒绝。
+     * 空闲但常驻的 CLI 不算"正在跑回合",上面几道门挡不住它;不先收掉,它被回收时会按原路径
+     * 写收尾记录,把搬走的 transcript"复活"成一个空壳。回合在飞或还有后台任务时收不掉,拒绝删除。
      */
     if (runtimeReleaser && session.provider_session_id) {
       const release = await runtimeReleaser(session.provider_session_id);
@@ -1050,7 +1130,7 @@ export const sessionsService = {
         );
       }
       if (!release.released && release.reason === 'background_tasks') {
-        // ho(复审):没有回合、只是后台任务在跑 —— 按停止停不掉它们,要在后台任务条上逐个停
+        // 没有回合、只是后台任务在跑:"停止"停不掉它们,要在后台任务条上逐个停。
         throw new AppError(
           `会话 "${sessionId}" 还有后台任务在跑 —— 先在对话里的后台任务条上停掉它们(或等它们跑完)再删除。`,
           { code: 'SESSION_RUN_IN_PROGRESS', statusCode: 409 },
@@ -1058,11 +1138,9 @@ export const sessionsService = {
       }
       if (!release.released) {
         /**
-         * **收不掉 ≠ 在跑。** `releaseClaudeSession` 在 dispose 本身抛错时
-         * (传输已经关了之类)也返回 `released: false`,reason 是 `error`。
-         * 上一版把这一类也当成"回合在飞"回 409,于是一个 dispose 坏掉的 runtime
-         * 能让这条会话**永远删不掉**,而用户看到的是"它明明没在跑"。
-         * 那个 runtime 已经坏了,拦着删除保护不了任何东西 —— 记一行往下走。
+         * 收不掉不等于在跑。`releaseClaudeSession` 在 dispose 本身抛错时(如传输已关闭)也返回
+         * `released: false`,reason 为 `error`。这种 runtime 已经坏了,拦着删除保护不了什么,
+         * 只会让这条会话永远删不掉;记一行日志,继续删除。
          */
         log.warn(
           `[sessions] 删除前收常驻进程没成功(reason=${release.reason ?? 'unknown'}),继续删除:${sessionId}`,
@@ -1126,8 +1204,8 @@ export const sessionsService = {
   },
 
   /**
-   * gk:这条会话是不是"正在用"(在跑回合 / 被终端接管 / 有排队消息)——
-   * 与永久删除路径上那三道门同一口径;删项目前的整体预检用它。
+   * 这条会话是否正在用(在跑回合 / 被终端接管 / 有排队消息),与永久删除路径上那三道门
+   * 同一口径;删项目前的整体预检用它。
    */
   isSessionInUse(sessionId: string): boolean {
     return chatRunRegistry.isProcessing(sessionId)
@@ -1136,15 +1214,15 @@ export const sessionsService = {
   },
 
   /**
-   * gk:谁能永久删这条会话(root / 项目 owner);hl(动态 P2-6)起归档 / 还原同门,
-   * 并多一维"会话发起人"。判定在 database 模块,这里只是转出去。
+   * 谁能永久删除、归档、还原这条会话:root、项目 owner、会话发起人。
+   * 判定在 database 模块,这里只是转出去。
    */
   canViewerManageSession(sessionId: string, viewer: Viewer): boolean {
     return canViewerManageSession(sessionId, viewer);
   },
 
   /**
-   * gk:永久删除的权限门。看得见但不能永久删 → 403 并说清楚该怎么办;
+   * 永久删除的权限门。看得见但无权永久删除 → 403,并说明谁可以删;
    * 看不见 → 与 assertViewerCanSeeSession 同形的 404(不当存在性预言机)。
    */
   assertViewerMayPermanentlyDelete(sessionId: string, viewer: Viewer): void {
@@ -1158,11 +1236,11 @@ export const sessionsService = {
   },
 
   /**
-   * hl(动态 P2-6):归档 / 还原的权限门 —— 与永久删除同一条判定。
+   * 归档 / 还原的权限门,与永久删除同一条判定。
    *
-   * `sessions.isArchived` 是全局的一列,归档等于让所有人当场看不见;此前"看得见就能归档",
-   * 共享项目里的协作者能把 owner 的会话整条收起来。403 的文案与永久删分开写:
-   * 两个动作的措辞不同,用户才知道自己被挡的是哪一件事。
+   * `sessions.isArchived` 是全局的一列,归档等于让所有人当场看不见,所以不能"看得见就能归档",
+   * 否则共享项目里的协作者能把 owner 的会话整条收起来。403 的文案与永久删除分开写,
+   * 用户才知道自己被挡的是哪一件事。
    */
   assertViewerMayArchiveOrRestore(sessionId: string, viewer: Viewer, action: 'archive' | 'restore'): void {
     this.assertViewerCanSeeSession(sessionId, viewer);
@@ -1177,9 +1255,8 @@ export const sessionsService = {
   },
 
   /**
-   * gk:最近删除的列表(分页,最近删的在前)。可见范围与活表同一条规则,
-   * 项目行已经没了的按删除那一刻的快照判;删的人自己也看得到自己删的。
-   * `canRestore` 按 root / 项目 owner / 删除者 三方给。
+   * 最近删除的列表(分页,最近删的在前)。可见范围与活表同一条规则,项目行已经没了的
+   * 按删除那一刻的快照判;删除者自己也看得到自己删的。`canRestore` 给 root / 项目 owner / 删除者。
    */
   listTrashedSessions(
     viewer: Viewer,
@@ -1211,9 +1288,9 @@ export const sessionsService = {
   },
 
   /**
-   * gk:从最近删除里恢复。项目行没了就按快照建回来(owner 照旧);活表里已有同 id /
-   * 同 provider id 的行时拒绝(409)。恢复后给侧栏推一条 `session_upserted`
-   * (由 chatRunRegistry 那条现成的路)。
+   * 从最近删除里恢复(root / 项目 owner / 删除者可恢复,其余 403)。项目行没了就按快照建回来
+   * (owner 不变);活表里已有同 id / 同 provider id 的行时拒绝(409)。恢复后经 chatRunRegistry
+   * 给侧栏推 `session_upserted`,另推 `session_restored` 撤掉前端的「已被删除」态。
    */
   async restoreTrashedSession(
     sessionId: string,
@@ -1246,7 +1323,7 @@ export const sessionsService = {
     }
 
     if (row.project_path) {
-      // 项目行在删项目时一起没了:按删除那一刻的快照建回来,owner **和 visibility** 都不能丢 ——
+      // 项目行在删项目时一起没了:按删除那一刻的快照建回来,owner 和 visibility 都不能丢 ——
       // owner 丢了就成了"无主"(非公共目录仅 root 可见);visibility 丢了则一个
       // `public` 项目会变回默认语义,原来看得见的人(以及共享对象)当场看不到这条恢复出来的会话。
       const existing = projectsDb.getProjectPath(row.project_path);
@@ -1261,12 +1338,11 @@ export const sessionsService = {
     }
 
     /**
-     * **文件先搬回来,再动库。**
+     * 文件先搬回来,再动库。
      *
-     * 反过来的话(上一版):`restore()` 一提交,回收站行就没了,而 transcript 还在
-     * `<trash>/…` 里 —— 这时若搬运失败(原目录被用户删了、只读盘),那份文件就
-     * **再没有任何记录指向它**,连清扫器都找不到,而恢复出来的会话指着一个不存在的
-     * 路径且接口回的是 `restored: true`。搬不动就当场失败,东西全留在回收站里可重试。
+     * 反过来的话,`restore()` 一提交回收站行就没了,这时若 transcript 搬运失败(原目录被删、只读盘),
+     * 那份文件再没有任何记录指向它,连清扫器都找不到,而恢复出来的会话指着一个不存在的路径。
+     * 搬不动就当场失败,东西全留在回收站里可以重试。
      */
     const { transcriptRestored, failed: transcriptFailed } = await restoreTranscriptFromTrash(row);
     if (transcriptFailed) {
@@ -1310,11 +1386,10 @@ export const sessionsService = {
       log.warn('[sessions] 恢复后的侧栏广播失败:', (error as Error)?.message || error);
     });
     /**
-     * gl:**撤掉「已被删除」态要走自己的帧。**
+     * 撤掉「已被删除」态要走自己的帧。
      *
-     * gk 这里只发了上面那一条,而它对归档会话直接 return —— 于是恢复一条归档态的
-     * 会话时前端一帧都收不到,页面永远停在「这条会话已被删除」,输入框回不来,
-     * 只能刷新(2026-09-15 测试环境实测)。这一帧无条件发给所有看得见它的人。
+     * 上面侧栏那一路广播对归档会话直接 return,只靠它的话,恢复一条归档态的会话时前端收不到
+     * 任何帧,页面停在「这条会话已被删除」、输入框回不来。这一帧无条件发给所有看得见它的人。
      */
     try {
       broadcastSessionRestored(sessionId);
@@ -1325,7 +1400,7 @@ export const sessionsService = {
     return { sessionId, restored: true, transcriptRestored };
   },
 
-  /** gk:root 立即清除一条(不等保留期)。 */
+  /** root 立即清除一条(不等保留期)。 */
   async purgeTrashedSession(sessionId: string, actor: SessionActor): Promise<{ sessionId: string; purged: boolean }> {
     const row = sessionTrashDb.purge(sessionId);
     if (!row) {
@@ -1354,21 +1429,20 @@ export const sessionsService = {
     }
 
     sessionsDb.updateSessionIsArchived(sessionId, false);
-    // hl(动态 P2-4):还原后回到活跃列表,别人的标签页也要看到。
+    // 还原后回到活跃列表,别人的标签页也要看到。
     void chatRunRegistry.announceSessionUpsert(sessionId).catch(() => { /* 推送失败不影响还原 */ });
     return { sessionId, isArchived: false };
   },
 
   /**
-   * F8:批量归档 / 恢复 / 删除会话。
+   * 批量归档 / 恢复 / 删除会话。
    *
-   * 回收站里攒了几百条时,一条条点是纯粹的体力活;而"全选删除"如果做成一个不
-   * 逐条鉴权的接口,就等于给了一把能扫掉别人会话的扫帚。所以这里**逐条**过
-   * `canViewerSeeSession`,看不见的既不动也不报错(报错等于告诉调用方那个 id
-   * 存在),只在结果里计数。
+   * 归档里攒了几百条时一条条点是纯体力活;但"全选删除"如果不逐条鉴权,就是一把
+   * 能扫掉别人会话的扫帚。所以逐条过 `canViewerSeeSession`(再过管理权限门),
+   * 看不见或无权操作的既不动也不报错(报错等于告诉调用方那个 id 存在),只计入 skipped。
    *
-   * 一条失败不中断其余:批量操作里最糟的结果是"删了一半然后抛异常",调用方
-   * 既不知道删了哪些,也不知道该不该重试。逐条 catch,最后给一份账。
+   * 一条失败不中断其余:批量操作最糟的结果是"删了一半然后抛异常",调用方既不知道
+   * 删了哪些,也不知道该不该重试。逐条 catch,最后给一份账。
    */
   async bulkSessionAction(
     sessionIds: string[],
@@ -1386,8 +1460,8 @@ export const sessionsService = {
         skipped.push(sessionId);
         continue;
       }
-      // gk:批量永久删除逐条过 owner / root 门 —— 看得见但不能永久删的静默跳过,计入 skipped。
-      // hl(动态 P2-6):归档 / 还原同门(发起人 / owner / root),与单条入口不许分叉。
+      // 批量永久删除 / 归档 / 还原都逐条过管理权限门(发起人 / owner / root),与单条入口不分叉;
+      // 看得见但无权操作的静默跳过,计入 skipped。
       if (!this.canViewerManageSession(sessionId, viewer)) {
         skipped.push(sessionId);
         continue;
@@ -1413,7 +1487,7 @@ export const sessionsService = {
       }
     }
 
-    // gk:批量删除 / 归档另记一条汇总 —— 单条那些各自有记录,这条回答"一次操作动了几条"。
+    // 批量删除 / 归档另记一条汇总:单条各自有记录,这条回答"一次操作动了几条"。
     if ((action === 'delete' || action === 'archive') && succeeded.length > 0) {
       recordSessionAudit(action === 'delete' ? 'sessions_bulk_deleted' : 'sessions_bulk_archived', options.actor ?? viewer, {
         entry: 'bulk', count: succeeded.length, names,
@@ -1424,10 +1498,10 @@ export const sessionsService = {
   },
 
   /**
-   * F8:清空回收站 —— 永久删除**当前访问者看得见的**所有归档会话。
+   * 清空归档:永久删除当前访问者看得见的所有归档会话(进最近删除,保留期内可恢复)。
    *
    * `olderThanDays` 可选:只清超过这个天数的,给"保留最近一周"这种用法。
-   * 分页取完再删(而不是一次全捞),归档几千条时不会把整张表读进内存。
+   * 按页边取边删(而不是一次全捞),归档几千条时也不会把整张表读进内存。
    */
   async emptyArchivedSessions(
     viewer: Viewer,
@@ -1439,17 +1513,15 @@ export const sessionsService = {
 
     let deleted = 0;
     let failed = 0;
-    // gk:看得见但不是自己项目的(共享给我的)不能永久删 —— 跳过并计数。
+    // 看得见但无权永久删除的(共享给我、又不是我发起的)跳过并计数。
     let skipped = 0;
     const names: string[] = [];
     /**
-     * dv:游标按"这一页留下了几条"前进,而不是恒取 offset 0 + 空页即收工。
+     * 游标按"这一页留下了几条"前进,不能恒取 offset 0、遇到没有目标的页就收工。
      *
-     * 删掉的条目会让后面的往前挪,所以删成功的那部分不推进游标(下一轮读到的
-     * 就是新补上来的);**没删的**(不够旧、或删失败)则留在原位,必须跳过去,
-     * 否则:① 带 `olderThanDays` 时,只要最新那一页archived 全是近期的,
-     * `targets.length === 0` 就直接 break,后面真正够旧的一条都清不到 ——
-     * 清理静默地什么也没做;② 少量删不动的条目会把游标永远钉在原地。
+     * 删掉的条目会让后面的往前挪,所以删成功的部分不推进游标(下一轮读到的就是新补上来的);
+     * 没删的(不够旧、或删失败)留在原位,必须跨过去。否则带 `olderThanDays` 时,只要最新那一页
+     * 全是近期的就会直接收工,真正够旧的一条都清不到;少量删不动的条目也会把游标永远钉在原地。
      */
     let offset = 0;
     for (;;) {
@@ -1513,7 +1585,7 @@ export const sessionsService = {
     }
 
     sessionsDb.updateSessionCustomName(sessionId, summary);
-    // hl(动态 P2-4):改名不碰 jsonl,watcher 不会推;这里主动推一帧 session_upserted。
+    // 改名不碰 jsonl,watcher 不会推;这里主动推一帧 session_upserted。
     void chatRunRegistry.announceSessionUpsert(sessionId).catch(() => { /* 推送失败不影响改名 */ });
     return { sessionId, summary };
   },

@@ -15,8 +15,8 @@ import { auditLogDb, closeConnection, initializeDatabase } from '@/modules/datab
  *
  * ## 这个文件里真正要紧的是第三条
  *
- * 筛选本身是便利功能,写错了顶多是筛不准。但 `userId` 那个参数**不是筛选条件,
- * 是权限边界**:非 root 只能看见自己的行,因为这些行带着用户名、登录时间和
+ * 筛选本身是便利功能,写错了顶多是筛不准。但 `userId` 那个参数不是筛选条件,
+ * 是权限边界:非 root 只能看见自己的行,因为这些行带着用户名、登录时间和
  * 客户端 IP —— 不设防的话任何账号都能把同事的作息拉一遍。
  *
  * 加筛选最容易犯的错,就是让某个 filter 把这道闸门顶掉(比如 `username` 传谁
@@ -76,13 +76,13 @@ describe('审计日志筛选', () => {
     assert.equal(auditLogDb.count(null, { outcome: 'failure' }), 1);
   });
 
-  test('⚠️ 用户名筛选**不能**越过可见范围', async () => {
+  test('用户名筛选不能越过可见范围', async () => {
     await seed();
 
     /*
      * bob(user_id = 2,非 root)带着 `username=alice` 来查。
      *
-     * 正确结果是**空** —— 因为 `user_id = 2` 这道闸门先拼上去,
+     * 正确结果是空 —— 因为 `user_id = 2` 这道闸门先拼上去,
      * `username LIKE '%alice%'` 只是在 bob 自己那三行里再缩小。
      *
      * 如果哪天有人"优化"成 username 传谁就查谁,这条会立刻红。
@@ -110,10 +110,6 @@ describe('审计日志筛选', () => {
     /*
      * `alice_2` 里的 `_` 在 LIKE 里是"任意一个字符"。不转义的话,
      * 搜 `alice_2` 会把 `aliceX2` 之类一起捞出来。
-     *
-     * 这个仓库在 P0-6 上正是栽在这里:附件台账的 `LIKE prefix%` 因为路径里的
-     * `_` 被当成通配符,删一个项目连带删了兄弟目录的台账(实测 4 行删 3 行)。
-     * 当时那句注释还写着"附件绝对路径里不会出现 %_"—— 所以这次直接钉住。
      */
     const exact = auditLogDb.list(100, 0, null, { usernameLike: 'alice_2' });
     assert.equal(exact.length, 1, '带下划线的用户名要精确匹配到它自己');

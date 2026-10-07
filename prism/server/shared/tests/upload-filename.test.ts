@@ -1,10 +1,9 @@
 /**
  * multipart 文件名的 latin1→UTF-8 恢复。
  *
- * 这个判据原来写死在 documents.js 里,于是**只有文档上传**的中文名是好的:
- * 图片附件与文件树上传两条路拿 `file.originalname` 原样用,`附件.png` 以
- * `é™„ä»¶.png` 落盘(2026-09-15 在测试环境实测)。提到 shared 层之后三条路共用
- * 一份 —— 所以这里既钉判据本身,也钉"三条路都真的用上了"。
+ * 文档上传、图片附件、文件树上传三条路共用这一份判据;任何一条路直接用
+ * `file.originalname`,`附件.png` 就会以 `é™„ä»¶.png` 落盘。所以这里既钉判据本身,
+ * 也钉上传路径真的用上了它。
  */
 
 import { Readable } from 'node:stream';
@@ -84,10 +83,10 @@ function path0(value: string): string {
  * 真跑一遍 multer:上面的 `asBusboyWouldRead` 是对 busboy 行为的模拟,这一条把
  * 模拟与真实对齐 —— 不然整套断言可能钉的是一个想象出来的病。
  *
- * 2026-09-15 实测(multer 2.0.x):`附件.png` 的 `originalname` 码点是
+ * multer 默认给出的 `附件.png` 的 `originalname` 码点是
  * `e9 99 84 e4 bb b6 2e 70 6e 67` —— UTF-8 的六个字节被逐字节当成了字符。
  *
- * 断言写成**不变量**而不是"一定是乱码":哪天 multer 改了默认字符集,
+ * 断言写成不变量而不是"一定是乱码":哪天 multer 改了默认字符集,
  * `recoverUploadFilename` 因为「码点 > 0xFF 就不碰」会自动变成空操作,这一条照样绿。
  */
 describe('multer 的真实行为', () => {
@@ -128,7 +127,7 @@ describe('multer 的真实行为', () => {
   it('模拟与真实一致:asBusboyWouldRead 给出的就是 multer 给的那个串', async () => {
     const real = '附件.png';
     const fromMulter = await parseOneUpload(real);
-    // 今天这里是乱码;哪天不是了,下一行会告诉我们(而上一条不变量仍然绿)。
+    // 目前这里是乱码;哪天不是了,下一行会告诉我们(而上一条不变量仍然绿)。
     expect(fromMulter).toBe(asBusboyWouldRead(real));
   });
 });

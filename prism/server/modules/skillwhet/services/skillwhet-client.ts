@@ -1,10 +1,10 @@
 import { AppError } from '@/shared/utils.js';
 
 /**
- * gy:Prism → `whet serve` 的回环 HTTP 客户端。
+ * Prism → `whet serve` 的回环 HTTP 客户端。
  *
- * serve 不认识用户:它只验共享口令。所以**权限判断全在 Prism 的路由里**,这里只管转、
- * 把它的错误映射成 AppError(状态码与 error 码原样带回,前端一句人话)。
+ * serve 不认识用户,只校验共享口令,所以权限判断全在 Prism 的路由里;这里只负责转发,
+ * 并把它的错误映射成 AppError(状态码与 error 码原样带回,前端显示一句人话)。
  * serve 没起来 / 超时 → 503 `SKILLWHET_UNAVAILABLE`,不让整条路由变成 500。
  */
 export type SkillWhetClientConfig = {
@@ -16,8 +16,8 @@ export type SkillWhetClientConfig = {
 export type SkillWhetEnvelope<T = unknown> = { ok: true; data: T } | { ok: false; error: string; message: string; [key: string]: unknown };
 
 /**
- * hl(动态 P3 中英混排):serve 的错误是英文,原来原样透传到页面。常见的几条在这里映射成中文;
- * 没映射到的仍原样带回(英文总比没有强)。`message` 是 serve 的原话,映射时可从中抽细节。
+ * serve 的错误信息是英文;常见的几条在这里映射成中文,没映射到的原样带回。
+ * `message` 是 serve 的原话,映射时可从中抽取细节。
  */
 const MESSAGES: Record<string, (raw: string, extra: Record<string, unknown>) => string> = {
   ALREADY_MANAGED: () => '已经有同名的受管副本 —— 先移除它,或换个名字',
@@ -34,7 +34,7 @@ const MESSAGES: Record<string, (raw: string, extra: Record<string, unknown>) => 
   NOT_MANAGED: (raw) => { const m = /'([^']+)'/.exec(raw); return `没有「${m?.[1] ?? '?'}」的受管副本`; },
   NOT_BOOTSTRAPPED: () => '这个副本还没 bootstrap(冻结 S₀)—— 先在技能资产里点 bootstrap',
   NO_TASKS: () => '这个副本没有任务集(或任务集为空)—— 先导入或派生任务',
-  // serve 原话两种:`'s' has no tests/unit/` 与 `no tests collected under tests/unit/`(复核 P3:原来的正则只认前一种的一部分)
+  // serve 的原话有两种:`'s' has no tests/unit/` 与 `no tests collected under tests/unit/`,两种都要认
   NO_TESTS: (raw) => {
     const dir = /(tests\/[A-Za-z0-9_-]+)\/?/.exec(raw)?.[1];
     if (/no tests collected/.test(raw)) return `${dir ?? 'tests'}/ 下没有收集到测试,派生不出任务`;
@@ -138,7 +138,7 @@ export class SkillWhetClient {
     return payload.data;
   }
 
-  /** gz:二进制体(staging 导出的 tar.gz)。错误仍是 JSON 信封,照常映射。 */
+  /** 取二进制体(staging 导出的 tar.gz)。错误仍是 JSON 信封,照常映射。 */
   async requestRaw(path: string, timeoutMs?: number): Promise<{ data: Buffer; filename: string | null }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs ?? this.timeoutMs);
@@ -166,7 +166,7 @@ export class SkillWhetClient {
     return { data: Buffer.from(await response.arrayBuffer()), filename: match ? match[1] : null };
   }
 
-  /** healthz 不带口令;serve 不在时返回 null 而不是抛。 */
+  /** healthz 不校验口令;serve 不在时返回 null 而不是抛错。 */
   async health(): Promise<Record<string, unknown> | null> {
     try {
       return await this.request<Record<string, unknown>>('GET', '/healthz');

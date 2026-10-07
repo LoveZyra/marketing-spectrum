@@ -15,10 +15,10 @@ import {
 } from './sendCommand';
 
 /**
- * A 组:一次发送是**在提交那一刻冻结的命令**。
+ * 一次发送是在提交那一刻冻结的命令。
  *
- * 此前"发送"是十几个 ref / state 现拼出来的,而它们在发送过程中(上传、建会话
- * 都是网络等待)全都会变。这里钉的就是"冻结"这件事本身,以及围绕它的三条规矩:
+ * 发送过程中(上传、建会话都是网络等待)周围的 ref / state 都会变,所以发送内容在提交时冻结。
+ * 这里钉的就是"冻结"这件事本身,以及围绕它的三条规矩:
  * 幂等键跟着持久化走、ACK 之后才清草稿、附件丢了就停下而不是照发。
  */
 const base = {
@@ -128,8 +128,8 @@ describe('reduceOutbox', () => {
 describe('什么时候能清草稿', () => {
   const cmd = freezeSendCommand(base);
 
-  test('**只有 acked**。socket.send 返回 true 不算', () => {
-    // F09 的核心:本地 send 成功只代表没抛异常,不代表服务端收到了。
+  test('只有 acked。socket.send 返回 true 不算', () => {
+    // 本地 send 成功只代表没抛异常,不代表服务端收到了。
     expect(canClearDraft({ command: cmd, status: 'sending', error: null, attempts: 1 })).toBe(false);
     expect(canClearDraft({ command: cmd, status: 'queued', error: null, attempts: 0 })).toBe(false);
     expect(canClearDraft({ command: cmd, status: 'failed', error: 'x', attempts: 1 })).toBe(false);
@@ -156,7 +156,7 @@ describe('持久化往返', () => {
     expect(back.attachmentsLost).toBe(false);
   });
 
-  test('分叉点与隐藏上下文也跟着走(F15:它们此前是全局 ref)', () => {
+  test('分叉点与隐藏上下文也跟着命令走,不靠全局 ref', () => {
     const cmd = freezeSendCommand({
       ...base,
       forkFrom: { providerSessionId: 'prov-1', resumeSessionAt: 'uuid-9' },
@@ -167,9 +167,9 @@ describe('持久化往返', () => {
     expect(back.command.hiddenContext).toBe('这段不显示给用户');
   });
 
-  test('排队时有图、恢复出来没有 → 标成"附件丢了",**不发**', () => {
-    // F12:此前 restoreQueuedDraft 直接 `images: []`,后台自动发送就把一条
-    // 引用了不存在图片的话发了出去,用户毫不知情。
+  test('排队时有图、恢复出来没有 → 标成"附件丢了",不发', () => {
+    // 恢复出来的图比排队时少,就不能自动发:否则后台会把一条引用了不存在图片的话
+    // 发出去,用户毫不知情。
     const restored = fromStoredCommand({ content: '看这张图', imageCount: 2, images: [] }, ctx);
     expect(restored.attachmentsLost).toBe(true);
     expect(restoredEntry(restored).status).toBe('needs_attachment');
@@ -198,7 +198,7 @@ describe('持久化往返', () => {
     expect(restored.command.clientMessageId).toMatch(/^cmd_/);
   });
 
-  test('恢复时归属按**当前**上下文重新绑定,不用存的那份', () => {
+  test('恢复时归属按当前上下文重新绑定,不用存的那份', () => {
     // 命令是按会话键落盘的,读它的时候我们已经知道自己是谁了;
     // 存一份归属再读回来只会多一个可能对不上的来源。
     const restored = fromStoredCommand({ content: 'x' }, { sessionKey: 's9:p9', sessionId: 's9', projectId: 'p9' });
@@ -208,12 +208,12 @@ describe('持久化往返', () => {
 });
 
 /**
- * **落盘的是"还没发出去的那条"。**
+ * 落盘的是"还没发出去的那条"。
  *
  * `markCommandSent` 之后条目停在 `sending` 等 ACK。若这时还写 localStorage,
  * 而 ACK 因为任何原因没到(服务端是旧版本、帧丢了、页面在 ACK 之前被关掉),
  * 这条记录就永久留在盘上 —— 而"换会话"那个 effect 每次都会把它读回来并置成
- * `queued`,冲队随即又发一次:**同一句话反复发送,停不下来**。
+ * `queued`,冲队随即又发一次:同一句话反复发送,停不下来。
  */
 describe('哪些状态该落盘', () => {
   const cmd = freezeSendCommand(base);
@@ -228,7 +228,7 @@ describe('哪些状态该落盘', () => {
     expect(shouldPersist('needs_attachment')).toBe(true);
   });
 
-  test('**sending 不落盘** —— 已经交出去了,盘上再留一份就是那个循环', () => {
+  test('sending 不落盘 —— 已经交出去了,盘上再留一份就是那个循环', () => {
     expect(shouldPersist('sending')).toBe(false);
   });
 
@@ -254,10 +254,10 @@ describe('哪些状态该落盘', () => {
 });
 
 /**
- * **「还在等着发」是一个判据,三处共用。**
+ * 「还在等着发」是一个判据,三处共用。
  *
  * 线上现象:消息已经发出去了,排队卡还挂着「已排队 · 本轮结束后自动发送」,
- * **刷新之后才消失**。那句"刷新才消失"正是指纹 —— 落盘那一侧已经收窄成
+ * 刷新之后才消失。那句"刷新才消失"正是指纹 —— 落盘那一侧已经收窄成
  * "只写还没发的",渲染那一侧却还是"outbox 非空就渲染",于是内存里留着、
  * 盘上没有。同一个判据修了一半。
  */
@@ -274,7 +274,7 @@ describe('isPendingSend —— 排队卡 / 落盘 / 合并共用', () => {
     expect(isPendingSend(at('needs_attachment'))).toBe(true);
   });
 
-  test('**sending 不是** —— 已经发出去了,卡片不该再显示', () => {
+  test('sending 不是 —— 已经发出去了,卡片不该再显示', () => {
     expect(isPendingSend(at('sending'))).toBe(false);
   });
 

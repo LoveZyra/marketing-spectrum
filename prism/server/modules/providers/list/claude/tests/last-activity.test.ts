@@ -1,9 +1,9 @@
 /**
- * bs:会话排序按「真实发生会话的时间」,而不是文件 mtime。
+ * 会话排序按「真实发生会话的时间」,而不是文件 mtime。
  *
- * 点开会话会触发预热(claude --resume),它会碰 JSONL 的 mtime 却不追加消息 ——
- * 以前 updated_at 取 mtime,于是"只点一下没说话"也把会话顶到最前。改成取最后一条
- * user/assistant 消息的时间;这里钉住那条挑选规则。
+ * 点开会话会触发预热(claude --resume),它会碰 JSONL 的 mtime 却不追加消息;
+ * updated_at 取 mtime 的话,"只点一下没说话"也会把会话顶到最前。所以取最后一条
+ * user/assistant 消息的时间,这里钉住那条挑选规则。
  */
 import { describe, it, expect } from 'vitest';
 

@@ -8,11 +8,11 @@ import { afterEach, describe, test } from 'vitest';
 import { parseVimgrepLine, searchProjectFiles } from '@/modules/files/services/project-search.service.js';
 
 /**
- * F10:跨文件全局搜索。
+ * 跨文件全局搜索。
  *
- * 文件树的搜索框只匹配**文件名**;人真正要找的常常是内容。这里钉的是三件事:
+ * 文件树的搜索框只匹配文件名;人真正要找的常常是内容。这里钉三件事:
  * 结果形状(相对路径,不泄漏服务器目录)、默认按字面量(而不是正则),以及
- * **截断如实上报** —— 少给结果而不说,比给少了更糟,用户会以为项目里就这么多。
+ * 截断如实上报 —— 悄悄少给结果,用户会以为项目里就这么多。
  */
 let repo: string | null = null;
 

@@ -1,9 +1,9 @@
 /**
- * gy:任务集导入的**浏览器侧**校验 —— 与 SkillWhet `imports.validate_and_map` 同一套规则。
+ * 任务集导入的浏览器侧校验,与 SkillWhet `imports.validate_and_map` 同一套规则。
  *
  * 为什么前端也校一遍:粘贴 200 行、错在第 37 行,来回打服务端才知道太慢;这里逐行给
  * 结果,用户改完再提交。服务端仍是最终裁判(`POST /tasks/validate` 复校,`POST /tasks`
- * 入库时再校),所以这里判"通过"不等于一定能入库 —— 只是把 90% 的低级错误就地拦住。
+ * 入库时再校),所以这里判"通过"不等于一定能入库,只是把大部分低级错误就地拦住。
  *
  * 规则(与 Python 侧逐条对应,改一边记得改另一边):
  * - `input` / `prompt` 必填,空串不算;
@@ -12,6 +12,7 @@
  * - `task_id` / `id` 可选,给了就不许重复;
  * - `split` 只能是 train / val / test(及别名 learn / dev / holdout / eval);
  * - `checks` 若给必须是对象数组;
+ * - CSV 里除 input / prompt 外的空单元格视为没给;
  * - 最多 5,000 行、5 MiB。
  */
 import { swText } from './sw-text';
@@ -118,8 +119,8 @@ export function parseRows(content: string, format: TaskFormat): Record<string, u
   if (format === 'json') {
     let data: unknown;
     try { data = JSON.parse(content); } catch (error) {
-      // hl(动态 P3):JSONL 里一行坏掉会退成 JSON 报 `position 49`,没有行号 —— 从 position 算出行号,
-      // 多行、每行都像对象的内容再提示一句"可能是 JSONL,手选格式"
+      // JSONL 里有一行坏掉时 detectFormat 会退成 JSON,而 JSON.parse 可能只报 `position N`:换算出行列;
+      // 多行、过半以 { 开头的内容再提示可能是 JSONL、请手选格式。
       const message = error instanceof Error ? error.message : String(error);
       const at = jsonErrorLine(content, message);
       const lines = content.split('\n').filter((line) => line.trim());
@@ -145,8 +146,8 @@ export function parseRows(content: string, format: TaskFormat): Record<string, u
     rows = parseCsv(content).map((raw) => {
       const row: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(raw)) {
-        // hl(动态 P2-16 / 复核 P3):与 serve 同一口径 —— 可选列留空当缺省(空 split / checks 不再判整行失败),
-        // 空 expected_output 也就等于没给:没有 rubric 时本地同样拒
+        // 与 serve 同一口径:可选列留空当缺省(空 split / checks 不判失败);
+        // 空 expected_output 等于没给,没有 rubric 时同样拒。
         if (value.trim() === '' && key !== 'input' && key !== 'prompt') continue;
         let parsed: unknown = value;
         if (CSV_JSON_COLUMNS.has(key) && (value.startsWith('{') || value.startsWith('['))) {

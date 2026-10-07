@@ -55,8 +55,8 @@ const LOGIN_LOCKOUT_MAX_MS = 24 * 60 * 60_000;
  * attacker who can reach the socket directly can otherwise forge a fresh IP
  * per request and bypass every limiter in this file.
  *
- * gk:实现搬到了 `shared/client-ip.js`(modules 层的删除路由也要给审计记 ip,
- * 而边界规则不许它们 import middleware)。这里只是转出去,调用方一个不改。
+ * 实现在 `shared/client-ip.js`(modules 层的删除路由也要给审计记 ip,而边界规则不许它们
+ * import middleware),这里只是转出。
  */
 export { clientIp };
 
@@ -153,7 +153,7 @@ const loginSweeper = setInterval(() => {
 loginSweeper.unref();
 
 const loginKey = (req) => {
-  // hj:与登录查询同口径 —— 先 trim(否则 " alice" 与 "alice" 各算各的锁,加个空格就绕过),
+  // 与登录查询同口径:先 trim(否则 " alice" 与 "alice" 各算各的锁,加个空格就绕过),
   // 再用与 COLLATE NOCASE 相同的比对键;截到 64 字符,免得超长用户名把键撑大。
   const username =
     typeof req.body?.username === 'string' ? usernameKey(req.body.username).slice(0, 64) : '';

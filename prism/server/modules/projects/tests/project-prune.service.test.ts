@@ -15,7 +15,7 @@ import { isPrismInternalProjectPath } from '@/shared/prism-internal-transcripts.
  * 忽略判据只挡住"新的进不来";项目一旦落进 `projects` 表,侧栏就直接读表,
  * 判不判都在。所以要有这一步按真实路径的清账。
  *
- * 这个功能只有一个真正的风险:**判错一个就是删掉用户真实的项目**。所以下面
+ * 这个功能只有一个真正的风险:判错一个就是删掉用户真实的项目。所以下面
  * 大半的用例是反向的 —— 一个都不许被当成幽灵。
  */
 const previousDatabasePath = process.env.DATABASE_PATH;
@@ -41,7 +41,7 @@ describe('isPrismInternalProjectPath', () => {
     assert.equal(isPrismInternalProjectPath('/tmp/prism_model_probe_abc123'), true);
   });
 
-  test('**用户的真实项目一个都不许误伤**', () => {
+  test('用户的真实项目一个都不许误伤', () => {
     for (const projectPath of [
       '/home/u/work/marketing',
       '/home/u/projects/probe-notes',

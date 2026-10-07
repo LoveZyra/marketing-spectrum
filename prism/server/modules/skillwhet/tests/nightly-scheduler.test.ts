@@ -12,7 +12,7 @@ import { AppError } from '@/shared/utils.js';
 import { classifyJob, NightlyScheduler, nightWindow } from '../services/nightly-scheduler.service.js';
 
 /**
- * he:夜训调度器(《实施计划》第四期验收那一段逐条钉住):
+ * 夜训调度器的验收行为逐条钉住:
  * 零纳入整夜无作业;新任务不够跳过;串行;时窗外不起;一晚预算用完排明晚;
  * 连续 3 晚无收益自动暂停;中断的下次续跑;同 skill 有手动作业在跑就让开。
  */
@@ -48,7 +48,7 @@ class FakeServe {
   busy = new Set<string>();
   status: Record<string, { source: string; uploaded_by?: string; imported_at?: string } | null> = {};
   gate: Record<string, string> = {};
-  /** hl:作业的 created_at 原来取真实时间,"一晚"按 2026-09-24 算的用例过了那天就红(日期依赖);给个可注入的钟 */
+  /** 作业 created_at 用的钟,可注入:按固定日期算"一晚"的用例不能依赖真实时钟。 */
   now: (() => Date) | null = null;
 
   async request<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -134,7 +134,7 @@ describe('classifyJob', () => {
 });
 
 describe('NightlyScheduler', () => {
-  test('hn(B7):配置里的模型在模型目录被下架 → 这一晚不跑、写明原因,不自动换模型;重新上架后下一晚照跑', async () => {
+  test('配置里的模型在模型目录被下架 → 这一晚不跑、写明原因,不自动换模型;重新上架后下一晚照跑', async () => {
     await freshDb();
     invalidateCatalogCache();
     const entry = claudeModelCatalog.create({ modelId: 'glm-5.2' }, 1);
@@ -150,7 +150,7 @@ describe('NightlyScheduler', () => {
     assert.match(out.skipped[0].detail, /slow_model=glm-5\.2/);
     assert.match(String(skillWhetNightlyDb.get('a')?.last_detail), /下架/);
 
-    // 复审 P2-4:被打断、待续跑的计划遇上下架 → 仍记"被打断",重新上架后接着续跑
+    // 被打断、待续跑的计划遇上下架 → 仍记"被打断",重新上架后接着续跑
     skillWhetNightlyDb.markFinished('a', 'interrupted', '服务重启打断', false);
     const kept = await new NightlyScheduler({ client: serve, now: at(3, 0, 26), logger: quiet }).tick();
     assert.equal(kept.started, null);

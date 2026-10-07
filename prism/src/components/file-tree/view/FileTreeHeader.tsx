@@ -19,10 +19,10 @@ type FileTreeHeaderProps = {
   onUploadFiles?: (files: FileList) => void;
   onRefresh?: () => void;
   onCollapseAll?: () => void;
-  /** F9:进入/退出多选。默认动作是打开文件,所以多选必须显式进入。 */
+  /** 进入 / 退出多选。默认动作是打开文件,所以多选必须显式进入。 */
   onToggleSelectionMode?: () => void;
   selectionMode?: boolean;
-  /** F10:全局内容搜索(与上面那个文件名搜索框是两回事)。 */
+  /** 全局内容搜索(与上面那个文件名搜索框是两回事)。 */
   onToggleSearch?: () => void;
   searchPanelOpen?: boolean;
   // Navigation

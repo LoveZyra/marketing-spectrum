@@ -4,7 +4,7 @@ type CodeEditorBinaryFileProps = {
   file: CodeEditorFile;
   isSidebar: boolean;
   isFullscreen: boolean;
-  /** ec:侧栏形态的「最大化 / 还原」—— 二进制占位页本身没什么可放大的,但最大化
+  /** 侧栏形态的「最大化 / 还原」:二进制占位页本身没什么可放大的,但最大化
    *  状态下切到这样一个标签时,头部必须仍有还原的入口。 */
   isExpanded?: boolean;
   onToggleExpand?: (() => void) | null;

@@ -12,7 +12,7 @@ export interface ToolGroupItem {
   timestamp: ChatMessage['timestamp'];
 }
 
-/** 相邻的子代理容器(Task/Agent)收成一组,渲染成并排卡片网格(ci 轮)。 */
+/** 相邻的子代理容器(Task/Agent)收成一组,渲染成并排卡片网格。 */
 export interface SubagentGroupItem {
   _isSubagentGroup: true;
   /** 跨渲染稳定的组身份,专供 React key —— 见 stabilizeGroupIdentity。 */
@@ -62,15 +62,15 @@ function rendersNothing(message: ChatMessage, showThinking: boolean): boolean {
 }
 
 /**
- * 回合**中间**的过渡性正文 —— 可以被收进活动时间轴的那种。
+ * 回合中间的过渡性正文:可以被收进活动时间轴的那种。
  *
- * 一轮长任务里模型常在工具调用之间说一段话("校验通过,接着写文档"),原来
- * 这段话会以完整正文打印、把时间轴切成两截,一轮任务在界面上碎成好几段流程。
- * 判定它"可吸收"的条件:普通的助手纯文本 —— 不是工具/思考,不在流式打字中
+ * 一轮长任务里模型常在工具调用之间说一段话("校验通过,接着写文档");按完整正文打印
+ * 会把时间轴切成两截,一轮任务在界面上碎成好几段流程。
+ * 判定它"可吸收"的条件:普通的助手纯文本,不是工具 / 思考,不在流式打字中
  * (流式尾巴要按正文实时显示,等下一个工具启动、它定稿后再折入),也不是任何
- * 有专属渲染的特殊行(交互问答/任务通知/压缩摘要/本地命令/带 reasoning 附页)。
+ * 有专属渲染的特殊行(交互问答 / 任务通知 / 压缩摘要 / 本地命令 / 带 reasoning 附页)。
  *
- * 真正吸不吸,还要看**它后面是不是还有活动**(见 groupConsecutiveTools):
+ * 真正吸不吸,还要看它后面是不是还有活动(见 groupConsecutiveTools):
  * 收尾的最终回答后面没有活动,永远保持大正文排版。
  */
 export function isAbsorbableNarration(message: ChatMessage): boolean {
@@ -95,9 +95,9 @@ export function isAbsorbableNarration(message: ChatMessage): boolean {
  * 把连续的「思考 + 工具调用」收成一段活动,交给活动时间轴渲染成一条竖线。
  *
  * 和早先的「工具执行卡」两点不同:
- * 1. **思考也进来** —— 它和工具调用本来就是同一轮里交替发生的,分成两种控件看,
+ * 1. 思考也进来 —— 它和工具调用本来就是同一轮里交替发生的,分成两种控件看,
  *    读者得自己在脑子里把顺序拼回去;
- * 2. **单条也成段** —— 阈值是 1。否则一次调用长这样、两次调用长那样,同一件事
+ * 2. 单条也成段 —— 阈值是 1。否则一次调用长这样、两次调用长那样,同一件事
  *    有两套外观。
  */
 export function groupConsecutiveTools(
@@ -111,7 +111,7 @@ export function groupConsecutiveTools(
     isGroupableToolMessage(message) || isVisibleThinking(message, showThinking);
 
   /**
-   * 从 from 起,跳过连续的可吸收正文与隐藏思考,看**后面第一条有效消息**是不是
+   * 从 from 起,跳过连续的可吸收正文与隐藏思考,看后面第一条有效消息是不是
    * 活动。是 → 这串正文夹在流程中间,该吸收;返回活动的下标。否则返回 -1。
    */
   const narrationRunLeadsToActivity = (from: number): number => {
@@ -214,7 +214,7 @@ export function groupConsecutiveTools(
  * 分组身份保持:成员完全没变的段,沿用上一轮的同一个 ToolGroupItem 对象。
  *
  * `groupConsecutiveTools` 每次都 mint 全新的组对象 —— 流式期间 store 每
- * 100ms 换一次消息数组,于是**所有**时间轴都拿到"新"的 group prop,memo
+ * 100ms 换一次消息数组,于是所有时间轴都拿到"新"的 group prop,memo
  * 形同虚设,每段都重算 rows 与摘要。消息对象本身在 store 里是身份稳定的
  * (没变的消息复用同一个对象),所以"逐个引用相等 + 长度相等"就能断定
  * 这一段没动,直接还回上一轮的对象。
@@ -225,29 +225,26 @@ export function groupConsecutiveTools(
 /**
  * 组身份的跨渲染登记表。
  *
- * `byMember` 把**组里的每一条消息**都指回它所属的组 —— 不是只记段首。
+ * `byMember` 把组里的每一条消息都指回它所属的组 —— 不是只记段首。
  * 这是关键:窗口从头部长大(补页 / 看更早 / 全部展开)会换掉段首,
  * 新工具追加进来会换掉段尾,只认段首或只认段尾都会在其中一种情况下判成"新组"。
  */
 export interface GroupIdentityState {
   byMember: WeakMap<ChatMessage, ToolGroupItem | SubagentGroupItem>;
   /**
-   * fz:**按消息的内在 id 再存一份。**
+   * 按消息的内在 id 再存一份。
    *
-   * `byMember` 是 `WeakMap`,认的是**对象引用**。而每一轮 `complete` 都会触发
-   * `refreshFromServer`,它 `slot.serverMessages = incoming` —— 整份消息对象
-   * 被换成刚 `await response.json()` 出来的新对象;`normalizedToChatMessages`
-   * 的转换缓存也是 WeakMap,旧 key 一起没。于是认亲**全部落空**,每一段都拿
-   * 新号,`_key` 全变,React 卸载重挂**每一条时间轴**:
+   * `byMember` 是 `WeakMap`,认的是对象引用。而每一轮 `complete` 都会触发 `refreshFromServer`,
+   * 它 `slot.serverMessages = incoming`,整份消息对象被换成刚 `await response.json()` 出来的
+   * 新对象;`normalizedToChatMessages` 的转换缓存也是 WeakMap,旧 key 一起没。只按引用认亲
+   * 会全部落空,每一段都拿新号,`_key` 全变,React 卸载重挂每一条时间轴:
    *
    * - 用户展开过的那一步(可能是一大段 diff)自己收回去,页面蹿半屏;
-   * - 手动点开/点收的折叠状态回到自动规则;
+   * - 手动点开 / 点收的折叠状态回到自动规则;
    * - 收尾那次 `1fr → 0fr` 的过渡从零开始,平滑收起变成硬跳。
    *
-   * 这三条正是这个函数的注释里写着要防的。丢帧补拉(回合进行中)和重连补齐
-   * 也走同一条路,所以不是"每轮一次",是"抖一下就来一次"。
-   *
-   * 内在 id 来自服务端(uuid / toolId / rowid),对象换了它不变 —— 拿它兜底。
+   * 丢帧补拉(回合进行中)和重连补齐也走同一条路,所以不是"每轮一次",是"抖一下就来一次"。
+   * 内在 id 来自服务端(uuid / toolId / rowid),对象换了它不变,拿它兜底。
    */
   byMemberKey: Map<string, ToolGroupItem | SubagentGroupItem>;
   /** 新组的自增编号。放在 state 里,组件卸载重挂之前一直连续。 */
@@ -259,18 +256,17 @@ export function createGroupIdentityState(): GroupIdentityState {
 }
 
 /**
- * 让活动组在多次渲染之间**保持同一个身份**,包括对象引用和 React key。
+ * 让活动组在多次渲染之间保持同一个身份,包括对象引用和 React key。
  *
  * 两件事分开做:
  *
- * 1. **对象引用**:内容完全没变时复用上一轮的组对象,下游 `memo` 才不会被击穿。
- * 2. **`_key`**:内容变了也要继承 —— 组长了一步、或者窗口把更早的几步纳进来,
- *    它**还是同一段活动**。以前 key 取段首消息(`getMessageKey(messages[0])`),
- *    窗口一放大段首就换,React 卸载旧的 ActivityTimeline 再挂一个新的:
+ * 1. 对象引用:内容完全没变时复用上一轮的组对象,下游 `memo` 才不会被击穿。
+ * 2. `_key`:内容变了也要继承。组长了一步、或者窗口把更早的几步纳进来,它还是同一段活动;
+ *    key 若跟着段首消息变,窗口一放大段首就换,React 卸载旧的 ActivityTimeline 再挂一个新的:
  *    用户展开过的步骤自己收回去,几百上千像素的高度当场突变。
  *
- * 认亲规则:先按段尾找(跑动中追加新步骤时段尾在变、段首不变 → 段首命中),
- * 再按段首找(窗口长大时段首在变、段尾不变 → 段尾命中),都不中再逐条兜底。
+ * 认亲规则:先按段首找(跑动中追加新步骤时段尾在变、段首不变 → 段首命中),
+ * 再按段尾找(窗口长大时段首在变、段尾不变 → 段尾命中),都不中再逐条兜底。
  */
 export function stabilizeGroupIdentity(
   items: MessageListItem[],
@@ -283,19 +279,18 @@ export function stabilizeGroupIdentity(
   };
 
   /**
-   * fj:本轮已经被认领过的旧组。
+   * 本轮已经被认领过的旧组。
    *
-   * 认亲规则是「段首命中 → 段尾命中 → 逐条兜底」,但**不记录某个旧组是否已被
-   * 本轮另一个新组认领过**;而 `next.serial += previousGroup ? 0 : 1` 只在完全
-   * 找不到旧组时才发新号。于是一个旧组 G 被中间插入的消息劈成 G1、G2 时,
-   * 两个都用 `messages[0]` 命中 G、**两个都拿到 `G._key`**。
+   * 认亲规则是「段首命中 → 段尾命中 → 逐条兜底」,而 `next.serial += previousGroup ? 0 : 1`
+   * 只在完全找不到旧组时才发新号。不记录认领的话,一个旧组 G 被中间插入的消息劈成 G1、G2 时,
+   * 两段都会命中 G,两个都拿到 `G._key`。
    *
-   * 中间插入不是罕见情形:`computeMerged` 会把 `[...server, ...extra]` 按时间
-   * 重排,所以服务端刷新只要带回一条时间戳夹在两个工具调用之间的行(压缩摘要、
-   * error 行、任务通知、`ExitPlanMode`/`AskUserQuestion`、子代理容器)就会造成。
+   * 中间插入不是罕见情形:`computeMerged` 会把 `[...server, ...extra]` 按时间重排,
+   * 服务端刷新只要带回一条时间戳夹在两个工具调用之间的行(压缩摘要、error 行、
+   * 任务通知、`ExitPlanMode`/`AskUserQuestion`、子代理容器)就会造成。
    *
-   * 后果是同层出现两个 `key="activity-group_N"`:React 报重复 key,至少一段
-   * 时间轴每次渲染被卸载重建 —— 用户展开过的步骤自己收回去、整段高度突变。
+   * 后果是同层出现两个 `key="activity-group_N"`:React 报重复 key,至少一段时间轴每次
+   * 渲染被卸载重建,用户展开过的步骤自己收回去、整段高度突变。
    */
   const claimed = new Set<ToolGroupItem | SubagentGroupItem>();
 

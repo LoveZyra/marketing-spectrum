@@ -1,23 +1,25 @@
 /**
- * 归档保留期清扫(F8)。
+ * 归档保留期清扫。
  *
  * 归档是"软删除":会话从活跃列表消失但行还在,随时可以恢复。好处是误删可挽回,
- * 代价是**它永远不会自己消失** —— 一年下来回收站里几千条,库越来越大,而没有
+ * 代价是它永远不会自己消失 —— 一年下来归档里几千条,库越来越大,而没有
  * 任何人会去手动清。
  *
- * `PRISM_ARCHIVE_RETENTION_DAYS` 给一个保留期,超期的归档会话被永久删除
- * (连同它的 transcript 文件与显示日志)。**默认 0 = 关闭** —— 这是不可逆操作,
- * 不能因为升级了一版就悄悄开始删用户的东西。要开是部署方的显式决定。
+ * `PRISM_ARCHIVE_RETENTION_DAYS` 给一个保留期,超期的归档会话按永久删除处理
+ * (由调用方注入的 deleteSession 执行,会话进最近删除,之后由回收站清扫器真删)。
+ * 默认 0 = 关闭:删用户的东西必须是部署方的显式决定。
  *
- * 清扫按**更新时间**算,不是创建时间:一段两年前开始、上周还在聊的会话不该因为
- * "创建得早"被清掉。
+ * 到期起点取归档时间与最后活动时间中较晚的那个(判据在 `sessionsDb.getExpiredArchivedSessions`):
+ * 刚归档的旧会话也至少留满保留期 —— 先归档、留个后悔期是常见用法,只看最后活动时间的话,
+ * 归档一批两个月没动过的会话,下一轮清扫就全进了最近删除;归档前还在聊的会话按最后活动算。
+ * 不看创建时间:一段两年前开始、上周还在聊的会话不该因为"创建得早"被清掉。
  */
 
 import { sessionsDb } from '@/modules/database/index.js';
 import { createLogger } from '@/shared/logger.js';
 const log = createLogger('providers');
 
-/** 每轮最多删多少 —— 首次开启时回收站里可能有几千条,不要一口气占住事件循环。 */
+/** 每轮最多删多少:首次开启时归档里可能有几千条,不要一口气占住事件循环。 */
 const SWEEP_BATCH = 200;
 const SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -32,24 +34,17 @@ export function getArchiveRetentionDays(): number {
  */
 export function findExpiredArchivedSessions(retentionDays: number, limit = SWEEP_BATCH): string[] {
   if (retentionDays <= 0) return [];
-  /**
-   * fj:cutoff 下推到 SQL,不再"取一页回来再过滤"。
-   *
-   * 原来是 `getArchivedSessionsPage({kind:'all'}, limit, 0)` —— 那个查询
-   * `ORDER BY updated_at DESC`(**最新在前**),而"超期"的定义就是"最旧",
-   * 它们排在整张表的**最后**。归档超过 200 条、且最新的 200 条还在保留期内时,
-   * 清扫**一条都删不到**;归档不改 `updated_at`,所以排序看的是最后活动时间,
-   * 一个持续在用的部署很容易满足这个条件。
-   *
-   * 部署方配了 `PRISM_ARCHIVE_RETENTION_DAYS=30` 以为回收站会自己清,实际上库
-   * 一直在涨,日志里也没有任何提示(`removed > 0` 才打日志)。
+  /*
+   * cutoff 下推到 SQL,不要"取一页回来再过滤":归档列表按 updated_at 倒序(最新在前),
+   * 而超期的恰恰是最旧的那些。最新一页都还在保留期内时,先取页再过滤会一条都删不到,
+   * 而且没有任何日志提示(`removed > 0` 才打日志)。
    */
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
   return sessionsDb.getExpiredArchivedSessions(cutoff, limit);
 }
 
 type SweepDependencies = {
-  /** 永久删除一条会话(连同 transcript)。注入以避免与 sessions.service 相互 import。 */
+  /** 永久删除一条会话(连同 transcript 进最近删除)。注入以避免与 sessions.service 相互 import。 */
   deleteSession: (sessionId: string) => Promise<unknown>;
 };
 

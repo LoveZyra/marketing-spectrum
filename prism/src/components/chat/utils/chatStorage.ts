@@ -19,16 +19,14 @@ export const safeLocalStorage = {
         console.warn('localStorage quota exceeded, clearing old drafts');
 
         /**
-         * fj:配额兜底**只清草稿**,绝不碰 `queued_message_*`。
+         * 配额兜底只清草稿,绝不碰 `queued_message_*`。
          *
-         * 那不是缓存,是**还没发出去、正等着自动重发的消息**。原来两类一起删,
-         * 于是任意一次写入撞上配额,所有会话里排队的消息就静默消失 ——
-         * `useQueuedMessageAutoSend` 与输入框的 flush 都读不到键,用户既不会
-         * 收到提示,也不会看到那条消息发出去。
+         * 那不是缓存,是还没发出去、正等着自动重发的消息。一起删的话,任意一次写入撞上配额,
+         * 所有会话里排队的消息就会静默消失:`useQueuedMessageAutoSend` 与输入框的 flush
+         * 都读不到键,用户既不会收到提示,也不会看到那条消息发出去。
          *
-         * 而且草稿键本身**只增不减**(会话删除时没有任何清理调用点),
-         * 所以配额撞线是迟早的事,不是异常路径。清的时候按 key 顺序删一半,
-         * 不是全删 —— 用户当前正在打的那条草稿也在这堆里。
+         * 草稿键本身只增不减(会话删除时没有清理调用点),配额撞线是迟早的事,不是异常路径。
+         * 清的时候按 key 顺序删一半,不是全删:用户当前正在打的那条草稿也在这堆里。
          */
         const draftKeys = Object.keys(localStorage).filter((k) => k.startsWith('draft_input_'));
         // 保守起见留下最后写入的那一批(key 顺序不保证时间序,但删一半足够腾地方)
@@ -81,19 +79,18 @@ export type QueuedSendOptions = Record<string, unknown>;
 /**
  * 盘上那份排队记录。
  *
- * fz:类型补齐 —— `toStoredCommand` 写进去的字段在这里一个都没有,于是读回来
- * 的那份被 `as StoredSendCommand` 强转着用,类型系统对"读少了几项"一言不发
- * (`readQueuedMessage` 削字段那个 bug 因此躲了很久)。这些字段是可选的:
+ * 字段要与 `toStoredCommand` 写进去的保持一致:读回来的那份会被当成 `StoredSendCommand` 用,
+ * 类型里少了字段,类型系统就不会提醒读路径把它们丢了。这些字段是可选的:
  * 老记录、以及只存了正文的历史格式都没有。
  */
 export type StoredQueuedMessage = QueueClaimFields & {
   content: string;
   options?: QueuedSendOptions;
-  /** F09 幂等键 —— 服务端据此去重并回 ACK。老记录没有。 */
+  /** 幂等键:服务端据此去重并回 ACK。旧记录可能没有。 */
   clientMessageId?: string;
   /** 图片描述符(纯 JSON,能跨刷新)。 */
   images?: unknown[];
-  /** 提交时有几张图 —— 与 `images.length` 对不上就说明附件丢了(F12)。 */
+  /** 提交时有几张图 —— 与 `images.length` 对不上就说明附件丢了。 */
   imageCount?: number;
   namingText?: string;
   forkFrom?: unknown;
@@ -102,7 +99,7 @@ export type StoredQueuedMessage = QueueClaimFields & {
 
 /**
  * 本标签页的 id。同一个标签页里的两个认领方(输入框 flush 和 app 级自动发送)
- * 共用它 —— 它们靠"清键"就能互相避让,要互斥的是**别的标签页**。
+ * 共用它 —— 它们靠"清键"就能互相避让,要互斥的是别的标签页。
  */
 export const QUEUE_TAB_ID = makeTabId();
 
@@ -122,28 +119,21 @@ export function readQueuedMessage(sessionId: string): StoredQueuedMessage | null
     const parsed = JSON.parse(raw) as unknown;
     if (parsed && typeof parsed === 'object' && typeof (parsed as StoredQueuedMessage).content === 'string') {
       /**
-       * fz:**保留未知字段。**
+       * 保留未知字段,原样返回整份记录。
        *
-       * 这里原来是解构出四个字段再**新建一个对象**返回,于是
-       * `toStoredCommand` 写进去的 `clientMessageId / images / imageCount /
-       * namingText / forkFrom / hiddenContext` 在读回来的路上全被扔掉 ——
-       * 而唯一的读者把返回值 `as StoredSendCommand` 用。后果三条,每条都是
-       * 被专门修过的老病:
+       * 不能解构出几个字段再新建对象:`toStoredCommand` 写进去的 `clientMessageId / images /
+       * imageCount / namingText / forkFrom / hiddenContext` 会在读回来的路上全被扔掉,
+       * 而唯一的读者把返回值当 `StoredSendCommand` 用。丢了它们:
        *
-       * 1. `imageCount` 没了 → `attachmentsLost` 恒为 false →
-       *    `needs_attachment` 一次都触发不了 → 冲队把一条引用了不存在图片的话
-       *    直接发给模型(F12 原样复活);
-       * 2. `clientMessageId` 没了 → fr 那条"这个标签页发过的命令不许回到待发"
-       *    的兜底判据恒为 undefined,分支永不进入;
-       * 3. `forkFrom` / `hiddenContext` 没了 → 排队的「编辑重跑」刷新后变成在
-       *    当前会话里续跑,而不是分叉。
+       * 1. `imageCount` 没了 → `attachmentsLost` 恒为 false → `needs_attachment` 触发不了,
+       *    冲队会把一条引用了不存在图片的话直接发给模型;
+       * 2. `clientMessageId` 没了 → "这个标签页发过的命令不许回到待发"的兜底判据恒为 undefined;
+       * 3. `forkFrom` / `hiddenContext` 没了 → 排队的「编辑重跑」刷新后变成在当前会话里续跑,
+       *    而不是分叉。
        *
-       * 而 `claimQueuedMessageAs` 认领时会把这份读结果原样写回盘上 ——
-       * **认领动作把盘上那份永久削平**,这是"同一条记录两个写者"的另一半。
-       *
-       * 单测之所以全绿:它拿 `toStoredCommand(...)` 的返回值直接喂
-       * `fromStoredCommand`,**中间没走 localStorage**。所以这次补的回归测试
-       * 必须真的走一遍存储。
+       * `claimQueuedMessageAs` 认领时会把这份读结果原样写回盘上,削掉的字段就永久丢了。
+       * 回归测试必须真的走一遍 localStorage,不能拿 `toStoredCommand(...)` 的返回值直接喂
+       * `fromStoredCommand`。
        */
       const stored = parsed as StoredQueuedMessage;
       return stored.content.trim() ? { ...stored } : null;
@@ -164,7 +154,7 @@ export function clearQueuedMessage(sessionId: string): void {
 }
 
 /**
- * 认领一条排队消息:盖上本标签页的戳,再**回读一次**确认戳还是自己的。
+ * 认领一条排队消息:盖上本标签页的戳,再回读一次确认戳还是自己的。
  *
  * 返回 null 有三种情况:没有排队记录、别的标签页刚认领过且还没过期、或者回读发现
  * 戳被别人盖掉了(同 tick 竞争,后写的赢)。三种都表示"这条不该由我发"。

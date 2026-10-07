@@ -44,13 +44,7 @@ type PermissionsContentProps = {
 };
 
 /**
- * Claude's tool allow/deny lists.
- *
- * Three permission models used to share this file behind an `agent`
- * discriminant, and the default export was a switch over it: Claude's tool
- * lists, Cursor's shell-command lists, and Codex's three-way permission-mode
- * radio. Two of the three agents are gone, so the discriminant had one value
- * and the switch one arm — this component is the whole file now.
+ * Claude's skip-permissions switch and tool allow/deny lists.
  */
 export default function PermissionsContent({
   skipPermissions,
@@ -97,7 +91,7 @@ export default function PermissionsContent({
               type="checkbox"
               checked={skipPermissions}
               onChange={(event) => onSkipPermissionsChange(event.target.checked)}
-              // hl(P3 可访问性):名称只取标题,说明走 aria-describedby(原来整段说明都塞进名称里)。
+              // 名称只取标题,说明走 aria-describedby,读屏器不必把整段说明当名称念。
               aria-label={t('permissions.skipPermissions.label')}
               aria-describedby="skip-permissions-description"
               className="h-4 w-4 accent-primary"

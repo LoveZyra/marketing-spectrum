@@ -38,11 +38,9 @@ describe('isPromptCommand —— 命令该由谁执行', () => {
 });
 
 /**
- * 回归:客户端在拿到 `/api/commands/list` 的 `builtIn` 数组后,会**无差别**
- * 给每一项盖上 `type: 'built-in'`(useSlashCommands 里那个 map)。
- * 而那个数组里混着 `cliPassthroughCommands` —— 服务端给它们标的是
- * `namespace: 'cli'`。判据必须扛得住这层覆盖,否则 `/compact` 又会被
- * 当成内置命令送去 execute 端点。
+ * 客户端拿到 `/api/commands/list` 的 `builtIn` 数组后,会给每一项都盖上 `type: 'built-in'`
+ * (useSlashCommands 里那个 map),而这个数组里混着服务端标为 `namespace: 'cli'` 的
+ * `cliPassthroughCommands`。判据必须扛得住这层覆盖,否则 `/compact` 会被当成内置命令送去 execute 端点。
  */
 describe('回归:builtIn 数组里混进来的 CLI 命令', () => {
   const asClientSees = (command: { name: string } & Record<string, unknown>) => ({

@@ -3,9 +3,8 @@ import { describe, test, expect } from 'vitest';
 import { planSlotEviction } from './useSessionStore';
 
 /**
- * C10 回归:会话槽位 LRU。原来"切会话不清、旧数据全留"导致逛几十个长会话
- * 后内存只涨不落;现在超过上限时,在切会话的边界按最久未用淘汰,当前会话
- * 与 60 秒内仍有动静(比如后台在推流)的会话不进候选。
+ * 会话槽位 LRU:超过上限时,在切会话的边界按最久未用淘汰,否则逛几十个长会话后内存只涨不落。
+ * 当前会话与 60 秒内仍有动静(比如后台在推流)的会话不进候选。
  */
 describe('planSlotEviction', () => {
   const NOW = 1_000_000_000;

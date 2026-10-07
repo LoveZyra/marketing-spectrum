@@ -11,22 +11,20 @@ export type SettingsMainTabMeta = {
   label: string;
   keywords: string;
   icon: ComponentType<{ className?: string }>;
+  /** i18n key under the `settings` namespace — 侧栏用它,命令面板回落到 label。 */
+  labelKey: string;
   /**
    * Hidden from non-root accounts. The server 403s these routes regardless —
    * this only keeps a tab that can do nothing out of everyone else's settings.
    */
-  /** i18n key under the `settings` namespace — 侧栏用它,命令面板回落到 label。 */
-  labelKey: string;
   rootOnly?: boolean;
 };
 
 /**
- * 设置页所有主标签的**唯一**清单。顺序即侧栏顺序。
+ * 设置页所有主标签的唯一清单,顺序即侧栏顺序。
  *
- * 之前这份清单在三个地方各写了一遍(这里、`SettingsSidebar` 的 NAV_ITEMS、
- * `useSettingsController` 的 KNOWN_MAIN_TABS),然后就漂了:只有侧栏那份有
- * `voice`,于是命令面板搜不到语音设置,`?tab=voice` 深链也会静默回落到 agents。
- * 现在另外两处都从这里派生,加一个标签只需要在这里加一行。
+ * 侧栏(`SettingsSidebar` 的 NAV_ITEMS)、命令面板、深链校验(`useSettingsController` 的
+ * KNOWN_MAIN_TABS)都从这里派生,加一个标签只需要在这里加一行。
  */
 export const SETTINGS_MAIN_TABS: SettingsMainTabMeta[] = [
   { id: 'agents', label: 'Agents', labelKey: 'mainTabs.agents', keywords: 'agents subagents claude code', icon: Bot },
@@ -35,7 +33,7 @@ export const SETTINGS_MAIN_TABS: SettingsMainTabMeta[] = [
   { id: 'accounts', label: 'Accounts', labelKey: 'mainTabs.accounts', keywords: 'accounts users approval root admin', icon: Users, rootOnly: true },
   { id: 'notifications', label: 'Notifications', labelKey: 'mainTabs.notifications', keywords: 'notifications alerts push', icon: Bell },
   { id: 'account', label: 'My Account', labelKey: 'mainTabs.account', keywords: 'account logout switch user sign out password 退出 登出 切换账号 修改密码', icon: UserRound },
-  // hq:每个人都有 —— 填自己的 key、管自己的私有网关 / 模型(root 也在这里填自己的 key)
+  // 每个人都有:填自己的 key、管自己的私有网关 / 模型(root 也在这里填自己的 key)
   { id: 'gateways', label: 'Model Gateways', labelKey: 'mainTabs.gateways', keywords: 'model gateway key api key personal private base url 模型网关 网关 个人 key 密钥 私有网关 私有模型', icon: Network },
   { id: 'models', label: 'Models', labelKey: 'mainTabs.models', keywords: 'model catalog mapping alias sonnet opus haiku fable settings.json context window gateway 模型 目录 映射 别名 窗口 网关', icon: Shuffle, rootOnly: true },
   { id: 'server', label: 'Server Status', labelKey: 'mainTabs.server', keywords: 'server status cpu memory disk jupyter gateway 服务器 状态 网关', icon: Activity, rootOnly: true },
@@ -45,11 +43,6 @@ export const SETTINGS_MAIN_TABS: SettingsMainTabMeta[] = [
 /** 所有合法的主标签 id。深链与持久化的标签值据此校验。 */
 export const SETTINGS_MAIN_TAB_IDS = SETTINGS_MAIN_TABS.map((tab) => tab.id);
 
-// `AGENT_PROVIDERS` and `AGENT_CATEGORIES` used to live here and were imported
-// by nobody — the agents tab built both lists itself, which is why nothing
-// noticed that `AGENT_CATEGORIES` was missing `skills`. Along with them went
-// `DEFAULT_CURSOR_PERMISSIONS`, `DEFAULT_PROJECT_SORT_ORDER` and
-// `DEFAULT_SAVE_STATUS`, none of which had a reader either.
 export const DEFAULT_CODE_EDITOR_SETTINGS: CodeEditorSettingsState = {
   wordWrap: false,
   showMinimap: true,

@@ -15,7 +15,7 @@ const write = (path: string, lines: number, isError = false): ChatMessage => ({
 } as unknown as ChatMessage);
 
 /**
- * ef:一轮的「产出」卡(设计稿里回答正文下方那张)。判据与会话级那份同源:
+ * 一轮的「产出」卡(回答正文下方那张)。判据与会话级那份同源:
  * 成功的 Write、排噪声路径、按路径去重;多带一个写入量。
  */
 describe('extractTurnOutputs', () => {
@@ -69,7 +69,7 @@ describe('displayOutputPath', () => {
 });
 
 /**
- * ej:服务端那份产出映射的落地。
+ * 服务端那份产出映射的落地。
  *
  * 服务端只给路径 + 行数(它不知道项目根),显示名、噪声过滤、写入量文案都在
  * 这里生成 —— 判据必须和窗口内抽取一致,否则同一个文件在两条路径下长得不一样。

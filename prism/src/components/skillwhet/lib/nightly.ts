@@ -4,7 +4,7 @@ import type { Tone } from '../view/StatusStrip';
 
 import type { Job, NightlyResult } from './types';
 
-/** he:夜训结果的人话与色调(技能卡、优化训练页顶部共用)。 */
+/** 夜训结果的文案与色调(技能卡、优化训练页顶部共用)。 */
 export function useNightlyResultLabel() {
   const { t } = useTranslation('skillwhet');
   return (result: NightlyResult | null): { label: string; tone: Tone } => {
@@ -29,8 +29,8 @@ const DAYS = 14;
 const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /**
- * he(F4-04):近 14 天每天的训练费用(单系列柱图,按作业创建日、本地时间)+ 接受率。
- * 一个度量一张图,不画双轴;数据全来自作业表,没有作业的日子画空槽。
+ * 近 14 天每天的训练费用、训练次数与其中的夜训次数(按作业创建日、本地时间;只算训练作业),
+ * 供总览的单系列柱图用:一个度量一张图,不画双轴。没有作业的日子也占一格,图上画空槽。
  */
 export function dailyCost(jobs: Job[], now = new Date()): Array<{ day: string; cost: number; runs: number; nightly: number }> {
   const out: Array<{ day: string; cost: number; runs: number; nightly: number }> = [];

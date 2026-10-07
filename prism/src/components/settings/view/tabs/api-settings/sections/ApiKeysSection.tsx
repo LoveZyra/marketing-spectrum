@@ -1,4 +1,4 @@
-import { ExternalLink, Key, Plus, Trash2 } from 'lucide-react';
+import { ExternalLink, Key, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../../../../../shared/view/ui';
@@ -10,6 +10,9 @@ type ApiKeysSectionProps = {
   newKeyName: string;
   /** 新建失败时的原因;null 表示没有错误。 */
   apiKeyError?: string | null;
+  /** 最近一次拉列表失败:列表是上次拉到的(或空),不能显示成「还没有密钥」。 */
+  loadFailed?: boolean;
+  onRetryLoad?: () => void;
   onShowNewKeyFormChange: (value: boolean) => void;
   onNewKeyNameChange: (value: string) => void;
   onCreateApiKey: () => void;
@@ -23,6 +26,8 @@ export default function ApiKeysSection({
   showNewKeyForm,
   newKeyName,
   apiKeyError,
+  loadFailed = false,
+  onRetryLoad,
   onShowNewKeyFormChange,
   onNewKeyNameChange,
   onCreateApiKey,
@@ -72,7 +77,7 @@ export default function ApiKeysSection({
               {t('apiKeys.form.cancelButton')}
             </Button>
           </div>
-          {/* 失败以前只写进 console —— 界面上一点动静都没有,看着就是"点了没反应"。 */}
+          {/* 失败原因显示在界面上,不能只写 console,否则看起来就是"点了没反应"。 */}
           {apiKeyError && (
             <p role="alert" className="mt-2 text-sm text-destructive">
               {apiKeyError}
@@ -81,9 +86,28 @@ export default function ApiKeysSection({
         </div>
       )}
 
+      {loadFailed && (
+        <div
+          role="alert"
+          className="mb-3 flex flex-col gap-2 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between"
+        >
+          <span>
+            {apiKeys.length > 0
+              ? t('apiKeys.refreshFailed', { defaultValue: 'API 密钥列表刷新失败,下面是上次加载到的内容,可能不是最新的。' })
+              : t('apiKeys.loadFailed', { defaultValue: 'API 密钥列表加载失败,请重试。' })}
+          </span>
+          {onRetryLoad && (
+            <Button type="button" variant="outline" size="sm" onClick={onRetryLoad}>
+              <RefreshCw className="h-4 w-4" />
+              {t('apiKeys.retryLoad', { defaultValue: '重试' })}
+            </Button>
+          )}
+        </div>
+      )}
+
       <div className="space-y-2">
         {apiKeys.length === 0 ? (
-          <p className="text-sm italic text-muted-foreground">{t('apiKeys.empty')}</p>
+          loadFailed ? null : <p className="text-sm italic text-muted-foreground">{t('apiKeys.empty')}</p>
         ) : (
           apiKeys.map((key) => (
             <div key={key.id} className="flex items-center justify-between rounded-lg border border-border p-3">
@@ -98,9 +122,7 @@ export default function ApiKeysSection({
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {/* 状态与动作分离:原来一颗按钮上写「激活」,分不清是"当前已激活"
-                    还是"点我去激活"。现在左边是**状态**(圆点 + 使用中/已停用,
-                    不可点),右边是**动作**(停用/启用,动词,点了会发生什么一目了然)。 */}
+                {/* 状态与动作分开:左边是状态(圆点 + 使用中/已停用,不可点),右边是动作(停用/启用),免得一颗按钮分不清是"已激活"还是"点我激活"。 */}
                 <span
                   className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs ${
                     key.is_active

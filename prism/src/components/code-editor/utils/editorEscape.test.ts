@@ -6,13 +6,9 @@ import { describe, expect, it } from 'vitest';
 import { resolveEditorEscapeAction } from './editorEscape';
 
 /**
- * ec:预览面板「最大化」。
- *
- * 用户要的是"可展示的文件(渲染出来的 HTML / Markdown / notebook / 图片 / PDF)
- * 也能放大看"。放大的机制(editorExpanded → 左栏 display:none、预览栏 flex-1)
- * 早就有,只是开关藏在 CodeMirror 的工具条里 —— 而上面这些形态根本不经过
- * CodeMirror。现在开关统一在头部,三种头部(文本编辑器 / 媒体预览 / 二进制占位)
- * 都有;Esc 先还原再关。
+ * 预览面板「最大化」:可展示的文件(渲染出来的 HTML / Markdown / notebook / 图片 / PDF)
+ * 也要能放大看(editorExpanded → 左栏 display:none、预览栏 flex-1)。开关在头部,
+ * 三种头部(文本编辑器 / 媒体预览 / 二进制占位)都有;Esc 先还原再关。
  */
 describe('resolveEditorEscapeAction', () => {
   it('侧栏 + 已最大化 + 有开关 → 第一次 Esc 只还原', () => {
@@ -64,12 +60,12 @@ describe('「最大化 / 还原」开关在三种头部都有(源码守门)', ()
   });
 });
 
-describe('ee:最大化时项目侧栏也收起(源码守门)', () => {
+describe('最大化时项目侧栏也收起(源码守门)', () => {
   it('MainContent 把 editorExpanded 通知上层;AppContent 据此折叠侧栏而不写偏好', () => {
     const main = read('../../main-content/view/MainContent.tsx');
     expect(main).toMatch(/onEditorMaximizedChange\?\.\(editorExpanded\)/);
     const app = read('../../app/AppContent.tsx');
-    // hl:「此处侧栏是否展开」改由 sidebarOpenHere 表达(聊天页走偏好、其他页走不落盘的本地状态)。
+    // 「此处侧栏是否展开」由 sidebarOpenHere 表达(聊天页走偏好、其他页走不落盘的本地状态)。
     expect(app).toMatch(/const isSidebarCollapsed = !isMobile && \(!sidebarOpenHere \|\| editorMaximized\s*\|\| activeTab === 'skillwhet' \|\| activeTab === 'notebook'\)/);
     expect(app).toMatch(/onEditorMaximizedChange=\{setEditorMaximized\}/);
     // 不能走 setPreference:那会把用户自己的侧栏开合状态覆盖掉

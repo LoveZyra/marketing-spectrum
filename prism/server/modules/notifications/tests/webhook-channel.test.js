@@ -6,16 +6,16 @@ import { afterEach, describe, test } from 'vitest';
 import { webhookChannel, __testing } from '../services/webhook-channel.service.js';
 
 /**
- * Webhook 通道 —— 服务端**唯一**的通知出口。
+ * Webhook 通道 —— 服务端唯一的通知出口。
  *
  * 在它之前 `notificationChannels` 是个空数组,也就是说服务端一条通知都发不出去,
  * 而编排管线(偏好闸、去重、payload)还完整跑着。最直接的后果是
- * **定时任务失败没有任何人会知道** —— 而无人值守正是定时任务存在的理由。
+ * 定时任务失败没有任何人会知道 —— 而无人值守正是定时任务存在的理由。
  *
  * 这里钉三件事:
  *   1. 启用与否只看"配没配地址"(没配时编排要能按零通道早退,省掉几十次白算的查询);
  *   2. 请求体同时给 `text` 和 `content`,群机器人认哪个都行;
- *   3. **内网地址一律拒发**。
+ *   3. 内网地址一律拒发。
  *
  * 第 3 条最要紧:地址虽然来自运维配置而不是用户输入,但配错一个
  * `http://127.0.0.1:9200` 就会让通知系统变成一台按事件触发的内网探针。
@@ -85,7 +85,7 @@ describe('webhook 通知通道', () => {
     await assert.rejects(() => __testing.assertPublicDestination('gopher://x/hook'), /协议/);
   });
 
-  test('send 到内网地址时**不会真的发出请求**', async () => {
+  test('send 到内网地址时不会真的发出请求', async () => {
     // 起一个真的本地接收端:如果守卫失效,它会收到请求 —— 用"收到几条"来判,
     // 比断言抛错更硬(抛错也可能是别的原因抛的)。
     const received = [];

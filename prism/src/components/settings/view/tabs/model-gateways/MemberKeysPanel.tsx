@@ -7,7 +7,7 @@ import { FORM_PROBLEM_FALLBACKS, formatDbTime, formProblemKey, formProblemVars, 
 import { errorMessage, gatewaysAdminApi, type BasicUser, type GatewayKeyHolder } from './gatewaysApi';
 
 /**
- * hq:root 管某个网关(含默认网关 0)上的「成员 key」—— 谁填了个人 key(只看末四位)、替人填 / 换 / 清。
+ * root 管某个网关(含默认网关 0)上的「成员 key」:谁填了个人 key(只看末四位)、替人填 / 换 / 清。
  * 个人 key 只给那个人自己的回合用,优先于网关的默认 key。
  */
 type Props = {

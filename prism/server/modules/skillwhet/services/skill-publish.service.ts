@@ -5,15 +5,15 @@ import path from 'node:path';
 import { AppError } from '@/shared/utils.js';
 
 /**
- * gz:把受管副本(`<home>/work/<skill>/`)发布到技能库(`~/.claude/skills/<skill>/`)。
+ * 把受管副本(`<home>/work/<skill>/`)发布到技能库(`~/.claude/skills/<skill>/`)。
  *
- * 这是整个技能优化里**唯一**会写技能库的动作(回滚是它的逆),而且只有 root 能点。四条纪律:
- *   1. 前置:该副本最近一次 staging 已被采纳(`adopted.json`)—— 训练产物只进 staging,采纳与发布是两个动作;
- *   2. 技能库那份自导入以来**没被人改过**(serve 的 `/drift` 逐文件 sha 对账)—— 改过就 409 并列出文件,不覆盖别人的手工修改;
+ * 这是技能优化里唯一会写技能库的动作(回滚是它的逆),只有 root 能执行。四条纪律:
+ *   1. 前置:该副本最近一次 staging 已被采纳(`adopted.json`,由路由检查)—— 训练产物只进 staging,采纳与发布是两个动作;
+ *   2. 技能库那份自导入以来没被人改过(路由传入 serve `/drift` 的逐文件 sha 对账结果)—— 改过就 409 并列出文件,不覆盖别人的手工修改;
  *   3. 原子替换:先整棵拷到 `.publish-<skill>-<ts>` 再 `rename`,旧目录挪进 `<home>/rollback/<skill>/<ts>/`(保 3 份);
  *   4. 不带 `.evo/`、`__pycache__`:训练状态留在副本里,技能库永远是干净的 skill。
  *
- * 「发布为新技能」(上传来源)走同一条路,只是前置换成"技能库里**没有**同名目录"。
+ * 「发布为新技能」(上传来源)走同一条路,只是前置换成"技能库里没有同名目录"。
  */
 export type PublishedFile = { rel: string; sha256: string };
 
@@ -145,7 +145,7 @@ export function publishManagedCopy(options: PublishOptions): PublishResult {
     try {
       moveDir(liveDir, rollback);
     } catch (error) {
-      // 旧的挪不走(另一个 root 同时在发?rollback 根在别的文件系统且拷贝失败?):新拷的那份别留在技能库里
+      // 旧目录挪不走(另一个 root 同时在发布,或 rollback 根在别的文件系统且拷贝失败):新拷的那份不能留在技能库里
       fs.rmSync(stagingDst, { recursive: true, force: true });
       fs.rmSync(rollback, { recursive: true, force: true });
       throw error;

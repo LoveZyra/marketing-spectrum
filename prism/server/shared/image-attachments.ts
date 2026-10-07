@@ -21,10 +21,9 @@ const log = createLogger('attachments');
 /**
  * Global storage folder for uploaded chat image attachments.
  *
- * Resolved through getDataDir() rather than hardcoding a home-relative path,
- * so it follows PRISM_DATA_DIR and the one-time ~/.cloudcli -> ~/.prism
- * migration. Hardcoding it here previously meant uploads kept writing to the
- * pre-migration folder while the rest of the app read the new one.
+ * Resolved through getDataDir() rather than a hardcoded home-relative path,
+ * so it follows PRISM_DATA_DIR; a hardcoded path would put uploads in a
+ * folder the rest of the app does not read.
  */
 export function getGlobalImageAssetsDir(): string {
   return path.join(getDataDir(), 'assets');
@@ -33,7 +32,7 @@ export function getGlobalImageAssetsDir(): string {
 /**
  * 项目内附件目录名。与 `shared/attachment-storage.ts` 的同名常量必须一致 ——
  * 这里就地定义是为了不把配额/落盘那一整套依赖拖进 provider 侧的构建路径。
- * 两处不一致会让"上传落哪"和"允许读哪"再次分家,所以那边有一条测试钉住它们相等。
+ * 两处不一致会让"上传落哪"和"允许读哪"分家,所以有一条测试钉住它们相等。
  */
 export const ATTACHMENT_DIR_NAME = 'attachments';
 
@@ -128,35 +127,17 @@ function getDirectoryPathVariants(directory: string): string[] {
 }
 
 /**
- * A7:**一张图片可以来自哪些目录 —— 只有这一个答案。**
+ * 组装给模型时,一张图片可以来自哪些目录:全局图库 + 本轮 cwd + cwd 自己的
+ * `attachments/` + 显式传入的根(`chat.send` 那道门算好的允许目录)及其 `attachments/`。
  *
- * ## 事故
+ * 这里必须覆盖上传落盘(`POST /api/assets/images`,落在项目的 `attachments/`)和
+ * `chat.send` 放行的位置。任何一处对不齐,图片就在那一道门被静默丢掉,而界面照样
+ * 显示原图(前端按侧栏的 projectId 走 `/api/projects/:id/files/content` 取图):
+ * 用户看到图在页面上,模型却说"传不进来",日志之外没有任何线索。所以会话项目的
+ * 根由调用方显式传入,不能只靠 cwd 推断。
  *
- * 之前"合法的图片路径"在三个地方各定义了一遍,而且互不相同:
- *
- * | 位置 | 允许的根 | 依据来自 |
- * |---|---|---|
- * | 上传落盘(`POST /api/assets/images`) | `<项目根>/attachments/`,解析不到项目才回落全局 | 前端传的 `projectId`(侧栏选中的那个) |
- * | `chat.send` 过滤 | 全局 + `session.project_path + '/attachments'` | `sessions` 表里那条会话的 `project_path` |
- * | 组装给模型(这里) | 全局 + **本轮 cwd** | 运行时的工作目录 |
- *
- * 三个来源不一样,只要有一处对不齐,图片就在那一道门被**静默丢掉** ——
- * 而界面照样显示得好好的(前端按侧栏的 projectId 走
- * `/api/projects/:id/files/content` 取原图)。于是用户看到的是:
- * **图在页面上,模型却说"传不进来"**,日志之外没有任何线索。
- *
- * 最容易踩到的是 root:它对所有项目可见,上传一定落进项目的 `attachments/`
- * (普通用户看不见的项目会回落全局目录,反而三道门都认)。会话行里的
- * `project_path` 与侧栏那个项目只要差一个字符,这一轮的图就全丢。
- *
- * ## 收口
- *
- * 现在只有 `imageSourceRoots()` 一个函数回答这个问题,三处都走它:
- * 全局图库 + 本轮 cwd + **cwd 自己的 `attachments/`** + 显式传入的会话项目根
- * 及其 `attachments/`。判据一致之后,"上传得进去、发不出来"这个组合不再成立。
- *
- * 安全水位不变:这些目录本来就是这个会话读得到的(cwd 是 agent 的工作目录,
- * 项目 attachments/ 在项目里),`~/.ssh` 之类照旧拒绝。
+ * 这些目录本来就是这个会话读得到的(cwd 是 agent 的工作目录,项目 attachments/
+ * 在项目里),`~/.ssh` 之类照旧拒绝。
  */
 export function imageSourceRoots(cwd?: string, projectRoots: readonly string[] = []): string[] {
   const workingDir = cwd || process.cwd();
@@ -219,7 +200,7 @@ export async function buildClaudeUserContent(
   images: unknown,
   cwd?: string,
   /**
-   * A7:会话所属项目根 —— 与 `chat.send` 那道门用的是**同一个来源**。
+   * `chat.send` 那道门算好的允许目录(会话项目的 `attachments/`、已放行图片所在目录)。
    *
    * cwd 通常就是项目根,但不是必然:分叉出来的会话、外部 API 起的回合、
    * 以及 cwd 被显式指过的运行时都会不一样。传进来才能保证两道门判据一致。
@@ -249,12 +230,7 @@ export async function buildClaudeUserContent(
       }
 
       const bytes = await fs.readFile(canonicalPath);
-      /**
-       * 发给模型之前在内存里缩一遍(长边 1568、~1MB),**磁盘原图不动**。
-       * 用户贴什么就传什么的话,一张手机原图就是 3.6MB 的 base64,而且它会跟着
-       * transcript 每一轮重发;把 base64 当文本计数的网关直接给你算出一百万 token。
-       * 详见 image-downscale.ts。
-       */
+      // 发给模型之前在内存里缩一遍(长边 1568、~1MB),磁盘原图不动;原因见 image-downscale.ts。
       const scaled = await downscaleImageForModel(bytes, mediaType);
       if (scaled.changed) {
         log.info(

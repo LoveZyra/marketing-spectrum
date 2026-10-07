@@ -5,11 +5,11 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 /**
- * gk:最近删除(会话回收站)的仓库层。
+ * 最近删除(会话回收站)的仓库层。
  *
- * 钉三件事:搬进去之后活表里**一行都不剩**、回收站里**一行不少**;搬回来之后
- * 显示日志的 id 与顺序**逐字相同**;可见范围与活表同一条规则(项目 owner 看得见、
- * 陌生人看不见、删的人自己看得见)。改回原来的 DELETE 路径,第一条就红。
+ * 钉三件事:搬进去之后活表里一行都不剩、回收站里一行不少;搬回来之后显示日志的
+ * id 与顺序逐字相同;可见范围与活表同一条规则(项目 owner 看得见、陌生人看不见、
+ * 删的人自己看得见)。删除若直接走 DELETE,第一条就红。
  */
 let tempDir: string;
 let db: typeof import('@/modules/database/index.js');
@@ -28,7 +28,7 @@ afterAll(() => {
 
 beforeEach(() => {
   const conn = db.getConnection();
-  for (const table of ['session_trash_messages', 'session_trash', 'session_display_messages', 'session_display_log_state', 'sessions', 'project_shares', 'projects']) {
+  for (const table of ['session_trash_messages', 'session_trash', 'session_display_messages', 'session_display_log_state', 'message_feedback', 'sessions', 'project_shares', 'projects']) {
     conn.prepare(`DELETE FROM ${table}`).run();
   }
 });
@@ -120,6 +120,52 @@ describe('session_trash:搬进 / 搬回', () => {
     expect(result.restored).toBe(false);
     expect(result.reason).toBe('conflict');
     expect(db.sessionTrashDb.get('s1')).not.toBeNull();
+  });
+
+  it('恢复后反馈还在;真删时反馈随会话一起清掉', () => {
+    ensureProject('/p/a', 14);
+    insertSession('s1', '/p/a', 'p1', null);
+    insertMessages('s1', 2);
+    db.messageFeedbackDb.upsert({
+      sessionId: 's1', projectId: 'pid:/p/a', messageId: 'm0', userId: 14,
+      source: 'vote', verdict: 1, status: 'answered', note: '答得好',
+    });
+    const feedbackOf = () => db.messageFeedbackDb.listForSessionAndUser('s1', 14)
+      .map((row) => ({ message_id: row.message_id, verdict: row.verdict, note: row.note }));
+    const before = feedbackOf();
+    expect(before).toEqual([{ message_id: 'm0', verdict: 1, note: '答得好' }]);
+
+    move('s1');
+    expect(feedbackOf()).toEqual(before);
+    expect(db.sessionTrashDb.restore('s1').restored).toBe(true);
+    expect(feedbackOf()).toEqual(before);
+
+    move('s1');
+    expect(db.sessionTrashDb.purge('s1')?.session_id).toBe('s1');
+    expect(feedbackOf()).toEqual([]);
+  });
+
+  it('恢复归档态的会话:归档时间记为恢复那一刻,保留期重新起算;未归档的保持 NULL', () => {
+    ensureProject('/p/a', 14);
+    insertSession('arch', '/p/a', 'p1', null);
+    insertSession('live', '/p/a', 'p2', null);
+    db.sessionsDb.updateSessionIsArchived('arch', true);
+    db.getConnection().prepare("UPDATE sessions SET archived_at = '2026-01-01 00:00:00', updated_at = '2026-01-01 00:00:00' WHERE session_id = 'arch'").run();
+    move('arch');
+    move('live');
+
+    expect(db.sessionTrashDb.restore('arch').restored).toBe(true);
+    expect(db.sessionTrashDb.restore('live').restored).toBe(true);
+    const archivedAt = (id: string) => (db.getConnection()
+      .prepare('SELECT isArchived, archived_at FROM sessions WHERE session_id = ?')
+      .get(id) as { isArchived: number; archived_at: string | null });
+
+    const restored = archivedAt('arch');
+    expect(restored.isArchived).toBe(1);
+    expect(Math.abs(Date.parse(`${String(restored.archived_at).replace(' ', 'T')}Z`) - Date.now())).toBeLessThan(60_000);
+    expect(archivedAt('live')).toEqual({ isArchived: 0, archived_at: null });
+    // 恢复回来的旧归档不会在下一轮清扫里又被送回最近删除
+    expect(db.sessionsDb.getExpiredArchivedSessions(new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString(), 10)).toEqual([]);
   });
 
   it('hasProviderSessionId:按 provider id 或 app id 都能查到', () => {

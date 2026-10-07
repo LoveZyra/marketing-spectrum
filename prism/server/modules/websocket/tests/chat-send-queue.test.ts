@@ -15,15 +15,14 @@ import {
 import { handleChatConnection } from '@/modules/websocket/services/chat-websocket.service.js';
 
 /**
- * F7:回合内排队。
+ * 回合内排队。
  *
- * 之前 `chat.send` 撞上在跑的回合就直接 `RUN_IN_PROGRESS` 打回去,那条消息就没了。
- * 前端确实有自己的排队(存在浏览器 localStorage 里),但它盖不住两种情况:
- * 判定竞态(前端以为空闲、服务端还在跑)与关掉标签页。服务端收下一条,回合结束
- * 自动续发。
+ * `chat.send` 撞上在跑的回合时不打回去,而是由服务端收下一条、回合结束自动续发。
+ * 前端自己的排队(存在 localStorage 里)盖不住两种情况:判定竞态(前端以为空闲、
+ * 服务端还在跑)与关掉标签页。
  *
- * 这里断言的是**副作用**:第二条消息最终有没有真的被送进运行时,以及它是
- * **在第一条结束之后**才进去的。只断言回了什么帧,一个"回帧但从不续发"的实现
+ * 这里断言的是副作用:第二条消息最终有没有真的被送进运行时,以及它是
+ * 在第一条结束之后才进去的。只断言回了什么帧,一个"回帧但从不续发"的实现
  * 照样能过。
  */
 type SentFrame = Record<string, unknown>;
@@ -237,14 +236,13 @@ describe('chat.send 回合内排队', () => {
 });
 
 /**
- * fj:中止的时序。
+ * 中止的时序。
  *
- * `abortFn` 不是瞬时的(真实实现里 `interruptWithTimeout` 最长等 5 秒)。原来
- * `dropPendingSend` 和 `completeRun` 都排在 `await abortFn` **之后**,那段窗口里
- * 排队那条已经被认领并起了新一轮 —— 于是「停止」没停住,而随后那句按 sessionId
- * 的 `completeRun` 又把**新**那一轮误标成完成。
+ * `abortFn` 不是瞬时的(真实实现里 `interruptWithTimeout` 最长等 5 秒)。`dropPendingSend` 和
+ * `completeRun` 若排在 `await abortFn` 之后,那段窗口里排队那条已经被认领并起了新一轮:
+ * 「停止」没停住,随后按 sessionId 的 `completeRun` 又把新那一轮误标成完成。
  *
- * 现有用例的 `abortFns.claude` 是同步的 `() => true`,**永远盖不到这条时序**。
+ * 其他用例的 `abortFns.claude` 是同步的 `() => true`,盖不到这条时序,所以这里用慢中止。
  */
 function connectWithSlowAbort(user: { id: number; username: string }, abortDelayMs: number) {
   const spawned: string[] = [];
@@ -277,7 +275,7 @@ function connectWithSlowAbort(user: { id: number; username: string }, abortDelay
   return { ws, spawned, finishCurrentTurn: () => { release?.(); release = null; } };
 }
 
-describe('fj:中止的时序', () => {
+describe('中止的时序', () => {
   test('慢中止期间,排队那条不许被续发出去 —— "停"就是停', async () => {
     await withIsolatedDatabase(async () => {
       const alice = await seedSession('s-abort-race');
@@ -293,7 +291,7 @@ describe('fj:中止的时序', () => {
       await settle();
       assert.deepEqual(session.spawned, ['A'], '第二条应当还在排队');
 
-      // 按停止。中止还在飞(60ms)的时候让第一轮结束 —— 这正是原来会漏发 B 的窗口:
+      // 按停止。中止还在飞(60ms)的时候让第一轮结束,这正是会漏发 B 的窗口:
       // 回合 promise settle → finally 触发 drain → B 被认领并 startRun,
       // 而 `await abortFn` 这时才刚回来。
       const aborting = send(session.ws, { type: 'chat.abort', sessionId: 's-abort-race' });

@@ -8,24 +8,24 @@ import { getDataDir } from '@/utils/runtime-paths.js';
 const log = createLogger('providers');
 
 /**
- * hq(复审 P1):**flag 层设置走文件,不走命令行。**
+ * flag 层设置走文件,不走命令行。
  *
- * SDK 把对象形式的 `options.settings` 序列化成 `--settings <json>` 塞进 CLI 的命令行 —— 网关 key 在里面,
- * `ps -eo args` / `/proc/<pid>/cmdline` 谁都看得到(常驻进程一活就是半小时;Bash 工具里模型随手 `ps aux`
- * 就会把别人的 key 带进自己的对话)。实测(2.1.285):
- * - `settings` 给成文件路径,命令行里只剩路径;CLI 启动时读一次;
+ * SDK 把对象形式的 `options.settings` 序列化成 `--settings <json>` 塞进 CLI 的命令行,网关 key 就在里面,
+ * `ps -eo args` / `/proc/<pid>/cmdline` 谁都看得到(常驻进程能活半小时;模型在 Bash 工具里随手 `ps aux`
+ * 就会把别人的 key 带进自己的对话)。CLI 的相关行为:
+ * - `settings` 给成文件路径时,命令行里只有路径;CLI 启动时读一次;
  * - 之后 `applyFlagSettings({ effortLevel })` 不会冲掉文件里的 env;
- * - 启动后文件被删,这个进程照旧用读进去的那份(但不赌 CLI 将来会不会重读 —— 文件留到进程收尾再删)。
+ * - 启动后文件被删,进程照旧用已读入的那份;但不依赖这一点,文件留到进程收尾再删。
  *
  * 文件在数据目录下的 `flag-settings/`(0700),文件 0600。同一个系统账号(jovyan)下的人本来就读得到
  * 数据库与 settings.json,这里挡的是"随手一个 ps 就看见"。
- * 只有带网关补丁(含 key)时才写文件;其余情况照旧用对象(与 hq 之前完全一样)。
+ * 只有带网关补丁(含 key)时才写文件;其余情况仍直接传对象。
  */
 
 const DIR_NAME = 'flag-settings';
 /**
- * 这一个 Prism 进程的随机前缀(复审 P2:不用 pid —— 容器里 node 每次启动都是同一个小 pid,
- * 按 pid 认"自己的"会让上一次崩溃留下的 key 文件永远删不掉)。
+ * 这一个 Prism 进程的随机前缀。不用 pid:容器里 node 每次启动都是同一个小 pid,
+ * 按 pid 认"自己的"会让上一次崩溃留下的 key 文件永远删不掉。
  */
 const BOOT_ID = randomUUID().slice(0, 8);
 const flagSettingsDir = (): string => path.join(getDataDir(), DIR_NAME);
@@ -75,7 +75,7 @@ export function sweepStaleFlagSettingsFiles(): number {
       fs.unlinkSync(path.join(flagSettingsDir(), name));
       removed += 1;
     } catch {
-      // 忽略
+      // 删不掉就留给下次启动再清
     }
   }
   return removed;

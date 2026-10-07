@@ -10,13 +10,12 @@ import {
 } from '../claude-sdk.js';
 
 /**
- * dc:待批审批必须有一条按会话清扫的路径。
+ * 待批审批必须能按会话清扫。
  *
- * 事故形状:`pendingToolApprovals` 全局只有一处 delete(waitForToolApproval 自己的
- * cleanup),而常驻路径的审批超时是**关的**(要等人来点),唯一出口是 SDK 的
- * `context.signal`;而回合/运行时的死亡路径都不碰这个 Map。signal 一旦没触发,
- * resolver 就永久留着,并且因为补发按 app 会话 id 匹配(该 id 对整段对话稳定),
- * 这条会话**以后每次订阅**都会把这个死请求当"待批"推给用户 —— 点了没反应。
+ * `pendingToolApprovals` 只在 waitForToolApproval 自己的 cleanup 里删除;常驻路径的审批没有超时
+ * (要等人来点),出口只有 SDK 的 `context.signal`,回合 / 运行时的死亡路径都不碰这个 Map。
+ * signal 没触发时 resolver 会一直留着;补发又按 app 会话 id 匹配(整段对话不变),
+ * 于是这条会话以后每次订阅都会把死请求当"待批"推给用户,点了没反应。
  */
 describe('按会话清扫待批审批', () => {
   test('清扫后不再出现在待批列表里', async () => {

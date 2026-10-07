@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   ChangeEvent,
@@ -32,6 +32,7 @@ import {
 } from '../../../../shared/view/ui';
 import { EFFORT_LABEL_KEYS, effectiveEffort } from '../../utils/modelEffortMenu';
 import { isModelAvailable } from '../../utils/modelAvailability';
+import { composerAutocompleteAria, listOptionId } from '../../utils/composerAutocompleteAria';
 
 import CommandMenu from './CommandMenu';
 import ComposerPlusMenu, { type ComposerPlusMenuItem } from './ComposerPlusMenu';
@@ -75,7 +76,7 @@ interface ChatComposerProps {
    * 实测过时有值;为空则 chip 只显示别名。
    */
   activeModelReal?: string | null;
-  /** hn:当前模型是目录条目时的显示名与厂商(别名时为空,走 activeModelReal)。 */
+  /** 当前模型是目录条目时的显示名与厂商(别名时为空,走 activeModelReal)。 */
   activeModelLabel?: string | null;
   activeModelVendor?: string | null;
   permissionMode: PermissionMode | string;
@@ -89,12 +90,12 @@ interface ChatComposerProps {
   /** 打开 /models 详情框(下拉列表右上角的滑杆图标;没有目录数据时芯片也走它)。 */
   onShowModelPicker: () => void;
   /**
-   * ho:点芯片弹出的**下拉列表**用的数据。给了(且非空)芯片就开下拉,不再弹大框。
+   * 点芯片弹出的下拉列表用的数据。给了(且非空)芯片就开下拉,否则芯片打开 /models 详情框。
    * `onSelectModel` 抛错 = 切换失败,下拉留着并在底部报错。
    */
   modelOptions?: ProviderModelOption[];
   onSelectModel?: (model: string) => Promise<unknown>;
-  /** hq:下拉里不能用的模型旁「去填 key」—— 开 设置 → 模型网关。 */
+  /** 下拉里不能用的模型旁的「去填 key」:打开 设置 → 模型网关。 */
   onOpenGatewaySettings?: () => void;
   contextUsedTokens?: number | null;
   /** 别名 → 配到的真实模型(下拉里别名行的「→ 真实模型」)。 */
@@ -104,36 +105,36 @@ interface ChatComposerProps {
   isDragActive: boolean;
   queuedDraft: QueuedDraft | null;
   /**
-   * F7:**服务端**排队中的那条(chat.send 撞上在跑的回合时被收下的)。
+   * 服务端排队中的那条(chat.send 撞上在跑的回合时被收下的)。
    * 与上面那份浏览器内的排队并存 —— 一份是"我主动排的",一份是"服务端替我
    * 兜住的",来源不同,能做的操作也不同(服务端那条只能撤销,不能编辑)。
    */
   serverQueued?: { preview: string; enqueuedAt: string; redacted?: boolean } | null;
   onCancelServerQueued?: () => void;
-  /** ho(hq-1):这段对话在后台跑的任务(全量)与它们的「停止」;「转到后台」把正在跑的前台命令挪到后台。 */
+  /** 这段对话在后台跑的任务(全量)与它们的「停止」;`onBackgroundForeground` 把正在跑的前台子代理转到后台(没有可转的时不传)。 */
   backgroundTasks?: BackgroundTaskItem[] | null;
   onStopBackgroundTask?: (taskId: string) => Promise<void> | void;
   onBackgroundForeground?: () => Promise<void> | void;
   onEditQueuedDraft: () => void;
   onDeleteQueuedDraft: () => void;
-  /** ho:排队的那条现在就插进这一轮(send now);带图片的不给(服务端不合流带图片的消息) */
+  /** 排队的那条现在就插进这一轮(send now);带图片的不给(服务端不合流带图片的消息) */
   onSendQueuedNow?: () => void;
   attachedImages: File[];
   onRemoveImage: (index: number) => void;
   uploadingImages: Map<string, number>;
   imageErrors: Map<string, string>;
-  /** prism: parsed document attachments (extracted text rides with the prompt). */
+  /** Parsed document attachments (extracted text rides with the prompt). */
   attachedDocs?: AttachedDoc[];
   onRemoveDoc?: (index: number) => void;
-  /** ed:「添加附件」—— 与拖拽 / 粘贴同一条分流:图片给模型看,其它类型存进项目。 */
+  /** 「添加附件」:与拖拽 / 粘贴同一条分流,图片给模型看,其它类型存进项目。 */
   onAttachFiles?: (files: File[]) => void;
   onAttachUrl?: (url: string) => void;
   parsingDocs?: boolean;
-  /** fj:提交在飞(图片上传 / 建会话 POST 还没回来)—— 发送按钮变灰,防重复提交。 */
+  /** 提交在飞(图片上传 / 建会话 POST 还没回来):发送按钮变灰,防重复提交。 */
   isSubmitting?: boolean;
-  /** prism: transfer progress for the generic attach path (files up to 500MB). */
+  /** Transfer progress for the generic attach path (files up to 500MB). */
   docUploadProgress?: DocUploadProgress | null;
-  /** Prism: open the checkpoint history drawer. */
+  /** Opens the checkpoint history drawer. */
   onShowCheckpoints?: () => void;
   showFileDropdown: boolean;
   filteredFiles: MentionableFile[];
@@ -141,7 +142,7 @@ interface ChatComposerProps {
   onSelectFile: (file: MentionableFile) => void;
   filteredCommands: SlashCommand[];
   selectedCommandIndex: number;
-  /** fj:悬停项 —— 只高亮,不影响回车。 */
+  /** 悬停项:只高亮,不影响回车。 */
   hoveredCommandIndex?: number;
   onCommandSelect: (command: SlashCommand, index: number, isHover: boolean) => void;
   onCloseCommandMenu: () => void;
@@ -255,7 +256,20 @@ function ChatComposer({
   sendByCtrlEnter,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
-  // ed: hidden file input behind 「添加附件」(all types; routed like drag-and-drop).
+  // 斜杠命令 / @ 文件两个下拉的 DOM id:输入框按它们挂 aria-controls / aria-activedescendant
+  const autocompleteId = useId();
+  const commandListId = `${autocompleteId}-commands`;
+  const fileListId = `${autocompleteId}-files`;
+  const fileListShown = showFileDropdown && filteredFiles.length > 0;
+  const autocompleteAria = composerAutocompleteAria({
+    commandListId,
+    commandListShown: isCommandMenuOpen && filteredCommands.length > 0,
+    selectedCommandIndex,
+    fileListId,
+    fileListShown,
+    selectedFileIndex,
+  });
+  // Hidden file input behind 「添加附件」(all types; routed like drag-and-drop).
   const attachInputRef = useRef<HTMLInputElement>(null);
 
   // 模型切换后给 chip 一个短暂高亮 —— 弹窗关掉后,这是"确实切了"最直接的反馈。
@@ -279,15 +293,15 @@ function ChatComposer({
     () => (hasModelDropdown ? modelOptions?.find((entry) => entry.value === activeModel) ?? null : null),
     [hasModelDropdown, modelOptions, activeModel],
   );
-  // ho:芯片上「模型名 档位」的档位 —— 当前模型实际跑的那一档(与服务端同一口径),没有档位就不显示
+  // 芯片上「模型名 档位」的档位:当前模型实际跑的那一档(与服务端同一口径),没有档位就不显示
   const chipEffortLabel = useMemo(() => {
     if (!hasModelDropdown) return null;
     const level = effectiveEffort(activeModelOption, effort);
     return level ? (EFFORT_LABEL_KEYS[level] ? t(EFFORT_LABEL_KEYS[level]) : level) : null;
   }, [hasModelDropdown, activeModelOption, effort, t]);
   /**
-   * hq:当前模型此刻对这个人不可用(网关没 key / 停用)。芯片照常显示它的名字(**不悄悄换模型**),
-   * 加一个小警示,原因进 title —— 发出去服务端会回一句清楚的错误(GATEWAY_KEY_MISSING 之类)。
+   * 当前模型此刻对这个人不可用(网关没 key / 停用)。芯片照常显示它的名字(不悄悄换模型),
+   * 加一个小警示,原因进 title;发出去服务端会回一句清楚的错误(GATEWAY_KEY_MISSING 之类)。
    * 当前模型干脆不在列表里(下架 / 不再对他可见)时没有可说的原因,芯片照旧只显示名字。
    */
   const activeModelUnavailableReason = activeModelOption && !isModelAvailable(activeModelOption)
@@ -309,7 +323,7 @@ function ChatComposer({
   const activeModelRealName =
     activeModelReal && activeModelReal !== activeModel ? activeModelReal : null;
   /**
-   * hn(B4):chip 上画厂商图标 —— 目录条目按它的厂商;别名按实际模型名识别;都认不出就留原来的 ModelMark。
+   * chip 上画厂商图标:目录条目按它的厂商;别名按实际模型名识别;都认不出就用 ModelMark。
    * 目录条目显示 label(网关原名进 title)。
    */
   const chipModelName = activeModelLabel || activeModelRealName || activeModel;
@@ -346,7 +360,7 @@ function ChatComposer({
     const rect = modeDropdownButtonRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    // hl(动态 P2-21):手机上菜单右半截被裁 —— 夹进视口(w-72 = 288px,渲染后按实测宽)。
+    // 菜单夹进视口,否则手机上右半截会被裁(渲染前按 w-72 = 288px 估,渲染后按实测宽)。
     const menuWidth = modeDropdownMenuRef.current?.offsetWidth || 288;
     setModeDropdownPosition({
       left: clampMenuLeft(rect.left, menuWidth, window.innerWidth),
@@ -453,19 +467,25 @@ function ChatComposer({
     };
   }, [isEffortDropdownOpen, updateEffortDropdownPosition]);
 
-  // Detect if the AskUserQuestion interactive panel is active
+  // While an AskUserQuestion request is pending, its panel replaces the input box.
   const hasQuestionPanel = pendingPermissionRequests.some(
     (r) => r.toolName === 'AskUserQuestion'
   );
 
-  // ed:底栏按自己的实测宽度分档(见 utils/composerDensity.ts),不再看视口断点。
+  // 底栏按自己的实测宽度分档(见 utils/composerDensity.ts),不看视口断点。
   const footerRef = useRef<HTMLDivElement | null>(null);
-  const density = useComposerDensity(footerRef);
+  const { density, extraActionFits } = useComposerDensity(footerRef);
+  /**
+   * 「转到后台」:回合进行中有前台子代理时才有。底栏放得下就放底栏,放不下(三个按钮同时在场会把
+   * 「+」挤出去)就收进「+」菜单的最后一项,判据见 fitsExtraFooterAction。
+   */
+  const backgroundActionAvailable = isLoading && Boolean(onBackgroundForeground);
+  const backgroundInFooter = backgroundActionAvailable && extraActionFits;
+  const backgroundInMenu = backgroundActionAvailable && !extraActionFits;
 
-  // ed:六个小图标收进「+」菜单,附加类只剩一项「添加附件」。它与拖拽 / 粘贴走同一条
-  // 分流:图片给模型看;其它类型存进项目,服务端落盘时对 PDF / Office / 文本类型顺带
-  // 抽一份正文随消息发出 —— 原来「附加图片」「附加文档」「附加文件」三个入口的能力
-  // 都在这一项里,三个入口本身撤掉。「添加链接」不是文件,保留。
+  // 底栏的小图标都收在「+」菜单里,附加类只有一项「添加附件」:它与拖拽 / 粘贴走同一条分流,
+  // 图片给模型看;其它类型存进项目,服务端落盘时对 PDF / Office / 文本类型顺带抽一份正文
+  // 随消息发出。「添加链接」不是文件,单独一项。
   const plusMenuItems = useMemo<ComposerPlusMenuItem[]>(() => {
     const items: ComposerPlusMenuItem[] = [
       {
@@ -510,8 +530,19 @@ function ChatComposer({
       onSelect: onToggleCommandMenu,
       separatorBefore: !onShowCheckpoints,
     });
+    // 菜单从「+」上方弹出,最后一项离按钮最近
+    if (backgroundInMenu && onBackgroundForeground) {
+      items.push({
+        id: 'background',
+        icon: <ArrowDownToLine />,
+        label: t('backgroundTasks.toBackground'),
+        description: t('backgroundTasks.toBackgroundHint'),
+        onSelect: () => void onBackgroundForeground(),
+        separatorBefore: true,
+      });
+    }
     return items;
-  }, [onAttachFiles, onAttachUrl, onShowCheckpoints, onToggleCommandMenu, openImagePicker, t]);
+  }, [backgroundInMenu, onAttachFiles, onAttachUrl, onBackgroundForeground, onShowCheckpoints, onToggleCommandMenu, openImagePicker, t]);
 
 
   const hasQueuedDraft = Boolean(queuedDraft);
@@ -523,12 +554,28 @@ function ChatComposer({
   }, [imageErrors, attachedImages]);
 
   /**
-   * fl:能不能发 —— **按钮与提交路径共用这一个判据**。
+   * 能不能发:发送按钮的判据必须与提交路径(useChatComposerState 的 `runSubmit`)一致。
    *
-   * 有正文、或挂了图片/文档,都算"有内容可发"。此前按钮只看 `input.trim()`,
-   * 而 `runSubmit` 已经放行了纯附件,两边对不上:图片挂上了、按钮还是灰的。
+   * 有正文、或挂了图片 / 文档,都算"有内容可发";只看 `input.trim()` 的话,
+   * 挂上纯附件时按钮是灰的,而提交路径其实放行。
    */
   const canSubmitNow = Boolean(input.trim()) || attachedImages.length > 0 || attachedDocs.length > 0;
+
+  /**
+   * Hover text for a document chip. A landed file has no extracted body, so a
+   * character count would describe the path string rather than the document —
+   * show the path itself instead (plus the extracted length when there is one).
+   */
+  const docTitle = (doc: AttachedDoc): string => {
+    const truncated = `(${t('attachments.truncated', { defaultValue: '已截断' })})`;
+    if (doc.kind === 'path') {
+      const extracted = doc.extractedChars
+        ? `\n${t('input.extractedChars', { chars: doc.extractedChars.toLocaleString(), defaultValue: '已抽取正文 {{chars}} 字' })}${doc.extractedTruncated ? truncated : ''}`
+        : '';
+      return `${doc.name}\n${doc.text}${extracted}`;
+    }
+    return `${doc.name} — ${t('input.docChars', { chars: doc.chars.toLocaleString(), defaultValue: '{{chars}} 字' })}${doc.truncated ? ` ${truncated}` : ''}`;
+  };
 
   const canQueueDraft = isLoading && Boolean(input.trim());
   // 快捷键说明不再占底栏排版位(那段长文案被左侧一排 chip 挤压后会折行,
@@ -536,8 +583,8 @@ function ChatComposer({
   const keyboardHint = sendByCtrlEnter
     ? t('input.hintText.ctrlEnter')
     : t('input.hintText.enter');
-  // 只有"流式中回车会排队"这种**当下才成立**的短提示留在底栏。底栏可见的是
-  // **短版**(几个字,窄屏也放得下,不会截成半句),整句进悬停 title。
+  // 只有"流式中回车会排队"这种当下才成立的短提示留在底栏。底栏可见的是
+  // 短版(几个字,窄屏也放得下,不会截成半句),整句进悬停 title。
   const submitHint = canQueueDraft
     ? hasQueuedDraft
       ? t('input.hintText.updateQueued', { defaultValue: 'Enter to update queued message' })
@@ -578,7 +625,7 @@ function ChatComposer({
 
       {serverQueued && (
         <QueuedMessageCard
-          /* gi:预览正文只给排它的人(#25)。占位按服务端的 redacted 标记走 ——
+          /* 预览正文只给排队的本人看。占位按服务端的 redacted 标记判断 ——
              自己排的一条只有图片没正文时 preview 也是空串,不能拿空串当"别人排的"。 */
           content={serverQueued.redacted
             ? t('input.queue.othersPreview', { defaultValue: '(另一位成员排队的消息)' })
@@ -590,11 +637,19 @@ function ChatComposer({
       )}
 
       {!hasQuestionPanel && <div className="relative mx-auto max-w-[52.25rem]">
-        {showFileDropdown && filteredFiles.length > 0 && (
-          <div className="prism-modal-shadow absolute bottom-full left-0 right-0 z-50 mb-2 max-h-48 overflow-y-auto rounded-panel border border-border bg-popover">
+        {fileListShown && (
+          <div
+            id={fileListId}
+            role="listbox"
+            aria-label={t('input.fileMentionsLabel', { defaultValue: '可提及的文件' })}
+            className="prism-modal-shadow absolute bottom-full left-0 right-0 z-50 mb-2 max-h-48 overflow-y-auto rounded-panel border border-border bg-popover"
+          >
             {filteredFiles.map((file, index) => (
               <div
                 key={file.path}
+                id={listOptionId(fileListId, index)}
+                role="option"
+                aria-selected={index === selectedFileIndex}
                 className={`cursor-pointer touch-manipulation border-b border-border px-4 py-3 last:border-b-0 ${
                   index === selectedFileIndex
                     ? 'bg-primary/8 text-foreground dark:text-primary'
@@ -618,6 +673,7 @@ function ChatComposer({
         )}
 
         <CommandMenu
+          id={commandListId}
           commands={filteredCommands}
           selectedIndex={selectedCommandIndex}
           hoveredIndex={hoveredCommandIndex}
@@ -645,16 +701,15 @@ function ChatComposer({
                     d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
                   />
                 </svg>
-                <p className="text-sm font-medium">松手即可添加附件</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">图片随消息一起发送,其他文件落到项目里</p>
+                <p className="text-sm font-medium">{t('input.dropHint', { defaultValue: '松手即可添加附件' })}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {t('input.dropHintDetail', { defaultValue: '图片随消息一起发送,其他文件落到项目里' })}
+                </p>
               </div>
             </div>
           )}
 
-          {/* 被拒文件的错误需要**独立的**出口。
-              `imageErrors` 原来只在遍历 `attachedImages` 时渲染,而超限/空文件恰恰
-              没进那个数组 —— 于是那条错误写进了 state 却没有任何渲染路径,
-              用户看到的是"拖进去什么都没发生"。 */}
+          {/* 被拒的文件(超限 / 空文件)不进 attachedImages,它们的错误要在这里单独渲染,否则拖进去没有任何反馈 */}
           {rejectedImageErrors.length > 0 && (
             <PromptInputHeader>
               <div className="rounded-md bg-transparent px-2 pt-2">
@@ -686,14 +741,7 @@ function ChatComposer({
                     <span
                       key={`${doc.name}-${index}`}
                       className="inline-flex max-w-56 items-center gap-1.5 rounded-sm border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground"
-                      title={
-                        /* A landed file has no extracted body, so a character
-                           count would describe the path string rather than the
-                           document — show the path itself instead. */
-                        doc.kind === 'path'
-                          ? `${doc.name}\n${doc.text}${doc.extractedChars ? `\n已抽取正文 ${doc.extractedChars.toLocaleString()} 字${doc.extractedTruncated ? '(已截断)' : ''}` : ''}`
-                          : `${doc.name} — ${doc.chars.toLocaleString()} chars${doc.truncated ? ' (truncated)' : ''}`
-                      }
+                      title={docTitle(doc)}
                     >
                       {doc.source === 'url'
                         ? <LinkIcon className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
@@ -702,7 +750,7 @@ function ChatComposer({
                       <span className="flex-shrink-0 text-[10px] text-muted-foreground">
                         {doc.kind === 'path'
                           ? (doc.extractedChars
-                            // ed:落盘 + 抽了正文:角标显示字数,与"只抽正文"时一致;悬停能看到路径
+                            // 落盘且抽了正文:角标显示字数,与"只抽正文"时一致;悬停能看到路径
                             ? (doc.extractedChars >= 1000 ? `${Math.round(doc.extractedChars / 1000)}k` : doc.extractedChars)
                             : t('input.attachmentPath', { defaultValue: 'path' }))
                           : doc.chars >= 1000 ? `${Math.round(doc.chars / 1000)}k` : doc.chars}
@@ -817,34 +865,21 @@ function ChatComposer({
               onInput={onTextareaInput}
               placeholder=""
               aria-label={placeholder}
+              {...autocompleteAria}
             />
         </PromptInputBody>
 
         <PromptInputFooter ref={footerRef} data-density={density} className={density === 'minimal' ? 'gap-x-1.5' : undefined}>
           <PromptInputTools>
-            {/* ed/ee:六个小图标 + 清空按钮 → 一个「+」;布局参考 Cowork:
-                左组 =「+」;右组 = 权限档位 + 模型 + Effort + 停止 / 发送。
-                预算(最坏情况:280px 正文栏 → 218px 底栏,实测;停止与发送同时在场):
-                  minimal:左「+」32;组间距 6;右 档位(只留图标)28 + 模型(只留图标)28 +
-                           Effort(只留闪电)28 + 停止 32 + 发送 32 + 4×4 = 164 → 202 ≤ 218,余 16。
-                  compact(≥460):左 32;间距 10;右 100 + 106 + 98 + 32 + 32 + 4×8 = 400 → 442。
-                  full(≥640):右侧模型名放宽到 192px → 572。
-                右组 flex-none 按内容定宽;超预算时被裁的是左组尾部(overflow-hidden),发送永远在右下角。 */}
+            {/* 左组只放「+」。宽度预算按最坏情况 218px 底栏(停止与发送同时在场)算:minimal = 左 32 + 间距 6 + 右 164(三个芯片各 28、停止 32、发送 32、间距 4×4)= 202;compact 442;full 572。「转到后台」再加 40(minimal 36):full 612 ≤ 640 照放,compact 482、minimal 238 会超,所以底栏减去它不够 460 时它收进「+」菜单(fitsExtraFooterAction)。分档阈值见 utils/composerDensity.ts */}
             <ComposerPlusMenu items={plusMenuItems} label={t('input.more', { defaultValue: '更多' })} />
 
 
           </PromptInputTools>
 
-          {/* ee:右组 = 权限档位 + 模型 + Effort + 停止 / 发送;左组只剩「+」。
-              flex-none:它按内容定宽,窄了压缩的是左边的工具组(overflow-hidden)。 */}
+          {/* 右组(权限档位 + 模型 + Effort + 停止 / 发送)flex-none 按内容定宽;底栏窄时被裁的是左组尾部(overflow-hidden),发送始终在右下角 */}
           <div className={`ml-auto flex flex-none items-center justify-end ${density === 'minimal' ? 'gap-1' : 'gap-2'}`}>
-            {/* Execution mode.
-                This used to be a single button that cycled through five modes
-                with nothing but a colour to distinguish them — including two
-                that let the agent write files or run commands unattended. It is
-                a labelled picker now, with one line each on what the gear
-                actually permits. Tab still cycles, for anyone with the old
-                muscle memory. */}
+            {/* Execution mode: a labelled picker with one line per gear on what it permits (two of them let the agent write files or run commands unattended); Tab still cycles. */}
             <div ref={modeDropdownRef} className="relative flex">
               <button
                 ref={modeDropdownButtonRef}
@@ -861,8 +896,7 @@ function ChatComposer({
                 title={`${t(activeMode.labelKey)} · ${t('input.clickToChangeMode')}`}
               >
                 <div className="flex items-center gap-1.5">
-                  {/* ee:每档一个图标替掉色点(默认盾勾 / 计划清单 / 编辑文件笔 / 自动魔杖 / 无限制划掉的盾);
-                      minimal 档只留图标,文字进 title */}
+                  {/* 每档一个图标(默认盾勾 / 计划清单 / 编辑文件笔 / 自动魔杖 / 无限制划掉的盾);minimal 档只留图标,文字进 title */}
                   <activeMode.Icon className={`h-3.5 w-3.5 shrink-0 ${activeMode.iconClassName}`} aria-hidden />
                   {density !== 'minimal' && <span className="whitespace-nowrap">{t(activeMode.labelKey)}</span>}
                   {/* minimal 档连箭头也省掉(18px):aria-haspopup / title 已说明它是个下拉 */}
@@ -935,8 +969,8 @@ function ChatComposer({
                 aria-expanded={hasModelDropdown ? isModelPickerOpen : undefined}
                 data-composer-chip="model"
                 className={hasModelDropdown
-                  /* ho:「图标 模型名 档位 ⌄」,外框与「默认模式」芯片同款(圆角细边框、同高同字号);
-                     档位合进来,单独的档位芯片不再出 */
+                  /* 有模型菜单时芯片是「图标 模型名 档位 ⌄」,外框与「默认模式」芯片同款(圆角细边框、同高同字号);
+                     档位并在这里,不另出档位芯片 */
                   ? `inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                     density === 'minimal' ? 'px-1.5' : 'px-2.5'
                   } ${
@@ -957,7 +991,7 @@ function ChatComposer({
                   activeModelLabel && activeModelLabel !== activeModel
                     ? t('input.modelHint', { model: `${activeModelLabel}（${activeModel}）`, defaultValue: `当前模型：${activeModelLabel}（${activeModel}），点击切换` })
                     : activeModelRealName
-                      ? `别名 ${activeModel} · 实际模型 ${activeModelRealName}，点击切换`
+                      ? t('input.modelAliasHint', { alias: activeModel, model: activeModelRealName, defaultValue: '别名 {{alias}} · 实际模型 {{model}} · 点击切换' })
                       : t('input.modelHint', { model: activeModel, defaultValue: `当前模型：${activeModel}，点击切换` }),
                   activeModelUnavailableReason,
                 ].filter(Boolean).join('\n')}
@@ -965,14 +999,14 @@ function ChatComposer({
                   activeModelLabel && activeModelLabel !== activeModel
                     ? t('input.modelHint', { model: `${activeModelLabel}（${activeModel}）`, defaultValue: `当前模型：${activeModelLabel}（${activeModel}），点击切换` })
                     : activeModelRealName
-                      ? `别名 ${activeModel} · 实际模型 ${activeModelRealName}，点击切换`
+                      ? t('input.modelAliasHint', { alias: activeModel, model: activeModelRealName, defaultValue: '别名 {{alias}} · 实际模型 {{model}} · 点击切换' })
                       : t('input.modelHint', { model: activeModel, defaultValue: `当前模型：${activeModel}，点击切换` }),
                   activeModelUnavailableReason,
                 ].filter(Boolean).join('. ')}
               >
                 {hasModelDropdown ? (
                   <>
-                    {/* ho:「图标 模型名 档位」—— 厂商图标保留(认不出厂商时用 ModelMark) */}
+                    {/* 「图标 模型名 档位」:认得出厂商时画厂商图标,否则用 ModelMark */}
                     <span className="flex shrink-0 items-center">
                       {chipVendorKnown ? (
                         <ModelVendorIcon vendor={activeModelVendor} modelId={activeModelRealName || activeModel} size={14} />
@@ -984,7 +1018,7 @@ function ChatComposer({
                     {density !== 'minimal' && (
                       <span className={`truncate whitespace-nowrap font-medium text-foreground ${density === 'compact' ? 'max-w-24' : 'max-w-48'}`}>{chipModelName}</span>
                     )}
-                    {/* hq:当前模型此刻用不了 —— 名字照旧,加个小警示(原因在 title 里) */}
+                    {/* 当前模型此刻用不了:名字照旧,加个小警示(原因在 title 里) */}
                     {activeModelUnavailableReason && (
                       <AlertTriangle className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
                     )}
@@ -996,16 +1030,14 @@ function ChatComposer({
                     )}
                   </>
                 ) : (
-                  /* ee:模型芯片的图标换成参考用户给的六边形拼块重画的线图标(见 ModelMark);
-                     hn:认得出厂商时换成厂商图标 */
+                  /* 认得出厂商时画厂商图标,否则画通用的六边形拼块线图标(ModelMark) */
                   chipVendorKnown ? (
                     <ModelVendorIcon vendor={activeModelVendor} modelId={activeModelRealName || activeModel} size={14} />
                   ) : (
                     <ModelMark />
                   )
                 )}
-                {/* 名字的宽度随密度档走:full 192px / compact 64px / minimal 不显示(只留图标,悬停可查)。
-                    以前用 `hidden sm:inline` 看视口 —— 1400px 的窗口里正文栏可以只有 280px,视口断点管不到。 */}
+                {/* 名字宽度跟密度档走(按底栏实测宽度,不看视口断点):full 最宽 192px / compact 64px / minimal 不显示,悬停可查 */}
                 {!hasModelDropdown && density !== 'minimal' && (
                   activeModelLabel || activeModelRealName ? (
                     // 只显示实际生效的模型 —— 目录条目显示它的名字;别名(default/sonnet…)是内部转发细节,
@@ -1035,8 +1067,8 @@ function ChatComposer({
               />
             )}
 
-            {/* ho:有模型菜单时档位在菜单的「档位 ›」里,这里不再单独出芯片 */}
-            {/* 当前模型不在选项里(下架 / 老会话原始 id)时也不出:服务端只对目录里的模型解析档位,选了也不生效(复审二轮) */}
+            {/* 有模型菜单时档位在菜单的「档位 ›」里,这里不单独出芯片 */}
+            {/* 当前模型不在选项里(已下架 / 老会话的原始 id)时也不出:服务端只对目录里的模型解析档位,选了也不生效 */}
             {!hasModelDropdown && availableEffortOptions.length > 0 && (
               <div ref={effortDropdownRef} className="relative">
                 <button
@@ -1053,7 +1085,7 @@ function ChatComposer({
                   aria-label={`Effort: ${selectedEffortLabel}`}
                   title={`Effort: ${selectedEffortLabel}`}
                 >
-                  {/* ee:"Effort" 文字换成闪电;minimal 档只留闪电,值进 title */}
+                  {/* 闪电图标代表 Effort;minimal 档只留闪电,值进 title */}
                   <Zap className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
                   {density !== 'minimal' && (
                     <span className="max-w-20 truncate capitalize">{selectedEffortLabel}</span>
@@ -1107,17 +1139,15 @@ function ChatComposer({
               </div>
             )}
 
-            {/* dx:token 用量芯片已从底栏移除(用户要求)—— 它是这一排里最宽的
-                一个,芯片一多就把底栏顶到第二行。用量本身没丢:敲 /cost 还是
-                原来那个弹窗,走的也一直是同一条 executeCommand 路径。 */}
+            {/* 底栏不放 token 用量芯片(太宽,会把底栏顶成两行);用量用 /cost 查看 */}
 
             {/* 底栏不放任何文字提示 —— 会把右侧两个按钮挤得来回移位。
                 "回车=排队"的说明收进发送按钮的悬停 title(见下)。 */}
             {/* 中止:跑起来才出现,描边方块。它和发送并排 ——
                 这样"有草稿时点发送=排队、想停就点方块"两件事各有各的按钮,
                 不用再让同一个按钮身兼二职。 */}
-            {/* ho(hq-1):转到后台 —— 正在跑的长命令 / 子代理挪到后台,这一轮接着往下走(等于终端里的 Ctrl+B) */}
-            {isLoading && onBackgroundForeground && (
+            {/* 转到后台:正在跑的长命令 / 子代理挪到后台,这一轮接着往下走(等于终端里的 Ctrl+B) */}
+            {backgroundInFooter && onBackgroundForeground && (
               <button
                 type="button"
                 onClick={() => void onBackgroundForeground()}
@@ -1157,26 +1187,15 @@ function ChatComposer({
                     : undefined
                 }
                 /**
-                 * fj:附件还在上传时也要禁用。
-                 *
-                 * 此前 `parsingDocs` 一路传进来只画进度条,按钮照旧可点 ——
-                 * 于是大文件传到一半按回车,消息**不带那个附件**就发出去了,
+                 * 附件还在上传(parsingDocs)时也禁用:否则消息会不带那个附件发出去,
                  * 附件随后挂到已清空的输入框上、跟着下一条发出。
-                 */
-                /**
-                 * fl:与提交路径**同一个判据**。
-                 *
-                 * fj 让 `runSubmit` 允许"只挂附件不打字",却漏了这里 ——
-                 * 按钮依旧灰着,回车也没反应,用户只能猜。两处判据必须一致,
-                 * 否则永远会有一边先改、另一边忘掉。
                  */
                 disabled={!canSubmitNow || parsingDocs || isSubmitting}
                 aria-label={submitAriaLabel}
                 // 悬停提示带上完整快捷键说明(底栏那段长文案删了,信息收到这里)。
                 title={`${submitAriaLabel} · ${submitHint}`}
-                // ef:设计稿的发送是 32 高、14 内边距的主色药丸 + 纸飞机图标
-                // (不是方形上箭头)。最窄档仍收成 32×32 方钮 —— 药丸多占 12px,
-                // 会吃掉 ee 定下的"最窄不折行"预算。
+                // 发送是 32 高、14 内边距的主色药丸 + 纸飞机图标;minimal 档收成 32×32 方钮,
+                // 药丸多占的 12px 会超出最窄档不折行的宽度预算。
                 className={density === 'minimal' ? 'h-8 w-8 flex-none px-0' : 'h-8 flex-none px-3.5'}
               >
                 <SendHorizonalIcon className="h-4 w-4" strokeWidth={2} />

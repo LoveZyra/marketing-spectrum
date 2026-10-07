@@ -3,11 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { collectSessionWritePaths } from '../session-outputs.routes.js';
 
 /**
- * ei:会话产出读取通道的**放行判据**。
+ * 会话产出读取通道的放行判据。
  *
- * 这条路由不接受任意路径 —— 只有"这段会话自己成功写出来过"的文件才放行。
- * 判据必须与前端产出列表同源(Write + 结果帧存在且非错),否则会出现
- * "列表里有、点开 403" 或者反过来"能读到没列出来的东西"。
+ * 这条路由不接受任意路径,只放行这段会话自己成功写出来过的文件。判据必须与前端产出列表同源
+ * (Write + 结果帧存在且非错),否则会出现"列表里有、点开 403",或者反过来"能读到没列出来的东西"。
  */
 describe('collectSessionWritePaths', () => {
   const use = (toolId: string, filePath: string) => ({

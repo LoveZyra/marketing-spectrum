@@ -12,10 +12,10 @@ import SkillWhetModelSelect from './SkillWhetModelSelect';
 import { Badge } from './StatusStrip';
 
 /**
- * he:技能卡上的「夜训」一行(《实施计划》F4-01)。
+ * 技能卡上的「夜训」一行。
  *
  * 纳入 / 移出 / 改时窗预算只 root(服务端同样只认 root);其他人只读看状态。
- * 时窗是**服务器本地时间**,表单旁边写着服务器现在几点,免得人按自己的时区填。
+ * 时窗是服务器本地时间,表单旁边写着服务器现在几点,免得人按自己的时区填。
  * 连续 N 晚无收益会被调度器自动移出,这里标黄;root 重新纳入即清零。
  */
 type Draft = {
@@ -140,7 +140,7 @@ export default function NightlyControl({ skill, plan, meta, isRoot, onSaved }: {
                 <option value="pytest">pytest</option><option value="agent">agent</option>
               </select>
             </label>
-            {/* hn(B7):模型从目录选(夜训配置只 root 能改 → 不限,可手填);只在设置展开时才拉目录 */}
+            {/* 模型从目录选;夜训配置只有 root 能改,所以不限名单、可手填。目录只在设置展开时才拉。 */}
             <NightlyModelFields draft={draft} onChange={(key, next) => setDraft((d) => (d ? { ...d, [key]: next } : d))} />
             <label className="inline-flex items-center gap-1 text-muted-foreground">
               <input type="checkbox" checked={draft.mock} onChange={(e) => setDraft({ ...draft, mock: e.target.checked })} aria-label="mock" />

@@ -10,10 +10,10 @@ import { apiKeysDb, closeConnection, getConnection, initializeDatabase, userDb }
 
 /**
  * 老库里的 `api_keys.api_key` 是 `NOT NULL`,而新代码往那一列写 NULL ——
- * **新建 API 密钥永远失败**,报 `NOT NULL constraint failed: api_keys.api_key`。
+ * 新建 API 密钥永远失败,报 `NOT NULL constraint failed: api_keys.api_key`。
  *
  * 全新安装撞不到(建表就是新形状),所以它只在升级上来的库上出现;
- * 而且**一把密钥都没建过的库最隐蔽** —— 那段哈希迁移只 UPDATE
+ * 而且一把密钥都没建过的库最隐蔽 —— 那段哈希迁移只 UPDATE
  * `api_key IS NOT NULL` 的行,一行都没有就什么也没做,约束原样留着。
  *
  * 这两条用例先按上游最初的形状造一张老表,再跑迁移,验证约束真的松掉了、

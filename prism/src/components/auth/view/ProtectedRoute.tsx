@@ -13,14 +13,10 @@ type ProtectedRouteProps = {
 };
 
 /**
- * Auth gate: setup on first run, then login, then the app.
+ * Auth gate: first-run setup, then login (or self-service registration), then the app.
  *
- * There used to be a fourth state between login and the app — an onboarding
- * screen asking which agent to connect. Claude Code is the only agent this
- * build talks to, so the question had one answer and the screen was a step
- * that could only be clicked through. Connecting the Claude CLI now lives in
- * Settings → Agents → Account, where it can be revisited, rather than in a
- * one-shot flow that a user sees exactly once and cannot get back to.
+ * There is no onboarding step: connecting the Claude CLI lives in
+ * Settings → Agents → Account, where it can be revisited at any time.
  */
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { user, isLoading, needsSetup } = useAuth();

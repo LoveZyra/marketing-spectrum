@@ -1,9 +1,9 @@
 /**
- * hq:设置页「网关 / 模型网关」的纯逻辑 —— 单测在 gatewayLogic.test.ts
+ * 设置页「网关 / 模型网关」的纯逻辑,单测在 gatewayLogic.test.ts
  * (客户端测试跑 node 环境,挂不起组件,能抽出来的判断都放这里)。
  *
  * 校验与服务端 `claude-gateways.service.ts` 同一口径(key 的空白 / 长度,网关地址的协议 / 账号密码 / # / 末尾 /v1);
- * 前端先拦一道只是为了按钮能早点变灰、提示能贴在字段旁边 —— 最终以服务端的报错为准。
+ * 前端先拦一道只是为了按钮能早点变灰、提示能贴在字段旁边,最终以服务端的报错为准。
  */
 
 import type { GatewayView, KeySource } from './gatewaysApi';

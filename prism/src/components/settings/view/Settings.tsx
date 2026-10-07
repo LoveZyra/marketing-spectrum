@@ -33,6 +33,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
     setClaudePermissions,
     notificationPreferences,
     setNotificationPreferences,
+    notificationPreferencesLoadFailed,
+    retryNotificationPreferences,
     providerAuthStatus,
     openLoginForProvider,
     showLoginModal,
@@ -44,8 +46,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
     initialTab
   });
 
-  // hl(动态 P2-22):Esc 关、Tab 不跑到弹窗背后、打开时焦点落在关闭按钮。
-  // 登录子弹窗开着时让它自己接 Esc(否则一按 Esc 连设置一起关掉)。
+  // Esc 关闭、Tab 焦点不跑到弹窗背后、打开时焦点落在关闭按钮。
+  // 登录子弹窗开着时让它自己接 Esc,否则一按 Esc 连设置一起关掉。
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   useModalKeyboard(dialogRef, { open: isOpen && !showLoginModal, onClose });
@@ -60,9 +62,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[rgba(16,16,16,0.72)] md:p-4">
       {/*
-        弹窗宽度:原来是 `max-w-4xl`(896px),减掉左侧导航与内边距,内容区只剩 ~540px ——
-        账号审批与操作记录那两张表在里面根本铺不开(「详情」列被挤成一条缝、「操作」列
-        被整个切掉)。放宽到 5xl,超宽屏再到 6xl;表格自己也做了响应式收列,两头一起让。
+        弹窗宽度 5xl,超宽屏 6xl:减掉左侧导航与内边距后,账号审批与操作记录两张表才铺得开
+        (更窄时「详情」列会被挤成一条缝、「操作」列被切掉);表格自己也做了响应式收列。
       */}
       <div
         ref={dialogRef}
@@ -79,7 +80,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               <span className="text-xs text-muted-foreground">{t('saveStatus.success')}</span>
             )}
             {saveStatus === 'error' && (
-              // 'error' 此前无处渲染 —— 通知偏好等 PUT 失败时用户毫无感知。
+              // 保存失败要显示出来,否则通知偏好等 PUT 失败时用户毫无感知。
               <span className="text-xs text-destructive">{t('saveStatus.error', { defaultValue: '保存失败,请重试' })}</span>
             )}
             <Button
@@ -130,6 +131,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                 <NotificationsSettingsTab
                   notificationPreferences={notificationPreferences}
                   onNotificationPreferencesChange={setNotificationPreferences}
+                  loadFailed={notificationPreferencesLoadFailed}
+                  onRetryLoad={retryNotificationPreferences}
                 />
               )}
 

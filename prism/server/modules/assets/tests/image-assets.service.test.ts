@@ -10,16 +10,13 @@ import {
 } from '@/modules/assets/services/image-assets.service.js';
 import { getGlobalImageAssetsDir } from '@/shared/image-attachments.js';
 
-// Derived from the module under test's own accessor rather than rebuilt from a
-// literal. This was hardcoded to `~/.cloudcli/assets`, so it silently asserted
-// against the pre-migration folder and would have gone on passing even if the
-// service started writing somewhere else entirely.
+// Derived from the module's own accessor rather than a hardcoded literal, so the
+// assertions follow the service wherever it actually writes.
 const ASSETS_DIR = getGlobalImageAssetsDir();
 
 test('isAllowedImageMimeType accepts image formats and rejects the rest', () => {
   assert.equal(isAllowedImageMimeType('image/png'), true);
-  // fj:SVG 移出白名单 —— 它上传得进来、界面上也显示,但发送时被静默丢掉,
-  // 用户只会看到模型说我没看到图片。上传即拒更诚实。
+  // SVG 不在白名单:发送给模型时会被静默丢掉,用户只会看到模型说没看到图片。上传即拒更诚实。
   assert.equal(isAllowedImageMimeType('image/svg+xml'), false);
   assert.equal(isAllowedImageMimeType('application/pdf'), false);
   assert.equal(isAllowedImageMimeType('text/html'), false);

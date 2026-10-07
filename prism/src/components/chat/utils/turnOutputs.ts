@@ -1,5 +1,6 @@
 import type { ChatMessage } from '../types/types';
 
+import { chatText } from './composerText';
 import { isDeliverablePath } from './sessionOutputs';
 import { toolMetric } from './toolRowSummary';
 
@@ -23,11 +24,11 @@ export function displayOutputPath(path: string, projectPath?: string | null): st
 }
 
 /**
- * ef:**这一轮**写出来的可交付文件(设计稿里回答下方那张「产出」卡)。
+ * 这一轮写出来的可交付文件(回答下方那张「产出」卡)。
  *
- * 与 `extractSessionOutputs`(会话级累计,右侧面板用)同源同判据 —— 成功执行的
- * Write、排掉噪声路径、按路径去重 —— 只是范围收到一个工具组内,并且多带一个
- * 写入量:那一轮到底产出了多大的东西,是读完结论后最先想知道的事。
+ * 与 `extractSessionOutputs`(会话级累计,右侧面板用)同源同判据:成功执行的 Write、
+ * 排掉噪声路径、按路径去重;只是范围收到一个工具组内,并且多带一个写入量:
+ * 那一轮到底产出了多大的东西,是读完结论后最先想知道的事。
  */
 export function extractTurnOutputs(
   messages: readonly ChatMessage[],
@@ -62,7 +63,7 @@ export function extractTurnOutputs(
     outputs.push({
       path,
       display: displayOutputPath(path, projectPath),
-      metric: added ? `+${added} 行` : '',
+      metric: added ? chatText('toolMetric.linesAdded', `+${added} 行`, { count: Number(added) }) : '',
     });
   };
 
@@ -82,7 +83,7 @@ export function extractTurnOutputs(
 /**
  * 按工具组缓存一次抽取结果。
  *
- * `stabilizeGroupIdentity` 保证内容没变的组在多轮渲染里是**同一个对象**,所以用
+ * `stabilizeGroupIdentity` 保证内容没变的组在多轮渲染里是同一个对象,所以用
  * WeakMap 挂在组上最省事:流式期间每 100ms 一次的重渲不会把每一段都重扫一遍
  * (长会话里这类全量扫描是 tick 开销的大头)。项目根变了就重算。
  */
@@ -108,11 +109,11 @@ export interface ServerTurnOutputFile {
 }
 
 /**
- * ej:把服务端算好的「回合 → 产出」映射转成卡片要的形状。
+ * 把服务端算好的「回合 → 产出」映射转成卡片要的形状。
  *
- * 服务端只给**路径 + 行数**(它不知道项目根,也不该管展示),显示名与噪声过滤
- * 仍在前端做,判据与窗口内抽取(`extractTurnOutputs`)、右侧产出表
- * (`extractSessionOutputs`)完全同源 —— 三处显示同一批文件,规则只有一份。
+ * 服务端只给路径 + 行数(它不知道项目根,也不该管展示),显示名与噪声过滤仍在前端做,
+ * 判据与窗口内抽取(`extractTurnOutputs`)、右侧产出表(`extractSessionOutputs`)完全同源:
+ * 三处显示同一批文件,规则只有一份。
  */
 export function turnOutputsFromServer(
   raw: unknown,
@@ -135,7 +136,7 @@ export function turnOutputsFromServer(
       files.push({
         path,
         display: displayOutputPath(path, projectPath),
-        metric: added !== null ? `+${added} 行` : '',
+        metric: added !== null ? chatText('toolMetric.linesAdded', `+${added} 行`, { count: added }) : '',
       });
     }
     if (files.length > 0) result.set(messageId, files);
@@ -144,14 +145,12 @@ export function turnOutputsFromServer(
 }
 
 /**
- * fz:把这一段的产出并进本轮已攒的那一份。
+ * 把这一段的产出并进本轮已攒的那一份。
  *
- * **没有新东西就原样返回旧引用** —— 这一句是给 `memo` 用的:
- * `extractTurnOutputsCached` 特意用 WeakMap 挂在组对象上返回稳定引用、
- * `NO_TURN_OUTPUTS` 也是模块级常量,都是为了不让 `turnOutputs` 这个 prop
- * 把浅比较的 `MessageComponent` 打穿。此前子代理分支展开出来的是**每次渲染
- * 都新建的字面量数组**,于是"派过子代理且写了文件"的那一轮,它后面那条长回答
- * 在下一轮打字的全过程里每秒被重排十次(流式期间约 10Hz commit)。
+ * 没有新东西就原样返回旧引用,这是给 `memo` 用的:`extractTurnOutputsCached` 用 WeakMap
+ * 挂在组对象上返回稳定引用、`NO_TURN_OUTPUTS` 是模块级常量,都是为了不让 `turnOutputs`
+ * 这个 prop 把浅比较的 `MessageComponent` 打穿。每次都新建数组的话,流式期间(约 10Hz commit)
+ * 后面那条长回答会跟着每次重渲染。
  */
 export function mergeTurnOutputs(
   current: TurnOutputFile[],

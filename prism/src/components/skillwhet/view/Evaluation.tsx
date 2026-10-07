@@ -11,8 +11,8 @@ import { GateGrid } from './SkillCard';
 import { Badge } from './StatusStrip';
 
 /**
- * gz:评测 —— 每个 skill 一行:六门体检(缓存的最近一次)+ 最近一份 staging 的
- * val / test 通过率(S₀ → 最佳)+ 轮数与停止原因。数字全部来自 staging 的 report,
+ * 评测:每个 skill 一张卡,含六门体检(缓存的最近一次)+ 最近一份 staging 的
+ * val / test 通过率(S₀ → 最佳)+ 轮数、停止原因与费用。数字全部来自 staging 的 report,
  * 没跑过训练的 skill 只有六门那一格;不画反事实 / 变异检查(该后端没有)。
  */
 const fmtScore = (v: number | null | undefined): string => (typeof v === 'number' ? `${Math.round(v * 100)}%` : '—');

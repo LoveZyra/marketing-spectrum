@@ -34,16 +34,16 @@ export type MainContentProps = {
   onSessionEstablished: (sessionId: string, context: SessionEstablishedContext) => void;
   onShowSettings: (tab?: SettingsMainTab) => void;
   /**
-   * ee:预览「最大化 / 还原」的状态通知。最大化时对话列与工作面板已经隐藏,
-   * 用户要的是"所有展开的栏目都收起" —— 项目侧栏归 AppContent 管,由它据此隐藏。
+   * 预览「最大化 / 还原」的状态通知。最大化时对话列与工作面板已经隐藏,
+   * 项目侧栏归 AppContent 管,由它据此一并收起。
    */
   onEditorMaximizedChange?: (maximized: boolean) => void;
-  /** ef:顶栏铅笔改名 / 「…」删除会话 —— 实现在 AppContent。 */
+  /** 顶栏铅笔改名 / 「…」删除会话,实现在 AppContent。 */
   onRenameSession?: (sessionId: string, summary: string) => Promise<boolean> | boolean;
   onDeleteSession?: (sessionId: string, sessionTitle: string) => void;
   externalMessageUpdate: number;
   newSessionTrigger: number;
-  /** gk:「这条会话已被删除」卡片上的「新建会话继续」。 */
+  /** 「这条会话已被删除」卡片上的「新建会话继续」。 */
   onStartNewSession?: (project: Project) => void;
   /** 「在 JupyterLab 打开」的目标;nonce 变化触发 notebook 标签页重新定位。 */
   jupyterTarget?: { path: string | null; nonce: number };
@@ -58,9 +58,9 @@ export type MainContentHeaderProps = {
   onMenuClick: () => void;
   /** 当前会话在服务端挂着常驻运行时(本页见过它在跑)——「…」里那行的乐观初值。 */
   isPersistentSession?: boolean;
-  /** ef:标题就地改名(顶栏铅笔)。 */
+  /** 标题就地改名(顶栏铅笔)。 */
   onRenameSession?: (sessionId: string, summary: string) => Promise<boolean> | boolean;
-  /** ef:顶栏「…」里的删除会话 —— 确认框在 AppContent(侧栏折叠时它也在)。 */
+  /** 顶栏「…」里的删除会话;确认框在 AppContent(侧栏折叠时也在)。 */
   onDeleteSession?: (sessionId: string, sessionTitle: string) => void;
 };
 
@@ -71,8 +71,8 @@ export type MainContentStateViewProps = {
   /**
    * 空态下用户当前选的页签。
    *
-   * 没选项目时四个页签渲染的都是这块空态 —— 点终端 / 文件 / notebook 看起来
-   * 「毫无反应」。把页签名说出来,至少让人知道点是点到了,缺的是一个项目。
+   * 没选项目时聊天 / 文件 / 终端都渲染这块空态,点了看起来毫无反应;
+   * 把页签名说出来,让人知道点到了,缺的是一个项目。
    */
   activeTab?: AppTab;
 };

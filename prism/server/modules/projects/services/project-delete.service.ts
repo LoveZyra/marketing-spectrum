@@ -8,61 +8,15 @@ import { AppError } from '@/shared/utils.js';
 import { createLogger } from '@/shared/logger.js';
 const log = createLogger('projects');
 
-function uniqueJsonlPathsFromSessions(
-  sessions: Array<{ jsonl_path: string | null }>,
-): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-
-  for (const row of sessions) {
-    const raw = row.jsonl_path?.trim();
-    if (!raw) {
-      continue;
-    }
-    const absolute = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(raw);
-    if (seen.has(absolute)) {
-      continue;
-    }
-    seen.add(absolute);
-    result.push(absolute);
-  }
-
-  return result;
-}
-
-async function unlinkJsonlIfExists(filePath: string): Promise<void> {
-  try {
-    await fs.unlink(filePath);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') {
-      return;
-    }
-    log.warn(`[project-delete] Failed to remove ${filePath}:`, (error as Error).message);
-  }
-}
-
 /**
- * Loads all session rows for the project path and removes each distinct `jsonl_path` file on disk.
- */
-export async function deleteSessionJsonlFilesForProjectPath(projectPath: string): Promise<void> {
-  const sessions = sessionsDb.getSessionsByProjectPathIncludingArchived(projectPath);
-  const paths = uniqueJsonlPathsFromSessions(sessions);
-
-  for (const filePath of paths) {
-    await unlinkJsonlIfExists(filePath);
-  }
-}
-
-/**
- * - **Soft delete** (`force` false): set `isArchived` on the `projects` row (hide from the active list; DB only).
- * - **Force** (`force` true): every session under that `project_path` goes to the trash (row + display
+ * - Soft delete (`force` false): set `isArchived` on the `projects` row and disable its scheduled
+ *   tasks (hide from the active list; DB only).
+ * - Force (`force` true): every session under that `project_path` goes to the trash (row + display
  *   log + transcript, see sessions.service), attachments are purged, then the `projects` row is removed.
  *
- * gk:此前 force 删项目是**直接 unlink 全部 transcript + DELETE 全部会话行**,而且
- * 完全不看这些会话有没有在跑。现在逐条走与单条永久删除同一条路(进最近删除、
- * 收 runtime、审计、推 `session_removed`),并且**先整体预检**:任何一条在跑 / 被终端
- * 接管 / 有排队消息,整个删除拒绝,一条都不动 —— 删一半再抛,比不删更难解释。
+ * force 时每条会话都走与单条永久删除同一条路(进最近删除、收 runtime、审计、推 `session_removed`),
+ * 并且先整体预检:任何一条在跑 / 被终端接管 / 有排队消息,整个删除拒绝,一条都不动。
+ * 删一半再抛,比不删更难解释。
  */
 export async function deleteOrArchiveProject(
   projectId: string,
@@ -86,8 +40,8 @@ export async function deleteOrArchiveProject(
   };
 
   if (!force) {
-    // hl(09-24 P1-9):归档同时停用这个项目上的定时任务 —— 否则任务照跑,还会把
-    // 项目重建出来。还原项目**不**自动恢复(留给人决定,见 disableByProjectPath)。
+    // 归档同时停用这个项目上的定时任务,否则任务照跑,还会把项目重建出来。
+    // 还原项目不自动恢复它们(留给人决定,见 disableByProjectPath)。
     const archiveProject = getConnection().transaction(() => {
       projectsDb.updateProjectIsArchivedById(projectId, true);
       return scheduledTasksDb.disableByProjectPath(row.project_path);
@@ -132,16 +86,13 @@ export async function deleteOrArchiveProject(
   }
 
   /**
-   * **一条都不许"直接删"。**
+   * 一条都不许"直接删"。
    *
-   * 上一版在这里继续往下走,靠后面的 `deleteSessionsByProjectPath` 兜住失败的那几条 ——
-   * 那等于把它们连显示日志一起硬删:回收站里没有副本、没有 `session_deleted` 审计、
-   * runtime 也没收,而这正是整个 gk 要消灭的那种"东西凭空没了"。
-   *
-   * 预检(上面的 `busy`)挡的是"删之前就在用";但循环里每条都 `await`,第五条删到
-   * 一半时第三条完全可能刚被起一个新回合 → 409 → 落到这里。这时正确的收场是
-   * **停下来**:已经进回收站的那些都可恢复(项目行还在,恢复能直接挂回去),
-   * 用户重试一次即可。删一半再硬删剩下的,才是不可解释的那种状态。
+   * 预检(上面的 `busy`)挡的是"删之前就在用";但循环里每条都 `await`,中途某条完全可能
+   * 刚被起一个新回合 → 409 → 落到这里。这时要停下来:已经进回收站的那些都可恢复(项目行
+   * 还在,恢复能直接挂回去),用户重试一次即可。不能继续往下、靠 `deleteSessionsByProjectPath`
+   * 兜住失败的那几条:那等于连显示日志一起硬删,回收站里没有副本、没有 `session_deleted` 审计,
+   * runtime 也没收。
    */
   if (failed.length > 0) {
     const names = failed.slice(0, 5);
@@ -161,8 +112,7 @@ export async function deleteOrArchiveProject(
 
   const commitRemoval = getConnection().transaction(() => {
     sessionsDb.deleteSessionsByProjectPath(row.project_path);
-    // hl(09-24 P1-9):定时任务(含运行记录)与项目同事务删除 —— 留着它们,
-    // 到点就会以任务主人的身份把项目重建出来。
+    // 定时任务(含运行记录)与项目同事务删除:留着它们,到点就会以任务主人的身份把项目重建出来。
     scheduledTasksDb.deleteByProjectPath(row.project_path);
     projectsDb.deleteProjectById(projectId);
   });
@@ -185,13 +135,12 @@ export async function deleteOrArchiveProject(
 /**
  * force 删项目时清掉它的附件目录 + 台账行。
  *
- * bl 轮起,对话附件落在项目的 `attachments/` 子目录、并记进 attachments 台账
- * (台账按用户计配额)。删项目原先只删了 sessions/transcripts/项目行,附件行
- * 继续占着用户配额,只能等 30 天 TTL 才消 —— 而那时目录可能已随项目被外部删掉,
- * 徒留一堆按用户计费的僵尸行。这里主动收口:
+ * 对话附件落在项目的 `attachments/` 子目录,并记进按用户计配额的 attachments 台账;
+ * 不主动清的话,附件行会继续占着用户配额直到 TTL 过期。
  *   1. 先递归删 `<project>/attachments/` 目录里的文件(forgetUnder 只删台账不删文件);
  *   2. 再按前缀 forget 掉台账行,立即把配额还给用户。
- * 顺序不能反 —— 先 forget 再删文件会留下磁盘孤儿(TTL 清扫器靠台账才找得到它们)。
+ * 顺序不能反:两步之间若中断,先 forget 会留下台账找不到的磁盘孤儿(TTL 清扫器靠台账才
+ * 找得到它们),先删文件则只剩几行会被 TTL 收走的台账。
  */
 async function purgeProjectAttachments(projectPath: string): Promise<void> {
   if (!projectPath) return;

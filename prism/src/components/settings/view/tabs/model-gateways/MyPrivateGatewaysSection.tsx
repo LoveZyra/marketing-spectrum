@@ -11,11 +11,11 @@ import { authTypeBadge, maskKey, type PrivateSectionMode } from './gatewayLogic'
 import { errorMessage, gatewaysAdminApi, myGatewaysApi, type GatewayTestResult, type MyGatewayView } from './gatewaysApi';
 
 /**
- * hq:「模型网关 → 我的私有网关」。只有自己看得到、用得了;key 就是网关本身的(不分默认 / 个人)。
+ * 「模型网关 → 我的私有网关」。只有自己看得到、用得了;key 就是网关本身的(不分默认 / 个人)。
  *
  * - `active`(root 允许):加 / 改 / 换 key / 测试 / 启停 / 删;
- * - `readonly`(root 关掉了,但我还有旧的):只列出来,只能删 —— 关掉之后服务端改动一律 403。
- * 删网关会连同挂在上面的私有模型一起删(服务端就是这么做的),确认按钮上写明有几个。
+ * - `readonly`(root 关掉了私有网关,但我名下还有):只列出来,只能删;关掉之后服务端对改动一律回 403。
+ * 删网关时服务端会连同挂在上面的私有模型一起删,确认按钮上写明有几个。
  */
 type Props = {
   owned: MyGatewayView[];

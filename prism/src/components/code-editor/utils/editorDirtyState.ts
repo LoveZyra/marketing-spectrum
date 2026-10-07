@@ -4,7 +4,7 @@
  * 为什么不是 React 状态:知道脏态的是 CodeEditor(深处),要拦截关闭/换文件的
  * 是 useEditorSidebar(上层)。把 hasUnsavedChanges 一路 props 提升穿过
  * EditorSidebar / MainContent 会让一堆中间层为一个布尔值重渲;而这里的消费场景
- * 是**事件处理器里同步读一次**(点了另一个文件 / 点了关闭),不需要订阅重渲,
+ * 是事件处理器里同步读一次(点了另一个文件 / 点了关闭),不需要订阅重渲,
  * module 单例正合适。
  *
  * 同屏最多一个可编辑的 CodeEditor 实例(sidebar 与弹出互斥),所以单例够用;
@@ -15,8 +15,8 @@
 let editorDirty = false;
 
 /**
- * hl(P3 文件组):脏态也要**能订阅** —— 标签条(EditorTabs)要在活动标签上画 ●。
- * 订阅方用 useSyncExternalStore;事件处理器里同步读一次的老用法不受影响。
+ * 脏态可订阅:标签条(EditorTabs)要在活动标签上画 ●。订阅方用 useSyncExternalStore;
+ * 事件处理器里仍可用 isEditorDirty() 同步读一次。
  */
 const listeners = new Set<() => void>();
 

@@ -4,21 +4,17 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * ga:**滚动控制器与滚动事件之间那几根线,读源码钉住。**
+ * 滚动控制器与滚动事件之间那几根线,读源码钉住。
  *
- * 这一轮反复付代价的失败形状是"判据写对了、单测也绿,但真实链路喂给它的
- * 数据不是那个东西":`isLocalNotice` 在写进 store 的第一步被剥掉、
- * 阅读位置补偿收到的是消息条数而不是行数、"用户滚过了"其实是控制器自己写的。
- * 这些都不是纯函数的错,而是**接线**的错 —— 而 vitest 这边没有 DOM,
- * 挂不起这个 hook,纯函数测试永远照不到接线。
+ * 这里防的是接线错误:判据写对了、单测也绿,但真实链路喂给它的数据不是那个东西
+ * (标记在写进 store 时被剥掉、补偿收到的是消息条数而不是行数、把控制器自己的写
+ * 当成"用户滚过了")。vitest 这边没有 DOM,挂不起这个 hook,纯函数测试照不到接线。
  *
- * 所以这里退一步,直接对源码断言那几根线还在:
- *  - 控制器**每一处** `container.scrollTop = ...` 后面都紧跟一句记账;
+ * 所以直接对源码断言那几根线还在:
+ *  - 控制器每一处 `container.scrollTop = ...` 后面都紧跟一句记账;
  *  - 滚动事件用 `isUserInitiatedScroll` 判"这一下是谁滚的";
  *  - 看不见的容器上的滚动事件一律不算数;
  *  - 由不可见变可见的那一帧要按锚点校回去,并把补页循环重新叫起来。
- *
- * 任何一根线被拆掉,这里立刻红。
  */
 const source = readFileSync(
   fileURLToPath(new URL('./useChatSessionState.ts', import.meta.url)),
@@ -29,7 +25,7 @@ describe('程序化滚动的记账(位置恢复不能被自己的写掐死)', ()
   it('控制器里每一处写 scrollTop 后面都紧跟一句"读回来记账"', () => {
     /**
      * 控制器那段 layout effect 里的两个写点:跟底与守位。
-     * `scrollToBottom`(用户点"回到底部")**故意不记账** —— 那一下是用户的意图,
+     * `scrollToBottom`(用户点"回到底部")故意不记账 —— 那一下是用户的意图,
      * 恢复就该让位,所以它不在这段范围里。
      */
     const controllerStart = source.indexOf('const rows = container.querySelectorAll');
@@ -50,7 +46,7 @@ describe('程序化滚动的记账(位置恢复不能被自己的写掐死)', ()
 
   it('滚动事件用 isUserInitiatedScroll 判,不是"有事件就算用户滚的"', () => {
     expect(source).toMatch(/isUserInitiatedScroll\(container\.scrollTop, programmaticScrollTopRef\.current\)/);
-    // fz 那一句必须已经不在了 —— 它是把整个恢复功能掐死的那一句。
+    // 这一句会把整个恢复功能掐死,源码里不能再有。
     expect(source).not.toMatch(/if \(scrollRestoreRef\.current\) scrollRestoreUserMovedRef\.current = true;/);
   });
 });
@@ -76,8 +72,8 @@ describe('容器不可见时的两道闸', () => {
   });
 
   it('补页循环由 ResizeObserver 的"0 → 非 0"重新叫起来,不在无依赖的 layout effect 里 setState', () => {
-    // fz 只加了"看不见就别补页",没有任何东西会在"重新看得见"时把循环叫回来 ——
-    // 于是在别的页签里点开的会话,切回来只有十来行,而且没有任何出口。
+    // 光有"看不见就别补页"不够,还得有东西在"重新看得见"时把循环叫回来,
+    // 否则在别的页签里点开的会话,切回来只有十来行,而且没有任何出口。
     expect(source).toMatch(/new ResizeObserver\(/);
     const observer = source.slice(source.indexOf('new ResizeObserver('));
     expect(observer.slice(0, 600)).toMatch(/const cameBack = wasEmpty && !isEmpty;/);
@@ -94,13 +90,11 @@ describe('容器不可见时的两道闸', () => {
 });
 
 /**
- * ga:**每一个顶层行都必须带 `data-row-key`,一个都不能漏。**
+ * 每一个顶层行都必须带 `data-row-key`,一个都不能漏。
  *
- * 锚点集合是 `.chat-message[data-row-key]`。漏掉一类行,它就不在锚点集合里 ——
- * "倒数第几行"当场错位,阅读位置落到别处。这一轮已经在 `MessageComponent`
- * 的**压缩摘要那一支**真的漏了一次(props 收下了 `rowKey` 却没往 DOM 上放,
- * 靠 eslint 的"未使用参数"才发现)。所以把它钉住:凡是渲染 `chat-message`
- * 根节点的地方,都要在同一个元素上放 `data-row-key`。
+ * 锚点集合是 `.chat-message[data-row-key]`。漏掉一类行,它就不在锚点集合里,
+ * "倒数第几行"当场错位,阅读位置落到别处(压缩摘要这类少见分支最容易漏)。
+ * 凡是渲染 `chat-message` 根节点的地方,都要在同一个元素上放 `data-row-key`。
  */
 describe('顶层行的 data-row-key', () => {
   const read = (relative: string) =>
@@ -122,11 +116,11 @@ describe('顶层行的 data-row-key', () => {
   });
 
   /**
-   * gh:**组的 rowKey 不许与 React key 同源。**
+   * 组的 rowKey 不许与 React key 同源。
    *
    * React key 是 `_key` = `group_${流水号}`,只在"上一次渲染的登记表里认得出"时沿用,
-   * 登记表不分会话 —— 切走再回来这条会话的每个组都换号,ga 按 rowKey 找回阅读位置
-   * 只要停在一个组上就必然失败。DOM 上的 data-row-key 改用尾成员的内在 key。
+   * 登记表不分会话:切走再回来,这条会话的每个组都换号,按 rowKey 找回阅读位置只要
+   * 停在一个组上就必然失败。所以 DOM 上的 data-row-key 用尾成员的内在 key。
    */
   it('ChatMessagesPane 给三类行都传了 rowKey;组的 rowKey 取自尾成员的内在 key,不是流水号', () => {
     const pane = read('../view/subcomponents/ChatMessagesPane.tsx');

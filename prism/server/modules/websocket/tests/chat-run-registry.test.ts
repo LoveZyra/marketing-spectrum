@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { test } from 'vitest';
 
-import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
+import { closeConnection, initializeDatabase, sessionMessagesDb, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients } from '@/shared/websocket-state.js';
 
@@ -235,16 +235,11 @@ test('replayEvents returns only events after the requested seq', async () => {
 });
 
 /**
- * 订阅是**加入**,不是接管。
+ * 订阅是加入,不是接管。
  *
- * 这条用例原来断言的正好相反 —— 第二个 socket 订阅后,第一个就收不到了。那是
- * 当时的实现(`updateWebSocket` 单持有者赋值),而它是个 bug:同一个人开两个
- * 标签页,先开的那个从此一个字节都收不到,一直转圈到刷新;公开项目里换成另一个
- * 人打开同一会话,效果一样。
- *
- * 对审批请求尤其致命 —— 审批帧走的是同一条路。被抢走之后它落在另一个浏览器上,
- * 那边如果没在看这个会话,前端还会再丢一次,于是**两边都没人看见**,原用户只
- * 等到一句 "Permission request timed out"。
+ * 单持有者的话,同一个人开两个标签页,先开的那个从此收不到任何帧,一直转圈到刷新;
+ * 公开项目里另一个人打开同一会话效果一样。审批帧走的也是这条路:被抢走后落在另一个浏览器上,
+ * 那边若没在看这个会话还会再丢一次,两边都没人看见,原用户只等到 "Permission request timed out"。
  */
 test('订阅是加入而不是接管:两个 socket 都继续收流', async () => {
   await withIsolatedDatabase(() => {
@@ -389,8 +384,7 @@ test('第二轮的补发不会被上一轮的游标滤掉(runId 判轮次)', asy
     const secondRunId = chatRunRegistry.currentRunId('app-run-5');
     assert.notEqual(secondRunId, firstRunId, '每轮必须是不同的 runId,否则这条判据形同虚设');
 
-    // 带着**上一轮**的游标来重连 —— 这正是事故现场:
-    // 只按 seq 过滤的话 `seq > 3` 在第 2 轮一条都匹配不上,整轮内容丢失。
+    // 带着上一轮的游标来重连:只按 seq 过滤的话,`seq > 3` 在第 2 轮一条都匹配不上,整轮内容丢失。
     const replayed = chatRunRegistry.replayEvents('app-run-5', 3, firstRunId);
     assert.deepEqual(replayed.map((e) => e.content), ['d', 'e'], '轮次不同就该从头补');
 
@@ -423,13 +417,13 @@ test('审批帧不进重放缓冲(否则刷新后已回答的框会重新弹出�
 });
 
 /**
- * fj:已完成的 run 不再转发迟到的内容帧。
+ * 已完成的 run 不再转发迟到的内容帧。
  *
- * 中止会抢先发终止帧把 run 标成 completed,而被杀掉的运行时随后还会吐一阵
- * 在途的 tool_result / stream_delta。此前只有重复的 `complete` 被丢弃,
- * 其它 kind 照发照落库 —— 前端已经停了转圈,正文却还在长。
+ * 中止会抢先发终止帧把 run 标成 completed,而被杀掉的运行时随后还会吐一阵在途的
+ * tool_result / stream_delta。只丢重复的 `complete` 不够:其他 kind 照发照落库的话,
+ * 前端已经停了转圈,正文却还在长。
  */
-test('fj:complete 之后的内容帧一律丢弃', async () => {
+test('complete 之后的内容帧一律丢弃', async () => {
   const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
   process.env.PRISM_PUBLIC_WORKSPACE = '/workspace';
   try {
@@ -465,15 +459,14 @@ test('fj:complete 之后的内容帧一律丢弃', async () => {
 });
 
 /**
- * fl(K01 回归):**正常收尾**之后的「本轮改动的文件」摘要必须还能发出去。
+ * 正常收尾之后的「本轮改动的文件」摘要必须还能发出去。
  *
- * fk 的那道闸是 `status === 'completed'` 就一律不转发,本意是挡中止之后在途的
- * 正文帧。但 `queryClaudeSDK` 的结构是"回合函数自己发 complete → 返回 → 外层
- * 才算 `changedFilesSince` 并发 `changed_files`" —— 于是每一个动过文件的**正常**
- * 回合,那张卡都被丢掉了(工作面板事件、显示日志一并没有)。
+ * completed 之后的转发闸是为了挡中止之后在途的正文帧,但 `queryClaudeSDK` 的结构是
+ * "回合函数自己发 complete → 返回 → 外层才算 `changedFilesSince` 并发 `changed_files`",
+ * 一律不转发的话,每个动过文件的正常回合那张卡都会被丢掉(工作面板事件、显示日志一并没有)。
  * 用 Bash / 脚本写文件时那张卡是唯一线索,补不回来。
  */
-test('fl:正常 complete 之后,changed_files 仍然送达;正文帧仍然被拒', async () => {
+test('正常 complete 之后,changed_files 仍然送达;正文帧仍然被拒', async () => {
   const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
   process.env.PRISM_PUBLIC_WORKSPACE = '/workspace';
   try {
@@ -508,7 +501,7 @@ test('fl:正常 complete 之后,changed_files 仍然送达;正文帧仍然被拒
   }
 });
 
-test('fl:**中止**收尾之后,连 changed_files 也不收 —— 用户按了停止,后面的都不算数', async () => {
+test('中止收尾之后,连 changed_files 也不收 —— 用户按了停止,后面的都不算数', async () => {
   const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
   process.env.PRISM_PUBLIC_WORKSPACE = '/workspace';
   try {
@@ -534,4 +527,60 @@ test('fl:**中止**收尾之后,连 changed_files 也不收 —— 用户按了�
     if (previousPublic === undefined) delete process.env.PRISM_PUBLIC_WORKSPACE;
     else process.env.PRISM_PUBLIC_WORKSPACE = previousPublic;
   }
+});
+
+/**
+ * 只广播不落库:网关已经自己把用户行写进显示日志,同一行再作为实时帧发出时不能再写一次。
+ * 这里故意用一行"没落过库"的消息:走普通 `writer.send` 会在出站收口写进日志,这条路一行都不写。
+ */
+test('broadcastWithoutPersist:编号、进重放缓冲、发给订阅者,不写显示日志', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('app-live-only', 'claude', '/workspace/demo');
+    const connection = new FakeConnection();
+    const run = chatRunRegistry.startRun({
+      appSessionId: 'app-live-only', provider: 'claude', providerSessionId: null,
+      connection, userId: null,
+    });
+    assert.ok(run);
+
+    const row = {
+      id: 'user_live_1', sessionId: 'app-live-only', timestamp: '2026-10-07T00:00:00.000Z',
+      provider: 'claude', kind: 'text', role: 'user', content: '提问', clientMessageId: 'cmid-x',
+    } as const;
+    assert.equal(chatRunRegistry.broadcastWithoutPersist('app-live-only', row), true);
+
+    assert.equal(connection.frames.length, 1);
+    assert.equal(connection.frames[0]?.id, 'user_live_1');
+    assert.equal(connection.frames[0]?.seq, 1);
+    assert.equal(connection.frames[0]?.runId, run.runId);
+    assert.deepEqual(chatRunRegistry.replayEvents('app-live-only', 0).map((event) => event.id), ['user_live_1']);
+    assert.equal(sessionMessagesDb.listForSession('app-live-only').length, 0, '这条路不落显示日志');
+
+    // 对照:同一行走 writer.send 会落库(出站收口)
+    run.writer.send({ ...row, id: 'user_live_2' });
+    assert.deepEqual(sessionMessagesDb.listForSession('app-live-only').map((message) => message.id), ['user_live_2']);
+  });
+});
+
+test('broadcastWithoutPersist:没有在跑的回合时什么都不做', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('app-live-idle', 'claude', '/workspace/demo');
+    const connection = new FakeConnection();
+    const row = {
+      id: 'user_idle_1', sessionId: 'app-live-idle', timestamp: '2026-10-07T00:00:00.000Z',
+      provider: 'claude', kind: 'text', role: 'user', content: '提问',
+    } as const;
+    assert.equal(chatRunRegistry.broadcastWithoutPersist('app-live-idle', row), false, '还没有回合');
+
+    const run = chatRunRegistry.startRun({
+      appSessionId: 'app-live-idle', provider: 'claude', providerSessionId: null,
+      connection, userId: null,
+    });
+    assert.ok(run);
+    chatRunRegistry.completeRunIfCurrent(run, { exitCode: 0 });
+    const before = connection.frames.length;
+    assert.equal(chatRunRegistry.broadcastWithoutPersist('app-live-idle', row), false, '回合已收尾');
+    assert.equal(connection.frames.length, before);
+    assert.equal(chatRunRegistry.replayEvents('app-live-idle', 0).some((event) => event.id === 'user_idle_1'), false);
+  });
 });

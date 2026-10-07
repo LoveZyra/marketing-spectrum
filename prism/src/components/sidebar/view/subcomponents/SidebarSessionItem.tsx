@@ -100,7 +100,7 @@ function SidebarSessionItem({
   const isEditing = editingSession === session.id;
   const compactSessionAge = formatCompactSessionAge(sessionView.sessionTime, currentTime);
   const editingContainerRef = useRef<HTMLDivElement>(null);
-  // 待审批优先级最高,而且**选中时也要显示** —— 框虽然渲染在聊天区里,但用户
+  // 待审批优先级最高,而且选中时也要显示 —— 框虽然渲染在聊天区里,但用户
   // 可能滚上去了、或者窗口不在前台。这是个恒定提示,不是"你没看见时才亮"。
   const showApprovalIndicator = awaitingApproval;
   const showAttentionIndicator = !showApprovalIndicator && needsAttention && !isSelected;
@@ -209,10 +209,8 @@ function SidebarSessionItem({
 
       <div className="hidden md:block">
         {isEditing ? (
-          /* gq:改名时输入框**顶替整行**。原来它绝对定位浮在右侧,底下那条标题行
-             还画着旧名字,于是输入框左边露出半截原名。现在编辑态整行换掉,行高钉成
-             31px —— 与未编辑时 `py-[7px]` + `leading-[17px]` 算出来的一模一样,
-             列表不会跳一下。 */
+          /* 改名时输入框顶替整行,不浮在标题上(否则输入框左边会露出半截旧名)。
+             行高钉成 31px,与未编辑时 `py-[7px]` + `leading-[17px]` 一致,列表不会跳一下。 */
           <div
             ref={editingContainerRef}
             className="flex h-[31px] w-full min-w-0 items-center gap-1 rounded-md px-2.5"
@@ -275,12 +273,9 @@ function SidebarSessionItem({
                 onSessionSelect(session, project.projectId);
               }}
             >
-              {/* ef:会话行收成**一行** —— 状态点 + 标题 + 右侧相对时间。原来第二行的
-                  「N 条」计数很少有人看,却让每行高 34 → 46;运行中改成标题前的实心点
-                  (纸构主题下是方形制图标记)+ 时间用强调色,不再另占一行文字。 */}
+              {/* 会话行只有一行:状态点 + 标题 + 右侧相对时间;运行中用标题前的实心点(纸构主题下是方形制图标记)+ 强调色时间表示,不另占一行。 */}
               <div className="flex w-full min-w-0 items-center gap-1.5">
-                {/* 状态点全库只此一处:空心圈=等授权,实心点=运行中/有动静。
-                    以前行外还挂了一个绝对定位的同义点,于是一行冒出两颗绿点。 */}
+                {/* 状态点全库只此一处(行外别再挂同义的点,否则一行冒出两颗):空心圈 = 等授权,实心点 = 运行中 / 有动静。 */}
                 {(showApprovalIndicator || isProcessing || showRecentIndicator || showAttentionIndicator) && (
                   <span
                     role="status"
@@ -320,7 +315,7 @@ function SidebarSessionItem({
             </a>
 
             <div className="absolute right-2 top-1/2 flex -translate-y-1/2 transform items-center gap-1 opacity-0 transition-colors duration-200 group-hover:opacity-100">
-              {/* F12:点开选格式(md / html / json)+「含工具过程」开关。 */}
+              {/* 点开选格式(md / html / json)+「含工具过程」开关。 */}
               <SessionExportMenu
                 onExport={(options) => {
                   void downloadSessionExport(session.id, sessionView.sessionName, options).catch(() => {

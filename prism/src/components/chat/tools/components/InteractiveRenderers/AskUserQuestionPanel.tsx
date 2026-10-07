@@ -25,7 +25,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
     requestAnimationFrame(() => setMounted(true));
   }, []);
 
-  // Focus the container for keyboard events when step changes
+  // Keep focus on the container (number keys / Enter / Esc) unless the "Other" input is active.
   useEffect(() => {
     if (!otherActive.get(currentStep)) {
       containerRef.current?.focus();
@@ -80,10 +80,8 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
       if (isOther && otherText) selected.push(otherText);
       if (selected.length === 0) return;
       /**
-       * dv:多选答案里若有选项**自带逗号**,`, ` 连接就再也拆不回来 ——
-       * 模型看到的是一串分不清边界的文本(用户自填的"其他"尤其容易带逗号)。
-       * 有冲突时改用换行加点号,边界明确且照样好读;没冲突时保持原样,
-       * 免得改变模型早已习惯的输入形状。
+       * 有值自带逗号时,`, ` 连接后模型就分不清边界(用户自填的"其他"尤其容易带逗号),
+       * 这时改用换行加 `- ` 列点;没有冲突时仍用 `, ` 连接,保持模型习惯的输入形状。
        */
       answers[q.question] = selected.some((value) => value.includes(','))
         ? selected.map((value) => `- ${value}`).join('\n')
@@ -159,8 +157,8 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
       ref={containerRef}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
-      // 待回答的交互面板:它自己吃 Esc(跳过)。全局的 Esc-中止监听靠这个标记
-      // 认出面板存在时就放行,不然运行中在这里按 Esc 会把整轮 run 一起中止。
+      // 面板自己处理 Esc(跳过)。ChatInterface 的全局 Esc 中止靠这个标记认出面板在场并放行,
+      // 否则运行中在这里按 Esc 会把整轮 run 一起中止。
       data-interactive-prompt="true"
       className={`w-full outline-none transition-colors duration-500 ease-out ${
         mounted ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0'
@@ -170,7 +168,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
         {/* Accent line */}
         <div className="absolute left-0 right-0 top-0 h-[2px] bg-primary" />
 
-        {/* Header + Question — compact */}
+        {/* Header + question */}
         <div className="px-4 pb-2 pt-3.5">
           <div className="mb-1.5 flex items-center gap-2.5">
             {/* Question icon */}
@@ -222,7 +220,6 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
             </div>
           )}
 
-          {/* Question text */}
           <p className="text-[14px] font-medium leading-snug text-foreground">
             {q.question}
           </p>
@@ -231,7 +228,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
           )}
         </div>
 
-        {/* Options — tight spacing */}
+        {/* Options */}
         <div className="scrollbar-thin max-h-48 overflow-y-auto px-4 pb-2" role={multi ? 'group' : 'radiogroup'} aria-label={q.question}>
           <div className="space-y-1">
             {q.options.map((opt, optIdx) => {
@@ -247,7 +244,6 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
                       : 'border-border hover:border-border-strong hover:bg-muted'
                   }`}
                 >
-                  {/* Keyboard hint */}
                   <kbd className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded font-mono text-[10px] transition-colors duration-150 ${
                     isSelected
                       ? 'bg-primary font-semibold text-primary-foreground'
@@ -316,7 +312,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
               )}
             </button>
 
-            {/* Other text input — inline */}
+            {/* Inline text input for "Other" */}
             {isOtherOn && (
               <div className="pl-[30px] pr-0.5">
                 <div className="relative">
@@ -331,7 +327,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
                         if (isLast) handleSubmit();
                         else setCurrentStep(s => s + 1);
                       }
-                      // Prevent container keydown from firing
+                      // Keep the container's number-key / Esc shortcuts out of the text input.
                       e.stopPropagation();
                     }}
                     placeholder={t('askUser.typeAnswer', { defaultValue: '输入你的回答…' })}
@@ -346,7 +342,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
           </div>
         </div>
 
-        {/* Footer — compact */}
+        {/* Footer */}
         <div className="flex items-center justify-between gap-2 border-t border-border bg-muted px-4 py-2">
           <button
             type="button"

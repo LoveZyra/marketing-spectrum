@@ -5,11 +5,11 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 /**
- * gk:回收站的文件层 —— 空壳识别、删除后的回头检查、超期清扫、保留期解析。
+ * 回收站的文件层:空壳识别、删除后的回头检查、超期清扫、保留期解析。
  *
- * "空壳复活"是 2026-09-14 事故里最不直观的一环:transcript 删掉后半小时,常驻 CLI 被
- * 回收,退出时按老路径写了 `last-prompt` + `mode` 两行,同名文件"复活"成 362 字节。
- * 这里用那两行原样造一个空壳,钉住它会被收走、而一份真 transcript 不会被当成空壳。
+ * "空壳复活":transcript 搬走后,常驻 CLI 被回收时会按原路径写 `last-prompt` + `mode` 两行,
+ * 同名文件"复活"成几百字节的空壳。这里用那两行原样造一个空壳,钉住它会被收走,
+ * 而一份真 transcript 不会被当成空壳。
  */
 let tempDir: string;
 let db: typeof import('@/modules/database/index.js');
@@ -73,7 +73,7 @@ describe('空壳识别', () => {
   });
 });
 
-/** 回头检查要求这条**还在回收站里**(恢复之后就不该再动老路径),测试里补一行。 */
+/** 回头检查要求这条还在回收站里(恢复之后就不该再动老路径),测试里补一行。 */
 const insertTrashRow = (sessionId: string, jsonlPath: string | null = null) => db.getConnection().prepare(
   `INSERT INTO session_trash (session_id, provider, deleted_at, deleted_via, jsonl_path)
    VALUES (?, 'claude', CURRENT_TIMESTAMP, 'session', ?)`,
@@ -111,7 +111,7 @@ describe('搬入 / 回头检查 / 恢复', () => {
 
   /**
    * 八秒内被恢复的那种时序:库里回收站行已经没了,老路径上是刚搬回来的文件。
-   * 回头检查必须**什么都不做** —— 否则它会把刚恢复的东西搬进一个没有行指向的桶。
+   * 回头检查必须什么都不做 —— 否则它会把刚恢复的东西搬进一个没有行指向的桶。
    */
   it('回头检查:这条已经不在回收站里(被恢复了)→ 一概不动老路径', async () => {
     const file = makeTranscript('p2b');
@@ -151,8 +151,8 @@ describe('搬入 / 回头检查 / 恢复', () => {
   });
 
   /**
-   * 搬不回去要**报出来**:调用方靠 `failed` 决定"这次恢复不算成功"。
-   * 上一版只记日志,于是回收站行被删掉、文件留在 trash 里再没有东西指向它。
+   * 搬不回去要报出来:调用方靠 `failed` 判定这次恢复不算成功。只记日志的话,回收站行会被删掉,
+   * 文件留在 trash 里再没有东西指向它。
    */
   it('恢复:回收站里有文件但原目录不可写 → failed=true,文件仍在回收站', async () => {
     const file = makeTranscript('p3b');

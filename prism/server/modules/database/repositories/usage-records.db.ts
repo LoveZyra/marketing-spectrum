@@ -1,9 +1,8 @@
 /**
  * 用量与费用台账。
  *
- * 审计报告把这条列在功能项第 4 位,并单独加了一句:**这一步不做,这个产品永远
- * 答不出"值不值"**。`total_cost_usd` 一直流到前端了,但只活在浏览器内存里,
- * 终点是 `/cost` 弹窗的一行 —— 刷新就没,换台机器就没。
+ * `total_cost_usd` 会推到前端,但只在浏览器内存里的话,刷新就没、换台机器就没,
+ * 也就答不出"值不值"。所以每一轮在服务端落一行账(表结构的说明见 schema.ts)。
  */
 
 import { getConnection } from '@/modules/database/connection.js';
@@ -12,7 +11,11 @@ import { createLogger } from '@/shared/logger.js';
 
 const log = createLogger('usage');
 
-export type UsageSource = 'chat' | 'compact' | 'task' | 'api';
+/**
+ * 账记在哪一档:chat 人发的回合、task 定时任务、api 外部接口、background CLI 自己发起的回合
+ * (比如后台任务跑完回报的那一轮)。compact 是独立压缩回合的账,只在历史行里出现。
+ */
+export type UsageSource = 'chat' | 'compact' | 'task' | 'api' | 'background';
 
 export type UsageRecordInput = {
   sessionId?: string | null;
@@ -27,7 +30,7 @@ export type UsageRecordInput = {
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
   /**
-   * SDK 的 `total_cost_usd` —— 注意它是**会话累计**,不是这一轮的钱。
+   * SDK 的 `total_cost_usd` —— 注意它是会话累计,不是这一轮的钱。
    * 这里会自己换算成增量,调用方原样传就行。
    */
   costUsdCumulative?: number;
@@ -69,13 +72,13 @@ const num = (value: unknown): number => {
 };
 
 /**
- * 把 SDK 的**会话累计**费用换算成这一轮的增量。
+ * 把 SDK 的会话累计费用换算成这一轮的增量。
  *
  * ## 这是整个功能里最容易做错的一处
  *
  * `total_cost_usd` 是会话累计值(前端也是当"最新值覆盖"用的,不是累加)。
  * 一轮一行地把它存进来再 `SUM()`,就是把第 N 轮的账算 N 遍 —— 十轮对话的账单
- * 会变成真实值的五倍多,而且**看起来完全正常**(数字是递增的、量级也对),
+ * 会变成真实值的五倍多,而且看起来完全正常(数字是递增的、量级也对),
  * 只有拿去和账单核对时才会发现。
  *
  * ## 计数器重置怎么办
@@ -85,7 +88,7 @@ const num = (value: unknown): number => {
  * - `current >= previous` → 正常递增,增量 = 差值;
  * - `current < previous`  → 计数器重置了,`current` 本身就是这一轮(新一段)的花费。
  *
- * 第二种情况**不能钳成 0** —— 那会把重置之后的所有花费全部丢掉,账目单调偏小
+ * 第二种情况不能钳成 0 —— 那会把重置之后的所有花费全部丢掉,账目单调偏小
  * 且没人看得出来。宁可在极端情况下多算一点,也不要静默少算。
  */
 export const deriveCostDelta = (cumulative: number, previousCumulative: number): number => {
@@ -97,7 +100,7 @@ export const deriveCostDelta = (cumulative: number, previousCumulative: number):
 
 export const usageRecordsDb = {
   /**
-   * 记一轮。**永远不抛** —— 记账失败不该让用户的对话失败。
+   * 记一轮。永远不抛 —— 记账失败不该让用户的对话失败。
    *
    * 这条是刻意的:台账是旁路数据,而它的写入点在对话的收尾路径上。
    * 一次磁盘满或者一次 SQLITE_BUSY 就让整轮对话报错,代价远大于丢一行账。
@@ -148,7 +151,7 @@ export const usageRecordsDb = {
   /**
    * 明细分页。
    *
-   * `userId` 不为 null 时只返回那个人的行 —— 和审计日志一样,这是**可见范围**
+   * `userId` 不为 null 时只返回那个人的行 —— 和审计日志一样,这是可见范围
    * 不是筛选条件:费用行带着 project_path 和 model,不设防的话任何账号都能
    * 摸清别人在做什么项目。路由层负责决定传不传。
    */
@@ -195,8 +198,8 @@ export const usageRecordsDb = {
     limit = 50,
   ): UsageSummaryRow[] {
     const db = getConnection();
-    // hj:按**服务器本地日期**分天(`created_at` 存的是 UTC)。原来按 UTC 分天,东八区
-    // 凌晨 0–8 点的对话记到了前一天 —— 「今天花了多少」对不上。
+    // 按服务器本地日期分天(`created_at` 存的是 UTC):按 UTC 分天的话,东八区凌晨 0–8 点的
+    // 对话会记到前一天,「今天花了多少」就对不上。
     const expression = groupBy === 'day'
       ? "date(created_at, 'localtime')"
       : groupBy;
@@ -213,8 +216,8 @@ export const usageRecordsDb = {
       params.push(`-${Math.floor(sinceDays)} days`);
     }
     const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
-    // hj:按日期看就按日期倒序,而且**每一天都要在** —— 原来一律按费用排再截 50 条,
-    // 90 天里有记录的日子超过 50 天时,便宜的那些天被截掉,按日期看就是中间缺日。
+    // 按日分组时按日期倒序,且条数上限至少覆盖整个时间窗,保证每一天都在;按费用排再截断
+    // 会把便宜的那些天截掉,按日期看就中间缺日。
     // `orderBy` 只会是下面两个字面量之一,不来自请求。
     const orderBy = groupBy === 'day' ? 'key DESC' : 'cost_usd DESC, runs DESC';
     const effectiveLimit = groupBy === 'day' && sinceDays !== null && sinceDays > 0

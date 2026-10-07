@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 /**
- * ea:前端方法隧道 —— PATCH/PUT/DELETE 一律改成 POST + X-HTTP-Method-Override。
+ * 前端方法隧道:PATCH / PUT / DELETE 一律改成 POST + X-HTTP-Method-Override。
  * 与服务端 shared/method-override.ts 认的集合是同一份。
  *
  * api.js 在模块顶层读 import.meta.env 与 localStorage,这里只 mock 到能 import 的程度。

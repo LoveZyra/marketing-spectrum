@@ -24,8 +24,8 @@ function useChatImageSrc(
   projectId?: string | null,
   enabled: boolean = true,
 ): { src: string | null; failed: boolean } {
-  // ee:同一张图的 object URL 走模块级缓存 —— 乐观行被服务端拷贝换掉时组件会重挂,
-  // 首帧就从缓存同步拿到 src,不再"先紫底、再重取一遍"(见 utils/imageSrcCache.ts)。
+  // 同一张图的 object URL 走模块级缓存:乐观行被服务端拷贝换掉时组件会重挂,
+  // 首帧就能从缓存同步拿到 src,不必先显示占位再重取一遍(见 utils/imageSrcCache.ts)。
   const cacheKey = image.path ? ImageSrcCache.key(projectId, image.path) : null;
   const [src, setSrc] = useState<string | null>(() => (
     image.data || (cacheKey ? chatImageSrcCache.peek(cacheKey) : null)
@@ -49,7 +49,7 @@ function useChatImageSrc(
       }
     }
 
-    // 还没滚到视野附近:不发请求,占位块先顶着。附件图取的是**原图** blob,
+    // 还没滚到视野附近:不发请求,占位块先顶着。附件图取的是原图 blob,
     // 长会话里几十张图在挂载瞬间全量并发拉取,既堵网络又白占内存 ——
     // 进入视口(带预读余量)再拉。
     if (!enabled) {
@@ -70,7 +70,7 @@ function useChatImageSrc(
       : null;
 
     /**
-     * 两条路都留着,但**先试哪条要看路径长什么样**。
+     * 两条路都留着,但先试哪条要看路径长什么样。
      *
      * 新传的附件落在项目的 `attachments/` 下,历史里存的是绝对路径;
      * 早于这次改动传的图还在全局 `~/.prism/assets` 里,存的路径也在那儿。
@@ -85,17 +85,10 @@ function useChatImageSrc(
     ).filter((url): url is string => Boolean(url));
 
     /**
-     * fj:`cancelled` 而不是 `acquiredKey`。
-     *
-     * cleanup 是同步跑的,而 `acquiredKey` 要等 `await response.blob()` 之后才
-     * 赋值。卸载正好发生在 blob 已 resolve、`put()` 还没执行的那一瞬时,cleanup
-     * 读到的仍是 null → **不 release**;紧接着 `put()` 把 refs 加到 1 并写进缓存,
-     * 这个条目从此永远 `refs >= 1`。`evict()` 里 `if (entry.refs > 0) continue`,
-     * 于是它永不淘汰、objectURL 永不 revoke —— 缓存无上限增长,长时间开着的
-     * 标签页内存持续爬升。
-     *
-     * 而这个窗口恰恰是 `imageSrcCache` 顶部注释描述的那个场景:发图后乐观行被
-     * 服务端拷贝换掉、React key 变化导致组件卸载重挂。
+     * cleanup 同步执行,而 acquiredKey 要等 await response.blob() 之后才赋值:卸载若落在
+     * blob 已 resolve、put() 还没执行的间隙,cleanup 读到 null,不会 release。所以 put()
+     * 之后还要看 cancelled,已卸载就当场归还;否则这个条目 refs 永远 ≥ 1,LRU 淘汰不掉,
+     * objectURL 也不会 revoke。发图后乐观行被服务端拷贝换掉、组件卸载重挂时正好撞上这个间隙。
      */
     let cancelled = false;
     let acquiredKey: string | null = null;
@@ -154,12 +147,8 @@ function useNearViewport<T extends Element>(): { ref: (node: T | null) => void; 
   const observerRef = useRef<IntersectionObserver | null>(null);
 
   /**
-   * fj:`useCallback` 包一层。
-   *
-   * 内联的回调 ref 每次渲染都是新函数,React 会先 `ref(null)` 再 `ref(node)` ——
-   * 于是每渲染一次就销毁并重建一个 IntersectionObserver。叠加上面那条
-   * (`turnOutputs={[]}` 让 `MessageComponent` 在流式期间约 10Hz 重渲),
-   * 带图的用户消息在整轮回答期间会持续抖,极端情况下图片一直停在灰色占位块上。
+   * 回调 ref 必须用 useCallback 固定:内联函数每次渲染都是新的,React 会先 ref(null) 再 ref(node),
+   * 每次渲染都重建一个 IntersectionObserver;流式回答期间消息约 10Hz 重渲,图片可能一直停在占位块上。
    */
   const ref = useCallback((node: T | null) => {
     if (observerRef.current) {
@@ -191,9 +180,8 @@ function useNearViewport<T extends Element>(): { ref: (node: T | null) => void; 
  */
 function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
   /**
-   * 这里原来只有 Esc,没有焦点陷阱 —— 而它声明了 `aria-modal="true"`。
-   * 全屏看图时 Tab 会一路跑到背后的对话流里去,而读屏软件被告知"背后不存在"。
-   * 换成共用 hook 之后 Esc / Tab / 滚动锁三件事一次到位。
+   * 声明了 aria-modal 就必须有焦点陷阱:useModalKeyboard 一并处理 Esc 关闭、Tab 圈在灯箱内、
+   * 背景滚动锁定,否则 Tab 会跑到背后的对话流里。
    */
   const modalRef = useRef<HTMLDivElement>(null);
   useModalKeyboard(modalRef, { onClose });

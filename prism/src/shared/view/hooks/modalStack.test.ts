@@ -4,7 +4,7 @@ import { beforeEach, describe, test } from 'vitest';
 
 import { isLocalEscapeTarget, isTopModal, pushModal, removeModal, resetModalStack } from './modalStack';
 
-describe('hl 复核 P2-2 弹层栈', () => {
+describe('弹层栈', () => {
   beforeEach(() => resetModalStack());
 
   test('向导里再开「选择文件夹」:只有栈顶那层处理 Esc(基线两层都处理,整个向导一起关)', () => {

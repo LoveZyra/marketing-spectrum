@@ -15,7 +15,7 @@ import { SkillWhetClient } from '../services/skillwhet-client.js';
 import { createSkillWhetRouter } from '../skillwhet.routes.js';
 
 /**
- * gy:`/api/skillwhet/*` 的权限线,在**路由层**测(理由同 tasks-authz.test.ts:
+ * `/api/skillwhet/*` 的权限线,在路由层测(理由同 tasks-authz.test.ts:
  * 只测函数证明不了路由调没调它)。
  *
  * serve 那边用一个假的回环 HTTP 顶替:它记下收到的请求、按路由回固定 JSON。
@@ -31,7 +31,7 @@ async function startFakeServe(): Promise<FakeServe> {
     'marketing-audit': { name: 'marketing-audit', source: 'live', uploaded_by: '', adopted: true, latest_staging: '20260923-100000', imported_from: '', bootstrapped: true },
     'period-report': { name: 'period-report', source: 'upload', uploaded_by: 'alice', adopted: true, latest_staging: '20260923-100001', bootstrapped: false },
   };
-  // gz:体检缓存(G1)、作业表、漂移 —— 测试用例通过 `fake.state` 改
+  // 体检缓存(G1)、作业表、漂移 —— 测试用例通过 `fake.state` 改
   const state = {
     gate: { 'marketing-audit': 'pass', 'period-report': 'pass' } as Record<string, string>,
     drift: [] as string[],
@@ -299,7 +299,7 @@ describe('/api/skillwhet gz 权限线:训练 / 采纳 / 发布 / 收件箱', () 
       assert.equal(forwarded.args.max_cost_usd, 1.5);
       assert.equal(forwarded.args.workers, 2);
       assert.equal(forwarded.args.fast_backend, undefined);
-      // hf2:被钳的参数告诉页面,不再悄悄按上限跑
+      // 被钳的参数告诉页面,不悄悄按上限跑
       assert.ok(((ok.body.data as { clamped: string[] }).clamped ?? []).some((c) => c.startsWith('max_cost_usd 99')));
       assert.ok(forwarded.tags.includes('user:' + String((ok.body.data as { job: { tags: string[] } }).job.tags.find((t) => t.startsWith('user:'))!.slice(5))));
       // bob 对 alice 的 skill → 403;alice 对技能库来源 → 403
@@ -319,7 +319,7 @@ describe('/api/skillwhet gz 权限线:训练 / 采纳 / 发布 / 收件箱', () 
       assert.equal(rootRun.status, 200, JSON.stringify(rootRun.body));
       const events = auditLogDb.list(50, 0, null).filter((row) => row.event === 'skillwhet_job_start');
       assert.ok(events.some((e) => e.detail.includes('g1_override')), 'root 越过 G1 要写进审计');
-      // hf2:root 可越过 .env 的单次上限(到硬上限 50),审计记 cost_override;超过硬上限仍被钳
+      // root 可越过 .env 的单次上限(到硬上限 50),审计记 cost_override;超过硬上限仍被钳
       fake.state.jobs.length = 0;
       const big = await call(baseUrl, 'boss', 'POST', '/api/skillwhet/jobs', { skill: 'period-report', args: { max_cost_usd: 10, max_minutes: 600 } });
       assert.equal(big.status, 200, JSON.stringify(big.body));
@@ -346,7 +346,7 @@ describe('/api/skillwhet gz 权限线:训练 / 采纳 / 发布 / 收件箱', () 
       assert.equal((await call(baseUrl, 'bob', 'POST', '/api/skillwhet/skills/period-report/staging/20260923-100001/adopt', {})).status, 403);
       assert.equal((await call(baseUrl, 'alice', 'POST', '/api/skillwhet/skills/period-report/staging/20260923-100001/adopt', {})).status, 200);
       assert.equal((await call(baseUrl, 'alice', 'POST', '/api/skillwhet/skills/marketing-audit/staging/20260923-100000/adopt', {})).status, 403);
-      // ha:force 与 skip_release 各自透传,不互相连带
+      // force 与 skip_release 各自透传,不互相连带
       assert.equal((await call(baseUrl, 'alice', 'POST', '/api/skillwhet/skills/period-report/staging/20260923-100001/adopt', { skip_release: true })).status, 200);
       const adoptBody = fake.calls.filter((c) => /\/adopt$/.test(c.url)).at(-1)!.body as { force: boolean; skip_release: boolean };
       assert.deepEqual(adoptBody, { force: false, skip_release: true });
@@ -367,7 +367,7 @@ describe('/api/skillwhet gz 权限线:训练 / 采纳 / 发布 / 收件箱', () 
       await writeFile(path.join(work, '.evo', 'junk.txt'), 'never published');
       await writeFile(path.join(work, 'import.json'), '{"name":"marketing-audit"}');
       assert.equal((await call(baseUrl, 'alice', 'POST', '/api/skillwhet/skills/marketing-audit/publish', {})).status, 403);
-      // gz 审计 #6:没有导入记录(或记录不指向技能库里的这个目录)→ 409,不整目录替换
+      // 没有导入记录(或记录不指向技能库里的这个目录)→ 409,不整目录替换
       const noRecord = await call(baseUrl, 'boss', 'POST', '/api/skillwhet/skills/marketing-audit/publish', {});
       assert.equal(noRecord.status, 409);
       assert.equal(noRecord.body.code, 'SKILLWHET_NO_IMPORT_RECORD');
@@ -404,7 +404,7 @@ describe('/api/skillwhet gz 权限线:训练 / 采纳 / 发布 / 收件箱', () 
       assert.ok(fsExists(path.join(liveRoot, 'period-report', 'SKILL.md')));
       const audits = auditLogDb.list(50, 0, null).map((r) => r.event);
       assert.ok(audits.includes('skillwhet_publish') && audits.includes('skillwhet_rollback') && audits.includes('skillwhet_adopt'));
-      // hd:发布 / 回滚都告诉 serve 记一笔(谁、哪份 staging);记录登录即可看,发起人只给 root
+      // 发布 / 回滚都告诉 serve 记一笔(谁、哪份 staging);记录登录即可看,发起人只给 root
       const rebases = fake.calls.filter((c) => /\/skills\/marketing-audit\/rebase$/.test(c.url)).map((c) => c.body as { event?: string; by?: string; to?: string });
       assert.ok(rebases.some((b) => b.event === 'publish' && b.by === 'boss'), JSON.stringify(rebases));
       assert.ok(rebases.some((b) => b.event === 'rollback' && b.by === 'boss' && b.to === ts));
@@ -437,7 +437,7 @@ describe('/api/skillwhet gz 权限线:训练 / 采纳 / 发布 / 收件箱', () 
       assert.ok(sent.records.some((r) => typeof r.rubric === 'string' && r.outcome === 'mixed'));
       assert.equal(messageFeedbackDb.get('m1_text', 1)?.task_id, `fb_${bad.id}`);
       assert.equal((await call(baseUrl, 'boss', 'GET', '/api/skillwhet/feedback/inbox?skill=marketing-audit')).body.data?.inbox.length, 0);
-      // gz 审计 #2 / #8:skill_hint 像路径的行不转(serve 侧会把它当目录名);好评 / 已转过的 id 传进来也不标记
+      // skill_hint 像路径的行不转(serve 侧会把它当目录名);好评 / 已转过的 id 传进来也不标记
       const evil = messageFeedbackDb.upsert({ ...base, messageId: 'm4_text', verdict: -1, note: '这条的 skill_hint 是路径', skillHint: '../../.claude/skills/pdf' });
       const good = messageFeedbackDb.get('m2_text', 1)!;
       const before = fake.calls.length;

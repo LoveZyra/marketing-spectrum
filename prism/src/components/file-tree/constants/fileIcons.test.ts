@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { FAMILY_COLOR_CLASS, getFileFamily, getFileIconData } from './fileIcons';
 
 /**
- * ej:产出列表改用**文件管理器同一套**图标之后,这份映射多了两个调用方
- * (右侧产出表、正文下的产出卡)。用户看到的正是这里的分辨力:一列产出里
- * `.md` / `.svg` / `.html` / `.py` / `.sh` 必须一眼分得开,不能全是同一个文档图标。
+ * 产出列表与文件管理器共用这份图标映射(右侧产出表、正文下的产出卡都用它)。
+ * 用户看到的正是这里的分辨力:一列产出里 `.md` / `.svg` / `.html` / `.py` / `.sh`
+ * 必须一眼分得开,不能全是同一个文档图标。
  */
 describe('getFileIconData', () => {
   it('用户产出里常见的几类各有各的图标(不是一律 FileText)', () => {

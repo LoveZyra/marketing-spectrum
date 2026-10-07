@@ -1,12 +1,10 @@
 /**
- * hh:数字输入框的取值规则(纯函数,`NumberInput` 与测试共用)。
+ * 数字输入框的取值规则(纯函数,`NumberInput` 与测试共用)。
  *
- * 原来各处写的是 `value={n} onChange={(e) => setN(clamp(Number(e.target.value) || 1))}`:
- * 删掉 "1" 时空串被立刻改回 1,于是「删不掉那个 1」,再敲 3 就成了 "13";
+ * 打字时只认文字,能读成数就把这个数(不夹取)交给上层;离开输入框时再夹到 [min, max]、
+ * 按需取整、把文字规范化;空着离开 → 允许空就交 `null`,否则回到 `fallback`。
+ * 边打边改写会出错:删掉 "1" 时空串被立刻改回 1(「删不掉那个 1」,再敲 3 成了 "13"),
  * 边打边夹取也会乱跳(小时框里 9 后面敲 1 → "91" → 被夹成 23)。
- *
- * 规则:**打字时只认文字**,能读成数就把这个数(不夹取)交给上层;**离开输入框时**再
- * 夹到 [min, max]、按需取整、把文字规范化;空着离开 → 允许空就交 `null`,否则回到 `fallback`。
  */
 export type NumberRule = {
   min?: number;
@@ -45,11 +43,11 @@ export function commitNumber(text: string, rule: NumberRule): { value: number | 
 }
 
 /**
- * hl(09-24 静态 P3):↑/↓ 步进的起点。
+ * ↑/↓ 步进的起点。
  *
- * 原来空框(可留空、用 placeholder 显示默认值)按 ↑ 从 `fallback ?? min ?? 0` 起 —— 这类框
- * 通常不传 fallback,于是「默认 8 轮」的框按一下变成 1,而不是 9。现在空框从 **placeholder
- * 里显示的那个默认值**起步;placeholder 读不出数才退回 fallback / min / 0。
+ * 空框(可留空、用 placeholder 显示默认值)从 placeholder 里显示的那个默认值起步,
+ * 「默认 8 轮」的空框按一下 ↑ 得 9;placeholder 读不出数才退回 fallback / min / 0
+ * (这类框通常不传 fallback,直接从 min 起会得到 1)。
  */
 export function stepNumber(
   text: string,

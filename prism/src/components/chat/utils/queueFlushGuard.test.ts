@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { FLUSH_MAX_ATTEMPTS, flushAttemptAllowed, reconcileWithStorageEvent, shouldDispatchClaimed, shouldEchoOnce, shouldRestoreStored } from './queueFlushGuard';
 
 /**
- * gk:排队冲队的判据 —— 对应 2026-09-15 测试环境的三个症状:
- * 取消了照样发出去;同一条命令投了四遍(四个气泡);回复之后多出来的消失。
+ * 排队冲队的判据。钉住的三个症状:取消了照样发出去;同一条命令被投了好几遍(好几个气泡);
+ * 回复之后多出来的气泡又消失。
  */
 describe('shouldDispatchClaimed', () => {
   const retired = new Set<string>();
@@ -101,11 +101,11 @@ describe('接线(读源码钉住)', () => {
   });
 
   /**
-   * ACK 清盘要**回读一次**才清。
+   * ACK 清盘要回读一次才清。
    *
    * 内存判的是"我这条被确认了",盘上删的却是"这个会话的排队记录" —— 两个标签页
    * 开同一个会话时,B 排进去的新消息就躺在那个键上,而 A 这边旧命令的第二次 accepted
-   * (排队收下一次、续发跑起来又一次)一到就把 B 从盘上删掉。这正是 fz 修过的那个坑。
+   * (排队收下一次、续发跑起来又一次)一到就会把 B 从盘上删掉。
    */
   it('ACK 清盘:盘上不是同一个幂等键就不清', () => {
     expect(composer).toMatch(/const stored = readQueuedMessage\(ackSessionId\) as StoredSendCommand \| null;\s*\n\s*if \(!stored \|\| !stored\.clientMessageId \|\| stored\.clientMessageId === clientMessageId\) \{\s*\n\s*clearQueuedMessage\(ackSessionId\);/);
@@ -117,7 +117,7 @@ describe('接线(读源码钉住)', () => {
   });
 
   /**
-   * 被挤掉 / 被别处撤掉的那条,**正文要退回输入框**。
+   * 被挤掉 / 被别处撤掉的那条,正文要退回输入框。
    * 排队槽一个会话只有一个,两个标签页各排一句时后写的覆盖先写的 ——
    * 先写的那句若连提示都没有,用户看到的就是"我明明排了一条,它自己没了"。
    */

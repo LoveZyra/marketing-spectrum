@@ -143,11 +143,11 @@ export function resolveClaudeCodeExecutablePath(
 }
 
 /* ------------------------------------------------------------------ */
-/*  hm(A2):Prism 起的所有 claude 统一用 SDK 随包的那一份               */
+/*  Prism 起的所有 claude 统一用 SDK 随包的那一份                     */
 /* ------------------------------------------------------------------ */
 
 /**
- * `CLAUDE_CLI_PATH` 有没有**显式**配。
+ * `CLAUDE_CLI_PATH` 有没有显式配。
  *
  * 配了(哪怕写的是 `claude`)= 运维要自己指定,所有入口(对话、终端、接管、登录、
  * SkillWhet)一起听它的;没配 = 用 SDK 随包的二进制。想临时退回全局 CLI 就写
@@ -167,12 +167,12 @@ let missingBundledWarned = false;
  * SDK 的 `pathToClaudeCodeExecutable` 该传什么。
  *
  * - 配了 `CLAUDE_CLI_PATH` → 它;
- * - 没配 → **随包二进制的绝对路径**(与 SDK 自己挑的是同一个文件,见 resolveBundledClaudeBinary)。
- *   hm 初版没配就不传、让 SDK 自己挑 —— 复审发现 SDK 每次 `query()` 挑的时候都跑一遍
- *   `process.report.getReport()`(不缓存,同步,还会对每个 TCP 句柄做反向 DNS),解析慢的机器上
- *   每起一个 runtime 都卡一下事件循环。这里挑一次、缓存,直接传;
+ * - 没配 → 随包二进制的绝对路径(与 SDK 自己挑的是同一个文件,见 resolveBundledClaudeBinary)。
+ *   不让 SDK 自己挑:它每次 `query()` 都会跑一遍 `process.report.getReport()`(不缓存,同步,
+ *   还会对每个 TCP 句柄做反向 DNS),解析慢的机器上每起一个 runtime 都卡一下事件循环。
+ *   这里挑一次、缓存,直接传;
  * - 随包的也找不到(`npm install --omit=optional`、拷来的 node_modules 平台不对)→ `'claude'`(PATH 上的全局),
- *   并打一行错误日志。hm 初版此时不传,SDK 直接抛 "Native CLI binary … not found",对话全挂而登录检查还显示已安装。
+ *   并打一行错误日志。此时若不传,SDK 会直接抛 "Native CLI binary … not found",对话全挂而登录检查还显示已安装。
  */
 export function sdkExecutableOption(
   configuredPath: string | undefined = process.env.CLAUDE_CLI_PATH,
@@ -223,7 +223,7 @@ function detectMusl(platform: string): boolean {
 }
 
 /**
- * 随包二进制的候选顺序 —— **逐字照抄 SDK 0.3.285 的 `SV()`**:
+ * 随包二进制的候选顺序,与 SDK 内部的候选逻辑逐字一致:
  * linux 上 musl 优先时先 `-musl` 后 glibc,否则反过来;其它平台只有一个;android 单列。
  * `claude-cli-path.test.ts` 对着 sdk.mjs 断言这段逻辑没变,SDK 换版改了顺序就会变红。
  */
@@ -257,8 +257,8 @@ let bundledCache: { value: string | null } | null = null;
 
 /**
  * SDK 随包的那个 claude 在哪 —— 与 SDK 不传 `pathToClaudeCodeExecutable` 时选中的是
- * **同一个文件**(同样的候选顺序、同样的解析起点)。只有终端里的命令串与
- * SkillWhet 这类"自己起进程"的入口要用它;SDK 那两条路直接不传路径。
+ * 同一个文件(同样的候选顺序、同样的解析起点)。传给 SDK 的路径(sdkExecutableOption)、
+ * 终端里的命令串、SkillWhet 这类"自己起进程"的入口都用它。
  *
  * 找不到返回 null(调用方回落 `'claude'` 并 warn)。不带依赖注入时结果缓存 ——
  * 进程生命周期里包不会变。
@@ -332,10 +332,9 @@ export function resolveClaudeCommandForShell(
  * 把 Prism 用的那个 claude 所在目录放到 PATH 最前(普通终端、接管、SkillWhet 的 `whet serve` 用)。
  *
  * - 没配 `CLAUDE_CLI_PATH` → 随包二进制的目录;
- * - 配成**绝对路径**(如 `/opt/claude/bin/claude`)→ 它所在的目录 —— 复审:原来配了就不动 PATH,
- *   结果对话 / 接管 / 登录用配置的那个,普通终端与 SkillWhet 的 `claude -p` 却还是 PATH 上的全局,
- *   与 `.env.example` 写的"所有入口一起"不符;
- * - 配成**裸命令名**(如 `claude`)或相对路径 → 不动 PATH:运维要退回全局 CLI,终端里敲的 `claude` 也跟着退回。
+ * - 配成绝对路径(如 `/opt/claude/bin/claude`)→ 它所在的目录:普通终端与 SkillWhet 的 `claude -p`
+ *   也要与对话 / 接管 / 登录用同一个,这是 `.env.example` 写的"所有入口一起";
+ * - 配成裸命令名(如 `claude`)或相对路径 → 不动 PATH:运维要退回全局 CLI,终端里敲的 `claude` 也跟着退回。
  *   注意:配成 `/usr/bin/claude` 这类系统目录会把整个目录提到最前(`.env.example` 里写明了,建议指到只放 claude 的目录)。
  * 随包目录里只有 `claude` / README / LICENSE / package.json。
  */
@@ -349,7 +348,7 @@ export function withBundledClaudeOnPath(
   const configured = configuredClaudeCliPath(configuredPath);
   let binary: string | null;
   if (configured) {
-    // 只认绝对路径:相对路径进 PATH 会让每个项目的 node_modules/.bin 之类盖住系统命令(复审)
+    // 只认绝对路径:相对路径进 PATH 会让每个项目的 node_modules/.bin 之类盖住系统命令
     if (!isPathLike(configured) || !pathApi.isAbsolute(configured)) return { ...env };
     binary = configured;
   } else {

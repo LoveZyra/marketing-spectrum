@@ -19,26 +19,14 @@ import { connectedClients } from '@/shared/websocket-state.js';
 /**
  * 别人订阅一条正在跑的会话,不能把回答从提问者那里劫走。
  *
- * 用户报的现象:**root 打开了别人的会话,那个用户再提问时,回答出现在 root 的
- * 页面上,提问者自己的页面上什么都没有。**
+ * 触发链路:root 打开会话 X;该用户往 X 发消息,`startRun` 的 writer 指向他自己的 socket;
+ * 运行时写 transcript → 服务端广播 `session_upserted` → root 的 `useProjectsState` 调
+ * `setSelectedProject`(`upsertSessionIntoProject` 返回新对象)→ `useChatSessionState` 的 effect
+ * 依赖 `selectedProject`,重新发出 `chat.subscribe` → 服务端见 `isProcessing` 为真就 `attachConnection`。
+ * 只要 root 开着那个会话,这条链路就必然在回答中途走到;同一个人开两个标签页、公开项目里
+ * 任意另一个用户也一样。
  *
- * 链路是这样的(全部确认过,不是推测):
- *
- *  1. root 打开会话 X。
- *  2. 该用户往 X 发消息 → `startRun` 建的 writer 指向他自己的 socket。
- *  3. 运行时把内容写进 transcript 文件 → 服务端广播 `session_upserted`。
- *  4. root 的 `useProjectsState` 收到后调 `setSelectedProject`,而
- *     `upsertSessionIntoProject` 返回的是**新对象**;
- *     `useChatSessionState` 那个 effect 的依赖里有 `selectedProject`,
- *     于是**重新跑一遍,发出 `chat.subscribe`**。
- *  5. 服务端见 `isProcessing` 为真 → `attachConnection`。原来那是
- *     `run.writer.updateWebSocket(rootSocket)` —— **一次单持有者赋值**,
- *     流从此归 root。
- *
- * 所以它不是偶发,是**只要 root 开着那个会话就必然发生**,而且发生在回答中途。
- * 同一个人开两个标签页、公开项目里换成任意另一个用户,都是同一条链路。
- *
- * 现在 `attachConnection` 是加入集合而不是替换,这条用例钉的就是这一点。
+ * `attachConnection` 必须是加入集合而不是替换,这条用例钉的就是这一点。
  */
 
 type SentFrame = Record<string, unknown>;
@@ -160,7 +148,7 @@ describe('运行中的会话被别人订阅', () => {
 
       // root 有权看这条会话,所以也收得到 —— 这是围观,不是劫走。
       //
-      // 它连**加入之前**的那一段也拿到了:订阅带的 `lastSeq` 是 0,而这条 run
+      // 它连加入之前的那一段也拿到了:订阅带的 `lastSeq` 是 0,而这条 run
       // 还在跑,所以服务端在回执之后把缓冲区里的事件补了一遍(`replayEvents`)。
       // 这正是想要的 —— 中途打开一条正在跑的会话,应该看到完整的回答,而不是
       // 从你点开的那一秒开始的半截。

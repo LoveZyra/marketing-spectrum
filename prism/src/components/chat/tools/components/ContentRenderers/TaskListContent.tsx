@@ -17,9 +17,8 @@ function parseTaskContent(content: string): TaskItem[] {
   const lines = content.split('\n');
 
   for (const line of lines) {
-    // Match patterns like: #15. [in_progress] Subject here
-    // or: - #15 [in_progress] Subject (owner: agent)
-    // or: #15. Subject here (status: in_progress)
+    // Accepts `#15 [in_progress] Subject`, optionally with a `.` after the id and a
+    // trailing `(owner: name)`; a line without `[status]` counts as pending.
     const match = line.match(/#(\d+)\.?\s*(?:\[(\w+)\]\s*)?(.+?)(?:\s*\((?:owner:\s*\w+)?\))?$/);
     if (match) {
       const [, id, status, subject] = match;
@@ -67,13 +66,12 @@ const statusConfig = {
 };
 
 /**
- * Renders task list results with proper status icons and compact layout
- * Parses text content from TaskList/TaskGet results
+ * Parses TaskList / TaskGet result text into compact rows with status icons and a
+ * progress bar. Falls back to the raw text when no line parses.
  */
 export const TaskListContent: React.FC<TaskListContentProps> = ({ content }) => {
   const tasks = parseTaskContent(content);
 
-  // If we couldn't parse any tasks, fall back to text display
   if (tasks.length === 0) {
     return (
       <pre className="whitespace-pre-wrap font-mono text-[11px] text-body">
@@ -103,8 +101,8 @@ export const TaskListContent: React.FC<TaskListContentProps> = ({ content }) => 
           const config = statusConfig[task.status] || statusConfig.pending;
           return (
             <div
-              // dv:`task.id` 来自模型输出,不保证唯一(重复 id 会让 React 复用
-              // 错行:勾选状态串到别的任务上)。补上序号去歧义。
+              // `task.id` 解析自工具输出文本,不保证唯一;重复 key 会让 React 复用错行
+              // (状态串到别的任务上),所以拼上序号。
               key={`${task.id ?? 'task'}-${index}`}
               className="group flex items-center gap-1.5 py-0.5"
             >

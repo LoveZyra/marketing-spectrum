@@ -3,17 +3,17 @@ import os from 'node:os';
 import path from 'node:path';
 
 /**
- * 别名 → **配置层**的模型解析(不发任何请求的那一层)。
+ * 别名 → 配置层的模型解析(不发任何请求的那一层)。
  *
- * 这套部署的映射方式是 CLI 环境变量:settings.json 的 env 块里
+ * 映射方式是 CLI 环境变量:settings.json 的 env 块里
  * `ANTHROPIC_DEFAULT_<别名>_MODEL` 决定各别名实际发出去的名字;顶层 `"model"`
  * 决定 default 档(它可以又是一个别名,递归解析一层);`ANTHROPIC_MODEL` 是
- * 没配 `"model"` 时的兜底。这一层**读文件就能算出来** —— 零成本、随改随新,
+ * 没配 `"model"` 时的兜底。这一层读文件就能算出来,零成本、随改随新,
  * /models 卡片的「配置」行、输入框 chip 的回退显示都用它,不需要实测。
  *
- * 实测(probe)依然保留,因为它验证的是配置层看不见的**网关**那一跳:CLI 发出的
+ * 实测(probe)仍然需要:它验证的是配置层看不见的网关那一跳 —— CLI 发出的
  * 名字网关认不认、会不会改写(比如把陌生名字兜底到别的模型),只有真发一次请求
- * 才知道。两层一致 → 放心;不一致 → 网关在改写,这本身就是重要信号。
+ * 才知道。两层不一致说明网关在改写,这本身就是重要信号。
  */
 
 export type AliasConfigMapping = {
@@ -100,7 +100,7 @@ export function resolveAliasMapping(settings: ClaudeUserSettings, alias: string)
   return { configuredModel: null, source: null };
 }
 
-/** 每次调用都重读 settings.json —— 这正是"改完配置立即反映"的实现方式。 */
+/** 每次调用都重读 settings.json,改完配置立即反映。 */
 export async function readAliasConfigMappings(
   aliases: string[],
 ): Promise<Record<string, AliasConfigMapping>> {

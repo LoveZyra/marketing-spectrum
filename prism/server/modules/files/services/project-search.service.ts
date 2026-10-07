@@ -1,21 +1,20 @@
 /**
- * 跨文件全局搜索(F10)。
+ * 跨文件全局搜索(按内容,不是文件名)。
  *
- * 文件树的搜索框只匹配**文件名**,而人真正想找的往往是内容 —— "那个函数叫什么来着"、
- * "这个常量还有谁在用"。之前唯一的办法是打开终端自己 grep。
+ * 文件树的搜索框只匹配文件名,而人真正想找的往往是内容 —— "那个函数叫什么来着"、
+ * "这个常量还有谁在用"。
  *
  * 用 ripgrep 而不是自己遍历:它已经是依赖(会话搜索在用),尊重 .gitignore,
  * 跳过二进制,而且比任何 JS 实现快一到两个数量级。
  *
- * 三道闸,都是为了让"一次搜索"不可能变成"一次拒绝服务":
- *   - 搜索根**必须**是调用者可见的项目目录(路由层用 resolveVisibleProjectRoot 解析,
+ * 三道闸,保证一次搜索不会变成一次拒绝服务:
+ *   - 搜索根必须是调用者可见的项目目录(路由层用 resolveVisibleProjectRoot 解析,
  *     这里只接受已解析好的绝对路径);
  *   - 结果数、单行长度、超时都有硬上限,截断如实上报(而不是悄悄少给);
- *   - 模式与 glob 都走 `--` 之后,不可能被当成 rg 的参数。
+ *   - 模式放在 `--` 之后,glob 作为 `--glob` 的值传入,都不可能被当成 rg 的参数。
  */
 
 import { spawn } from 'node:child_process';
-import path from 'node:path';
 
 import { EDITOR_MAX_BYTES } from '@/modules/files/services/text-sniff.js';
 import { RIPGREP_MISSING_MESSAGE, resolveRipgrepPath } from '@/shared/ripgrep-path.js';
@@ -34,8 +33,8 @@ export type SearchResult = {
   /** 命中数超过上限被截断。 */
   truncated: boolean;
   /**
-   * hl(P3 文件组):因超过单文件大小上限而**没搜**的文件数。以前静默跳过 >2MB 的文件,
-   * 而编辑器能打开 5MB —— 用户在编辑器里看得见的字,搜索却说「没有」。
+   * 因超过单文件大小上限(与编辑器同一个上限)而没搜的文件数。要报出来,
+   * 免得用户把"搜不到"当成"不存在"。
    */
   skippedLargeFiles: number;
   /** 搜索本身失败(超时/rg 起不来),此时 matches 为空。 */
@@ -61,7 +60,7 @@ const MAX_LINE_LENGTH = 400;
 /** 解析 rg 的 `--vimgrep` 行:`path:line:col:text`(路径里可能含冒号,所以从左边切三次)。 */
 export function parseVimgrepLine(line: string): SearchMatch | null {
   // 从右往左找不行(text 里全是冒号);从左往右也不行(Windows 盘符)。
-  // rg 在这里拿到的是**相对路径**(cwd = 项目根),所以左切三次是安全的。
+  // rg 在这里拿到的是相对路径(cwd = 项目根),所以左切三次是安全的。
   const first = line.indexOf(':');
   if (first < 0) return null;
   const second = line.indexOf(':', first + 1);
@@ -185,9 +184,4 @@ export async function searchProjectFiles(
       finish(code === 2 ? '搜索过程中出错(可能是无效的正则)。' : null);
     });
   });
-}
-
-/** 给调用方拼绝对路径用(不进 API 返回值)。 */
-export function resolveMatchPath(projectRoot: string, relativePath: string): string {
-  return path.resolve(projectRoot, relativePath);
 }

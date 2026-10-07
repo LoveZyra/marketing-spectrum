@@ -16,23 +16,24 @@ import {
   getModelVendor,
 } from '../../../../../shared/modelVendors';
 import { availableFirst, canFixWithKey, isModelAvailable } from '../../utils/modelAvailability';
+import { resolveAliasReal } from '../../utils/modelAliasReal';
 
 /**
- * hn(B4):`/models` 的选择器 —— **模型目录**为主,别名组收在最后。
+ * `/models` 的选择器:以模型目录为主,别名组收在最后。
  *
- * 分三块:
- * 1. 「推荐」—— 目录里标了推荐的;
- * 2. 「更多模型」—— 其余上架条目,按厂商分组(组序同 `MODEL_VENDORS`,认不出的归「其他」);
- * 3. 「别名 · 子代理用」—— default / sonnet / opus / haiku …,默认收起(当前正用别名、或搜索命中别名时展开)。
- *    别名那一块保留原来的「配置映射 + 实测」两行(实测按钮只给 root:整组探测路由已收紧为 root)。
+ * 自上而下:
+ * - 「私有」:本人的私有模型(带「私有」小标);
+ * - 「推荐」:目录里标了推荐的;
+ * - 「更多模型」:其余上架条目,按厂商分组(组序同 `MODEL_VENDORS`,认不出的归「其他」);
+ * - 「别名 · 子代理用」:default / sonnet / opus / haiku …,带「配置映射 + 实测」两行(实测按钮只给 root)。
+ *   目录为空时别名可选、默认展开;目录里有模型时只给 root 看、只读,默认收起(搜索结果里没有目录模型时展开)。
  *
  * 每行:厂商图标、显示名、窗口角标(`128K`)、网关原名、一行说明;当前项打勾。
- * **窗口比当前上下文还小**(已过它的压缩线)的行标一句提示 —— 服务端会挡住切过去后的第一条普通消息,
+ * 窗口比当前上下文还小(已过它的压缩线)的行标一句提示 —— 服务端会挡住切过去后的第一条普通消息,
  * 那时发 `/compact` 会先用当前模型压缩,压完自动换过去。
  *
- * hq:本人的**私有模型**单独一节放在最上面(带「私有」小标);不在默认网关上的模型标网关名;
- * **不能用的模型**(网关没有可用的 key / 停用)照样列出、置灰点不了,写上服务端给的原因,
- * 填了 key 就能用的带「去填 key」(开 设置 → 模型网关);每一节里不能用的排在后面。
+ * 不在默认网关上的模型标网关名;不能用的模型(网关没有可用的 key / 停用)照样列出、置灰点不了,
+ * 写上服务端给的原因,填了 key 就能用的带「去填 key」(开 设置 → 模型网关);每一节里不能用的排在后面。
  */
 
 type ModelOption = Partial<ProviderModelOption> & { value: string };
@@ -72,27 +73,15 @@ export type ModelPickerContentProps = {
     model: string,
     sessionId?: string | null,
   ) => Promise<{ scope: 'default' | 'session'; changed: boolean; model: string }>;
-  /** hq:「去填 key」—— 开 设置 → 模型网关(先关掉这个弹窗)。不给就不出这个入口。 */
+  /** 「去填 key」:打开 设置 → 模型网关(先关掉这个弹窗)。不传就不出这个入口。 */
   onOpenKeySettings?: () => void;
   onClose: () => void;
 };
 
-/** "3 分钟前 / 2 小时前 / 5 天前" —— 映射是网关配置,新鲜度比精确时刻有用。 */
-function formatCheckedAgo(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return '';
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 1) return '刚刚实测';
-  if (minutes < 60) return `${minutes} 分钟前实测`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前实测`;
-  return `${Math.floor(hours / 24)} 天前实测`;
-}
-
 const optionVendor = (option: ModelOption): string | null =>
   getModelVendor(option.vendor)?.id ?? detectModelVendor(option.realModel || option.value);
 
-/** 没有 `group` 字段的老数据一律当别名(hn 之前只有别名)。 */
+/** 没有 `group` 字段的数据一律当别名。 */
 const isAliasOption = (option: ModelOption, hasGroups: boolean): boolean =>
   !hasGroups || option.group === 'alias';
 
@@ -119,6 +108,18 @@ export default function ModelPickerContent({
 }: ModelPickerContentProps) {
   const { t } = useTranslation('chat');
   const isRoot = Boolean(useAuth().user?.isRoot);
+
+  /** "3 分钟前 / 2 小时前 / 5 天前" —— 映射是网关配置,新鲜度比精确时刻有用。 */
+  const formatCheckedAgo = (iso: string): string => {
+    const ms = Date.now() - new Date(iso).getTime();
+    if (!Number.isFinite(ms) || ms < 0) return '';
+    const minutes = Math.floor(ms / 60_000);
+    if (minutes < 1) return t('commandResult.models.probedJustNow', { defaultValue: '刚刚实测' });
+    if (minutes < 60) return t('commandResult.models.probedMinutesAgo', { count: minutes, defaultValue: '{{count}} 分钟前实测' });
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return t('commandResult.models.probedHoursAgo', { count: hours, defaultValue: '{{count}} 小时前实测' });
+    return t('commandResult.models.probedDaysAgo', { count: Math.floor(hours / 24), defaultValue: '{{count}} 天前实测' });
+  };
   const [query, setQuery] = useState('');
   const [changingModel, setChangingModel] = useState<string | null>(null);
   const [pendingSessionModel, setPendingSessionModel] = useState<string | null>(null);
@@ -167,11 +168,13 @@ export default function ModelPickerContent({
     setProbing(true);
     try {
       const response = await authenticatedFetch(`/api/providers/${currentProvider}/model-mappings/probe`, { method: 'POST' });
-      if (!response.ok) throw new Error(`探测失败(HTTP ${response.status})`);
+      if (!response.ok) {
+        throw new Error(t('commandResult.models.probeFailedHttp', { status: response.status, defaultValue: '探测失败(HTTP {{status}})' }));
+      }
       const payload = (await response.json()) as { data?: Parameters<typeof applyMappingsPayload>[0] };
       if (payload.data) applyMappingsPayload(payload.data);
     } catch (error) {
-      setSelectionNotice(error instanceof Error ? error.message : '探测失败');
+      setSelectionNotice(error instanceof Error ? error.message : t('commandResult.models.probeFailed', { defaultValue: '探测失败' }));
     } finally {
       setProbing(false);
     }
@@ -180,7 +183,7 @@ export default function ModelPickerContent({
   const currentModel = data?.current?.model || 'Unknown';
   /**
    * 「当前」按会话的模型值判(目录条目的网关名,或别名),不按 `data.current.model` ——
-   * 自定义网关下后者是别名解析后的真实模型名,与别名不是一个命名空间(2026-09-15 实测)。
+   * 自定义网关下后者是别名解析后的真实模型名,与别名不是一个命名空间。
    */
   const currentValue = activeModelAlias || currentModel;
   const providerLabel = data?.current?.providerLabel || 'Claude';
@@ -206,7 +209,7 @@ export default function ModelPickerContent({
     };
     const catalog = availableOptions.filter((option) => !isAliasOption(option, hasGroups) && matchesQuery(option));
     const aliasList = availableOptions.filter((option) => isAliasOption(option, hasGroups) && matchesQuery(option));
-    // hq:私有模型单独一节(最上面);推荐 / 更多里不再出现。每一节里能用的在前(availableFirst 保持服务端顺序)
+    // 私有模型单独一节(最上面),推荐 / 更多里不重复出现。每一节里能用的在前(availableFirst 保持服务端顺序)
     const own = availableFirst(catalog.filter((option) => option.private));
     const rec = availableFirst(catalog.filter((option) => option.recommended && !option.private));
     const rest = availableFirst(catalog.filter((option) => !option.recommended && !option.private));
@@ -223,11 +226,13 @@ export default function ModelPickerContent({
   const moreCount = moreByVendor.reduce((sum, group) => sum + group.options.length, 0);
   const catalogCount = privateModels.length + recommended.length + moreCount;
   /*
-   * ho:**目录里有模型时别名不再当选项**(与输入框的模型菜单同一口径,见 splitModelMenu)。
-   * 子代理默认跟随主模型;别名只在 Claude 派子代理时点名 sonnet/opus/haiku/fable、或 CLI 内部小活时路由用。
-   * 这时别名组只给 root 看(只读,带「实测别名」排查网关路由);目录为空(官方 API / 老服务端)时别名照旧可选。
+   * 目录里有模型时别名不当选项(与输入框的模型菜单同一口径,见 splitModelMenu):
+   * 子代理默认跟随主模型,别名只在 Claude 派子代理时点名 sonnet/opus/haiku/fable、或 CLI 内部小活时路由用。
+   * 这时别名组只给 root 看(只读,带「实测别名」排查网关路由);目录为空(如官方 API)时别名可选。
    */
   const currentIsAlias = currentOption ? isAliasOption(currentOption, hasGroups) : !hasGroups;
+  const aliasSources = { probed: mappingsState.mappings, configured: mappingsState.configMappings, stale: mappingsState.stale };
+  const currentAliasReal = currentIsAlias ? resolveAliasReal(currentValue, aliasSources) : null;
   const catalogTotal = availableOptions.filter((option) => !isAliasOption(option, hasGroups)).length;
   const aliasesSelectable = catalogTotal === 0;
   const showAliasSection = aliases.length > 0 && (aliasesSelectable || isRoot);
@@ -248,7 +253,7 @@ export default function ModelPickerContent({
   const labelOf = (value: string): string => availableOptions.find((option) => option.value === value)?.label || value;
 
   const handleSelectModel = async (model: string) => {
-    // hq:不能用的模型点不了(行本身已不是按钮;这里再挡一道)
+    // 不能用的模型点不了(行本身已不是按钮;这里再挡一道)
     if (!isModelAvailable(availableOptions.find((option) => option.value === model))) return;
     setChangingModel(model);
     try {
@@ -278,7 +283,7 @@ export default function ModelPickerContent({
     const tooLarge = !isCurrent && used !== null && compactLine !== null && used >= compactLine;
     const label = option.label || option.value;
     const efforts = option.effort?.values?.map((value) => value.value) ?? [];
-    // hq:不能用(网关没 key / 停用)—— 整行不是按钮(里面可能有「去填 key」按钮,按钮不能套按钮)
+    // 不能用(网关没 key / 停用)的整行不是按钮:里面可能有「去填 key」按钮,按钮不能套按钮
     const unavailable = !isModelAvailable(option);
     const Row = unavailable ? 'div' : 'button';
     return (
@@ -327,7 +332,7 @@ export default function ModelPickerContent({
                 {t('commandResult.models.effortLevels', { count: efforts.length })}
               </span>
             )}
-            {/* hq:不在默认网关上的模型标网关名 */}
+            {/* 不在默认网关上的模型标网关名 */}
             {option.gatewayName && (
               <span className="truncate text-[10px] leading-4 text-muted-foreground" title={`${t('commandResult.models.gatewayVia')} ${option.gatewayName}`}>
                 {option.gatewayName}
@@ -397,7 +402,7 @@ export default function ModelPickerContent({
       const ago = mapping ? formatCheckedAgo(mapping.checkedAt) : '';
       rows.push(
         <span key="probe" className="mt-1 flex flex-wrap items-baseline gap-x-1.5 text-[11px] leading-4">
-          <span className="text-muted-foreground">实测</span>
+          <span className="text-muted-foreground">{t('commandResult.models.probedLabel', { defaultValue: '实测' })}</span>
           <span className="font-mono font-semibold text-foreground">{probedModel}</span>
           {ago && <span className="text-muted-foreground">· {ago}</span>}
         </span>,
@@ -405,22 +410,33 @@ export default function ModelPickerContent({
       if (configModel) {
         rows.push(
           <span key="mismatch" className="mt-1 text-[11px] leading-4 text-muted-foreground">
-            ⚠ 实测与配置不一致:网关把「{configModel}」改写成了「{probedModel}」
+            {t('commandResult.models.probeMismatch', {
+              configured: configModel,
+              probed: probedModel,
+              defaultValue: '⚠ 实测与配置不一致:网关把「{{configured}}」改写成了「{{probed}}」',
+            })}
           </span>,
         );
       }
     } else if (probedModel && probedModel === configModel) {
       const ago = mapping ? formatCheckedAgo(mapping.checkedAt) : '';
       rows.push(
-        <span key="verified" className="mt-1 text-[11px] leading-4 text-muted-foreground">实测一致{ago ? ` · ${ago}` : ''}</span>,
+        <span key="verified" className="mt-1 text-[11px] leading-4 text-muted-foreground">
+          {t('commandResult.models.probeVerified', { defaultValue: '实测一致' })}{ago ? ` · ${ago}` : ''}
+        </span>,
       );
     } else if (!probedModel && !configModel && mapping && !mapping.actualModel) {
       rows.push(
-        <span key="error" className="mt-1.5 text-[11px] leading-4 text-muted-foreground">实测失败:{mapping.error || '未知原因'}</span>,
+        <span key="error" className="mt-1.5 text-[11px] leading-4 text-muted-foreground">
+          {t('commandResult.models.probeError', {
+            error: mapping.error || t('commandResult.models.unknownReason', { defaultValue: '未知原因' }),
+            defaultValue: '实测失败:{{error}}',
+          })}
+        </span>,
       );
     }
-    const real = probedModel || configModel;
-    // ho:目录里有模型时别名只读(看路由用),不能点选
+    const real = resolveAliasReal(option.value, aliasSources);
+    // 目录里有模型时别名只读(看路由用),不能点选
     const Row = aliasesSelectable ? 'button' : 'div';
     return (
       <Row
@@ -453,7 +469,9 @@ export default function ModelPickerContent({
         <span className="min-w-0 flex-1">
           <span
             className="block break-all font-mono text-sm font-semibold text-foreground"
-            title={cardConfig?.source ? `来源:${cardConfig.source}(settings.json,实时)` : undefined}
+            title={cardConfig?.source
+              ? t('commandResult.models.configSource', { source: cardConfig.source, defaultValue: '来源:{{source}}(settings.json,实时)' })
+              : undefined}
           >
             {configModel ?? option.value}
           </span>
@@ -501,9 +519,9 @@ export default function ModelPickerContent({
               {currentWindow && (
                 <span className="rounded border border-border bg-muted px-1 py-px font-mono text-[10px] leading-4 text-muted-foreground">{currentWindow}</span>
               )}
-              {/* 别名:它在 settings.json 里配到的真实模型(与下面别名行第一行同一个来源) */}
-              {currentIsAlias && mappingsState.configMappings[currentValue]?.configuredModel && (
-                <span className="break-all font-mono text-[11px] text-muted-foreground">→ {mappingsState.configMappings[currentValue]?.configuredModel}</span>
+              {/* 别名:它此刻实际打到的模型,与输入框芯片同一判据(resolveAliasReal) */}
+              {currentAliasReal && (
+                <span className="break-all font-mono text-[11px] text-muted-foreground">→ {currentAliasReal}</span>
               )}
               {pendingSessionModel && pendingSessionModel !== currentValue && (
                 <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground dark:text-primary">
@@ -511,7 +529,7 @@ export default function ModelPickerContent({
                 </span>
               )}
             </p>
-            {/* hq:当前模型此刻对他不可用 —— 不悄悄换,说清楚原因(发出去服务端也会这么回) */}
+            {/* 当前模型此刻对当前用户不可用:不悄悄换,说清楚原因(发出去服务端也会这么回) */}
             {currentOption && !isModelAvailable(currentOption) && (
               <p className="mt-0.5 flex items-start gap-1 text-[11px] leading-4 text-amber-700 dark:text-amber-400">
                 <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />
@@ -606,7 +624,7 @@ export default function ModelPickerContent({
                   size="sm"
                   onClick={handleProbeMappings}
                   disabled={probing}
-                  title="对每个别名各发一次最小请求,读出网关实际使用的模型"
+                  title={t('commandResult.models.probeAliasesTitle', { defaultValue: '对每个别名各发一次最小请求,读出网关实际使用的模型' })}
                   className="h-7 gap-1.5 rounded-md px-2 text-[11px] text-muted-foreground hover:text-foreground"
                 >
                   <Radar className={`h-3.5 w-3.5 ${probing ? 'text-primary' : ''}`} />
@@ -631,7 +649,7 @@ export default function ModelPickerContent({
               <>
                 {mappingsState.stale && (
                   <p className="mb-2 rounded-lg border border-border bg-muted px-3 py-2 text-[11px] leading-4 text-muted-foreground">
-                    模型配置(settings.json)在上次实测后已变更 —— 下方「实测」行可能过期。
+                    {t('commandResult.models.probeStale', { defaultValue: '模型配置(settings.json)在上次实测后已变更 —— 下方「实测」行可能过期。' })}
                   </p>
                 )}
                 <p className="mb-2 text-[11px] leading-4 text-muted-foreground">

@@ -75,6 +75,8 @@
   "notifications": {
     "title": "通知",
     "description": "控制你希望接收的通知事件。",
+    "loadFailed": "通知偏好載入失敗。為免覆蓋已儲存的設定,下面的開關暫時無法使用。",
+    "retryLoad": "重試",
     "sound": {
       "title": "聲音",
       "description": "聊天執行完成時播放短提示音。",
@@ -195,6 +197,9 @@
     },
     "newButton": "新增 API 金鑰",
     "empty": "尚未建立 API 金鑰。",
+    "loadFailed": "API 金鑰清單載入失敗,請重試。",
+    "refreshFailed": "API 金鑰清單重新整理失敗,下面是上次載入的內容,可能不是最新的。",
+    "retryLoad": "重試",
     "list": {
       "created": "建立時間：",
       "lastUsed": "最後使用："
@@ -218,6 +223,8 @@
         "howToCreate": "如何建立 GitHub 個人存取權杖 →"
       },
       "empty": "尚未新增 GitHub 權杖。",
+      "loadFailed": "GitHub 權杖清單載入失敗,請重試。",
+      "refreshFailed": "GitHub 權杖清單重新整理失敗,下面是上次載入的內容,可能不是最新的。",
       "added": "新增時間：",
       "confirmDelete": "確定要刪除此 GitHub 權杖嗎？"
     },
@@ -571,6 +578,34 @@
       "needKey": "要填 key",
       "keyTooLong": "key 不能超過 {{max}} 個字元",
       "keyWhitespace": "key 裡有空格或換行 —— 多半是貼上時帶進來的,去掉再儲存"
+    }
+  },
+  "usage": {
+    "sources": {
+      "chat": "對話",
+      "compact": "自動壓縮",
+      "task": "定時任務",
+      "api": "外部介面",
+      "background": "背景任務"
+    }
+  },
+  "about": {
+    "tagline": "公共演算法與分析 Agent 工作台",
+    "visionTitle": "願景",
+    "vision": "像稜鏡把一束光分解為完整的光譜，稜鏡把複雜的演算法與資料問題，分解為清晰、可執行、可回溯的智慧工作流程。",
+    "pillars": {
+      "entry": {
+        "title": "一個入口",
+        "body": "統一承載演算法研發、資料分析與多 Agent 協作"
+      },
+      "trusted": {
+        "title": "可信執行",
+        "body": "每一輪改動可視化、可稽核、可一鍵還原"
+      },
+      "reuse": {
+        "title": "沉澱複用",
+        "body": "團隊的演算法資產與分析方法在這裡持續累積"
+      }
     }
   }
 }

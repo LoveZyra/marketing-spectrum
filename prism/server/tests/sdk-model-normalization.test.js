@@ -5,15 +5,14 @@ import { describe, test } from 'vitest';
 import { toSdkModel } from '../claude-sdk.js';
 
 /**
- * 'default' 档不下发 model 参数 —— 这条规则的由来:
+ * 'default' 档不下发 model 参数。
  *
- * 实测 `claude -p "1" --model default` 发现 CLI 不把 'default' 当别名解析,而是
- * 原样透传给网关,请求落进网关对陌生名字的兜底路由(当时是 glm-5.2[1m]),和
- * settings.json 的 "model" 配置链(sonnet → ANTHROPIC_DEFAULT_SONNET_MODEL)完全
- * 无关。于是同一个"默认档"在 chat、终端、探测三处各走一条路,结果互相对不上。
+ * CLI 不把 `--model default` 当别名解析,而是原样透传给网关,请求落进网关对陌生名字的兜底路由,
+ * 和 settings.json 的 "model" 配置链(sonnet → ANTHROPIC_DEFAULT_SONNET_MODEL)完全无关;
+ * 同一个"默认档"在 chat、终端、探测三处就会各走一条路、结果对不上。
  *
- * 修法:选 default 时**省略 model**,CLI 才走自己的配置链。这里钉死归一规则,
- * 三个下发点(一次性路径、常驻路径、探测)共用同一语义。
+ * 所以选 default 时省略 model,让 CLI 走自己的配置链。三个下发点(一次性路径、常驻路径、探测)
+ * 共用这条归一规则。
  */
 describe('toSdkModel —— default 档省略 model', () => {
   test("'default' 归一为 null(不下发)", () => {

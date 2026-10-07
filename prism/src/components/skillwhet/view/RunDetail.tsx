@@ -15,9 +15,9 @@ import ProcessTimeline from './ProcessTimeline';
 import { Badge } from './StatusStrip';
 
 /**
- * gz:运行详情,六个页签:优化过程(progress 事件 → 时间轴)/ 指标趋势(val 曲线,纵轴 0–1 固定)/
- * 代码与文档(staging 逐文件 diff)/ 执行证据(provenance + ledger)/ 回放评测(逐轮门与治理)/ 模型与参数。
- * **第一轮结束前曲线为空且直说**;「对话与工具」不画(该后端无工具)。
+ * 运行详情。训练作业六个页签:优化过程(progress 事件 → 时间轴)/ 指标趋势(val 曲线,纵轴 0–1 固定)/
+ * 代码与文档(staging 逐文件 diff)/ 执行证据(provenance + ledger)/ 回放评测(逐轮门与治理)/ 模型与参数;
+ * 挖任务与留出集评估作业只有过程与参数两页。第一轮结束前曲线为空并明说;「对话与工具」不画(该后端无工具)。
  */
 type Tab = 'process' | 'metrics' | 'diff' | 'evidence' | 'replay' | 'params';
 
@@ -57,9 +57,9 @@ function eventLine(e: ProgressEvent, t: (k: string, o?: Record<string, unknown>)
       }
       return { icon: e.improved ? Check : Square, tone: e.improved ? 'text-emerald-600' : '', main: t('ev.done', { defaultValue: '完成 · {{r}}', r: String(e.stop_reason ?? '') }), sub: `${e.improved ? t('ev.improved', { defaultValue: '有改进' }) : t('ev.unchanged', { defaultValue: '无改进(staged S₀)' })} · val ${n(e.baseline_score).toFixed(2)} → ${n(e.best_score).toFixed(2)} · $${n(e.cost_usd).toFixed(4)}${e.staging ? ` · staging ${String(e.staging)}` : ''}` };
     case 'error': return { icon: AlertTriangle, tone: 'text-red-600', main: t('ev.error', { defaultValue: '出错' }), sub: String(e.message ?? '') };
-    // he:从中断处续跑
+    // 从中断处续跑
     case 'resumed': return { icon: GitBranch, tone: 'text-primary', main: t('ev.resumed', { defaultValue: '从第 {{r}} 轮之后续跑', r: n(e.from_round) }), sub: t('ev.resumedSub', { defaultValue: '前 {{r}} 轮上次已跑完(花了 ${{c}}),S₀ 基线不重测;被打断的那一轮丢弃重来', r: n(e.from_round), c: n(e.prior_cost_usd).toFixed(4) }) };
-    // hf2:一轮之内到了费用上限,不再开新的提议(已该做的验证照做)
+    // 一轮之内到了费用上限:不再开新的提议(已该做的验证照做)
     case 'budget_reached': return { icon: AlertTriangle, tone: 'text-amber-600', main: t('ev.budgetReached', { defaultValue: '到费用上限了:跳过 {{what}}', what: String(e.skipped ?? '') }), sub: t('ev.budgetReachedSub', { defaultValue: '已花 ${{s}} / 上限 ${{m}};已经该做的验证照做,这一轮结束就停', s: n(e.spent_usd).toFixed(4), m: n(e.max_cost_usd).toFixed(2) }) };
     case 'resume_unavailable': return { icon: AlertTriangle, tone: 'text-amber-600', main: t('ev.resumeUnavailable', { defaultValue: '续跑不成,从头开始' }), sub: String(e.reason ?? '') };
     default: return { icon: Activity, tone: '', main: e.kind, sub: '' };
@@ -108,7 +108,7 @@ type RunDetailProps = {
   userId: number | null;
   onBack: () => void;
   onOpenVersions: (skill: string, stagingId: string | null) => void;
-  /** he:续跑起了新作业后跳过去 */
+  /** 续跑起了新作业后跳过去 */
   onOpenJob?: (jobId: string) => void;
 };
 
@@ -120,8 +120,8 @@ export default function RunDetail({ jobId, isRoot, userId, onBack, onOpenVersion
   const [tab, setTab] = useState<Tab>('process');
   const [staging, setStaging] = useState<StagingDetail | null>(null);
   const [log, setLog] = useState<string | null>(null);
-  // hl(动态 P2-14):stdout 原来以 `log !== null` 为缓存条件,刷新与作业终态都不重拉,之后永远是"—"。
-  // 现在按 (作业 id, 作业状态, 刷新次数) 重拉:状态每变一次、点一次刷新都重新读。
+  // stdout 按 (作业 id, 作业状态, 刷新次数) 重拉:作业状态每变一次、每点一次刷新都重新读,
+  // 不能拉到一次就缓存,否则作业结束后的输出永远看不到。
   const [logTick, setLogTick] = useState(0);
   const [harvestImported, setHarvestImported] = useState<boolean | null>(null);
   const [evidence, setEvidence] = useState<{ provenance: unknown[]; ledger: string } | null>(null);
@@ -171,7 +171,7 @@ export default function RunDetail({ jobId, isRoot, userId, onBack, onOpenVersion
   // eslint-disable-next-line react-hooks/exhaustive-deps -- 只按 id / 状态 / 刷新次数重拉,不跟着 job 对象每 3 秒变
   }, [tab, job?.id, jobState, logTick]);
 
-  // hl(静态 P2-28):挖任务作业跑完了、还没入库 —— 运行详情也给一个「入库」入口(向导离开后回不来的兜底)
+  // 挖任务作业跑完了、还没入库:运行详情也给一个「入库」入口,作为向导找不回作业时的兜底。
   const isHarvest = (job?.kind ?? 'train') === 'harvest';
   useEffect(() => {
     setHarvestImported(null);
@@ -187,7 +187,7 @@ export default function RunDetail({ jobId, isRoot, userId, onBack, onOpenVersion
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job?.id, jobState, isHarvest]);
 
-  // he:中断 / 失败 / 取消的训练,看 SkillWhet 那边有没有这次训练存下的 checkpoint(存的时间落在这次作业跑的时间里)
+  // 中断 / 失败 / 取消的训练,看 SkillWhet 那边有没有这次训练存下的 checkpoint(存的时间落在这次作业跑的时间里)
   const ended = job ? ['interrupted', 'failed', 'cancelled'].includes(job.state) && (job.kind ?? 'train') === 'train' : false;
   useEffect(() => {
     setCheckpoint(null);
@@ -201,7 +201,7 @@ export default function RunDetail({ jobId, isRoot, userId, onBack, onOpenVersion
         const to = job.finished_at ? Date.parse(job.finished_at) : Date.now();
         const ours = Number.isFinite(at) && at >= from - 1000 && at <= to + 1000;
         if (!cancelled) setCheckpoint(info.exists && info.matches && ours ? info : null);
-      } catch { /* 老 serve 没有这条路由:不画续跑 */ }
+      } catch { /* 旧版 serve 没有这条路由:不画续跑 */ }
     })();
     return () => { cancelled = true; };
   }, [job, ended]);
@@ -241,7 +241,7 @@ export default function RunDetail({ jobId, isRoot, userId, onBack, onOpenVersion
   if (!job) return <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" aria-hidden />{t('detail.loading', { defaultValue: '读取作业…' })}</div>;
 
   const { tone } = jobBadge(job);
-  // hb:挖任务 / 留出集评估没有轮次、diff、provenance —— 只留过程与参数两页(原来六页签全画,里面全是空的)
+  // 挖任务 / 留出集评估没有轮次、diff、provenance:只留过程与参数两页。
   const isTrain = (job.kind ?? 'train') === 'train';
   const tabs: Array<{ id: Tab; label: string; n?: number }> = [
     { id: 'process', label: t('detail.tabProcess', { defaultValue: '优化过程' }) },

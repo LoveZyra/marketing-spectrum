@@ -1,10 +1,10 @@
 import { getConnection } from '@/modules/database/connection.js';
 
 /**
- * he:技能优化的夜训计划(表结构与语义见 `schema.ts` 的 `SKILLWHET_NIGHTLY_PLAN_TABLE_SCHEMA_SQL`)。
+ * 技能优化的夜训计划(表结构与语义见 `schema.ts` 的 `SKILLWHET_NIGHTLY_PLAN_TABLE_SCHEMA_SQL`)。
  *
  * 一行一个 skill。纳入 / 移出 / 改时窗预算是 root 的动作(路由里判);其余字段只由调度器写。
- * 时间一律存 ISO UTC(`2026-09-24T02:00:00Z`),`last_night` 是服务器本地日历日(时窗开始那天)。
+ * 时间一律存 ISO 8601 UTC 字符串(带 `Z`),`last_night` 是服务器本地日历日(时窗开始那天)。
  */
 export type NightlyResult =
   | 'running' | 'improved' | 'unchanged' | 'no_candidate' | 'budget'
@@ -44,7 +44,7 @@ export type NightlyPlanInput = {
   copyId?: string | null;
 };
 
-/** 连续几晚没收益就自动暂停(《实施计划》F8)。 */
+/** 连续几晚没收益就自动暂停。 */
 export const NIGHTLY_AUTOPAUSE_AFTER = 3;
 
 const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -90,7 +90,7 @@ export const skillWhetNightlyDb = {
     return this.get(skill) as NightlyPlanRow;
   },
 
-  /** 副本被移除 / 换掉:移出夜训(不动其余设置,root 重新纳入即可)。@returns 原来是否纳入着 */
+  /** 副本被移除 / 换掉:移出夜训(不动其余设置,root 重新纳入即可)。@returns 调用前是否处于纳入状态 */
   unenroll(skill: string, result: NightlyResult | null = null, detail: string | null = null): boolean {
     const row = this.get(skill);
     if (!row || row.enrolled !== 1) return false;
@@ -113,7 +113,7 @@ export const skillWhetNightlyDb = {
 
   /**
    * 这一晚没起作业(任务不够 / 有别的作业在跑 / 一晚预算用完 / 出错)。不动 `last_run_at`、不算无收益。
-   * hl(动态 P2-15):`consumeNight=false` 时不写 `last_night` —— 这一晚还能再试(手动作业占着、G1 没过当晚修好)。
+   * `consumeNight=false` 时不写 `last_night`,这一晚还能再试(手动作业占着、G1 没过但当晚修好)。
    */
   markSkipped(skill: string, night: string, result: NightlyResult, detail: string | null, consumeNight = true): void {
     if (consumeNight) {

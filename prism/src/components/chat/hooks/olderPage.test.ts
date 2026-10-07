@@ -3,14 +3,11 @@ import { describe, expect, test } from 'vitest';
 import { classifyOlderPage } from './useChatSessionState';
 
 /**
- * B2:「看更早」补回来的这一页,到底算什么。
+ * 「看更早」补回来的这一页算什么结局。
  *
- * 原来的判据是 `slot.serverMessages.length === 0` —— 那是**累计**已加载条数,
- * 只有空会话才成立。也就是说"这一页什么也没带回来"这个状态从来没被识别过,
- * 而它在流式期间真的会出现:新行不断落盘、补页按已加载条数算 offset 从尾部
- * 取页,取回来的一页可能与已加载窗口完全重叠(去重后净增 0),服务端却仍报
- * `hasMore: true`。当时的代码会返回 true,自动补页据此认为自己在前进 ——
- * 30 次请求打满,界面一动不动。
+ * 必须按这一页的净增条数判断,不能看累计已加载条数:流式期间新行不断落盘,补页按已加载条数
+ * 算 offset 从尾部取页,取回的一页可能与已加载窗口完全重叠(去重后净增 0),服务端却仍报
+ * `hasMore: true`。把它当成加载成功,自动补页会以为自己在前进,打满 30 次请求而界面不动。
  */
 const slot = (loaded: number, hasMore: boolean) => ({
   serverMessages: new Array(loaded).fill(null),
@@ -31,18 +28,18 @@ describe('classifyOlderPage', () => {
     expect(classifyOlderPage(slot(20, false), 20)).toBe('exhausted');
   });
 
-  test('一条没多、服务端却说还有 → stalled,**不能**当成加载成功', () => {
-    // 这正是自动补页空转 30 次的那个状态。
+  test('一条没多、服务端却说还有 → stalled,不能当成加载成功', () => {
+    // 自动补页会在这个状态上空转到请求上限。
     expect(classifyOlderPage(slot(20, true), 20)).toBe('stalled');
   });
 
   test('累计条数不为 0 也可能一条没多 —— 原来的判据在这里恒假', () => {
-    // 旧代码:`slot.serverMessages.length === 0` → 20 !== 0 → 直接当成功。
+    // 判据是净增条数而不是累计条数:累计 20 条、净增 0 不能算成功。
     expect(classifyOlderPage(slot(20, true), 20)).not.toBe('loaded');
   });
 
   test('请求失败(null)→ failed,与"没有更多"区分开', () => {
-    // 两者都会让「看更早」停下,但只有失败要提示用户,而且**不能**置
+    // 两者都会让「看更早」停下,但只有失败要提示用户,而且不能置
     // allMessagesLoaded —— 那会让这条会话的分页永久关死。
     expect(classifyOlderPage(null, 20)).toBe('failed');
     expect(classifyOlderPage(undefined, 0)).toBe('failed');

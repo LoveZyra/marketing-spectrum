@@ -47,9 +47,9 @@ type FetchProjectsOptions = {
 };
 
 /**
- * hl(动态 P2-4):项目级实时推送。服务端在新建 / 改名 / 权限 / 归档 / 还原 / 转移属主 /
- * 删除项目时按可见性逐 socket 推:能看见的收 `project_upserted`(带按我视角算的
- * isStarred / sharedWithViewer),看不见了的收 `project_removed`。帧里**不带会话列表**。
+ * 项目级实时推送。服务端在新建 / 改名 / 权限 / 归档 / 还原 / 转移属主 / 删除项目时按可见性逐 socket 推:
+ * 能看见的收 `project_upserted`(带按我视角算的 isStarred / sharedWithViewer),看不见了的收
+ * `project_removed`。帧里不带会话列表。
  */
 export type ProjectUpsertedEvent = ServerEvent & {
   kind: 'project_upserted';
@@ -62,7 +62,7 @@ export type ProjectUpsertedEvent = ServerEvent & {
 };
 
 /**
- * 把一帧 `project_upserted` 合进列表。已知项目只换元数据、**保留会话列表与分页状态**;
+ * 把一帧 `project_upserted` 合进列表。已知项目只换元数据、保留会话列表与分页状态;
  * 陌生项目返回 null —— 调用方静默重拉整份列表(它可能已经有几十条会话,一帧塞不下)。
  */
 export const mergeProjectUpsert = (projects: Project[], event: ProjectUpsertedEvent): Project[] | null => {
@@ -93,8 +93,8 @@ export const removeProjectById = (projects: Project[], projectId: string): Proje
 };
 
 /**
- * hl 复核 P3-8:当前选中的项目被移除(归档 / 删除 / 收回可见性)时的处理 —— 保留对话区,
- * 只打 `removedFromView` 标记。不是它就原样返回(引用不变)。
+ * 当前选中的项目被移除(归档 / 删除 / 收回可见性)时的处理:保留对话区,只打 `removedFromView` 标记。
+ * 不是它就原样返回(引用不变)。
  */
 export function markSelectedProjectRemoved(selected: Project | null, removedId: string): Project | null {
   if (!selected || selected.projectId !== removedId || selected.removedFromView) return selected;
@@ -126,15 +126,13 @@ const readSelectedProvider = (): LLMProvider => {
 /**
  * 上次打开的项目。启动时用它把现场恢复回来 —— 见下面那个自动选中的 effect。
  *
- * **按用户分开存**:Prism 是多用户的,同一台机器上换个账号登录,不该把上一个人
- * 的项目打开给他 —— 那不只是别扭,那个项目他可能根本无权看见。所以键上带账号
- * 标识(优先用 id,没有就退到用户名)。
+ * 按用户分开存:Prism 是多用户的,同一台机器上换个账号登录,不该把上一个人的项目打开给他
+ * (那个项目他可能根本无权看见)。所以键上带账号标识(优先用 id,没有就退到用户名)。
  *
  * 存 `projectId` 而不是路径:路径会被改名,id 是 `projects` 表的主键。
  * 读写一律吞掉异常(隐私模式 / 禁用存储),存不上最多是回到"要自己点一下"。
  *
- * 存在浏览器本地,所以是"每个用户 + 每个浏览器"。换台机器不跟着走 ——
- * 要跨设备就得挪到服务端的用户偏好里,这轮没做。
+ * 存在浏览器本地,所以是"每个用户 + 每个浏览器",换台机器不跟着走。
  */
 const LAST_PROJECT_KEY_PREFIX = 'prism-last-project-id';
 
@@ -195,7 +193,7 @@ export const projectsHaveChanges = (
       Boolean(nextProject.isStarred) !== Boolean(prevProject.isStarred) ||
       // 权限徽标(公共 / 已共享·N / 仅 root)由这四项算出来。漏掉它们,改完权限后
       // handleSidebarRefresh 虽然拉到了新数据,却会因"这里判定没变"而跳过 setProjects,
-      // 徽标一直停在旧值,必须整页刷新才更新 —— 用户报的就是这个。
+      // 徽标一直停在旧值,必须整页刷新才更新。
       Boolean(nextProject.isPublic) !== Boolean(prevProject.isPublic) ||
       (nextProject.ownerUserId ?? null) !== (prevProject.ownerUserId ?? null) ||
       Boolean(nextProject.sharedWithViewer) !== Boolean(prevProject.sharedWithViewer) ||
@@ -210,19 +208,15 @@ export const projectsHaveChanges = (
 /**
  * URL 里的会话在 `projects` 里被重新找到时,要不要把它换进 `selectedSession`。
  *
- * 顶栏那行标题读的就是 `selectedSession.summary`(见 MainContentTitle),而这个
- * 对象只在下面那个 effect 里跟着 `projects` 走。原来的判据只有 **id 与 provider**
- * —— 改名两样都不动,于是顶栏那支铅笔改完名之后:
+ * 顶栏标题读的是 `selectedSession.summary`(见 MainContentTitle),而这个对象只在下面那个 effect 里
+ * 跟着 `projects` 走。所以除了 id 与 provider,标题变了也要换,否则改名后侧栏已是新名字,
+ * 顶栏还挂着旧标题(没有 summary 时是写死的 "New Session")。
  *
- *   侧栏已经是新名字(它走 handleSidebarRefresh,那条会重新挑一次 selectedSession),
- *   顶栏还挂着旧标题(没有 summary 的会话就是那句写死的 "New Session"),
- *   一直到手动点一次刷新才对上。2026-09-15 在测试环境实测。
+ * 但不放宽成整对象比对:messageCount / lastActivity 每来一条消息就变一次,那样会在流式输出期间
+ * 把整个聊天子树重渲一遍。
  *
- * 判据放宽到"标题也算",但**不**放宽成整对象比对:messageCount / lastActivity
- * 每来一条消息就变一次,那样会在流式输出期间把整个聊天子树重渲一遍。
- *
- * 空标题不算变化 —— 与 `upsertSessionIntoProject` 同一条规矩:新会话会短暂地
- * 广播一个空 custom_name,让它覆盖已有标题就是把顶栏闪回 "New Session"。
+ * 空标题不算变化,与 `upsertSessionIntoProject` 同一条规矩:新会话会短暂地广播一个空 custom_name,
+ * 让它覆盖已有标题会把顶栏闪回 "New Session"。
  */
 export const selectedSessionNeedsSync = (
   current: Pick<ProjectSession, 'id' | 'summary' | '__provider'> | null | undefined,
@@ -474,12 +468,11 @@ export function useProjectsState({
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
   /**
-   * gn:「最近删除」那一段的**外部**重拉信号。
+   * 「最近删除」那一段的外部重拉信号。
    *
-   * gk 已经做了"自己操作后刷新"(侧栏自己的 `trashReloadToken`),缺的是
-   * **别人操作后**也刷新:别人删了 / 恢复了一条,你开着的侧栏一直是旧数据,
-   * 要切走再切回来才更新(2026-09-15 实测)。websocket 那两帧在这一层收,
-   * 计数往下传,和 `externalMessageUpdate` 一个路数。
+   * 侧栏自己的 `trashReloadToken` 只管本人操作后的刷新;别人删除 / 恢复了一条时,
+   * 靠 websocket 的 `session_removed` / `session_restored` 两帧在这一层收、计数往下传
+   * (和 `externalMessageUpdate` 同一做法),否则开着的侧栏一直是旧数据。
    */
   const [trashSignal, setTrashSignal] = useState(0);
   const [attentionSessionIds, setAttentionSessionIds] = useState<Set<string>>(new Set());
@@ -487,13 +480,12 @@ export function useProjectsState({
    * 正在等工具审批的会话。
    *
    * 和 `attentionSessionIds` 分开,因为这两件事的性质不一样:后者是"这边有动静"
-   * (一条流、一次 upsert 都算),而这一条是**这轮跑不下去了,在等你**。用同一个
+   * (一条流、一次 upsert 都算),而这一条是"这轮跑不下去了,在等你"。用同一个
    * 琥珀点表示,等于把"有新消息"和"卡住了等你点确认"混成一个信号 —— 而恰恰是
    * 后者,用户不去看就永远不会有进展。
    *
-   * 之所以需要它:审批弹窗只在**当前正在看**那个会话时才渲染
-   * (`useChatRealtimeHandlers` 里的 `sid === activeViewSessionId`)。人在别的
-   * 会话里时,原来没有任何地方告诉他"那边有个框在等你"。
+   * 审批弹窗只在当前正在看的那个会话里渲染(`useChatRealtimeHandlers` 里的
+   * `sid === activeViewSessionId`),人在别的会话里时,只有这里能告诉他"那边有个框在等你"。
    */
   const [awaitingApprovalSessionIds, setAwaitingApprovalSessionIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<AppTab>(readPersistedTab);
@@ -548,7 +540,7 @@ export function useProjectsState({
   selectedSessionRef.current = selectedSession;
   const activeSessionsRef = useRef(activeSessions);
   activeSessionsRef.current = activeSessions;
-  // hl:project_upserted 要判"这个项目我认不认识"(不认识就重拉整份列表)。
+  // project_upserted 要判"这个项目我认不认识"(不认识就重拉整份列表)。
   const projectsRef = useRef(projects);
   projectsRef.current = projects;
 
@@ -592,7 +584,7 @@ export function useProjectsState({
   /**
    * 标记/清除"这个会话在等审批"。
    *
-   * 和 attention 不同,**当前正在看的会话也要标**:审批框本身是渲染在聊天区里的,
+   * 和 attention 不同,当前正在看的会话也要标:审批框本身是渲染在聊天区里的,
    * 但用户可能滚上去了、或者窗口没在前台。侧栏这个点是个恒定的提示,而不是
    * "你没看见的时候才亮"。
    */
@@ -727,16 +719,13 @@ export function useProjectsState({
   /**
    * 启动时把上次打开的项目选回来。
    *
-   * 不做这一步的后果不是"少一点方便",而是**四个页签看起来全坏了**:
-   * `MainContent` 开头就是 `if (!selectedProject) return <选择您的项目/>`,
-   * 没选项目时点终端 / 对话 / 文件 / notebook,`activeTab` 确实变了、轨上图标
-   * 也亮了,但主区渲染的还是那块空状态 —— 和点之前一模一样。用户读到的是
-   * "点了没反应",然后随手点了个项目才活过来,于是又读成"加载太慢"。
+   * 没选项目时 `MainContent` 只渲染「选择您的项目」空状态:点终端 / 对话 / 文件 / notebook,
+   * `activeTab` 变了、轨上图标也亮了,主区却和点之前一模一样,看起来像是坏了。
    *
-   * 只有一个项目时照旧直接选中它(原来就有的行为);多个项目时按存下来的
-   * `projectId` 找回上次那个。项目被删了就找不回,退回空状态,不硬选一个。
+   * 只有一个项目时直接选中它;多个项目时按存下来的 `projectId` 找回上次那个。
+   * 项目被删了就找不回,留在空状态,不硬选一个。
    *
-   * URL 里带 sessionId 时一概不插手 —— 那条路自己会把项目定出来。
+   * URL 里带 sessionId 时不插手 —— 那条路自己会把项目定出来。
    */
   useEffect(() => {
     if (isLoadingProjects || selectedProject || sessionId || projects.length === 0) return;
@@ -760,8 +749,8 @@ export function useProjectsState({
 
   // Realtime sidebar updates. The backend pushes per-session deltas
   // (`session_upserted`) instead of full project snapshots, so each event is
-  // a keyed upsert that can never clobber unrelated client state — no
-  // "suppress updates while a run is active" protection is needed anymore.
+  // a keyed upsert that cannot clobber unrelated client state, and no
+  // "suppress updates while a run is active" guard is needed.
   useEffect(() => {
     const handleEvent = (event: ServerEvent) => {
       if (event.kind === 'loading_progress') {
@@ -819,9 +808,9 @@ export function useProjectsState({
       }
 
       /**
-       * gk:会话被永久删除(进了最近删除)—— 从侧栏拿掉。
+       * 会话被永久删除(进了最近删除):从侧栏拿掉。
        *
-       * **不**在这里把当前查看的那条置空、也不导航走:对话区自己会切成
+       * 不在这里把当前查看的那条置空、也不导航走:对话区自己会切成
        * 「这条会话已被删除」态(useChatRealtimeHandlers → ChatInterface),把发生了什么、
        * 没发出去的那段话都留给用户;跳走等于把现场一并抹掉。
        */
@@ -832,17 +821,17 @@ export function useProjectsState({
         setProjects((previousProjects) =>
           previousProjects.map((project) => removeSessionFromProject(project, eventSessionId)),
         );
-        // gn:「最近删除」那一段也要跟着动 —— 见下面 trashSignal 的注释。
+        // 「最近删除」那一段也要跟着刷新,见 trashSignal 的注释。
         setTrashSignal((value) => value + 1);
         return;
       }
 
       /**
-       * gn:别人恢复了一条 —— 「最近删除」里少一条。
+       * 别人恢复了一条:「最近删除」里少一条。
        *
-       * 这一帧本来只给对话区用(撤掉「已被删除」态),但它同时也是"回收站变了"
-       * 的信号。不收它的话,侧栏那一段会一直显示旧数据,要切走再切回来才刷新。
-       * 会话本身怎么回到列表里由下一次 `session_upserted` / 刷新负责,这里只管计数。
+       * 这一帧主要给对话区用(撤掉「已被删除」态),同时也是"回收站变了"的信号,
+       * 不收的话侧栏那一段会一直显示旧数据。会话本身回到列表由下一次
+       * `session_upserted` / 刷新负责,这里只管计数。
        */
       if (event.kind === 'session_restored') {
         setTrashSignal((value) => value + 1);
@@ -850,8 +839,8 @@ export function useProjectsState({
       }
 
       /**
-       * hl(动态 P2-4):项目级变更。已知项目就地合并元数据;陌生项目(别人刚建了一个
-       * 共享给我的、或权限改公开了)静默重拉列表 —— 会话列表跟着列表接口来,一帧不带。
+       * 项目级变更。已知项目就地合并元数据;陌生项目(别人刚建了一个共享给我的、或权限改公开了)
+       * 静默重拉列表 —— 会话列表跟着列表接口来,帧里不带。
        */
       if (event.kind === 'project_upserted') {
         const upsert = event as ProjectUpsertedEvent;
@@ -876,16 +865,15 @@ export function useProjectsState({
       }
 
       /**
-       * 项目被归档 / 删除 / 对我收回了可见性:从侧栏拿掉。正在看的是它 → 退回空状态
-       * (会话页自己会由 session_removed 切成「已被删除」态;归档 / 收回可见性时对话区
-       * 保持原样,用户下一次操作会得到 404,不在这里替他跳走)。
+       * 项目被归档 / 删除 / 对我收回了可见性:从侧栏拿掉。正在看的是它时不清空 selectedProject
+       * (清空会把对话区当场切掉),只打 `removedFromView` 标记,主区给一条「项目已不可见」的提示。
+       * 会话页自己会由 session_removed 切成「已被删除」态;归档 / 收回可见性时对话区保持原样,
+       * 用户下一次操作会得到 404,不在这里替他跳走。
        */
       if (event.kind === 'project_removed') {
         const removedId = typeof event.projectId === 'string' ? event.projectId : '';
         if (!removedId) return;
         setProjects((previousProjects) => removeProjectById(previousProjects, removedId));
-        // hl 复核 P3-8:与上面注释一致 —— 正在看的项目被移除时**不清空**(原来置 null,
-        // 对话区当场被切掉);只打标,主区给一条「项目已不可见」的提示。
         setSelectedProject((previousProject) => markSelectedProjectRemoved(previousProject, removedId));
         return;
       }
@@ -1016,7 +1004,6 @@ export function useProjectsState({
       return;
     }
 
-    // Project membership is resolved through `projectId` after the migration.
     for (const project of projects) {
       const match = project.sessions?.find((session) => session.id === sessionId);
       if (match) {
@@ -1235,8 +1222,7 @@ export function useProjectsState({
     }
   }, [projects, selectedProject?.projectId]);
 
-  // `projectId` is the DB identifier passed from the sidebar's delete flow
-  // after the migration away from folder-derived project names.
+  // `projectId` is the DB identifier passed from the sidebar's delete flow.
   const handleProjectDelete = useCallback(
     (projectId: string) => {
       if (selectedProject?.projectId === projectId) {
@@ -1269,7 +1255,7 @@ export function useProjectsState({
       onRefresh: handleSidebarRefresh,
       onShowSettings: () => setShowSettings(true),
       isMobile,
-      // gn:别人删了 / 恢复了一条时,「最近删除」那一段也要跟着重拉。
+      // 别人删除 / 恢复了一条时,「最近删除」那一段也要跟着重拉。
       externalTrashSignal: trashSignal,
     }),
     [

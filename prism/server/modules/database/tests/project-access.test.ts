@@ -14,13 +14,11 @@ import {
 } from '@/modules/database/index.js';
 
 /**
- * G1:`resolveVisibleProjectRoot` 的契约。
+ * `resolveVisibleProjectRoot` 的契约。
  *
- * 这个函数是**所有按 projectId 寻址的路由**的第一道门(文件读写、上传、预览、
- * 全局搜索……):它同时做归属校验与路径解析,返回 null 就是 404。
- *
- * 它此前没有直接测试 —— 而它一旦对不该看见的项目返回了路径,后面每一条路由都
- * 会照着那个路径去读写文件。这里钉的是"谁能拿到路径"这条判据本身。
+ * 它是所有按 projectId 寻址的路由的第一道门(文件读写、上传、预览、全局搜索……):
+ * 同时做归属校验与路径解析,返回 null 就是 404。它一旦对不该看见的项目返回了路径,
+ * 后面每一条路由都会照着那个路径去读写文件。这里钉的是"谁能拿到路径"这条判据本身。
  */
 const previousDatabasePath = process.env.DATABASE_PATH;
 const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;

@@ -1,10 +1,10 @@
 /**
- * hl(P3 中英混排):文件接口的英文错误 → 界面语言。
+ * 文件接口的英文错误 → 界面语言。
  *
- * 服务端的文件路由(files.routes.ts)是从 upstream 搬来的,错误文案全是英文
- * (`Directory already exists`、`A file or directory with this name already exists`…),
- * 而文件树把 `data.error` 原样塞进 toast。改服务端会牵动 API 调用方与既有测试,
- * 所以在展示层按**原句**映射:认得的翻成当前语言,认不得的原样透传(总比吞掉强)。
+ * 服务端文件路由(files.routes.ts)的错误文案是英文(`Directory already exists`、
+ * `A file or directory with this name already exists`…),而文件树把 `data.error` 原样塞进 toast。
+ * 改服务端会牵动 API 调用方与既有测试,所以在展示层按原句映射:认得的翻成当前语言,
+ * 认不得的原样透传(总比吞掉强)。
  *
  * 键放在 common:fileTree.serverErrors.* 下,`t` 由调用方传入(它已经绑定了当前语言)。
  */
@@ -36,6 +36,13 @@ const KNOWN: Array<{ match: RegExp; key: string; zh: string }> = [
   { match: /^Failed to delete$/i, key: 'deleteFailed', zh: '删除失败' },
   { match: /^Failed to create$/i, key: 'createFailed', zh: '创建失败' },
   { match: /^Upload failed\. Check your connection and try again\.$/i, key: 'uploadNetwork', zh: '上传失败,请检查网络后重试' },
+  // Prism 自己的 413 带 JSON 说明(上面 fileTooLarge / uploadTooLarge 两条);只剩状态码的 413
+  // 是反向代理在请求到达 Prism 之前回的(响应体是它的 HTML 页)。
+  {
+    match: /^Upload failed with status 413$/i,
+    key: 'proxyTooLarge',
+    zh: '上传请求超过了反向代理的大小上限(client_max_body_size)。请联系管理员调大代理上限,或调小分片大小(PRISM_UPLOAD_CHUNK_MB)',
+  },
   { match: /^Upload canceled\.$/i, key: 'uploadCanceled', zh: '上传已取消' },
 ];
 

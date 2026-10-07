@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { dailyCost } from './nightly';
 import type { Job } from './types';
 
-/** he:总览的每日费用 —— 按作业创建日(本地时间)累加,只算训练;没作业的日子也占一格。 */
+/** 总览的每日费用:按作业创建日(本地时间)累加,只算训练;没作业的日子也占一格。 */
 const job = (created: Date, extra: Partial<Job> = {}): Job => ({
   id: 'j', kind: 'train', skill: 's', args: {}, tags: [], state: 'done', created_at: created.toISOString(), ...extra,
 });

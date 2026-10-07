@@ -225,15 +225,14 @@ export function getFileIconData(filename: string): FileIconData {
 }
 
 /**
- * 文件类型的**七个语义族**。
+ * 文件类型的七个语义族(目录另算 `dir`)。
  *
- * `FILE_ICON_MAP` 已经给每种类型分了图标,但颜色一律 `text-muted-foreground` ——
- * 一列灰图标,扫一眼分不出哪些是代码、哪些是配置、哪些是密钥。两份浅色设计稿
- * (`light-ui/`)都要求按族分色,并且明确"**不动图标映射**",所以这里只加一层
- * 族归属,原来的图标解析一行不改。
+ * `FILE_ICON_MAP` 只管图标,颜色一律 `text-muted-foreground`:一列灰图标分不出哪些是代码、
+ * 哪些是配置、哪些是密钥。浅色设计稿要求按族分色、且不动图标映射,所以族归属单独一层,
+ * 与图标解析互不影响。
  *
- * 色值由主题给(`--filetype-*`):两套浅色用设计稿的七色,霓虹终端下全部落回
- * 次级墨色 —— 深色那一稿没有这个特性,不该被这轮顺手改掉。
+ * 色值由主题给(`--filetype-*`):两套浅色主题用设计稿的七色,霓虹终端下全部落回次级墨色
+ * (深色设计稿没有按族分色)。
  */
 export type FileFamily = 'dir' | 'code' | 'data' | 'config' | 'doc' | 'runtime' | 'secret' | 'plain';
 

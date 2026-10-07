@@ -6,10 +6,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { QuestionAnswerContent } from './QuestionAnswerContent';
 
-// Regression coverage for the chat-interface crash where an AskUserQuestion
-// payload loaded from a session transcript arrives with a non-array `questions`
-// or a question missing its `options` array. Rendering must degrade gracefully
-// instead of throwing "TypeError: e.map is not a function".
+// AskUserQuestion payloads loaded from session transcripts can be malformed
+// (non-array `questions`, missing or broken `options`, non-string answers).
+// Rendering must degrade gracefully instead of throwing
+// "TypeError: e.map is not a function" and taking the chat view down.
 
 test('renders without throwing when questions is a non-array value', () => {
   assert.doesNotThrow(() => {

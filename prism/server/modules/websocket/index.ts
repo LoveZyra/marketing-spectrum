@@ -5,10 +5,10 @@ export { forgetObservedRun, observeOrphanFrames, observedRunStats } from './serv
 export { getPtyPoolStats } from './services/shell-websocket.service.js';
 export {
   backgroundApprovalWriter, broadcastBackgroundTasks, broadcastRuntimeEvicted, broadcastSessionRestored, drainPendingSendForSession,
-  handleMergedMessageEvent, hasPendingSendForSession, prepareSessionRemovedBroadcast,
+  handleMergedMessageEvent, hasPendingSendForSession, prepareSessionRemovedBroadcast, withdrawUnstartedUserTurn,
 } from './services/chat-websocket.service.js';
-// fl:会话删除前要判"终端有没有接管着它"(见 sessions.service 的 deleteOrArchive)。
+// 删除会话前要判断终端是否正接管着它(见 sessions.service 的 deleteOrArchiveSessionById / isSessionInUse)。
 export { currentHolder as currentConversationHolder } from './services/conversation-ownership.service.js';
 export { broadcastPendingApprovalCount } from './services/admin-broadcast.service.js';
-// hl(动态 P2-4):项目级实时推送(新建 / 改名 / 权限 / 归档 / 还原 / 转移属主 / 删除)。
+// 项目级实时推送(新建 / 改名 / 权限 / 归档 / 还原 / 转移属主 / 删除)。
 export { broadcastProjectChange, prepareProjectChangeBroadcast } from './services/project-broadcast.service.js';

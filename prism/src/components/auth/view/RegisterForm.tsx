@@ -16,12 +16,10 @@ type RegisterFormProps = {
 /**
  * Self-service registration.
  *
- * Prism used to allow exactly one account: `/auth/register` refused once a user
- * existed and there was no screen for it beyond first-run setup. Colleagues now
- * sign up here and a root user approves them, so the success state that matters
- * is "submitted, waiting" — not "you're in". That state gets the whole panel
- * rather than a toast, because the next thing the person would otherwise do is
- * try to log in and hit a 403 they have no explanation for.
+ * New accounts wait for a root user's approval, so the success state that matters
+ * is "submitted, waiting" rather than "you're in". It takes over the whole panel
+ * instead of a toast: otherwise the person's next move is to try logging in and
+ * hit a 403 they have no explanation for.
  */
 export default function RegisterForm({ onBackToLogin }: RegisterFormProps) {
   const { t } = useTranslation('auth');

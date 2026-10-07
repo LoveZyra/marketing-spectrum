@@ -6,11 +6,10 @@ import { upsertRealtimeRows } from './useSessionStore';
 import type { NormalizedMessage } from './useSessionStore';
 
 /**
- * F16 的另一半:**实时行按 id 落位**,同一个 id 再来一次是覆盖,不是追加。
+ * 实时行按 id 落位:同一个 id 再来一次是覆盖,不是追加。
  *
- * 两个入口原来都是无脑 `[...realtime, ...新来的]`。而同一个事件会来第二次
- * (重连补发、订阅重叠、seq 跳号触发的补拉),于是同一个工具调用在屏幕上
- * 并排两份 —— 而且要等服务端行落库、prune 接管之后才收得掉。
+ * 同一个事件会来第二次(重连补发、订阅重叠、seq 跳号触发的补拉),直接追加的话,
+ * 同一个工具调用在屏幕上会并排两份,要等服务端行落库、prune 接管之后才收得掉。
  */
 const row = (id: string, patch: Partial<NormalizedMessage> = {}): NormalizedMessage => ({
   id,
@@ -35,7 +34,7 @@ describe('upsertRealtimeRows', () => {
     assert.equal(out[1].content, '补上了结果', '后到的那份通常更完整,取后者');
   });
 
-  test('覆盖**不改位置** —— 否则早先的工具行会被重排到末尾,屏幕顺序会跳', () => {
+  test('覆盖不改位置 —— 否则早先的工具行会被重排到末尾,屏幕顺序会跳', () => {
     const out = upsertRealtimeRows(
       [row('a'), row('b'), row('c')],
       [row('a', { content: '更新' })],
@@ -73,7 +72,7 @@ describe('upsertRealtimeRows', () => {
     assert.equal(out[0].id, 'm1', '裁掉的是最早那条');
   });
 
-  test('覆盖已有行时**不会**因为长度不变而漏裁 —— 长度本来就没涨', () => {
+  test('覆盖已有行时不会因为长度不变而漏裁 —— 长度本来就没涨', () => {
     const existing = Array.from({ length: 500 }, (_, i) => row(`m${i}`));
     const out = upsertRealtimeRows(existing, [row('m0', { content: '更新' })], 's1');
     assert.equal(out.length, 500);

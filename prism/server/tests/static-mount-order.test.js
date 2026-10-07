@@ -1,18 +1,14 @@
 /**
- * 静态挂载顺序:**dist 必须排在 public 前面。**
+ * 静态挂载顺序:dist 必须排在 public 前面。
  *
- * 2026-09-15 在测试环境上踩到的:`public/` 里躺着一份 2026-09-02 的旧构建
- * (`index.html` + `assets/`),而它当时挂在 dist 前面 —— 于是
+ * `public/` 里可能残留一份旧构建(`index.html` + `assets/`):发布包里不含这两样,
+ * `tar --overwrite` 永远删不掉它。若 public 挂在 dist 前面:
  *
- *   - 打开 `http://host:8080/` 或 `/index.html` → public 先答 → **两周前的前端**
- *     (`cache-control: public, max-age=0`、`last-modified: 2026-09-02`);
+ *   - 打开 `/` 或 `/index.html` → public 先答 → 旧前端(`cache-control: public, max-age=0`);
  *   - 打开 `/session/xxx` 这种无扩展名深链 → `app.get('*')` 送 dist/index.html
- *     → **当天的前端**(`no-cache`、`last-modified` 是构建时间)。
+ *     → 新前端(`no-cache`、`last-modified` 是构建时间)。
  *
- * 同一台机器"有时新版有时老版",就是这么来的。发布包里不含 `public/index.html`
- * 与 `public/assets/`,所以 `tar --overwrite` 永远删不掉那份残留 ——
- * 顺序一旦被改回去,症状会原样复发,而且在网络面板里只看得到 200/304。
- *
+ * 同一台机器就会"有时新版有时老版",而网络面板里只看得到 200/304。
  * 这里对源码断言(挂载顺序是一行 `app.use` 的位置,跑起来才发现就太晚了)。
  */
 import assert from 'node:assert/strict';

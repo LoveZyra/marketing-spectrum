@@ -14,12 +14,11 @@ import {
 } from '../services/chat-send-dedupe.js';
 
 /**
- * F09:`chat.send` 的幂等门。
+ * `chat.send` 的幂等门。
  *
- * 前端此前判断"发出去了"的依据是 `socket.send()` 没抛异常 —— 那只代表写进了
- * 本地发送缓冲。socket 在写入之后、服务端读到之前断开是很常见的一瞬,而这一瞬里
- * 前端已经清了草稿、画了乐观气泡。用户看不到回应就会重发,如果服务端其实收到了
- * 第一条,这一下就是**真的发两遍**:模型跑两轮、改两遍文件。
+ * `socket.send()` 不抛异常只代表写进了本地发送缓冲。socket 在写入之后、服务端读到之前断开是
+ * 很常见的一瞬,这一瞬里前端已经清了草稿、画了乐观气泡;用户看不到回应就会重发,如果服务端
+ * 其实收到了第一条,就是真的发两遍:模型跑两轮、改两遍文件。
  */
 beforeEach(() => {
   resetSendDedupeForTest();
@@ -58,12 +57,12 @@ describe('registerSend', () => {
     expect(registerSend('s1', 'cmd_a', t0 + SEND_DEDUPE_TTL_MS + 1)).toBe(true);
   });
 
-  it('窗口内重复会**刷新**记忆点,连续重试不会因为超时而漏过去', () => {
+  it('窗口内重复会刷新记忆点,连续重试不会因为超时而漏过去', () => {
     const t0 = 1_000_000;
     registerSend('s1', 'cmd_a', t0);
     // 半个窗口之后又撞一次:仍然拦下
     expect(registerSend('s1', 'cmd_a', t0 + SEND_DEDUPE_TTL_MS / 2)).toBe(false);
-    // 从**首次登记**起算超时(拦下的那次不刷新时间戳),所以这里放行
+    // 从首次登记起算超时(拦下的那次不刷新时间戳),所以这里放行
     expect(registerSend('s1', 'cmd_a', t0 + SEND_DEDUPE_TTL_MS + 1)).toBe(true);
   });
 
@@ -74,7 +73,7 @@ describe('registerSend', () => {
     expect(sendDedupeSizeForTest('s1')).toBeLessThanOrEqual(SEND_DEDUPE_MAX_PER_SESSION);
   });
 
-  it('超量时丢的是**最早**的键(最近的重发才是要防的那一批)', () => {
+  it('超量时丢的是最早的键(最近的重发才是要防的那一批)', () => {
     const t0 = 1_000_000;
     for (let i = 0; i < SEND_DEDUPE_MAX_PER_SESSION + 10; i++) {
       registerSend('s1', `cmd_${i}`, t0 + i);
@@ -94,13 +93,11 @@ describe('registerSend', () => {
 });
 
 /**
- * ga:**没回 ACK 的早退,必须把幂等键退回去。**
+ * 没回 ACK 的早退,必须把幂等键退回去。
  *
- * 这张表自己写的契约是"收到 ACK 才算发出去了"。可 `handleChatSend` 在可见性
- * 检查之后**立刻**登记键,之后还有六条早退分支(终端接管、provider 不支持、
- * 准备期被停止、抄历史之后的两道复检、排队位已满)一条都不回 ACK —— 遵守契约
- * 的重投会撞上去重、拿到一个**假的 `duplicate` ACK**,前端据此清盘:这条消息
- * 既没执行,也没有任何痕迹。门房先在登记本上划掉单号,再去看仓库门开没开。
+ * 这张表的契约是"收到 ACK 才算发出去了"。`handleChatSend` 在可见性检查之后立刻登记键,
+ * 之后的早退分支都不回 ACK;键不退回的话,遵守契约的重投会撞上去重、拿到假的
+ * `duplicate` ACK,前端据此清盘:这条消息既没执行,也没有任何痕迹。
  */
 describe('forgetSend', () => {
   it('退还之后同一个键可以重新登记(相当于这一次从没发生过)', () => {
@@ -132,14 +129,12 @@ describe('forgetSend', () => {
 });
 
 /**
- * ga:上面那几条只证明"退还这个动作是对的",**证明不了调用方真的退了**。
+ * 上面几条只证明"退还这个动作是对的",证明不了调用方真的退了。
  *
- * 这一轮反复付代价的形状正是"修复代码在,数据到不了它"。`handleChatSend` 需要
- * 真的 socket / 数据库 / provider 才跑得起来,这里挂不起来,所以退一步读源码:
- * 幂等门与"已收下"的 ACK 之间,**每一条 `return;` 前面都必须有一句退还**。
- * 漏掉一条,这里立刻红。
+ * `handleChatSend` 需要真的 socket / 数据库 / provider 才跑得起来,这里挂不起来,所以退一步读源码:
+ * 幂等门与"已收下"的 ACK 之间,每一条 `return;` 前面都必须有一句退还。漏掉一条,这里立刻红。
  */
-describe('handleChatSend 的六条早退都退还了幂等键', () => {
+describe('handleChatSend 的八条早退都退还了幂等键', () => {
   const source = readFileSync(
     fileURLToPath(new URL('../services/chat-websocket.service.ts', import.meta.url)),
     'utf8',
@@ -155,16 +150,15 @@ describe('handleChatSend 的六条早退都退还了幂等键', () => {
     const returns = lines
       .map((line, index) => ({ line: line.trim(), index }))
       .filter(({ line }) => line === 'return;');
-    // 终端接管 / provider 不支持 / 准备期被停止 / 抄历史后的两道复检
-    // gh:+1 —— 分叉点撞上已有历史的会话(FORK_TARGET_HAS_HISTORY)
-    // hn:+1 —— 模型不在目录里 / 已下架(MODEL_NOT_ALLOWED)
+    // 终端接管 / provider 不支持 / 模型不在目录里或已下架(MODEL_NOT_ALLOWED)/ 准备期被停止 /
+    // 抄历史后的两道复检 / 分叉目标已有历史(FORK_TARGET_HAS_HISTORY)
     expect(returns.length).toBe(7);
     for (const { index } of returns) {
       expect(lines[index - 1].trim()).toBe('releaseSendKey();');
     }
   });
 
-  it('第六条(排队位已满)也退还 —— 它在 ACK 之后的 !run 分支里', () => {
+  it('第八条(排队位已满)也退还 —— 它在 ACK 之后的 !run 分支里', () => {
     const queueFull = source.indexOf("'QUEUE_FULL'");
     expect(queueFull).toBeGreaterThan(0);
     expect(source.slice(queueFull, queueFull + 400)).toMatch(/releaseSendKey\(\);\n\s*return;/);

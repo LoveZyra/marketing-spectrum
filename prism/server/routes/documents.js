@@ -1,5 +1,7 @@
 /**
- * Document text extraction + URL article fetch (ported from claude-web-ui 2.0).
+ * Document text extraction + URL article fetch.
+ *
+ * 部分实现源自 Claude Code Web(Apache-2.0),已修改;版权与许可见 NOTICE。
  *
  * POST /api/documents/parse       multipart upload -> { name, text, truncated }
  *   Supported: pdf, docx, pptx, xlsx/xlsm, csv/tsv, txt/md/json and other
@@ -149,8 +151,8 @@ function landHtmlFile(originalname, buffer, targetDir) {
   return landed;
 }
 
-// Path variant — used by /land, whose multer instance already streamed the
-// upload to .incoming. Moving is a metadata operation on the common case, so a
+// Path variant — used by /land and /land/complete, whose uploads are already
+// staged under .incoming. Moving is a metadata operation on the common case, so a
 // 500MB attachment costs the same as a 5KB one and never touches the heap.
 function landStagedFile(originalname, tempPath, targetDir) {
   const landed = reserveStagedPath(originalname, targetDir);
@@ -186,26 +188,13 @@ function validationError(message) {
 }
 
 /**
- * The chat composer wraps every extracted document in an
- * <attached-document ...> ... </attached-document> envelope when building the
- * model prompt. A document (or fetched web page) that itself contains the
- * literal closing tag "</attached-document" could terminate that envelope
- * early and smuggle text the model would read as instructions OUTSIDE the
- * attachment — a prompt-injection boundary break. Neutralize it by swapping
- * the '<' of any such closing tag for the visually equivalent fullwidth
- * '＜' (U+FF1C): the text stays human-readable but can no longer close the
- * envelope. Case-insensitive because HTML/XML tag matching is.
- */
-/**
- * fj:抓回来的页面标题要单独清洗一次。
+ * 抓回来的页面标题要单独清洗一次。
  *
- * 标题会被前端拼进 `<attached-document name="...">` 的属性里,而
- * `escapeAttachedDocumentTags` 只管正文。`htmlToText` 取 `<title>` 之后还会
- * `decodeXmlEntities`,把 `&lt;` `&gt;` `&#10;` 还原成真的尖括号和换行 ——
- * 于是攻击者控制的页面可以用标题把信封提前闭合,让注入的指令落在信封外面。
+ * 标题会被前端拼进 `<attached-document name="...">` 的属性里,而 `escapeAttachedDocumentTags` 只管正文。
+ * `htmlToText` 取 `<title>` 之后还会 `decodeXmlEntities`,把 `&lt;` `&gt;` `&#10;` 还原成真的尖括号和换行,
+ * 攻击者控制的页面就能用标题把信封提前闭合,让注入的指令落在信封外面。
  *
- * 前端也有一份同样的清洗(`attachmentPrompt.ts` 的 `escapeAttr`)。**两侧都做**
- * 是刻意的:任何一侧单独成立,不依赖对方。
+ * 前端也有一份同样的清洗(`attachmentPrompt.ts` 的 `escapeAttr`)。两侧都做是刻意的:任何一侧单独成立,不依赖对方。
  */
 export function sanitizeFetchedTitle(title) {
   return String(title ?? '')
@@ -215,6 +204,17 @@ export function sanitizeFetchedTitle(title) {
     .slice(0, 200);
 }
 
+/**
+ * The chat composer wraps every extracted document in an
+ * <attached-document ...> ... </attached-document> envelope when building the
+ * model prompt. A document (or fetched web page) that itself contains the
+ * literal closing tag "</attached-document" could terminate that envelope early
+ * and smuggle text the model would read as instructions OUTSIDE the
+ * attachment — a prompt-injection boundary break. Neutralize it by swapping
+ * the '<' of any such closing tag for the visually equivalent fullwidth
+ * '＜' (U+FF1C): the text stays human-readable but can no longer close the
+ * envelope. Case-insensitive because HTML/XML tag matching is.
+ */
 export function escapeAttachedDocumentTags(text) {
   return String(text ?? '').replace(/<(?=\/attached-document)/gi, '＜');
 }
@@ -520,15 +520,15 @@ function xlsxCellToText(value) {
 }
 
 /**
- * 表格提取(cp 轮从 sheetjs/xlsx 换成 exceljs)。
+ * 表格提取,用 exceljs 而不是 sheetjs/xlsx。
  *
- * 换的原因是安全:`xlsx@0.18.5` 带两个高危(GHSA-4r6h-8v6p-xvw6 原型污染、
- * ReDoS),而 **npm 上没有修复版本** —— SheetJS 0.19.3+ 只发在自家 CDN,
- * `npm audit` 对它是 `fixAvailable:false`。这条链路恰好解析**用户上传的**
+ * 原因是安全:`xlsx@0.18.5` 带两个高危(GHSA-4r6h-8v6p-xvw6 原型污染、
+ * ReDoS),而 npm 上没有修复版本 —— SheetJS 0.19.3+ 只发在自家 CDN,
+ * `npm audit` 对它是 `fixAvailable:false`。这条链路恰好解析用户上传的
  * 表格,是最不该留 CVE 的地方。
  *
  * 代价:exceljs 只吃 zip 容器(.xlsx/.xlsm),不认旧版 .xls(OLE/CFB 二进制),
- * 所以 .xls 现在明确报错让用户另存为 .xlsx,而不是悄悄解析出乱码。
+ * 所以 .xls 明确报错让用户另存为 .xlsx,而不是悄悄解析出乱码。
  */
 async function extractXlsx(buffer) {
   if (!isZipBuffer(buffer)) {
@@ -560,11 +560,10 @@ async function extractXlsx(buffer) {
 
 /**
  * Raw binary sniff: only a NUL byte is a hard "this is not text" signal at the
- * byte level. The old heuristic counted high/control BYTES in the raw buffer,
- * which misclassified perfectly valid GB18030/Shift_JIS text (multi-byte lead
- * bytes land in 0x80-0xFE) — non-UTF-8 CJK files were rejected as binary.
- * Control-character density is now measured AFTER decoding (see
- * controlCharRatio) where legitimate legacy encodings no longer look "binary".
+ * byte level. Counting high/control BYTES in the raw buffer would misclassify
+ * valid GB18030/Shift_JIS text (multi-byte lead bytes land in 0x80-0xFE), so
+ * control-character density is measured AFTER decoding (see controlCharRatio),
+ * where legitimate legacy encodings do not look "binary".
  */
 export function looksBinary(buffer) {
   return buffer.includes(0);
@@ -596,7 +595,7 @@ export function controlCharRatio(text) {
  *   - strip a UTF-8 BOM if present;
  *   - strict utf-8 (fatal) -> gb18030 (fatal) -> shift_jis (fatal) -> latin1.
  * The fatal flag makes each attempt reject cleanly instead of silently
- * emitting U+FFFD, so GB18030 Chinese text no longer round-trips into mojibake.
+ * emitting U+FFFD, so GB18030 Chinese text does not turn into mojibake.
  * Returns { text, encoding }.
  */
 export function decodeTextBuffer(buffer) {
@@ -723,15 +722,13 @@ router.post('/parse', upload.single('document'), async (req, res) => {
 // benefit — and Buffers live outside the V8 heap, so exhausting them gets the
 // whole process OOM-killed rather than failing one request.
 /**
- * ed:落盘之后顺手抽一份正文。
+ * 落盘之后顺手抽一份正文。
  *
- * 「+」菜单合并成一个「添加附件」之后,原来「附加文档」那条"只抽正文、不落盘"的路
- * 没有入口了。抽正文的价值不能丢:模型不用先调工具就能读到内容(问"这份 PPT 讲了
- * 什么"应当一步到位)。所以落盘之后,凡是解析器认识的类型且 ≤ MAX_DOC_BYTES(与
- * /parse 同一个上限)的,就地再抽一份文本一并返回;客户端把它作为
- * <attached-document> 随消息发出,磁盘路径照旧给智能体做工具处理。
- * 抽不出来(扫描件、二进制、损坏)就静默略过 —— 文件已经在盘上,智能体还能用工具读。
- * 只对 EXTRACTORS 登记的类型做,不对任意扩展名猜"是不是文本"(那会把 .bin 当文本抽)。
+ * 模型不用先调工具就能读到内容(问"这份 PPT 讲了什么"应当一步到位)。所以落盘之后,凡是
+ * EXTRACT_ON_LAND_EXTENSIONS 列出的类型且 ≤ MAX_DOC_BYTES(与 /parse 同一个上限)的,就地再抽一份
+ * 文本一并返回;客户端把它作为 <attached-document> 随消息发出,磁盘路径照旧给智能体做工具处理。
+ * 抽不出来(扫描件、二进制、损坏)就静默略过:文件已经在盘上,智能体还能用工具读。
+ * 不对任意扩展名猜"是不是文本"(那会把 .bin 当文本抽)。
  */
 const EXTRACT_ON_LAND_EXTENSIONS = new Set([
   '.pdf', '.docx', '.pptx', '.xlsx', '.xlsm', '.csv', '.tsv',
@@ -838,16 +835,15 @@ router.post('/land', (req, res) => {
 /* ------------------------------------------------------------------ */
 /*  Chunked landing — for deployments behind a body-size-capped proxy   */
 /* ------------------------------------------------------------------ */
-// 反向代理(nginx/openresty)的 client_max_body_size 在请求到达 Node 之前就把超限
-// 的请求体砍掉,回自己的 413 HTML 页 —— 上游允许多大都没用,而且这一层的拒绝在应用
-// 日志里不留任何痕迹(本部署实测:15MB 附件通过,54.4MB 附件被网关拒,Prism 全程无感)。
+// 反向代理(nginx/openresty)的 client_max_body_size 在请求到达 Node 之前就把超限的请求体砍掉,
+// 回自己的 413 HTML 页:上游允许多大都没用,而且这一层的拒绝在应用日志里不留任何痕迹
+// (例如 15MB 附件通过、54.4MB 附件被网关拒,Prism 全程无感)。
 //
-// 分片上传把一次大请求拆成若干个小于代理上限的小请求,服务端按序追加还原,最后走与
-// /land 完全相同的落盘与响应逻辑 —— 下游(agent 拿到的磁盘路径)对此毫无感知。
+// 分片上传把一次大请求拆成若干个小于代理上限的小请求,服务端按序追加还原,最后走与 /land 完全相同的
+// 落盘与响应逻辑,下游(agent 拿到的磁盘路径)对此毫无感知。
 //
-// 分片大小要略小于代理上限。默认 15MB 是本部署实测通过的值;换环境用
-// PRISM_LAND_CHUNK_MB 调,不必改代码。前端通过 GET /api/documents/limits 读取它,
-// 免得又出现"前端常量与真实上限各说各话"那类问题。
+// 分片大小要略小于代理上限。默认 15MB 是本部署验证过能通过的值;换环境用 PRISM_LAND_CHUNK_MB 调,
+// 不必改代码。前端通过 GET /api/documents/limits 读取它,前端常量与真实上限不会各说各话。
 const LAND_CHUNK_MB = intFromEnv('PRISM_LAND_CHUNK_MB', 15);
 const LAND_CHUNK_BYTES = LAND_CHUNK_MB * 1024 * 1024;
 // 单个分片请求的硬上限:分片本体 + multipart 边界与字段的余量。
@@ -884,8 +880,8 @@ function appendChunkFile(partPath, chunkPath) {
 /**
  * 每个上传会话一把串行锁。
  *
- * 分片必须**严格按序追加**到同一个 `.part`,否则拼出来的文件坏得很安静。
- * 光把 `nextIndex` 挪到 await 之前是不够的:那样两个**不同** index 的请求会
+ * 分片必须严格按序追加到同一个 `.part`,否则拼出来的文件坏得很安静。
+ * 光把 `nextIndex` 挪到 await 之前是不够的:那样两个不同 index 的请求会
  * 同时通过顺序门、同时 append 到同一文件,字节级交错。所以整个「判序 + 追加 +
  * 推进」必须在一把锁里做完:
  *   - 同一 index 的重发:等到锁时 `nextIndex` 已推进 → 命中幂等分支被丢弃
@@ -949,7 +945,7 @@ router.post('/land/start', (req, res) => {
   if (declaredSize > MAX_LAND_BYTES) {
     return res.status(413).json({ error: `文件太大,单个附件最多 ${MAX_LAND_MB}MB。` });
   }
-  // 配额在**开传之前**就拦 —— 传完 400MB 再说"你超了"是最糟的告知时机。
+  // 配额在开传之前就拦 —— 传完 400MB 再说"你超了"是最糟的告知时机。
   const verdict = checkQuota(req.user?.id ?? null, declaredSize);
   if (!verdict.ok) {
     return res.status(413).json({ error: quotaExceededMessage(verdict) });
@@ -963,7 +959,7 @@ router.post('/land/start', (req, res) => {
     return res.status(500).json({ error: error.message });
   }
   chunkSessions.set(uploadId, {
-    // 这条路的名字来自 **JSON body**(见前端 landFileInChunks 的 JSON.stringify),
+    // 这条路的名字来自 JSON body(见前端 landFileInChunks 的 JSON.stringify),
     // express.json 早就按 UTF-8 解好了 —— 不能再套 recoverUploadFilename:
     // 它的判据对"本身就是合法 UTF-8 序列的双字符"(`Ã©`)会误伤,而这里本来没病。
     // multipart 那条路(/land 直传)才需要恢复,见上面 req.file.originalname 处。
@@ -973,7 +969,7 @@ router.post('/land/start', (req, res) => {
     declaredSize,
     nextIndex: 0,
     userId: req.user?.id ?? null,
-    // 落盘目录在 complete 时才用得上,但**必须在 start 时就记下来** ——
+    // 落盘目录在 complete 时才用得上,但必须在 start 时就记下来 ——
     // complete 请求上没有 projectId,现取会回落到全局目录,分片上传的文件
     // 就和直传的文件落到两个地方去了。
     projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : null,

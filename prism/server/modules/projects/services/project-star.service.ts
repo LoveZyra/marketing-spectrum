@@ -95,13 +95,11 @@ export function toggleProjectStar(projectId: string, userId: number | null = nul
 }
 
 /**
- * eo:**设成**某个状态(而不是翻转)。批量收藏/取消收藏要的就是这个。
+ * 设成某个状态(而不是翻转),给批量收藏 / 取消收藏用:选中的一批里有的已收藏、有的没有,
+ * 逐个翻转的结果会是一半收藏一半取消。
  *
- * 批量场景下翻转是错的:选中的一批里有的已收藏、有的没有,逐个翻转的结果是
- * 「一半收藏一半取消」—— 点了「收藏」却看到一半被取消,没有人会认为这是对的。
- *
- * 与 `toggleProjectStar` 共用同一套落库路径(有 userId 走 project_stars 那一行,
- * 平台模式退回旧的全局列),所以两条入口不会在"收藏到底存哪儿"上分叉。
+ * 与 `toggleProjectStar` 共用同一套落库路径(有 userId 写 project_stars,平台模式下没有
+ * userId 时用全局 isStarred 列),两条入口不会在"收藏到底存哪儿"上分叉。
  */
 export function setProjectStarForActor(
   projectId: string,

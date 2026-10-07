@@ -89,6 +89,8 @@
   "notifications": {
     "title": "通知",
     "description": "控制你希望接收的通知事件。",
+    "loadFailed": "通知偏好加载失败。为免覆盖已保存的设置,下面的开关暂时不可用。",
+    "retryLoad": "重试",
     "sound": {
       "title": "声音",
       "description": "聊天运行完成时播放短提示音。",
@@ -210,6 +212,9 @@
     },
     "newButton": "新建 API 密钥",
     "empty": "尚未创建 API 密钥。",
+    "loadFailed": "API 密钥列表加载失败,请重试。",
+    "refreshFailed": "API 密钥列表刷新失败,下面是上次加载到的内容,可能不是最新的。",
+    "retryLoad": "重试",
     "list": {
       "created": "创建时间：",
       "lastUsed": "最后使用："
@@ -233,6 +238,8 @@
         "howToCreate": "如何创建 GitHub 个人访问令牌 →"
       },
       "empty": "尚未添加 GitHub 令牌。",
+      "loadFailed": "GitHub 令牌列表加载失败,请重试。",
+      "refreshFailed": "GitHub 令牌列表刷新失败,下面是上次加载到的内容,可能不是最新的。",
       "added": "添加时间：",
       "confirmDelete": "确定要删除此 GitHub 令牌吗？"
     },
@@ -316,10 +323,6 @@
     "actions": {
       "edit": "编辑服务器",
       "delete": "删除服务器"
-    },
-    "managed": {
-      "badge": "托管",
-      "hint": "由棱镜托管。"
     },
     "addServer": "添加 {{provider}} MCP 服务器",
     "refreshingScopes": "正在刷新项目作用域…",
@@ -652,13 +655,20 @@
     "loading": "加载中…",
     "empty": "这段时间还没有用量记录。跑一轮对话之后就会出现。",
     "scopedHint": "只统计你自己的用量",
-    "footnote": "费用取自模型返回的计费值,按轮记账。与对话页 /cost 里的数字不是一回事 —— 那个是当前上下文占用,这里是累计花销。「输入」不含缓存,命中缓存的部分记在「缓存读」里(按约一折计费)。升级到 hj 版本之前的 token 数记录不全 —— 网关把用量放在流的末尾,旧版本没读到;费用不受影响。",
+    "footnote": "费用取自模型返回的计费值,按轮记账。与对话页 /cost 里的数字不是一回事 —— 那个是当前上下文占用,这里是累计花销。「输入」不含缓存,命中缓存的部分记在「缓存读」里(按约一折计费)。较早的记录里 token 数可能不全 —— 网关把用量放在流的末尾,早期版本没读到;费用不受影响。",
     "by": {
       "day": "按日期",
       "username": "按用户",
       "project_path": "按项目",
       "model": "按模型",
       "source": "按来源"
+    },
+    "sources": {
+      "chat": "对话",
+      "compact": "自动压缩",
+      "task": "定时任务",
+      "api": "外部接口",
+      "background": "后台任务"
     },
     "columns": {
       "key": "维度",
@@ -845,6 +855,25 @@
       "needKey": "要填 key",
       "keyTooLong": "key 不能超过 {{max}} 个字符",
       "keyWhitespace": "key 里有空格或换行 —— 多半是粘贴时带进来的,去掉再保存"
+    }
+  },
+  "about": {
+    "tagline": "公共算法与分析 Agent 工作台",
+    "visionTitle": "愿景",
+    "vision": "像棱镜把一束光分解为完整的光谱，棱镜把复杂的算法与数据问题，分解为清晰、可执行、可回溯的智能工作流。",
+    "pillars": {
+      "entry": {
+        "title": "一个入口",
+        "body": "统一承载算法研发、数据分析与多 Agent 协作"
+      },
+      "trusted": {
+        "title": "可信执行",
+        "body": "每一轮改动可视化、可审计、可一键回滚"
+      },
+      "reuse": {
+        "title": "沉淀复用",
+        "body": "团队的算法资产与分析方法在这里持续积累"
+      }
     }
   }
 }

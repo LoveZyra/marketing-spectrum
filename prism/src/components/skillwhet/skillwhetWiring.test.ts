@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * gy:技能优化接线 —— 客户端测试跑在 node 环境(没有 DOM 挂不起组件),读源码钉住
+ * 技能优化接线:客户端测试跑在 node 环境(没有 DOM 挂不起组件),读源码钉住
  * 「没挂载就不画、挂载了在定时任务之后」「反馈控件真的接进了消息卡」「调查卡三种落库
  * 形状」这几根线;真正的行为在服务端路由测试(message-feedback-routes / skillwhet-authz)。
  */
@@ -110,11 +110,11 @@ describe('技能优化页', () => {
     expect(card).toMatch(/const mayMutate = isRoot \|\| \(skill\.source === 'upload' && skill\.uploaded_by === username\);/);
     expect(card).toMatch(/isRoot && skill\.source === 'live' && skill\.live_exists !== false/);
     expect(card).toMatch(/mayMutate && !skill\.bootstrapped/);
-    // gz:「新建训练」权限同 mutate,且要先 bootstrap
+    // 「新建训练」权限同 mutate,且要先 bootstrap
     expect(card).toMatch(/onClick=\{\(\) => onTrain\(skill\.name\)\} disabled=\{busy !== null \|\| !skill\.bootstrapped\}/);
   });
 
-  it('gz · 新建训练表单:非 root 不给 mock / 后端字段,评估模型 ≠ 提议模型,超额度不放行', () => {
+  it('新建训练表单:非 root 不给 mock / 后端字段,评估模型 ≠ 提议模型,超额度不放行', () => {
     const form = read('./view/RunNew.tsx');
     expect(form).toMatch(/if \(mock && isRoot\) Object\.assign\(args, \{ fast_backend: 'mock', slow_backend: 'mock', eval_backend: 'mock' \}\);/);
     expect(form).toMatch(/run\.sameModel/);
@@ -123,7 +123,7 @@ describe('技能优化页', () => {
     expect(form).toMatch(/api\.skillWhet\.jobCreate\(/);
   });
 
-  it('gz · 作业表:撤销只给发起人(tags user:<id>)或 root;3 秒轮询只在有活作业时', () => {
+  it('作业表:撤销只给发起人(tags user:<id>)或 root;3 秒轮询只在有活作业时', () => {
     const runs = read('./view/Runs.tsx');
     expect(runs).toMatch(/\(isRoot \|\| \(userId != null && job\.tags\?\.includes\(`user:\$\{userId\}`\)\)\)/);
     const hook = read('./hooks/useJobs.ts');
@@ -132,10 +132,10 @@ describe('技能优化页', () => {
     expect(hook).toMatch(/api\.skillWhet\.jobProgress\(id, seqRef\.current\)/);
   });
 
-  it('gz · 版本页:采纳权限同 mutate,未接受的要 force 二次确认;发布 / 回滚只画给 root 且发布要先采纳', () => {
+  it('版本页:采纳权限同 mutate,未接受的要 force 二次确认;发布 / 回滚只画给 root 且发布要先采纳', () => {
     const versions = read('./view/Versions.tsx');
     expect(versions).toMatch(/const mayAdopt = Boolean\(target\) && \(isRoot \|\| \(target\?\.source === 'upload' && target\.uploaded_by === username\)\);/);
-    // ha:没接受 → force;没做留出集评估 → skip_release;两个开关各带各的,test 上没变好也要二次确认
+    // 没接受 → force;没做留出集评估 → skip_release;两个开关各带各的,test 上没变好也要二次确认
     expect(versions).toMatch(/force: !!s && !s\.accepted/);
     expect(versions).toMatch(/skipRelease: !!s && !s\.release/);
     expect(versions).toMatch(/g\.force \|\| g\.skipRelease \|\| g\.releaseWorse \? setConfirm\('adoptForce'\)/);
@@ -152,7 +152,7 @@ describe('技能优化页', () => {
     expect(versions).toMatch(/\{isRoot && \(\s*typeof confirm === 'object' && confirm\?\.rollback === rb\.ts/);
   });
 
-  it('gz · 任务集:从测试派生权限同入库;反馈收件箱只 root 拉、只 root 画', () => {
+  it('任务集:从测试派生权限同入库;反馈收件箱只 root 拉、只 root 画', () => {
     const tasks = read('./view/Tasks.tsx');
     expect(tasks).toMatch(/target\?\.has_unit_tests && \(\s*<button type="button" onClick=\{\(\) => void derive\(\)\} disabled=\{!mayAdd \|\| busy !== null\}/);
     expect(tasks).toMatch(/if \(!isRoot\) return;\s*try \{\s*const res = await unwrap<\{ inbox: InboxRow\[\] \}>\(await api\.skillWhet\.feedbackInbox\(null\)\);/);
@@ -181,7 +181,7 @@ describe('技能优化页', () => {
     expect(card).toMatch(/onClick=\{recheck\} disabled=\{busy !== null \|\| !mayMutate\}/);
   });
 
-  it('gz · api.js 的作业 / staging / 发布 / 收件箱路径与服务端路由一致', () => {
+  it('api.js 的作业 / staging / 发布 / 收件箱路径与服务端路由一致', () => {
     const api = read('../../utils/api.js');
     const routes = readFileSync(fileURLToPath(new URL('../../../server/modules/skillwhet/skillwhet.routes.ts', import.meta.url)), 'utf8');
     for (const [helper, route] of [
@@ -218,7 +218,7 @@ describe('技能优化页', () => {
     const markers = readFileSync(fileURLToPath(new URL('../../../server/shared/prism-internal-transcripts.ts', import.meta.url)), 'utf8');
     expect(markers).toMatch(/'prism-skillwhet'/);
   });
-  it('hb · 测试环境实测修的几处:导航回列表、runner 默认 / 提示、非训练作业不画训练页签、发布看副本采纳状态、挖任务只挖用过该 skill 的', () => {
+  it('导航回列表、runner 默认 / 提示、非训练作业不画训练页签、发布看副本采纳状态、挖任务只挖用过该 skill 的', () => {
     const page = read('./SkillWhetPage.tsx');
     expect(page).toMatch(/const goSection = \(id: SkillWhetSection\) => \{ if \(id === 'runs'\) setOpenJob\(null\); setSection\(id\); \};/);
     expect(page).not.toMatch(/onClick=\{\(\) => setSection\(id\)\}/);
@@ -237,9 +237,9 @@ describe('技能优化页', () => {
     const card = read('./view/SkillCard.tsx');
     expect(card).toMatch(/card\.gatePassSkipped/);
   });
-  it('hc · 技能优化是全局页面:不渲染项目侧栏 / 项目页头;左轨开合按钮改管技能导航;导航按训练先后排序', () => {
+  it('技能优化是全局页面:不渲染项目侧栏 / 项目页头;左轨开合按钮改管技能导航;导航按训练先后排序', () => {
     const app = readFileSync(fileURLToPath(new URL('../app/AppContent.tsx', import.meta.url)), 'utf8');
-    // hl(切片 D):侧栏开合改由 sidebarOpenHere 表达(切页不再写偏好),判据不变:技能优化 / Notebook 页一律收起。
+    // 侧栏开合由 sidebarOpenHere 表达(切页不写偏好);技能优化 / Notebook 页一律收起。
     expect(app).toMatch(/const isSidebarCollapsed = !isMobile && \(!sidebarOpenHere \|\| editorMaximized\s*\|\| activeTab === 'skillwhet' \|\| activeTab === 'notebook'\);/);
     const rail = readFileSync(fileURLToPath(new URL('../app/AppRail.tsx', import.meta.url)), 'utf8');
     expect(rail).toMatch(/const onSkillPage = activeTab === 'skillwhet';/);
@@ -259,7 +259,7 @@ describe('技能优化页', () => {
     expect(strip).toMatch(/<Badge key=\{key\} tone=\{tone\} wrap>/);
   });
 
-  it('hd · 版本页:staging 的 diff 按训练时的底比,发布 / 回滚有记录;优化过程按步骤展开', () => {
+  it('版本页:staging 的 diff 按训练时的底比,发布 / 回滚有记录;优化过程按步骤展开', () => {
     const versions = read('./view/Versions.tsx');
     expect(versions).toMatch(/api\.skillWhet\.publishHistory\(/);
     expect(versions).toMatch(/data-testid="publish-history"/);
@@ -293,7 +293,7 @@ describe('技能优化页', () => {
     const page = read('./SkillWhetPage.tsx');
     expect(page).toMatch(/api\.skillWhet\.nightly\(\)/);
     const index = readFileSync(fileURLToPath(new URL('../../../server/index.js', import.meta.url)), 'utf8');
-    // hl:别的切片把启动步骤包进了 runStartupStep(…, () => skillWhetNightly?.start(), log) —— 只认调用本身
+    // 启动步骤包在 runStartupStep(…, () => skillWhetNightly?.start(), log) 里,只认调用本身
     expect(index).toMatch(/skillWhetNightly\?\.start\(\)/);
     expect(index).toMatch(/skillWhetNightly\?\.stop\(\)/);
   });
@@ -306,13 +306,13 @@ describe('技能优化页', () => {
     expect(form).toMatch(/data\.clamped && data\.clamped\.length > 0/);
   });
 
-  it('hh · 数字框能正常打字;Notebook 页不显示项目栏', () => {
+  it('数字框能正常打字;Notebook 页不显示项目栏', () => {
     const form = read('./view/RunNew.tsx');
     expect(form).not.toMatch(/type="number"/);
     expect(form).toMatch(/<NumberInput integer min=\{1\} max=\{20\} value=\{rounds\}/);
     const nightly = read('./view/NightlyControl.tsx');
     expect(nightly).not.toMatch(/type="number"/);
-    // hi:夜训轮数上限 / 单次费用上限都跟服务端给的走(20 / 100)
+    // 夜训轮数上限 / 单次费用上限都跟服务端给的走(20 / 100)
     expect(nightly).toMatch(/max=\{meta\.nightlyMaxRounds \?\? 10\}/);
     expect(nightly).toMatch(/meta\.nightlyHardMaxCostUsd \?\?/);
     const tasks = readFileSync(fileURLToPath(new URL('../tasks/TasksPage.tsx', import.meta.url)), 'utf8');

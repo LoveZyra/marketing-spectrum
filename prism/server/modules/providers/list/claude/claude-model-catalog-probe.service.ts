@@ -15,7 +15,7 @@ import { readClaudeSettingsParseProblem } from './claude-settings-selfcheck.js';
 import { removeFlagSettingsFile, writeFlagSettingsFile } from './claude-flag-settings-file.js';
 
 /**
- * hn(B2):**模型目录里单条模型的「实测」** —— 一次一致性检查,不只是"网关认不认这个名字"。
+ * 模型目录里单条模型的「实测」:一次一致性检查,不只是"网关认不认这个名字"。
  *
  * 一次 SDK 调用(maxTurns 3),带一个进程内 MCP 工具 `probe_echo`,提示模型"调用它再回 DONE"。
  * 一次就能看出这个模型经网关后能不能在 Claude Code 里正常干活:
@@ -24,7 +24,7 @@ import { removeFlagSettingsFile, writeFlagSettingsFile } from './claude-flag-set
  * |---|---|
  * | 名字被接受 | 没有 error result、拿到了 assistant 回复 |
  * | 工具往返 | `probe_echo` 真的被调用、且之后还有最终回复 |
- * | 档位 / thinking 字段 | CLI 对非 Claude 名**总会**带 `thinking: adaptive` + `output_config.effort` —— 请求成功即说明网关容忍 |
+ * | 档位 / thinking 字段 | CLI 对非 Claude 名总会带 `thinking: adaptive` + `output_config.effort`,请求成功即说明网关容忍 |
  * | usage 可信 | `input_tokens > 0`(网关不回 usage,CLI 就永远不自动压缩) |
  * | 回复模型名 | 与请求一致;不一致时说明网关在改写 |
  *
@@ -35,13 +35,8 @@ import { removeFlagSettingsFile, writeFlagSettingsFile } from './claude-flag-set
 const PROBE_TIMEOUT_MS = 60_000;
 const inFlight = new Map<string, Promise<CatalogProbeResult>>();
 
-export function isCatalogProbeRunning(modelId: string): boolean {
-  for (const key of inFlight.keys()) if (key.split('\u0000')[0] === modelId) return true;
-  return false;
-}
-
 /**
- * hq:`gateway` = 这次实测走哪个网关、用哪把 key(claude-gateways.service 的 resolveTurnGateway 解析好的)。
+ * `gateway` = 这次实测走哪个网关、用哪把 key(claude-gateways.service 的 resolveTurnGateway 解析好的)。
  * 单飞按"模型 + 网关指纹"分:root 与私有模型的主人测同名模型时各测各的,不会串结果。
  */
 export async function probeCatalogModel(
@@ -93,7 +88,7 @@ async function runProbe(
     timedOut = true;
     abort.abort();
   }, PROBE_TIMEOUT_MS);
-  // hq(复审 P1):带 key 的设置写进 0600 文件给路径,不进命令行(见 claude-flag-settings-file.ts)
+  // 带 key 的设置写进 0600 文件、只传路径,不进命令行(见 claude-flag-settings-file.ts)
   let flagSettingsFile: string | null = null;
 
   try {
@@ -128,7 +123,7 @@ async function runProbe(
         mcpServers: { prism_probe: probeServer },
         allowedTools: ['mcp__prism_probe__probe_echo'],
         abortController: abort,
-        // hq:网关与 key 走 flag 层(压得过 settings.json 的 env;怎么防串见 buildGatewaySettingsPatch)
+        // 网关与 key 走 flag 层(压得过 settings.json 的 env;怎么防串见 buildGatewaySettingsPatch)
         ...(flagSettingsFile ? { settings: flagSettingsFile } : {}),
       },
     });
@@ -182,7 +177,7 @@ async function runProbe(
       ?? (!inputTokens ? '网关没有回 usage(input_tokens 为 0)—— CLI 将无法按用量自动压缩' : null);
 
   /*
-   * ho:「Not logged in · Please run /login」= CLI 根本没拿到网关配置。最常见的原因是 ~/.claude/settings.json 不是合法 JSON
+   * 「Not logged in · Please run /login」= CLI 根本没拿到网关配置。最常见的原因是 ~/.claude/settings.json 不是合法 JSON
    * (抄了带 // 注释的片段,CLI 整份忽略),其次是 env 里没有网关地址 / 令牌 —— 把原因直接写进实测结果。
    */
   let explained = error;

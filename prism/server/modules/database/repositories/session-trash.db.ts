@@ -1,12 +1,12 @@
 /**
- * gk:最近删除(会话回收站)的仓库层。
+ * 最近删除(会话回收站)的仓库层。
  *
- * 永久删除 = 把 `sessions` 行、显示日志、`session_display_log_state` **整体搬进**
+ * 永久删除 = 把 `sessions` 行、显示日志、`session_display_log_state` 整体搬进
  * `session_trash` / `session_trash_messages`;恢复 = 原样搬回;超期清扫 = 真删。
  * 这一层只管库,transcript 文件的搬运在 providers 的 session-trash.service 里。
  *
- * 搬进 / 搬回都是**一个事务**:活表与回收站表之间不存在"两边都有"或"两边都没有"
- * 的中间态 —— 那正是会话"凭空消失"这件事故里最难解释的部分。
+ * 搬进 / 搬回都是一个事务:活表与回收站表之间不存在"两边都有"或"两边都没有"的中间态,
+ * 会话不会凭空消失。
  */
 
 import { getConnection } from '@/modules/database/connection.js';
@@ -104,7 +104,7 @@ function buildTrashWhere(scope: VisibilityScope): { sql: string; params: unknown
 
 export const sessionTrashDb = {
   /**
-   * 把一条会话从活表搬进回收站。**一个事务**;活表里没有这一行时什么都不动。
+   * 把一条会话从活表搬进回收站。一个事务;活表里没有这一行时什么都不动。
    *
    * 返回搬完之后的回收站行(transcript 的回收站路径此时还是 NULL,文件搬完由
    * `recordFilePaths` 补上)。
@@ -208,10 +208,13 @@ export const sessionTrashDb = {
   },
 
   /**
-   * 从回收站搬回活表。**一个事务**。
+   * 从回收站搬回活表。一个事务。
    *
    * 活表里已经有同 id 的行(或同 provider id 的行)时拒绝 —— 那是另一段对话,
-   * 不能把两份显示日志缝在一起。显示日志按**原 id** 写回。
+   * 不能把两份显示日志缝在一起。显示日志按原 id 写回。
+   *
+   * 归档态的会话恢复后 `archived_at` 记为恢复那一刻,归档保留期重新起算:回收站不存原来的
+   * 归档时间,留空的话判据回落到最后活动时间,被保留期清扫送进来的旧会话下一轮就会被送回去。
    */
   restore(sessionId: string): { restored: boolean; reason?: 'not_in_trash' | 'conflict'; row: SessionTrashRow | null } {
     const db = getConnection();
@@ -224,12 +227,13 @@ export const sessionTrashDb = {
       ).get(sessionId, row.provider_session_id ?? '') as { session_id: string } | undefined;
       if (conflict) return { restored: false, reason: 'conflict' as const, row };
 
+      const archived = row.isArchived ? 1 : 0;
       cachedPrepare(db,
-        `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))`,
+        `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, archived_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))`,
       ).run(
         row.session_id, row.provider, row.provider_session_id, row.custom_name, row.project_path, row.jsonl_path,
-        row.isArchived ? 1 : 0, row.created_at, row.updated_at,
+        archived, archived, row.created_at, row.updated_at,
       );
 
       // 原 id 写回:AUTOINCREMENT 不会把删掉的 id 再分给别人,所以不会撞。
@@ -247,8 +251,6 @@ export const sessionTrashDb = {
 
       cachedPrepare(db, 'DELETE FROM session_trash_messages WHERE session_id = ?').run(sessionId);
       cachedPrepare(db, 'DELETE FROM session_trash WHERE session_id = ?').run(sessionId);
-      // gy:反馈随会话一起彻底清掉(进回收站那一步不动它,恢复后反馈还在)。
-      cachedPrepare(db, 'DELETE FROM message_feedback WHERE session_id = ?').run(sessionId);
       return { restored: true, row };
     });
     try {
@@ -267,7 +269,7 @@ export const sessionTrashDb = {
       if (!row) return null;
       cachedPrepare(db, 'DELETE FROM session_trash_messages WHERE session_id = ?').run(sessionId);
       cachedPrepare(db, 'DELETE FROM session_trash WHERE session_id = ?').run(sessionId);
-      // gy:反馈随会话一起彻底清掉(进回收站那一步不动它,恢复后反馈还在)。
+      // 反馈随会话一起彻底清掉(进回收站那一步不动它,恢复后反馈还在)。
       cachedPrepare(db, 'DELETE FROM message_feedback WHERE session_id = ?').run(sessionId);
       return row;
     });
@@ -277,7 +279,7 @@ export const sessionTrashDb = {
   /**
    * 超过保留期的(按删除时间),给清扫器;纯查询。
    *
-   * 只把**参数**归一成 SQLite 的 `YYYY-MM-DD HH:MM:SS`(`datetime(?)`),列保持裸的 ——
+   * 只把参数归一成 SQLite 的 `YYYY-MM-DD HH:MM:SS`(`datetime(?)`),列保持裸的 ——
    * 列上包函数索引就废了,清扫器每 6 小时全表扫一遍 + 临时排序。
    */
   listExpired(cutoffIso: string, limit: number): SessionTrashRow[] {

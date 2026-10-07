@@ -6,36 +6,18 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { routeOrphanMessage, setOrphanTurnHook } from '../claude-sdk.js';
 
 /**
- * gf:**子代理的帧不许掉进主代理的会话流。**
+ * 子代理的帧不许掉进主代理的会话流。
  *
- * ## 线上现象(用户原话)
+ * `sessionsService.normalizeMessage`(claude-sessions.provider.ts)不设 `parentToolUseId`:它只看 SDK 帧
+ * 内容块里的东西,而父 id 挂在 SDK 的外层信封(`parent_tool_use_id`)上。所以每一条流式链路
+ * (一次性路径、常驻回合路径、无主帧路径)都必须在归一化之后自己拷一次。
  *
- * >「我感觉你在胡说,我看你说的是主 agent 的会话流程,其实是子 agent 的。
- * >  你是不是把二者混在一起了。」
+ * 前端 `normalizedToChatMessages` 靠这个字段把 tool_use / tool_result / text / thinking 挡在顶层之外。
+ * 字段一丢,子代理内部的每一步都会当成主代理的活动行平铺到主轴上,而对应的子代理卡片停在「2 步」不动。
  *
- * 他是对的,而且是 gb 那一包写出来的。
- *
- * ## 病根
- *
- * `sessionsService.normalizeMessage`(claude-sessions.provider.ts)**从来不设**
- * `parentToolUseId` —— 它只认 SDK 帧内容块里的东西,父 id 挂在 SDK 的**外层信封**
- * (`parent_tool_use_id`)上。所以每一条流式链路都必须在归一化**之后**自己拷一次:
- *
- *   - 一次性路径      claude-sdk.js:1447
- *   - 常驻回合路径    claude-sdk.js:2865
- *   - **无主帧路径    claude-sdk.js:2323 ← gb 漏了这一处**
- *
- * 丢了这个字段的后果是确定的:前端 `normalizedToChatMessages` 第一句就是
- * 「带 `parentToolUseId` 的 tool_use/tool_result/text/thinking 不出顶层」。
- * 字段没了 → 判据不成立 → 子代理内部的每一步都当成主代理的活动行平铺到主轴上,
- * 而它对应的那张子代理卡还停在「2 步」。**"主 agent 会话流里混进子 agent"就是这么来的。**
- *
- * ## 这份测试为什么要走真链路
- *
- * 这一轮已经在同一个形状上栽过好几次:判据写对、单测全绿,而真实链路喂给它的
- * 根本不是那个值。所以这里**不手搓归一化结果**,而是把一条真 SDK 形状的帧
- * 灌进 `routeOrphanMessage`,让它自己跑一遍 `transformMessage` + 真的
- * `normalizeMessage`,再看钩子收到的东西上有没有父 id。
+ * 这份测试走真链路:最容易漏的就是"判据写对、单测全绿,而真实链路喂给它的根本不是那个值"。所以这里
+ * 不手搓归一化结果,而是把一条真 SDK 形状的帧灌进 `routeOrphanMessage`,让它自己跑一遍
+ * `transformMessage` 和真的 `normalizeMessage`,再看钩子收到的东西上有没有父 id。
  */
 describe('无主帧必须保住 parentToolUseId', () => {
   afterEach(() => setOrphanTurnHook(null));

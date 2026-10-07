@@ -54,7 +54,7 @@ type SidebarProjectItemProps = {
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
   /** 权限保存成功后刷新项目列表,让徽标(公共/已共享·N)立即跟上。 */
   onProjectsRefresh?: () => void;
-  /** eo:多选态。为真时行首出现复选框,整行点击变成勾选。 */
+  /** 多选态。为真时行首出现复选框,整行点击变成勾选。 */
   selectionMode?: boolean;
   isSelectedForBulk?: boolean;
   onToggleSelection?: (projectId: string) => void;
@@ -75,16 +75,15 @@ type VisibilityBadgeProps = {
 };
 
 /**
- * 项目可见性标记 —— **只给图标,不给文字**。
+ * 项目可见性标记,只给图标、不给文字。
  *
- * 原来是四个带边框的文字胶囊(公共 / 仅 root / 共享 / 已共享·N)。侧栏内宽只有
- * ~236px,一个「已共享·4」就要吃掉 56px,项目名被迫先截断 —— 而项目名才是这一行
- * 真正要读的东西。换成 14px 图标之后,同样的信息占 ~18px。
+ * 侧栏内宽只有 ~236px,文字胶囊(一个「已共享·4」就要 56px)会让项目名先被截断,
+ * 而项目名才是这一行真正要读的东西;14px 图标表达同样的信息只占 ~18px。
  *
- * 含义不靠猜:每个图标都挂 `title` + `aria-label`,悬停出全句解释,读屏器也念得出。
- * 「已共享」后面那个数字是共享人数,保留 —— 那是个量,不是个状态。
+ * 每个图标都挂 `title` + `aria-label`,悬停出全句解释,读屏器也念得出。
+ * 「已共享」后面的数字是共享人数,保留:那是个量,不是个状态。
  *
- * 四个状态的分工:
+ * 四个状态:
  * - 公共(Globe):无主且在公共目录下,对所有人可见
  * - 仅 root(Lock):无主但没在公共目录下,只有 root 收得到
  * - 他人共享给你(UserCheck)
@@ -151,22 +150,14 @@ function ProjectVisibilityBadges({
 }
 
 /**
- * 一行项目。**用 memo 包起来**。
+ * 一行项目,用 memo 包起来。
  *
- * ## 为什么现在包才有意义
+ * memo 靠 props 引用不变:`sessions={getProjectSessions(project)}` 能稳定,全靠
+ * `getAllSessions` 按 project 对象缓存;没有那层缓存,每次渲染都是新数组,memo 永远不命中。
  *
- * `memo` 靠的是"props 引用没变"。此前 `sessions={getProjectSessions(project)}`
- * **每次渲染都是一个新数组**(内部整份拷贝+排序),所以包了也永远不命中 ——
- * 这也是为什么它此前没被包:包了没用。
- *
- * `getAllSessions` 换成按 project 对象缓存之后,这条 props 才真正稳定下来,
- * `memo` 从"白写"变成"有效"。两件事必须一起做,单做任何一件都没用。
- *
- * ## 剩下那条会穿透 memo 的 props 是故意的
- *
- * `currentTime` 每 60 秒变一次,届时所有行一起重渲染 —— 这是对的:
- * 相对时间("3 分钟前")本来就该刷新。要紧的是**搜索框每敲一个字**、
- * 展开/收起某个项目、某条会话状态变化时,不相干的行不再跟着重渲染。
+ * `currentTime` 每 60 秒变一次,届时所有行一起重渲染,这是有意的:相对时间("3 分钟前")
+ * 本来就该刷新。要紧的是搜索框每敲一个字、展开 / 收起某个项目、某条会话状态变化时,
+ * 不相干的行不再跟着重渲染。
  */
 function SidebarProjectItem({
   project,
@@ -216,15 +207,14 @@ function SidebarProjectItem({
   const isEditing = editingProject === project.projectId;
   const totalSessionCount = Number(project.sessionMeta?.total ?? sessions.length);
   const sessionCountDisplay = getSessionCountDisplay(project, sessions);
-  // hl(P3 中英混排):原来写死英文 `0 sessions`,中文界面里一句英文。
-  // 用 `sessions` 而不是 `count` 作插值名:这条不需要复数变体键(同 fileTree.batchDownloadLabel)。
+  // 插值名用 `sessions` 而不是 `count`:这条不需要复数变体键(同 fileTree.batchDownloadLabel)。
   const sessionCountLabel = totalSessionCount === 1
     ? t('projects.sessionCountOne', { sessions: sessionCountDisplay, defaultValue: `${sessionCountDisplay} 个会话` })
     : t('projects.sessionCount', { sessions: sessionCountDisplay, defaultValue: `${sessionCountDisplay} 个会话` });
 
   // "公共" 只在项目真正对所有人可见时才打(无主且落在 PRISM_PUBLIC_WORKSPACE 下,
-  // 由后端 isPublic 判定)。以前拿 ownerUserId===null 当"公共"是错的 —— 没配公共目录
-  // 时,无主项目其实只有 root 看得到,不该标"公共"。
+  // 由后端 isPublic 判定)。不能拿 ownerUserId === null 当"公共":不在公共目录下的
+  // 无主项目只有 root 看得到。
   const isPublicProject = project.isPublic === true;
   // 无主但不在公共目录:只有 root 收得到这类项目(非 root 根本不会出现在列表里)。
   // 给它一个"仅 root"标,让管理员一眼看出这些是未认领、仅自己可见的目录。
@@ -233,12 +223,11 @@ function SidebarProjectItem({
   const isSharedToViewer = project.sharedWithViewer === true;
   // 反向视角:owner 和 root 不是接收方,靠授权人数看出"这个项目共享过"。
   const sharedOutCount = !isSharedToViewer ? (project.sharedUserCount ?? 0) : 0;
-  // 权限管理入口:root 或项目 owner 才显示。这只是入口显隐 —— 服务端对
-  // GET/PUT /permissions 有同样的校验(非 owner/root 一律 403),边界在后端。
-  // hl(动态 P1-5 / P2-7):**改名的铅笔与归档 / 删除的垃圾桶也按这一条画** ——
-  // 显示名是全局的一列,服务端 rename 现在与权限同门(非 owner / root 403);
-  // 无主(公共目录)项目的归档 / 永久删自 hl 起只给 root。给协作者画一枚必然 403 的按钮
-  // 比不画更糟。
+  // 权限管理入口:root 或项目 owner 才显示。这只是入口显隐,服务端对
+  // GET/PUT /permissions 有同样的校验(非 owner / root 一律 403),边界在后端。
+  // 改名的铅笔与归档 / 删除的垃圾桶也按这一条画:显示名是全局的一列,服务端 rename
+  // 与权限同门(非 owner / root 403);无主(公共目录)项目的归档 / 永久删除只给 root。
+  // 给协作者画一枚必然 403 的按钮比不画更糟。
   const canManagePermissions =
     user?.isRoot === true ||
     (project.ownerUserId != null &&
@@ -248,12 +237,11 @@ function SidebarProjectItem({
   const canRemoveProject = canManagePermissions;
 
   /**
-   * gq:改名时**点行外关闭**。
+   * 改名时点行外关闭。
    *
-   * 原来项目行改名只有 Enter / Esc / ✓ / ✕ 四条出路 —— 点到别处那一行就一直
-   * 停在编辑态,而它上面既没有遮罩也没有焦点提示,看上去像界面卡住了。
-   * 会话行早就有这个行为(`SidebarSessionItem`),两边现在一致:**点外面 = 取消**,
-   * 不是保存 —— 误点一下就把项目改名了,比丢掉几个字糟得多。
+   * 编辑态上面既没有遮罩也没有焦点提示,点到别处还停在编辑态,看上去像界面卡住了。
+   * 与会话行(`SidebarSessionItem`)一致:点外面 = 取消,不是保存;
+   * 误点一下就把项目改了名,比丢掉几个字糟得多。
    *
    * 手机卡片与桌面行各一个 ref:同一时刻只有一个在 DOM 里,但两边都要认。
    */
@@ -286,7 +274,7 @@ function SidebarProjectItem({
   /**
    * 行的默认动作:选中项目并展开会话。
    *
-   * **多选态下改成勾选** —— 但这只在用户显式点过「多选」之后才生效。
+   * 多选态下改成勾选 —— 但这只在用户显式点过「多选」之后才生效。
    * 悄悄把"打开"改成"选中"是删错东西的开始(文件树那边同样的取舍)。
    */
   const selectAndToggleProject = () => {
@@ -319,8 +307,7 @@ function SidebarProjectItem({
           >
             <div className="flex items-center justify-between">
               <div className="flex min-w-0 flex-1 items-center gap-3">
-                {/* eo:多选态下这一格是复选框 —— 手机上收藏星那个 32px 的按钮
-                    正好是最顺手的位置,不必再挤出一格。 */}
+                {/* 多选态下这一格换成复选框:手机上收藏星那个 32px 的位置最顺手,不必再挤出一格。 */}
                 {selectionMode ? (
                   <span className="flex h-8 w-8 flex-none items-center justify-center">
                     <input
@@ -408,7 +395,7 @@ function SidebarProjectItem({
                 </div>
               </div>
 
-              {/* eo:多选态下收起这排单条动作 —— 单条与批量混在一起最容易点错。 */}
+              {/* 多选态下收起这排单条动作:单条与批量混在一起最容易点错。 */}
               <div className={cn('flex items-center gap-1', selectionMode && 'hidden')}>
                 {isEditing ? (
                   <>
@@ -507,13 +494,7 @@ function SidebarProjectItem({
           onClick={selectAndToggleProject}
         >
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            {/* ef:设计稿的项目行是「箭头 → 文件夹 → 名字 …… 会话数」。
-                箭头原来在行尾,和右侧的会话数、悬停动作挤在一起;放到最左边之后
-                展开状态一眼可见,层级也和下面缩进的会话行对得上。
-
-                eo:多选态下复选框**顶掉箭头**,而不是再挤进去一格 —— 侧栏内宽
-                只有 ~210px,多一格就少 16px 项目名(这行被挤没过一次了)。
-                多选时也不需要展开:要选的是项目,不是会话。 */}
+            {/* 项目行是「箭头 → 文件夹 → 名字 …… 会话数」,箭头在最左,展开状态一眼可见;多选态下复选框顶替箭头而不另占一格(侧栏只有 ~210px,多一格就少 16px 项目名),多选时也不需要展开。 */}
             {selectionMode ? (
               <input
                 type="checkbox"
@@ -532,11 +513,8 @@ function SidebarProjectItem({
             />
             <div className="min-w-0 flex-1 text-left">
               {isEditing ? (
-                /* gq:改名也是**单行**。
-                   原来这里是 `space-y-1`:输入框下面再挂一行完整路径,行高从 36px
-                   涨到 ~70px,底下的项目全被顶下去一截。而这一行的既定设计就是
-                   「完整路径进 title,不再占第二行」(见下面非编辑分支的注释)——
-                   编辑分支是那次改动漏下的。路径进输入框的 title,悬停照样看得到。 */
+                /* 改名也是单行:完整路径放进输入框的 title,不另占第二行(与非编辑分支一致),
+                   否则行高会从 36px 涨到 ~70px,把底下的项目顶下去一截。 */
                 <input
                   type="text"
                   value={editingName}
@@ -611,7 +589,7 @@ function SidebarProjectItem({
               <>
                 {/* 收藏星也收进悬停浮层了 —— `sortProjects` 里收藏项无条件排在最前,
                     位置本身就是状态,行里再挂一颗常驻的星是重复表达,还要占 24px。 */}
-                {/* ef:项目行 = 名字 + 会话数(等宽小字),悬停浮层盖上来时它让位。 */}
+                {/* 项目行 = 名字 + 会话数(等宽小字),悬停浮层盖上来时它让位。 */}
                 {totalSessionCount > 0 && (
                   <span
                     className="font-mono text-[10.5px] tabular-nums text-muted-foreground group-hover:invisible"
@@ -624,15 +602,7 @@ function SidebarProjectItem({
             )}
           </div>
 
-          {/*
-            悬停动作浮在行上,**不参与行内布局**。
-            以前这四个按钮(星/改名/权限/删除)是 `opacity-0 group-hover:opacity-100` ——
-            看不见,但 4×24px + 间距 ≈ 96px 的宽度一直占着。侧栏内宽本来就只有
-            ~210px,再减掉文件夹图标与箭头,名字只剩 ~58px,于是 `chendongchao`
-            被截成 `chendo…`;再挂个「已共享·4」徽标,名字直接被挤到 0 宽度
-            (线上截图里那行只剩徽标,项目名整个不见了)。
-            改成绝对定位之后,这些按钮悬停时盖在名字尾部,而不是挤压它。
-          */}
+          {/* 悬停动作绝对定位浮在行上、不参与行内布局:侧栏内宽只有 ~210px,四个按钮常驻占位(哪怕透明)会把项目名挤到几乎 0 宽,悬停时盖住名字尾部即可。 */}
           {!isEditing && !selectionMode && (
             <div className="absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md bg-muted pl-3 group-hover:flex">
               <div

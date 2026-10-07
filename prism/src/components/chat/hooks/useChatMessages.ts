@@ -9,10 +9,10 @@ import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } 
 
 function formatToolResultContent(content: unknown): string {
   /**
-   * dv:`JSON.stringify(undefined)` 返回的是 **undefined 值**(不是字符串),
-   * 紧接着 `.trim()` 就抛 TypeError —— 而 `NormalizedMessage.content` 是可选的,
-   * transcript 解析层在 content 缺席时正好产出它。一条这样的 tool_result 就能
-   * 让整个 `normalizedToChatMessages` 在 useMemo 里抛错、聊天页白屏。
+   * `JSON.stringify(undefined)` 返回的是 undefined 值(不是字符串),紧接着 `.trim()` 就抛
+   * TypeError;而 `NormalizedMessage.content` 是可选的,transcript 解析层在 content 缺席时
+   * 正好产出它。一条这样的 tool_result 就能让整个 `normalizedToChatMessages` 在 useMemo 里
+   * 抛错、聊天页白屏,所以兜底成空串。
    */
   const text = typeof content === 'string' ? content : (JSON.stringify(content) ?? '');
   const toolUseErrorMatch = /^<tool_use_error>([\s\S]*)<\/tool_use_error>$/.exec(text.trim());
@@ -114,11 +114,10 @@ type ConversionCacheEntry = {
  *
  * The point is reference stability, not raw speed. Every stream delta replaces
  * the store's realtime array, which re-runs this conversion across the *entire*
- * transcript; each pass used to mint brand-new ChatMessage objects for messages
- * that had not changed, so every `memo`'d row re-rendered on every frame of
- * streaming, and `ChatMessagesPane`'s key map saw a new object for the same
- * logical message after each pagination prepend — remounting the list and
- * jumping the viewport.
+ * transcript; minting new ChatMessage objects for unchanged messages would
+ * re-render every `memo`'d row on every streaming frame, and would hand
+ * `ChatMessagesPane`'s key map a new object for the same logical message after
+ * each pagination prepend — remounting the list and jumping the viewport.
  *
  * Keying on identity is only sound because the store never mutates a
  * NormalizedMessage in place: `updateStreaming` and `finalizeStreaming` each
@@ -150,13 +149,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
   }
 
   /**
-   * 子代理实时子步骤归拢(ci 轮)。
+   * 子代理实时子步骤归拢。
    *
-   * SDK 在 forwardSubagentText=false 下依然实时转发子代理的 tool_use /
-   * tool_result 帧(带 parentToolUseId),且已随显示日志持久化 —— 此前前端
-   * 不消费,这些行被当**顶层工具行**混进主时间轴,层级全丢。现在:
-   * 按 parentToolUseId 归拢成 SubagentChildTool[],塞给对应父容器
-   * (toolId === parentToolUseId)的 subagentState;这些行自身不再出顶层。
+   * SDK 会实时转发子代理的 tool_use / tool_result 帧(带 parentToolUseId,forwardSubagentText
+   * 关着也转发),且随显示日志持久化。按 parentToolUseId 归拢成 SubagentChildTool[],塞给对应
+   * 父容器(toolId === parentToolUseId)的 subagentState;这些行自身不出顶层,否则它们会当
+   * 顶层工具行混进主时间轴,层级全丢。
    */
   const childResultByToolId = new Map<string, NormalizedMessage>();
   for (const msg of messages) {
@@ -165,16 +163,15 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     }
   }
   /**
-   * gd:**后台任务的进展与汇报,按 `toolId` 归到子代理卡上。**
+   * 后台任务的进展与汇报,按 `toolId` 归到子代理卡上。
    *
-   * SDK 的 `task_progress` / `task_notification` 都带 `tool_use_id`,而那正是
-   * 那次 Task/Agent 调用的 id —— 也就是子代理卡的身份。任务一转后台,
-   * 子代理的内部步骤就**不再走实时流**了(那次工具调用当场拿到一个
-   * "running in the background" 的 tool_result),卡片因此停在转后台之前的那几步。
-   * 线上看到的「2 步」+ 另起一行的完成汇报,就是这两样没连起来。
+   * SDK 的 `task_progress` / `task_notification` 都带 `tool_use_id`,那正是那次 Task/Agent
+   * 调用的 id,也就是子代理卡的身份。任务一转后台,子代理的内部步骤就不再走实时流(那次工具
+   * 调用当场拿到一个 "running in the background" 的 tool_result),卡片停在转后台之前的那几步;
+   * 不把这两样连起来,卡片就停在「2 步」,完成汇报另起一行。
    *
-   * 汇报优先于进展:同一个 toolId 上,`task_notification` 是终态,不许被后到的
-   * 进展帧盖回 running(帧的顺序在重连补发时不保证)。
+   * 汇报优先于进展:同一个 toolId 上,`task_notification` 是终态,不许被后到的进展帧盖回
+   * running(帧的顺序在重连补发时不保证)。
    */
   const backgroundByToolId = new Map<string, NonNullable<ChatMessage['subagentState']>['background']>();
   for (const msg of messages) {
@@ -194,16 +191,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     });
   }
   /**
-   * ge:**后台任务的完成/失败归到它自己那一行,主对话流里一行都不多出。**
+   * 后台任务的完成 / 失败归到它自己那一行,主对话流里一行都不多出。
    *
-   * gd 只把有 `tool_use_id` 的汇报归给**子代理卡**,别的(转后台的 Bash、
-   * workflow)照旧独立成行 —— 实机看下来那一串「✅ 后台任务完成 Run minidb
-   * test suite」把一条本该连贯的时间轴切得七零八落,而它说的事**那一行自己
-   * 就能说**(那条 Bash 就在上面几行)。
-   *
-   * 所以归属集合放宽到**任何 tool_use**:后台跑的东西必然是某次工具调用起的,
-   * 它的终态就该回到那次调用上。剩下真正无主的(那一行被 trim 出窗口了),
-   * 也不再单独成行 —— 内容仍在显示日志里,只是不在这条轴上插一句旁白。
+   * 归属集合是任何 tool_use,不只子代理卡:后台跑的东西(转后台的 Bash、workflow 等)必然是
+   * 某次工具调用起的,它的终态就该回到那次调用上;单独成行的「后台任务完成 X」会把一条本该
+   * 连贯的时间轴切碎。真正无主的(那一行被 trim 出窗口了)也不单独成行:内容仍在显示日志里,
+   * 只是不在这条轴上插一句旁白。
    */
   const toolRowIds = new Set<string>();
   for (const msg of messages) {
@@ -214,13 +207,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
   for (const msg of messages) {
     if (!msg.parentToolUseId) continue;
     /**
-     * ge:**正文与思考也收进来。**
+     * 正文与思考也收进来。
      *
-     * SDK 默认只转发子代理的 `tool_use` / `tool_result`("enough for a heartbeat
-     * counter"),`forwardSubagentText: true` 之后正文与思考也带着
-     * `parent_tool_use_id` 一起来 —— SDK 明说那就是给"渲染嵌套 transcript"用的。
-     * 此前这两种被**直接丢掉**(顶层那句 `continue` 之外没有别的去处),
-     * 于是点开一张卡只有一串光秃秃的工具名,看不出它在想什么。
+     * SDK 默认只转发子代理的 `tool_use` / `tool_result`("enough for a heartbeat counter"),
+     * `forwardSubagentText: true` 之后正文与思考也带着 `parent_tool_use_id` 一起来,SDK 明说
+     * 那就是给"渲染嵌套 transcript"用的。不收的话,点开一张卡只有一串光秃秃的工具名,
+     * 看不出它在想什么。
      */
     if (msg.kind === 'text' || msg.kind === 'thinking') {
       const body = typeof msg.content === 'string' ? msg.content.trim() : '';
@@ -267,15 +259,14 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       continue;
     }
     /**
-     * ge:任务生命周期的行**有主的不出顶层**。
+     * 任务生命周期的行,有主的不出顶层。
      *
-     * 进展每几秒一条,本来就只归行;带 `toolId` 的完成/失败也归到它自己那一行
-     * (见上面 `toolRowIds`)。要的是"一根轴串下来",不是每隔几行插一句旁白。
+     * 进展每几秒一条,只归行;带 `toolId` 的完成 / 失败也归到它自己那一行(见上面 `toolRowIds`)。
+     * 要的是"一根轴串下来",不是每隔几行插一句旁白。
      *
-     * gh:**没有 `toolId` 的照旧渲染成回执行。** ge 把所有 task_notification 一刀切掉,
-     * 连定时任务的三条回执(「⏰ 开始执行」「✅ 执行完成」「⚠️ 执行失败:<原因>」)也一起
-     * 没了 —— 它们从来没有 tool_use_id,不是旁白,是那条会话唯一的成败说明。
-     * 删一类东西之前要先列全它的来源;这里就是没列全的代价。
+     * 没有 `toolId` 的 task_notification 照旧渲染成回执行:定时任务的三条回执(「开始执行」
+     * 「执行完成」「执行失败:<原因>」)都没有 tool_use_id,它们不是旁白,是那条会话唯一的
+     * 成败说明。
      */
     if (msg.kind === 'task_progress') continue;
     if (msg.kind === 'task_notification' && msg.toolId) continue;
@@ -284,16 +275,15 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     const realtimeChildren = msg.kind === 'tool_use' && msg.toolId
       ? childrenByParent.get(msg.toolId) ?? null
       : null;
-    // ge:任何工具行都可能被转到后台,不只是子代理容器。
+    // 任何工具行都可能被转到后台,不只是子代理容器。
     const background = msg.kind === 'tool_use' && msg.toolId && toolRowIds.has(msg.toolId)
       ? backgroundByToolId.get(msg.toolId)
       : undefined;
     /**
-     * gd:**后台状态必须进缓存签名。**
+     * 后台状态必须进缓存签名。
      *
-     * 缓存按 `msg` 对象缓存,而后台任务的进展是**另一条消息**带来的 ——
-     * 容器那一行自己一个字都没变。不进签名的话,进度涨了、任务完成了,
-     * 这张卡还是缓存里那份旧的:"修复代码在,数据到不了它"的又一种形状。
+     * 缓存按 `msg` 对象缓存,而后台任务的进展是另一条消息带来的,容器那一行自己一个字都没变。
+     * 不进签名的话,进度涨了、任务完成了,这张卡还是缓存里那份旧的。
      */
     const childSignature = [
       realtimeChildren
@@ -333,7 +323,7 @@ function convertMessage(
   msg: NormalizedMessage,
   resolvedToolResult: ResolvedToolResult,
   realtimeChildren: SubagentChildTool[] | null = null,
-  /** gd:这个子代理转到后台之后的进展与汇报(按 toolId 归拢,见调用点)。 */
+  /** 这次工具调用转到后台之后的进展与汇报(按 toolId 归拢,见调用点)。 */
   background: NonNullable<ChatMessage['subagentState']>['background'] = undefined,
 ): ChatMessage[] {
   const converted: ChatMessage[] = [];
@@ -382,7 +372,7 @@ function convertMessage(
             content: unescapeWithMathProtection(decodeHtmlEntities(content)),
             timestamp: msg.timestamp,
             images,
-            // ho(ho-1):合流消息的撤回 / 置灰
+            // 合流消息的撤回 / 置灰
             ...(msg.clientMessageId ? { clientMessageId: msg.clientMessageId } : {}),
             ...(msg.withdrawn === true ? { withdrawn: true } : {}),
             ...(msg.interjection === true ? { interjection: true } : {}),
@@ -447,13 +437,10 @@ function convertMessage(
             content: formatToolResultContent(tr.content),
             isError: Boolean(tr.isError),
             /**
-             * dv:把结果帧的时间戳带上。
+             * 把结果帧的时间戳带上。
              *
-             * `toolDuration`(工具行的「耗时」列)读的就是这个字段,而生产链路
-             * 上唯一的构造点就是这里,原来只写 content/isError/toolUseResult ——
-             * 于是真实会话里耗时**恒为空**;单测手搓对象所以一直是绿的。
-             * 独立 tool_result 行有自己的 timestamp;服务端预挂的那份没有,
-             * 缺席时仍返回空,行为与从前一致。
+             * `toolDuration`(工具行的「耗时」列)读的就是这个字段,而生产链路上唯一的构造点就是这里。
+             * 独立 tool_result 行有自己的 timestamp;服务端预挂的那份没有,缺席时耗时为空。
              */
             timestamp: (tr as { timestamp?: string | number | Date }).timestamp,
             toolUseResult: tr.toolUseResult,
@@ -469,7 +456,7 @@ function convertMessage(
         toolInput: typeof msg.toolInput === 'string' ? msg.toolInput : JSON.stringify(msg.toolInput ?? '', null, 2),
         toolId: msg.toolId,
         toolResult,
-        // ge:转后台的工具行(不只子代理)——`summarizeToolRow` 据此显示真实终态。
+        // 转后台的工具行(不只子代理):`summarizeToolRow` 据此显示真实终态。
         ...(background ? { background } : {}),
         isSubagentContainer,
         subagentState: isSubagentContainer
@@ -477,9 +464,8 @@ function convertMessage(
               childTools,
               currentToolIndex: childTools.length > 0 ? childTools.length - 1 : -1,
               /**
-               * gd:转到后台的任务,那次工具调用**立刻**就有 tool_result
-               * ("running in the background"),按老判据当场就算"完成"了。
-               * 真正的终态在 `task_notification` 里 —— 有后台状态时以它为准。
+               * 转到后台的任务,那次工具调用立刻就有 tool_result("running in the background"),
+               * 不能据此判完成;真正的终态在 `task_notification` 里,有后台状态时以它为准。
                */
               isComplete: background ? background.status !== 'running' : Boolean(toolResult),
               ...(background ? { background } : {}),
@@ -508,10 +494,9 @@ function convertMessage(
         content: msg.content || 'Unknown error',
         timestamp: msg.timestamp,
         ...sharedMetadata,
-        // ga:本地提示的标记要还原回来 —— `endsTurnForOutputs` 靠它区分
-        // "provider 报的错终结回合"与"前端就地插的一条红字"。
-        // 剥掉它的后果:拖一个超大附件进输入框,正在跑的工具清单当场塌成一行、
-        // 真正在跑的那条命令翻成「已中断」、这一轮的产出卡被清空。
+        // 本地提示的标记要还原回来:`endsTurnForOutputs` 靠它区分"provider 报的错终结回合"与
+        // "前端就地插的一条红字"。剥掉它的话,拖一个超大附件进输入框,正在跑的工具清单会当场
+        // 塌成一行、真正在跑的那条命令翻成「已中断」、这一轮的产出卡被清空。
         ...(msg.isLocalNotice ? { isLocalNotice: true } : {}),
       });
       break;
@@ -593,17 +578,14 @@ function convertMessage(
 
   // 把稳定身份从 NormalizedMessage 盖到每条 ChatMessage 上。
   //
-  // 此前这一步整个漏掉:convertMessage 产出的 ChatMessage 不带 id/seq/rowid,
-  // 于是 getIntrinsicMessageKey 只能退化到 "时间戳+正文前 48 字" 当 key。两个
-  // 后果都很实:
-  //   1)「编辑重跑」按钮 gated 在 message.id 上,永远 undefined → 功能整体死掉;
-  //   2)流式气泡的 id 本是稳定的 `__streaming_<sid>`,丢了之后 key 变成
-  //      "时间戳+正文",而 updateStreaming 每次 flush 换新时间戳 → key 每 100ms
-  //      漂移 → React 每次都卸载重建整个流式气泡(DOM 重建 + markdown 重排)。
-  // 一处补齐,同时救这两个症状。
+  // convertMessage 产出的 ChatMessage 不带 id / seq / rowid,不补的话 getIntrinsicMessageKey
+  // 只能退化到"时间戳 + 正文前 48 字"当 key:
+  //   1)「编辑重跑」按钮 gated 在 message.id 上,会永远是 undefined;
+  //   2)流式气泡的 id 本是稳定的 `__streaming_<sid>`,丢了之后 key 随 updateStreaming 每次
+  //      flush 的新时间戳漂移,React 每 100ms 卸载重建整个流式气泡(DOM 重建 + markdown 重排)。
   //
   // 多输出防撞:一条 msg 可能拆成多条(task-notification = 状态行 + 结果正文),
-  // 它们共用同一个 msg.id 会撞 key —— >1 时给 id 加 `#index` 后缀。
+  // 它们共用同一个 msg.id 会撞 key,>1 时给 id 加 `#index` 后缀。
   const multi = converted.length > 1;
   return converted.map((chatMessage, index) => {
     if (chatMessage.id !== undefined && chatMessage.id !== null) return chatMessage;

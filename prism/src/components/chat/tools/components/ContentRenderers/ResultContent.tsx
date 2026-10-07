@@ -19,7 +19,8 @@ interface ResultContentProps {
  * - 一句话 → 就一行,不套框(`Cancelled job 15082b3a` 这种)
  * - 其余 → 等宽块,超高折叠,右上角悬停出复制
  *
- * 失败不用红色(设计系统里红只留给不可逆销毁),靠「失败」二字与弱化描边表达。
+ * 失败不用红色(设计系统里红只留给不可逆销毁):空输出与一句话前面标「失败」;
+ * 多行块不另加标记,失败由工具行上的状态徽标表达。
  */
 export const ResultContent: React.FC<ResultContentProps> = ({ content, isError }) => {
   const { t } = useTranslation('chat');

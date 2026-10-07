@@ -105,10 +105,8 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
     }
 
     /**
-     * fj:结束判据从"半角空格"改成"任意空白"。
-     *
-     * 换行不是半角空格,**中文正文里也几乎没有半角空格** —— 于是
-     * `参考@Rea这个文件改一下` 会让下拉一直开着,盖住上方消息,还把 ↑/↓ 吞掉
+     * `@` 之后出现任意空白(含换行)就收起下拉,不只认半角空格:
+     * 只认半角空格的话,换了行下拉还开着,盖住上方消息,还把 ↑/↓ 吞掉
      * (方向键既移不动光标,也触发不了历史回填)。
      */
     const textAfterAt = textBeforeCursor.slice(lastAtIndex + 1);
@@ -119,7 +117,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
     }
 
     /**
-     * fj:`@` 前面必须是行首或空白,否则 `zhang@example.com` 这种邮箱地址
+     * `@` 前面必须是行首或空白,否则 `zhang@example.com` 这种邮箱地址
      * 一打出来就弹文件下拉。
      */
     const charBeforeAt = lastAtIndex > 0 ? textBeforeCursor[lastAtIndex - 1] : '';
@@ -198,12 +196,11 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
   const selectFile = useCallback(
     (file: MentionableFile) => {
       /**
-       * fj:被替换的只是「@ 到光标」这一段,后面的正文一个字都不许动。
+       * 被替换的只是「@ 到光标」这一段,后面的正文一个字都不许动。
        *
-       * 原来是 `indexOf(' ')` 找半角空格,找不到就把余下全部丢弃。换行不是空格,
-       * **中文正文里也没有半角空格** —— 于是回头去改一个提及(光标停在 `@Rea`
-       * 后面、下面还有几行正文)时,点一下补全项就把后面全吃掉了,没有撤销、
-       * 没有提示。判据抽到 `completionBoundary`,与斜杠命令共用一份并钉了测试。
+       * 不能按 `indexOf(' ')` 找结尾:换行不是空格,中文正文里也没有半角空格,
+       * 回头去改一个提及(光标停在 `@Rea` 后面、下面还有几行正文)时会把后面全吃掉。
+       * 判据在 `completionBoundary`,与斜杠命令共用一份,有测试钉住。
        */
       const { text: newInput, caret: newCursorPosition } = replaceCompletionToken(
         input,
@@ -265,14 +262,13 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
       }
 
       if (event.key === 'Tab' || event.key === 'Enter') {
-        // 没高亮任何一项时**不抢回车**。
+        // 没高亮任何一项时不抢回车。
         //
-        // 这个下拉的开启条件极宽:光标前有 `@` 且其后无空格就开,**空查询也开**
-        // (空串对所有文件都成立)。原来回车会无条件退而取首项,于是
-        // 「帮我回复 @」+ 回车 = 不发送,而是把文件列表第一项的路径插进输入框,
-        // 得再按一次回车才发得出去。中文里 `@` 出现得并不少,这个很烦人。
+        // 这个下拉的开启条件极宽:光标前有 `@` 且其后无空白就开,空查询也开
+        // (空串对所有文件都成立)。回车若无条件退而取首项,「帮我回复 @」+ 回车
+        // 就不是发送,而是把文件列表第一项的路径插进输入框。
         //
-        // Tab 不在此列 —— 补全键补成第一个匹配项是它该有的行为。
+        // Tab 不在此列:补全键补成第一个匹配项是它该有的行为。
         if (event.key === 'Enter' && selectedFileIndex < 0) {
           return false;
         }

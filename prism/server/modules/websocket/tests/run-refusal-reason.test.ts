@@ -12,20 +12,14 @@ import { claimForShell, releaseShellClaim } from '@/modules/websocket/services/c
 import { connectedClients } from '@/shared/websocket-state.js';
 
 /**
- * ga:**`startRun` 返回 null 有两种原因,调用方必须分得清。**
+ * `startRun` 返回 null 有两种原因,调用方必须分得清。
  *
- * fz 在 `startRun` 里加了"终端接管着就不许开跑"(在此之前定时任务和外部 API
- * 会在终端接管期间照样起一个 CLI resume 同一份 transcript)。可三个非网页调用点
- * 的文案还是老那一种:定时任务抛 `目标会话正有回合在跑,本次跳过`、外部 API 回
- * `already has a run in progress`。于是**一个开着的终端会让定时任务在 15 分钟里
- * 连发三条内容错误的失败告警**(5 分钟一次、共 3 次),而真正该做的事是去把那个
- * 终端关掉 —— 告警里一个字都没提。
+ * 终端接管着就不许开跑(否则定时任务和外部 API 会在接管期间再起一个 CLI resume 同一份 transcript)。
+ * 非网页调用点若只有"有回合在跑"那一种文案,一个开着的终端会让定时任务连发几条内容错误的失败告警
+ * (定时任务抛"目标会话正有回合在跑"、外部 API 回 `already has a run in progress`),而真正该做的
+ * 是去把那个终端关掉。
  *
- * 打印室门上两种情况都让你进不去(里面有人在印 / 维修师傅反锁了),自动播报
- * 却只会说"里面有人正在印,请稍后"。
- *
- * 这条测试跑的是**真实链路**:真的建会话、真的 startRun 占位、真的 claimForShell
- * 接管,然后问 `explainRunRefusal`。
+ * 这条测试跑真实链路:真的建会话、真的 startRun 占位、真的 claimForShell 接管,然后问 `explainRunRefusal`。
  */
 let tempDirectory: string;
 let previousDatabasePath: string | undefined;
@@ -70,13 +64,13 @@ describe('explainRunRefusal', () => {
     sessionsDb.createAppSession('s-held', 'claude', path.join(tempDirectory, 'proj'), 1);
     const holder = claimForShell('s-held', { userId: 7, username: '小王' });
     try {
-      // 这就是 fz 加的那道门 —— 它确实挡住了,但原来说不出为什么。
+      // 终端接管那道门确实挡住了;explainRunRefusal 要说得出为什么。
       expect(startRunFor('s-held')).toBeNull();
       const refusal = chatRunRegistry.explainRunRefusal('s-held');
       expect(refusal.code).toBe('HELD_BY_SHELL');
       expect(refusal.holder).toBe('小王');
       expect(refusal.message).toContain('终端接管');
-      // 关键:**不能**再说成"有回合在跑" —— 那句话会让人去等,而该做的是关终端。
+      // 关键:不能再说成"有回合在跑" —— 那句话会让人去等,而该做的是关终端。
       expect(refusal.message).not.toContain('正有回合在跑');
     } finally {
       releaseShellClaim('s-held', holder.token);
@@ -101,7 +95,7 @@ describe('explainRunRefusal', () => {
 });
 
 /**
- * 上面证明了"问得出原因",下面证明**三个调用点真的在问**。
+ * 上面证明了"问得出原因",下面证明三个调用点真的在问。
  * (它们各自要真 HTTP / 真调度器才跑得起来,这里读源码钉住接线。)
  */
 describe('三个非网页调用点都改用了这个原因', () => {

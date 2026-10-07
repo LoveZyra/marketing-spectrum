@@ -26,7 +26,7 @@ type ProviderCapabilities = {
 };
 
 /**
- * The capability matrix mirrors what the Claude runtime actually implements today:
+ * The capability matrix mirrors what the Claude runtime implements:
  * - permission modes match the option set accepted by the Claude SDK.
  * - the Claude SDK integration surfaces interactive permission requests.
  */

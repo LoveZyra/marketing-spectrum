@@ -2,34 +2,25 @@ import { authenticatedFetch } from './api';
 import { decodeJwtPayload } from './tokenRefresh';
 
 /**
- * 账号级界面偏好同步(F11)。
+ * 账号级界面偏好同步。
  *
- * 权限清单、项目排序、编辑器偏好、文件树视图、提示音开关 —— 这些全都住在
- * localStorage 里,于是换台电脑、换个浏览器、清一次缓存就全部归零,而它们是
- * 用户一条条调出来的。
+ * 权限清单、项目排序、编辑器偏好、文件树视图、提示音开关都住在 localStorage 里,
+ * 换台电脑、换个浏览器、清一次缓存就全部归零,而它们是用户一条条调出来的。
  *
- * 做法刻意保守:**localStorage 仍然是读的那一份**(同步、无网络、不会让界面
- * 在启动时闪一下默认值),服务端只是它的备份与跨设备通道。登录后拉一次,
- * 改动后推一次。
+ * 做法刻意保守:localStorage 仍然是读的那一份(同步、无网络、不会让界面在启动时闪一下默认值),
+ * 服务端只是它的备份与跨设备通道。登录后拉一次,改动后推一次。
  *
- * 冲突用时间戳解决:两边都带 `updatedAt`,新的赢。没有它的话,"在 A 电脑上改完
- * 打开 B 电脑"和"在 B 电脑上改完打开 A 电脑"会得到相反的结果,而用户完全无从
- * 预测哪一次生效。
+ * 冲突用时间戳解决:两边都带 `updatedAt`,新的赢。否则"在 A 电脑上改完打开 B 电脑"和
+ * "在 B 电脑上改完打开 A 电脑"会得到相反的结果,用户无从预测哪一次生效。
  *
- * ## hl(动态 P1-7 / 09-24 P1-5):本机那份**记着主人是谁**
- *
- * 同一浏览器换账号登录,此前 ann 的 `claude-settings`(含 skipPermissions / allowedTools)、
- * 字号、以及**未发送的草稿全文**被当作"本机更新"推成了 ben 的账号设置(浏览器实测,
- * 草稿里的「内部密码」进了对方的服务端记录)。根因两处:登出只清令牌,本机时间戳
- * 仍是 ann 的、通常比服务端新;草稿键也参与同步。
- *
- * 现在:
+ * 本机那份记着主人是谁:同一浏览器换账号登录时,前一个人的设置(含 skipPermissions /
+ * allowedTools)和草稿不能被当作"本机更新"推成后一个人的账号设置。
  *   - 本机记一个 `accountSettingsOwner`(userId)。拉取时主人 ≠ 当前用户 → 本机那份
- *     一律**不推**,先清掉再以服务端为准;
- *   - 登出时清草稿 + 时间戳(`clearLocalAccountStateOnLogout`);同步键留着,换人由主人标记兜底
- *     (hl 复核 P3-7:原来登出连同步键一起清,同一个人再登录必整页重载一次);
- *   - 草稿(`draft_input_*`)**不再同步** —— 草稿是正文,不是偏好;服务端老记录里残留的
- *     草稿键在下一次推送时被整体覆盖掉。
+ *     一律不推,先清掉再以服务端为准;
+ *   - 登出时只清草稿 + 时间戳(`clearLocalAccountStateOnLogout`);同步键留着,
+ *     换人由主人标记兜底;
+ *   - 草稿(`draft_input_*`)不同步:草稿是正文,不是偏好;服务端记录里残留的草稿键
+ *     在下一次推送时被整体覆盖掉。
  */
 
 /** 参与同步的 localStorage 键。不在这张表里的一律只留在本机(比如 auth-token)。 */
@@ -45,8 +36,8 @@ const SYNCED_KEYS = [
 ] as const;
 
 /**
- * 登出 / 换账号时要清掉的**本机私有**前缀键:输入框草稿。
- * dl 曾把它们纳入账号同步;hl 起只在本机,换人时清掉(它们是上一个人的正文)。
+ * 登出 / 换账号时要清掉的本机私有前缀键:输入框草稿。
+ * 它们不参与账号同步,只在本机;换人时清掉(它们是上一个人的正文)。
  */
 const LOCAL_PRIVATE_KEY_PREFIXES = ['draft_input_'] as const;
 
@@ -120,7 +111,7 @@ const writeLocal = (values: Record<string, unknown>, updatedAt: string): void =>
 /**
  * 清掉本机与账号相关的一切:同步键、草稿、时间戳、主人标记。
  * 登出时调;换账号登录(主人 ≠ 当前用户)时也在拉取前先调。
- * **不**动 `auth-token`(登出流程自己管)与主题、语言这类与账号无关的键。
+ * 不动 `auth-token`(登出流程自己管)与主题、语言这类与账号无关的键。
  */
 export function clearLocalAccountState(): void {
   for (const key of SYNCED_KEYS) safeRemove(key);
@@ -130,11 +121,11 @@ export function clearLocalAccountState(): void {
 }
 
 /**
- * hl 复核 P3-7:**登出**只清本机私有的东西(草稿、时间戳),同步键与主人标记留着。
+ * 登出只清本机私有的东西(草稿、时间戳),同步键与主人标记留着。
  *
- * 原来登出调 `clearLocalAccountState` 连同步键一起清 —— 同一个人再登录时本机是空的、
- * 服务端那份必然"不一样",于是每次登录都整页重载一次。换人的情况不靠登出清理:
- * 拉取时主人标记 ≠ 当前用户,`pullAccountSettings` 会先整体清掉、且绝不推上去。
+ * 连同步键一起清的话,同一个人再登录时本机是空的、服务端那份必然"不一样",每次登录都会
+ * 整页重载一次。换人的情况不靠登出清理:拉取时主人标记 ≠ 当前用户,
+ * `pullAccountSettings` 会先整体清掉、且绝不推上去。
  */
 export function clearLocalAccountStateOnLogout(): void {
   for (const key of listLocalPrivateKeys()) safeRemove(key);
@@ -158,7 +149,7 @@ const hasLegacyDraftKeys = (values: Record<string, unknown>): boolean =>
  * 服务端那份更新就落到本机并返回 true(调用方据此让界面重读)——
  * 本机更新则反向推上去,不覆盖用户刚在本机做的改动。
  *
- * 主人 ≠ 当前用户时本机那份**绝不推**:先清掉,再把服务端的落下来(服务端没有就从
+ * 主人 ≠ 当前用户时本机那份绝不推:先清掉,再把服务端的落下来(服务端没有就从
  * 默认值开始,同样不推)。
  */
 export async function pullAccountSettings(): Promise<boolean> {
@@ -190,12 +181,12 @@ export async function pullAccountSettings(): Promise<boolean> {
       return false;
     }
 
-    // **只有真的不一样才报"变了"**。
+    // 只有真的不一样才报"变了"。
     //
     // 调用方拿这个返回值去重载页面(散在十几个组件里的初始 state 没法逐个通知)。
     // 如果这里对"内容完全相同"也返回 true,就会变成:落盘 → 重载 → 又落盘 →
     // 又重载 —— 一个无限刷新的页面。时间戳相等并不代表内容相等(另一台设备可能
-    // 推了一份一模一样的),所以判据必须是**内容**,不是时间戳。
+    // 推了一份一模一样的),所以判据必须是内容,不是时间戳。
     const changed = SYNCED_KEYS.some((key) => {
       const next = remote.values?.[key];
       return typeof next === 'string' && next !== local.values[key];
@@ -234,31 +225,3 @@ export async function pushAccountSettings(): Promise<void> {
 
 /** 供测试与调用点复用的键清单。 */
 export const ACCOUNT_SYNCED_KEYS: readonly string[] = SYNCED_KEYS;
-
-/**
- * 高频改动的**拖尾节流推送**(停笔 8 秒推一次;页面隐藏时立刻推)。
- *
- * dl 时给草稿用;hl 起草稿不再同步,输入框那边的调用保留为空转 —— 推的只会是
- * SYNCED_KEYS,没有必要为每次停笔打一次接口。留着这个导出是为了不动输入框的代码;
- * 真正要同步的偏好改动都在保存动作里直接 `pushAccountSettings()`。
- */
-const PUSH_DEBOUNCE_MS = 8_000;
-let pushTimer: ReturnType<typeof setTimeout> | null = null;
-
-export function schedulePushAccountSettings(delayMs: number = PUSH_DEBOUNCE_MS, options: { force?: boolean } = {}): void {
-  if (!options.force) return;
-  if (pushTimer) clearTimeout(pushTimer);
-  pushTimer = setTimeout(() => {
-    pushTimer = null;
-    void pushAccountSettings();
-  }, delayMs);
-}
-
-if (typeof document !== 'undefined') {
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'hidden' || !pushTimer) return;
-    clearTimeout(pushTimer);
-    pushTimer = null;
-    void pushAccountSettings();
-  });
-}

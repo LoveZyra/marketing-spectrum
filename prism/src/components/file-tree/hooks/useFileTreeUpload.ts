@@ -21,7 +21,7 @@ type UseFileTreeUploadOptions = {
   onRefresh: () => void;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
   /**
-   * hl(动态 P2-12):上传前查一下树里有没有同名 —— 返回会被覆盖的相对路径列表。
+   * 上传前查一下树里有没有同名:返回会被覆盖的相对路径列表。
    * 由 FileTree 提供(它手里有整棵树);不传就只在上传后按服务端返回的 `overwritten` 提示。
    */
   findExisting?: (relativePaths: string[], targetPath: string) => string[];
@@ -43,7 +43,7 @@ type UploadResponse = {
   files?: unknown[];
   uploadedCount?: number;
   requestedFileCount?: number;
-  /** hl(动态 P2-12):服务端落盘前查到的同名文件(相对目标目录)。 */
+  /** 服务端落盘前查到的同名文件(相对目标目录)。 */
   overwritten?: string[];
 };
 
@@ -63,8 +63,8 @@ const getFileDisplayName = (file: File) => {
 type Translate = (key: string, options: Record<string, unknown> & { defaultValue: string }) => string;
 
 /**
- * hl(P3 文件组):不再按「一次最多 20 个」整批拒绝 —— 超过的按 20 个一批分批发
- * (见 uploadFiles)。这里只剩单文件与总量两道闸。
+ * 上传前的本地校验:单文件与总量两道闸。文件数不设闸,
+ * 超过服务端每请求上限的按批分发(见 uploadFiles)。
  */
 const validateFilesForUpload = (files: File[], t: Translate): string | null => {
   const oversizedFile = files.find((file) => file.size > MAX_FILE_UPLOAD_SIZE_BYTES);
@@ -91,11 +91,31 @@ const validateFilesForUpload = (files: File[], t: Translate): string | null => {
   return null;
 };
 
-/** 按服务端每请求的文件数上限切批。 */
-export const chunkUploadBatches = <T,>(files: T[], size = MAX_FILE_UPLOAD_COUNT): T[][] => {
+/**
+ * 小文件装批:每批不超过服务端每请求的文件数上限,累计字节也不超过 maxBytes(一片的大小)。
+ *
+ * 只按个数切的话,20 个 12MB 的文件就是一个 240MB 的请求,反向代理的 client_max_body_size
+ * 在 Prism 之前就回 413。走批量的文件单个都不超过一片(超过的走分片),按片大小装批后,
+ * 每个批量请求都和一个分片请求一样能穿过代理。按原顺序依次装,不重排。
+ */
+export const chunkUploadBatches = <T extends { size: number }>(
+  files: T[],
+  { maxCount = MAX_FILE_UPLOAD_COUNT, maxBytes = Number.POSITIVE_INFINITY }: { maxCount?: number; maxBytes?: number } = {},
+): T[][] => {
   const batches: T[][] = [];
-  for (let index = 0; index < files.length; index += size) {
-    batches.push(files.slice(index, index + size));
+  let current: T[] = [];
+  let currentBytes = 0;
+  for (const file of files) {
+    if (current.length > 0 && (current.length >= maxCount || currentBytes + file.size > maxBytes)) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(file);
+    currentBytes += file.size;
+  }
+  if (current.length > 0) {
+    batches.push(current);
   }
   return batches;
 };
@@ -127,7 +147,24 @@ const formatUploadSuccessMessage = (uploadedCount: number, requestedFileCount: n
   });
 };
 
-/** hl(动态 P2-12):被覆盖的文件列表 → 一句提示(最多列 3 个,其余计数)。 */
+/**
+ * 上传中途失败的提示。前面的批次已经落盘,要把传上去几个、还剩几个说出来,
+ * 免得用户以为一个都没传上去,整批重传又覆盖一遍。
+ */
+export const formatUploadFailureMessage = (reason: string, uploaded: number, total: number, t: Translate): string => {
+  if (uploaded <= 0) {
+    return reason;
+  }
+
+  return t('fileTree.upload.failedAfterPartial', {
+    reason,
+    uploaded,
+    rest: total - uploaded,
+    defaultValue: `${reason}(${uploaded} 个文件已上传,其余 ${total - uploaded} 个没有上传)`,
+  });
+};
+
+/** 被覆盖的文件列表 → 一句提示(最多列 3 个,其余计数)。 */
 export const formatOverwrittenMessage = (overwritten: string[], t: Translate): string => {
   const shown = overwritten.slice(0, 3).join('、');
   const rest = overwritten.length - 3;
@@ -167,10 +204,10 @@ const buildUploadFormData = (files: File[], targetPath: string) => {
 };
 
 /**
- * prism: 分片上传单个大文件。反向代理(nginx/openresty)的 client_max_body_size 会在
- * 请求到达 Prism 之前砍掉超限的请求体并返回它自己的 413 —— 服务端允许 1GB 也没用,
- * 那层拒绝在应用日志里不留痕迹。切成小于代理上限的片逐个发,代理只看单请求大小。
- * 片大小由服务端 /files/upload/limits 给出(默认 15MB),前端不再自己硬编码。
+ * 分片上传单个大文件。反向代理(nginx/openresty)的 client_max_body_size 会在请求到达
+ * Prism 之前砍掉超限的请求体并返回它自己的 413:服务端允许 1GB 也没用,那层拒绝在应用日志里
+ * 不留痕迹。切成小于代理上限的片逐个发,代理只看单请求大小。片大小由服务端
+ * /files/upload/limits 给出,拿不到时用内置的 15MB。
  */
 const UPLOAD_CHUNK_FALLBACK_BYTES = 15 * 1024 * 1024;
 const UPLOAD_CHUNK_RETRIES = 3;
@@ -189,7 +226,7 @@ const fetchUploadLimits = async (projectId: string): Promise<{ chunkBytes: numbe
       chunkBytes: Number.isFinite(chunkBytes) && chunkBytes > 0 ? chunkBytes : UPLOAD_CHUNK_FALLBACK_BYTES,
     };
   } catch {
-    // 老服务端没有这个端点:退回内置值,分片照样能工作。
+    // 拿不到上限(端点不存在或请求失败)时退回内置值,分片照样能工作。
     uploadLimitsCache = { chunkBytes: UPLOAD_CHUNK_FALLBACK_BYTES };
   }
   return uploadLimitsCache;
@@ -277,8 +314,8 @@ const uploadFormDataWithProgress = (
 
     // authenticatedFetch sends these on every other request; this hand-rolled
     // XHR exists only for the progress events, so it has to reproduce the same
-    // headers. Omitting the API key made file-tree uploads the one path that
-    // would break the moment PRISM_API_KEY was configured.
+    // headers. Without the API key, uploads would be the one path that breaks
+    // once PRISM_API_KEY is configured.
     Object.entries(apiKeyHeaders()).forEach(([header, value]) => {
       xhr.setRequestHeader(header, value);
     });
@@ -299,7 +336,7 @@ const uploadFormDataWithProgress = (
     };
 
     xhr.onload = () => {
-      // 经共享闸门落盘:形状不对、或与当前用户不一致(缓存重放/换号竞态)都丢弃(dj)。
+      // 刷新后的 token 经共享闸门落盘:形状不对、或与当前用户不一致(缓存重放 / 换号竞态)都丢弃。
       installRefreshedToken(xhr.getResponseHeader('X-Refreshed-Token'));
 
       const payload = parseUploadResponse(xhr);
@@ -318,14 +355,14 @@ const uploadFormDataWithProgress = (
     xhr.send(formData);
   });
 
-// Helper function to read all files from a directory entry recursively
+// Recursively reads every file under a dropped directory entry.
 const readAllDirectoryEntries = async (directoryEntry: FileSystemDirectoryEntry, basePath = ''): Promise<File[]> => {
   const files: File[] = [];
 
   const reader = directoryEntry.createReader();
   let entries: FileSystemEntry[] = [];
 
-  // Read all entries from the directory (may need multiple reads)
+  // readEntries returns entries in batches; keep reading until a batch comes back empty.
   let batch: FileSystemEntry[];
   do {
     batch = await new Promise<FileSystemEntry[]>((resolve, reject) => {
@@ -346,12 +383,12 @@ const readAllDirectoryEntries = async (directoryEntry: FileSystemDirectoryEntry,
         fileEntry.file(resolve, reject);
       });
 
-      // Skip ignored files
       if (ignoredFiles.includes(file.name)) {
         continue;
       }
 
-      // Create a new file with the relative path as the name
+      // Dropped files have no webkitRelativePath, so carry the relative path in
+      // the name; getRelativePath falls back to it.
       const fileWithPath = new File([file], entryPath, {
         type: file.type,
         lastModified: file.lastModified,
@@ -481,7 +518,7 @@ export const useFileTreeUpload = ({
         return;
       }
 
-      // hl(动态 P2-12):树里已经能看到同名的,先问一句再覆盖 —— 覆盖是不可逆的。
+      // 树里已经能看到同名的,先问一句再覆盖:覆盖是不可逆的。
       if (findExisting) {
         const clashes = findExisting(files.map(getRelativePath), targetPath);
         if (clashes.length > 0) {
@@ -510,11 +547,12 @@ export const useFileTreeUpload = ({
       });
 
       let latestProgress = 0;
+      let uploadedCount = 0;
 
       try {
         const { chunkBytes } = await fetchUploadLimits(selectedProject.projectId);
-        // 小于一片的文件继续走原来的批量请求:它们本来就能穿过代理,拆开只是徒增往返。
-        // 超过一片的逐个分片传 —— 这是唯一能穿过 client_max_body_size 的走法。
+        // 不超过一片的文件走批量请求:单个文件本来就能穿过代理,拆开只是徒增往返。
+        // 超过一片的逐个分片传,这是唯一能穿过 client_max_body_size 的走法。
         const smallFiles = files.filter((file) => file.size <= chunkBytes);
         const largeFiles = files.filter((file) => file.size > chunkBytes);
         const totalBytes = files.reduce((sum, file) => sum + file.size, 0) || 1;
@@ -530,12 +568,11 @@ export const useFileTreeUpload = ({
           );
         };
 
-        let uploadedCount = 0;
         let response: UploadResponse = {};
         const overwritten: string[] = [];
 
-        // hl(P3 文件组):服务端每请求最多 20 个,超过的分批发而不是整批拒。
-        for (const batch of chunkUploadBatches(smallFiles)) {
+        // 服务端每请求最多 20 个文件,每批的累计字节也不超过一片(见 chunkUploadBatches)。
+        for (const batch of chunkUploadBatches(smallFiles, { maxBytes: chunkBytes })) {
           const batchBytes = batch.reduce((sum, file) => sum + file.size, 0);
           response = await uploadFormDataWithProgress(
             selectedProject.projectId,
@@ -575,7 +612,7 @@ export const useFileTreeUpload = ({
           targetPath,
         });
 
-        // hl(动态 P2-12):覆盖了同名文件就用 warning 列出来,而不是一句「上传完成」。
+        // 覆盖了同名文件就用 warning 列出来,而不是一句「上传完成」。
         if (overwritten.length > 0) {
           showToast(formatOverwrittenMessage(overwritten, t), 'warning');
         } else {
@@ -584,13 +621,18 @@ export const useFileTreeUpload = ({
         scheduleProgressClear(COMPLETE_PROGRESS_CLEAR_DELAY_MS);
         onRefresh();
       } catch (err) {
-        const message = describeFileServerError(
+        const reason = describeFileServerError(
           err instanceof Error ? err.message : t('fileTree.uploadFailed', { defaultValue: '上传失败' }),
           t,
         );
+        const message = formatUploadFailureMessage(reason, uploadedCount, files.length, t);
         console.error('Upload error:', err);
         showToast(message, 'error');
         setUploadError(message, files.length, targetPath, fileName, latestProgress);
+        // 已经传上去的那部分在盘上了,刷新一下让树里看得到。
+        if (uploadedCount > 0) {
+          onRefresh();
+        }
       } finally {
         setOperationLoading(false);
         setDropTarget(null);

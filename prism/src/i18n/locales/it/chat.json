@@ -33,7 +33,6 @@
   },
   "input": {
     "placeholder": "Digita / per i comandi, @ per i file, o chiedi qualcosa a {{provider}}...",
-    "attachImages": "Allega immagini",
     "send": "Invia",
     "stop": "Ferma",
     "hintText": {

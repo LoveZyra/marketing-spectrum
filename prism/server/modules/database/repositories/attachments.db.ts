@@ -8,7 +8,7 @@ const log = createLogger('db');
  * 聊天附件台账。
  *
  * 附件本体落在会话所属项目的 `attachments/` 下(没有项目时回落全局目录),
- * 这里只记账。配额与过期清理都只认这张表 —— **清理只删这张表记过的文件**,
+ * 这里只记账。配额与过期清理都只认这张表 —— 清理只删这张表记过的文件,
  * 用户自己往 `attachments/` 里放的东西一个字节都不碰。
  */
 
@@ -27,7 +27,7 @@ type SweepRow = { id: number; abs_path: string };
 
 export const attachmentsDb = {
   /**
-   * 记一笔。**永不抛异常** —— 记账失败不该把一次成功的上传变成失败。
+   * 记一笔。永不抛异常 —— 记账失败不该把一次成功的上传变成失败。
    * 同一个绝对路径重复记走 `ON CONFLICT` 更新,不会长出两行。
    */
   record(entry: AttachmentRecord): boolean {
@@ -72,12 +72,11 @@ export const attachmentsDb = {
     }
   },
 
-  /** 删一行(用户在文件树里把文件删了、或清扫器收尾时调用)。 */
   /**
-   * fj:这个附件是谁上传的 —— 图片下发路由据此判归属。
+   * 这个附件是谁上传的 —— 图片下发路由与发消息时的图片门据此判归属。
    *
    * 查不到就返回 `undefined`(而不是 null):调用方要能区分"这个文件没记过账"
-   * (本次加固之前落盘的历史文件)与"记过账但不属于你"。
+   * (台账建立前落盘的文件)与"记过账但不属于你"。
    */
   ownerOf(absPath: string): { userId: number | null; sessionId: string | null } | undefined {
     if (!absPath) return undefined;
@@ -92,6 +91,7 @@ export const attachmentsDb = {
     }
   },
 
+  /** 删一行(用户在文件树里删了文件、或一批上传回滚时调用)。 */
   forget(absPath: string): void {
     try {
       getConnection().prepare('DELETE FROM attachments WHERE abs_path = ?').run(absPath);
@@ -101,22 +101,14 @@ export const attachmentsDb = {
   },
 
   /**
-   * 删掉某个目录下的所有台账行(用户在文件树里删了整个目录时调用)。
+   * 删掉某个目录下的所有台账行(用户在文件树里删了整个目录、或删除项目时调用)。
    *
-   * ## 为什么不是 LIKE
+   * 用前缀范围查询而不是 `abs_path LIKE '<dir>/%'`:`_` 是 LIKE 的单字符通配符,而真实路径里
+   * 到处都是(`my_proj`、`data_v2`)—— 删 `/home/u/my_proj/attachments/` 会连 `/home/u/myXproj/`
+   * 的台账一起删掉。那些文件从此不计入配额(配额绕过),`sweepExpired` 也不会再清它们(永久占盘)。
+   * 范围查询没有元字符问题,还能吃到 `abs_path` 的 UNIQUE 索引(2 万行下比 LIKE 全表扫快约 94 倍)。
    *
-   * 这里原来是 `abs_path LIKE '<dir>/%'`,注释还辩解过一句「LIKE 里的 `%_` 是通配
-   * 元字符,但附件绝对路径里不会出现」—— **那句话是错的**。`_` 在真实路径里太常见
-   * (`my_proj`、`data_v2`、`user_features`),它是 LIKE 的单字符通配符。写注释的人
-   * 想的是 `%`,写成了 `%_`。
-   *
-   * 实测:删 `/home/u/my_proj/attachments/` 时,`/home/u/myXproj/`、`/home/u/my2proj/`
-   * 的台账**一起被删**(4 行删掉 3 行)。后果是双向的 —— 那些文件不再计入用户配额
-   * (配额绕过),而 `sweepExpired` 只删台账记过的行,它们从此没人认领、**永久占盘**。
-   *
-   * 改成前缀**范围**查询:既没有元字符问题,又能吃到 `abs_path` 的 UNIQUE 索引
-   * (实测 2 万行下比 LIKE 全表扫快约 94×)。`prefixEnd` 是把前缀末字符 +1,
-   * 半开区间 `[prefix, prefixEnd)` 正好等价于「以 prefix 开头」。
+   * `prefixEnd` 是把前缀末字符 +1,半开区间 `[prefix, prefixEnd)` 正好等价于「以 prefix 开头」。
    */
   forgetUnder(dirPath: string): void {
     if (!dirPath) return;

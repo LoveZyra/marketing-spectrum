@@ -3,11 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readCachedTurnOutputs, writeCachedTurnOutputs } from './turnOutputsCache';
 
 /**
- * ek:「产出」卡的本地快照。
+ * 「产出」卡的本地快照。
  *
- * 它存在的唯一理由是**刷新页面时卡片不消失** —— 服务端映射走的是 work-frames
- * 那一次请求,内存清空后有一段空窗(用户实测:"一刷新产出文件的部分就会消失,
- * 然后等待重新加载完成")。挂载时同步读回快照,首帧就有卡片。
+ * 用途是刷新页面时卡片不消失:服务端映射要等 work-frames 那一次请求返回,
+ * 内存清空后有一段空窗。挂载时同步读回快照,首帧就有卡片。
  */
 const store = new Map<string, string>();
 
@@ -41,7 +40,7 @@ describe('turnOutputsCache', () => {
     writeCachedTurnOutputs('s1', turns);
     const back = readCachedTurnOutputs('s1');
     expect(Object.keys(back ?? {}).length).toBeLessThanOrEqual(120);
-    // 留的是**最近的**(尾部),不是最早的
+    // 留的是最近的(尾部),不是最早的
     expect(back).toHaveProperty('a199');
     expect(back).not.toHaveProperty('a0');
   });

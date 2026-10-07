@@ -16,18 +16,15 @@ import {
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 
 /**
- * 一个**没有任何浏览器连着**就开跑的回合。
+ * 一个没有任何浏览器连着就开跑的回合。
  *
- * 外部 API(`POST /api/agent` 的 async 模式)就是这个形状:先把会话 id 返回去,
- * 回合立刻在后台开跑,人还在拿着 id 拼链接 —— 这中间一个 socket 都没有。
+ * 外部 API(`POST /api/agent` 的 async 模式)就是这个形状:先把会话 id 返回去,回合立刻
+ * 在后台开跑,这中间一个 socket 都没有。`ChatSessionWriter` 只在 `options.connection` 有值时
+ * 才把它加进集合,传 null 不能给每条出站消息埋下 `null.readyState` 的 TypeError。
  *
- * 原来 `ChatSessionWriter` 的构造函数无条件把 `options.connection` 塞进集合,
- * 传 null 进去等于给**每一条出站消息**埋一颗 `null.readyState` 的 TypeError。
- * 现在有值才加。
- *
- * 而"没人在看"绝不等于"这段可以丢":
+ * "没人在看"不等于"这段可以丢":
  *  - 事件照样进补发缓冲,人点开链接后 `chat.subscribe` 能把前半段补回来;
- *  - 显示日志照样记(az 轮),所以刷新页面看到的是完整的一轮。
+ *  - 显示日志照样记,刷新页面看到的是完整的一轮。
  */
 
 type Frame = Record<string, unknown>;

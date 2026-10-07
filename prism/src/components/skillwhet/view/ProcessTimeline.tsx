@@ -8,13 +8,13 @@ import { currentActivity, groupEvents, type StepGroup } from '../lib/process-eve
 import type { ProgressEvent } from '../lib/types';
 
 /**
- * hd:优化过程 —— 把训练里"此刻在做什么"画出来,而不是只写"训练中"。
+ * 优化过程:把训练里"此刻在做什么"画出来,而不是只写"训练中"。
  *
- * SkillWhet 0.4.2 起训练会发细粒度事件:`step` / `step_end`(每一步的起止、耗时、累计调用与费用)、
+ * SkillWhet ≥ 0.4.2 的训练会发细粒度事件:`step` / `step_end`(每一步的起止、耗时、累计调用与费用)、
  * `task`(每条任务跑完:过没过、没过的原因)、`proposing` / `proposals`(向模型要修改方案、拿到几个)、
  * `candidate`(每个候选过门的结果)、`selected`(最后采用哪个、理由)。这里把一个 step 和它里面的
- * 任务 / 候选收成一行,可展开;汇总事件(基线、归因、G7、轮结束…)照旧一行一条。
- * 0.4.1 及以前的作业没有这些事件,画出来和原来一样。
+ * 任务 / 候选收成一行,可展开;汇总事件(基线、归因、G7、轮结束…)一行一条。
+ * 0.4.1 及更早的作业没有细粒度事件,只按汇总事件逐条画。
  */
 
 type Line = { icon: typeof Check; tone: string; main: string; sub: string };

@@ -1,18 +1,14 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 /**
- * 界面主题 —— 三选一,不再是「深浅开关」。
+ * 界面主题,三选一:两种浅色材质加一种深色。
  *
- * 原来只有一个 `isDarkMode` 布尔:浅色一套、深色一套。现在浅色分成两种材质
- * (设计稿 `light-ui/`),布尔表达不了三个值,所以底层换成一个联合类型。
- *
- * - `blueprint` 纸构蓝图:暖白点阵、发丝线分区、**零投影**、等宽标注
+ * - `blueprint` 纸构蓝图:暖白点阵、发丝线分区、零投影、等宽标注
  * - `glass`     棱光玻璃:冷白画布浮半透明玻璃、两层柔光、紫→青分光条
- * - `dark`      霓虹终端:近黑画布、强调色当光源(未改动)
+ * - `dark`      霓虹终端:近黑画布、强调色当光源
  *
- * `isDarkMode` / `toggleDarkMode` 仍然对外导出:全库有十来处消费方
- * (代码编辑器主题、语法高亮、命令面板…)只关心"是不是深色",
- * 它们一行都不用改。
+ * 同时导出 `isDarkMode` / `toggleDarkMode`:代码编辑器主题、语法高亮、命令面板等十来处消费方
+ * 只关心"是不是深色"。
  */
 export type UiTheme = 'blueprint' | 'glass' | 'dark';
 
@@ -25,9 +21,12 @@ const THEME_COLOR: Record<UiTheme, string> = {
   dark: '#050607',
 };
 
+/** 用户显式选过的主题。只在用户动作里写:没有这个键就表示没选过,跟随系统。 */
 const STORAGE_KEY = 'prism-ui-theme';
-/** 旧键。值是 'dark' / 'light',迁移一次之后不再写入。 */
+/** 旧的深浅开关键(值为 'dark' / 'light'):只在迁移时读取,不再写入。 */
 const LEGACY_STORAGE_KEY = 'theme';
+/** 上一次选过的浅色,`toggleDarkMode` 从深色切回来时用。 */
+const LAST_LIGHT_STORAGE_KEY = 'prism-ui-theme-last-light';
 
 const DEFAULT_LIGHT: UiTheme = 'blueprint';
 
@@ -50,6 +49,24 @@ function readStoredTheme(): UiTheme | null {
   return null;
 }
 
+function writeStorage(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // 存不进去不影响本次会话的显示。
+  }
+}
+
+function readLastLightTheme(initial: UiTheme): UiTheme {
+  try {
+    const saved = localStorage.getItem(LAST_LIGHT_STORAGE_KEY);
+    if (isUiTheme(saved) && saved !== 'dark') return saved;
+  } catch {
+    // 读不到就按当前主题推断。
+  }
+  return initial === 'dark' ? DEFAULT_LIGHT : initial;
+}
+
 function resolveInitialTheme(): UiTheme {
   const stored = readStoredTheme();
   if (stored) return stored;
@@ -61,12 +78,11 @@ function resolveInitialTheme(): UiTheme {
 }
 
 type ThemeContextValue = {
-  /** 当前主题。 */
   uiTheme: UiTheme;
   setUiTheme: (theme: UiTheme) => void;
-  /** 兼容旧消费方:只关心"是不是深色"的地方继续用这个。 */
+  /** 给只关心"是不是深色"的消费方用。 */
   isDarkMode: boolean;
-  /** 兼容旧消费方(命令面板的快捷切换):深色 ↔ 上一次选过的浅色。 */
+  /** 命令面板的快捷切换:深色 ↔ 上一次选过的浅色。 */
   toggleDarkMode: () => void;
 };
 
@@ -83,28 +99,20 @@ export const useTheme = (): ThemeContextValue => {
 export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
   const [uiTheme, setUiThemeState] = useState<UiTheme>(resolveInitialTheme);
   /**
-   * 上一次选过的浅色。`toggleDarkMode` 从深色切回来时要回到**这一套**,
-   * 而不是硬编码的默认那套 —— 选了棱光玻璃的人切一趟深色再切回来,
-   * 不该变成纸构蓝图。
+   * 上一次选过的浅色。`toggleDarkMode` 从深色切回来时回到这一套,而不是默认那套:
+   * 选了棱光玻璃的人切一趟深色再切回来,不该变成纸构蓝图。
    */
-  const [lastLightTheme, setLastLightTheme] = useState<UiTheme>(() => {
-    const initial = resolveInitialTheme();
-    return initial === 'dark' ? DEFAULT_LIGHT : initial;
-  });
+  const [lastLightTheme, setLastLightTheme] = useState<UiTheme>(() => readLastLightTheme(resolveInitialTheme()));
 
   useEffect(() => {
     const root = document.documentElement;
 
-    // `.dark` 这个类名是全库(以及 tailwind 的 dark: 变体)认的开关,保持不变。
+    // `.dark` 类名是全库(以及 tailwind 的 dark: 变体)认的深色开关。
     root.classList.toggle('dark', uiTheme === 'dark');
     // 两套浅色靠属性区分。深色也打上,方便个别规则按主题精确命中。
     root.dataset.uiTheme = uiTheme;
 
-    try {
-      localStorage.setItem(STORAGE_KEY, uiTheme);
-    } catch {
-      // 存不进去不影响本次会话的显示。
-    }
+    // 这里不写存储:跟随系统得出的主题不算用户选过,写进去之后系统再变就不跟了。
 
     const statusBarMeta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
     if (statusBarMeta) {
@@ -117,7 +125,7 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
     }
   }, [uiTheme]);
 
-  // 没手动选过时跟随系统。选过之后系统怎么变都不再干预。
+  // 没手动选过(存储里没有主题)时跟随系统;选过之后系统怎么变都不再干预。
   useEffect(() => {
     if (!window.matchMedia) return;
 
@@ -133,13 +141,19 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
 
   const setUiTheme = useCallback((theme: UiTheme) => {
     if (!isUiTheme(theme)) return;
-    if (theme !== 'dark') setLastLightTheme(theme);
+    writeStorage(STORAGE_KEY, theme);
+    if (theme !== 'dark') {
+      setLastLightTheme(theme);
+      writeStorage(LAST_LIGHT_STORAGE_KEY, theme);
+    }
     setUiThemeState(theme);
   }, []);
 
   const toggleDarkMode = useCallback(() => {
-    setUiThemeState((previous) => (previous === 'dark' ? lastLightTheme : 'dark'));
-  }, [lastLightTheme]);
+    const next = uiTheme === 'dark' ? lastLightTheme : 'dark';
+    writeStorage(STORAGE_KEY, next);
+    setUiThemeState(next);
+  }, [lastLightTheme, uiTheme]);
 
   const value = useMemo<ThemeContextValue>(
     () => ({

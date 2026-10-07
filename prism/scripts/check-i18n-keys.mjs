@@ -1,31 +1,17 @@
 #!/usr/bin/env node
 /**
- * 构建前自检:`t('…')` 用到的键,两个 locale 里必须都有。
+ * 构建前自检:`t('…')` 用到的字面量键,zh-CN 与 en 两个 locale 里必须都有。
  *
- * ## 起因
+ * `t('x', '兜底')` 在键缺失时静默回落到兜底串(没有兜底就直接画出键名),开发时看不出异常,
+ * 只有换了语言才现形。所以在构建前挡一道,把静默回落变成报错。
  *
- * 2026-09-15 在测试环境上逐页看界面,发现**删除确认框里「归档」和「永久删除」
- * 两个按钮都是英文**,而框里其余文字是中文 —— 用户要在"藏起来"和"不可逆的
- * 永久删除"之间做选择,偏偏这两个按钮没翻译。全仓扫下来这样的键有 **69 个**,
- * 其中 9 个**连兜底都没有**,界面上直接画出 `search.matches` 这样的键名。
- *
- * 根因不是谁偷懒:`t('x', '兜底')` 在键缺失时**静默**回落到兜底串,
- * 开发时看不出任何异常,只有换了语言才现形。补一次不解决问题 —— 下一个人
- * 加一句文案照样会漏。所以在构建前挡一道,把"静默回落"变成一句红字。
- *
- * ## 判据
- *
- * - 只认**字面量**键(`t('a.b')`);模板串 `t(\`tabs.${x}\`)` 一律跳过 ——
- *   它的取值范围要靠人看,不是扫描能定的;
- * - **不猜命名空间**:一个键只要在该语言的任意一个命名空间里存在就算有。
- *   原因是 `t` 经常是**从父组件传下来的 prop**(`SidebarSessionItem` 就是),
- *   文件里根本没有 `useTranslation` 可读 —— 按文件猜命名空间会造出上百条误报,
- *   而一个天天误报的守卫等于没有守卫。这道闸门管的是"这个键在 locale 里
- *   压根不存在"(那 69 个全属于此类,界面上直接画键名或退回英文);
- *   唯一的例外是下面那张 `PROP_T_NAMESPACES` —— **收 `t` 当 prop 的组件**
- *   逐个登记它拿到的是谁的 `t`,这些文件改成**严格查那几个命名空间**。
- *   这类文件全仓只有十来个,一次点清就不会再退化(有自检兜着,见文件尾)。
- * - 两个 locale(zh-CN / en)都要有,缺一边就算缺 —— 只补中文是这次的病根之一。
+ * 判据:
+ * - 只认字面量键(`t('a.b')`);模板串 `t(\`tabs.${x}\`)` 跳过,它的取值范围只能靠人看;
+ * - 默认不猜命名空间:键在该语言的任意一个命名空间里存在就算有。`t` 经常是父组件传下来的 prop,
+ *   文件里没有 `useTranslation` 可读,按文件猜命名空间会造出大量误报,而天天误报的守卫等于没有;
+ * - 例外是 `PROP_T_NAMESPACES` 里登记的"收 `t` 当 prop"的文件:按它真实拿到的命名空间严格查。
+ *   这张表本身也有自检(见文件尾):登记了却已不存在、该登记却漏了,都会报错;
+ * - 两个 locale 都要有,缺一边就算缺。
  *
  * 加不了键又必须放行的,写进 `ALLOWED_MISSING` 并注明理由。
  */
@@ -40,18 +26,15 @@ const LANGS = ['zh-CN', 'en'];
 const DEFAULT_NS = 'common';
 
 /**
- * **`t` 是从父组件传下来的那些文件**,各自登记它拿到的是谁的 `t`。
+ * `t` 从父组件传下来的那些文件,各自登记它拿到的是谁的 `t`。
  *
- * 起因:2026-09-15 补那 69 个键时,`deleteConfirmation.*` 只加进了 `common`,
- * 而删除确认框的 `t` 来自 AppContent 的 `useTranslation('sidebar')` ——
- * 上面那道闸门"任意命名空间里有就算有",于是全绿放行,界面上
- * 「Archive session」「Delete permanently」照样是英文。
+ * 这些文件不能用"任意命名空间里有就算有":键只加进了 `common`、组件拿到的却是只认 `sidebar` 的 `t` 时,
+ * 宽松判据照样放行,界面上显示的仍是英文兜底。
  *
  * 值按 i18next 的解析顺序写:`useTranslation(['sidebar','common'])` 传下来的
- * 就是 `['sidebar','common']`;`useTranslation('sidebar')` 传下来的只有
- * `['sidebar']`。**一个组件被多处渲染时取交集** —— SessionDeleteDialog 两条
- * 入口(AppContent 的 `tSidebar`、SidebarModals 的 sidebar+common)交出来就是
- * `['sidebar']`,这也正是那次漏网的地方。
+ * 就是 `['sidebar','common']`;`useTranslation('sidebar')` 传下来的只有 `['sidebar']`。
+ * 一个组件被多处渲染时取交集:SessionDeleteDialog 有两条入口(AppContent 的 `tSidebar`、
+ * SidebarModals 的 sidebar+common),交集就是 `['sidebar']`。
  */
 const PROP_T_NAMESPACES = new Map([
   // AppContent: t={tSidebar}(只有 sidebar) / SidebarModals: Sidebar 的 sidebar+common
@@ -96,11 +79,11 @@ const lookup = (dict, key) => {
   return node;
 };
 
-/** 这个键在**指定的那几个**命名空间里存在吗(`PROP_T_NAMESPACES` 用)。 */
+/** 这个键在指定的那几个命名空间里存在吗(`PROP_T_NAMESPACES` 用)。 */
 const hasKeyIn = (namespaces, nsList, key) =>
   nsList.some((ns) => namespaces[ns] && typeof lookup(namespaces[ns], key) === 'string');
 
-/** 这个键在这门语言的**任意**命名空间里存在吗(理由见文件头)。 */
+/** 这个键在这门语言的任意命名空间里存在吗(理由见文件头)。 */
 const hasKeyAnywhere = (namespaces, preferredNs, key) => {
   if (preferredNs && namespaces[preferredNs] && typeof lookup(namespaces[preferredNs], key) === 'string') return true;
   return Object.values(namespaces).some((dict) => typeof lookup(dict, key) === 'string');
@@ -185,7 +168,7 @@ if (missing.length > 0) {
 }
 
 /*
- * 表自己的自检:**登记过的文件得还在,该登记的不能漏。**
+ * 表自己的自检:登记过的文件得还在,该登记的不能漏。
  *
  * 这张表是靠人维护的,烂掉了上面那道严格检查就悄悄失效 —— 所以两头都钉住:
  * 表里指到一个已经不存在(或不再用 t)的文件 → 报错;

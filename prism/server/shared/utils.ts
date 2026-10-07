@@ -261,7 +261,7 @@ export async function validateWorkspacePath(requestedPath: string): Promise<Work
         throw fileError;
       }
 
-      // hj(审计 P1-4):ENOENT 可能是「悬空软链」而不是「还不存在」—— 那种情况不能退到父目录判断
+      // ENOENT 可能是「悬空软链」而不是「还不存在」—— 那种情况不能退到父目录判断
       // (父目录在根内 → 放行 → 随后的写会跟着软链落到根外)。悬空软链一律拒绝。
       const leafStat = await lstat(absolutePath).catch(() => null);
       if (leafStat?.isSymbolicLink()) {
@@ -469,7 +469,7 @@ export const readOptionalString = (value: unknown): string | undefined => {
  * Reads an optional string array from unknown input.
  *
  * Non-array values are ignored, and any array entries that are not strings are
- * filtered out. This lets provider config readers consume loosely shaped JSON/TOML
+ * filtered out. This lets provider config readers consume loosely shaped JSON
  * data without failing on incidental invalid members.
  */
 export const readStringArray = (value: unknown): string[] | undefined => {
@@ -655,7 +655,7 @@ const buildUnsupportedProviderSessionActiveModelChange = (
  * Reads the persisted session model-change state for one provider session.
  *
  * Runtime resume paths use this to decide whether they should inject a
- * provider-specific model argument/thread option for the next resumed turn.
+ * provider-specific model option for the next resumed turn.
  * Missing cache entries are normalized to `{ changed: false }` so callers can
  * treat absence as "use the ordinary model selection flow".
  */
@@ -850,8 +850,6 @@ export const writeJsonConfig = async (filePath: string, data: Record<string, unk
 };
 
 // ---------------------------
-//----------------- PROVIDER SKILL FILE UTILITIES ------------
-// ---------------------------
 //----------------- PROVIDER SKILL MARKDOWN UTILITIES ------------
 /**
  * Finds direct child skill markdown files under a provider skill root.
@@ -1011,8 +1009,6 @@ export function normalizeProviderTimestamp(value: unknown): string {
 }
 
 // ---------------------------
-//----------------- SAFE DIRECTORY NAME UTILITIES ------------
-// ---------------------------
 //----------------- SESSION SYNCHRONIZER FILESYSTEM HELPERS ------------
 /**
  * Recursively discovers files that match one extension, with optional incremental filtering.
@@ -1097,18 +1093,15 @@ export async function buildLookupMap(
   const lookup = new Map<string, string>();
 
   /**
-   * `finally` 里既 close 又 destroy,**两个都要**。
+   * `finally` 里既 close 又 destroy,两个都要。
    *
    * 异步迭代器被 throw 或 break 打断时(abrupt completion),只 `rl.close()` 不销毁
    * 底层流,fd 就既不会被 autoClose 收(流没走到 'end'),也不会被 GC 回收 —— 是永久泄漏。
+   * `~/.claude/history.jsonl` 每来一条 prompt 就会被重读一次,漏的 fd 到 `ulimit -n`
+   * 之后服务表现为"活着但什么都干不了"。
    *
-   * 这条路径极其容易踩:`~/.claude/history.jsonl` 只要有一行坏 JSON(CLI 崩在 append
-   * 中途、盘满,都会留下一行永久截断),下面的 JSON.parse 就抛,而这个文件**每来一条
-   * prompt 就重读一次**。实测 30 次带坏行的调用 = +30 fd,强制 GC 三轮也不掉。
-   * 到 `ulimit -n` 之后服务表现为"活着但什么都干不了"。
-   *
-   * 顺带把 JSON.parse 单独兜住:一行坏行不该让整份文件白读(claude-sessions.provider
-   * 早就是这么写的,注释也说明了并发写会产生半行)。
+   * JSON.parse 单独兜住:CLI 崩在 append 中途、盘满或并发写都会留下半行,
+   * 一行坏行不该让整份文件白读。
    */
   const fileStream = fs.createReadStream(filePath);
   const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
@@ -1153,9 +1146,8 @@ export async function extractFirstValidJsonlData<T>(
   filePath: string,
   extractor: (parsedJson: unknown) => T | null | undefined
 ): Promise<T | null> {
-  // 同 buildLookupMap:命中即停是 break 语义,异常也是 —— 两条 abrupt completion
-  // 都必须走到 finally 才关得掉 fd。原来只在**成功**路径上显式关了两个,
-  // 说明作者知道要关,只是漏了另外两条出口。
+  // 同 buildLookupMap:命中即停(return)和异常都是 abrupt completion,
+  // 都必须走到 finally 才关得掉 fd。
   const fileStream = fs.createReadStream(filePath);
   const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
   try {

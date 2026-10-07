@@ -171,9 +171,9 @@ test('buildClaudeUserContent accepts images under a symlinked cwd', async (t) =>
 
 test('isAllowedImageSourcePath only accepts the upload store and the run cwd', () => {
   const cwd = path.join(os.tmpdir(), 'some-project');
-  // Ask the module where the store is rather than rebuilding the path here.
-  // A literal `~/.cloudcli/assets` used to be hardcoded in this test, which
-  // meant it kept passing after the store moved and stopped testing anything.
+  // Ask the module where the store is rather than rebuilding the path here:
+  // a hardcoded path would keep passing after the store moves and stop
+  // testing anything.
   const uploadStore = getGlobalImageAssetsDir();
 
   assert.equal(isAllowedImageSourcePath(path.join(uploadStore, 'shot.png'), cwd), true);

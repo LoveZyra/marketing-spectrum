@@ -1,14 +1,12 @@
 /**
  * `GET /api/projects/:projectId/files/content` 的 inline 白名单。
  *
- * 这条路由早先是 `mime.lookup()` 直出、不带 Content-Disposition、也没有 CSP:
- * 往项目里放一个 `evil.html`,它就会被以 `text/html` 内联渲染在应用**同源**下。
- * `nosniff` 挡不住 —— 类型是服务端自己显式声明的。实测那份 HTML 里的脚本执行了,
- * 并把 localStorage 里的整个 JWT 读了出来。
+ * 不在白名单里的类型一律按附件下发。否则往项目里放一个 `evil.html`,它就会以 `text/html`
+ * 内联渲染在应用同源下,脚本能读走 localStorage 里的 JWT;`nosniff` 挡不住,因为类型是
+ * 服务端自己显式声明的。
  *
- * 所以这张白名单只放位图 / 音频 / 视频,其余一律按附件下发。宁可窄:
- * 名单里少一个类型,最坏是直接导航时变成下载(应用内全部走 blob,不受影响);
- * 名单里多一个能承载脚本的类型,就是一个同源的存储型 XSS。
+ * 所以白名单只放位图 / 音频 / 视频,宁可窄:少一个类型,最坏是直接导航时变成下载
+ * (应用内全部走 blob,不受影响);多一个能承载脚本的类型,就是一个同源的存储型 XSS。
  */
 
 import { describe, it, expect } from 'vitest';

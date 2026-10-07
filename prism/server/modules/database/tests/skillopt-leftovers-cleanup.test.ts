@@ -9,15 +9,13 @@ import { afterEach, describe, test } from 'vitest';
 import { closeConnection, getConnection, initializeDatabase, projectsDb } from '@/modules/database/index.js';
 
 /**
- * eu:技能训练撤掉之后,把它留在库里的东西清干净 —— **只跑一次**。
+ * skillopt 遗留数据的一次性清理。两种风险都要钉:
  *
- * 两件事各有各的风险,都要钉:
- *
- * 1. **误删**。清账要删 `projects` 行,判据错一点就是删掉用户真实的项目。
+ * 1. 误删。清理要删 `projects` 行,判据错一点就是删掉用户真实的项目。
  *    所以下面大半用例是反向的:名字里带 skillopt 的正常项目、路径里带 work 的
  *    正常项目,一个都不许命中。
- * 2. **反复删**。无条件的 `DROP TABLE IF EXISTS` 在功能重新接回来时会把新建的
- *    表又悄悄删掉。所以做过要留标记,第二次启动必须什么都不动。
+ * 2. 反复删。无条件的 `DROP TABLE IF EXISTS` 会把日后重新建的同名表悄悄删掉,
+ *    所以做过要留标记,第二次启动必须什么都不动。
  */
 const previousDatabasePath = process.env.DATABASE_PATH;
 let tempDir: string | null = null;
@@ -69,7 +67,7 @@ const tableExists = (name: string): boolean => Boolean(
   getConnection().prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name),
 );
 
-describe('eu:清掉技能训练留在库里的东西', () => {
+describe('清掉技能训练留在库里的东西', () => {
   test('删表、删幽灵项目、删审计行;真项目一个不动', async () => {
     await legacyDb();
     await initializeDatabase();
@@ -112,7 +110,7 @@ describe('eu:清掉技能训练留在库里的东西', () => {
     assert.deepEqual(events, ['login'], 'skillopt 审计行该删,其余不动');
   });
 
-  test('**只跑一次** —— 功能重新接回来时不会把新建的表又删掉', async () => {
+  test('只跑一次 —— 功能重新接回来时不会把新建的表又删掉', async () => {
     await legacyDb();
     await initializeDatabase();
     assert.equal(tableExists('skillopt_runs'), false);

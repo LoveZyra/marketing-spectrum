@@ -15,15 +15,13 @@ import {
 import { canViewerSeeProject } from '@/shared/project-visibility.js';
 
 /**
- * bu 轮回归:项目**第一次落行**就必须带对 owner。
+ * 项目第一次落行就必须带对 owner。
  *
- * `createProjectPath` 的 ON CONFLICT 分支按设计不改归属(复活归档路径不得改权限)。
- * 推论:谁先落行,owner 就定格在那一笔 —— 外部 Agent API 曾在 createAppSession
- * 之前先做了一次不带 owner 的预注册,导致新路径项目永远无主:非公共目录下
- * **连创建者自己都看不见**(2026-08-14 起无主≠公开,只对 root 可见)。
+ * `createProjectPath` 的 ON CONFLICT 分支按设计不改归属(复活归档路径不得改权限),
+ * 所以谁先落行,owner 就定格在那一笔。先做一次不带 owner 的预注册,新项目就永远无主,
+ * 非公共目录下连创建者自己都看不见(无主项目在公共目录外只对 root 可见)。
  *
- * 这两条用例分别钉住"正确姿势"与"污染陷阱",防止未来再冒出第二个先注册后补
- * owner 的调用点。
+ * 两条用例分别钉住正确写法与"先注册、后补 owner"的陷阱。
  */
 
 async function withIsolatedDatabase(runTest: (tempDirectory: string) => void | Promise<void>): Promise<void> {

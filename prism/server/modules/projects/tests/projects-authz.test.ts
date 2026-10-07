@@ -19,18 +19,18 @@ import projectsRouter from '../projects.routes.js';
  * ## 覆盖率上这个文件是 0.0%
  *
  * 14 条端点,其中 `DELETE /:projectId?force=true` 会 `rm -rf <项目>/attachments/`
- * 加删掉这个项目所有会话的 jsonl —— **不可逆**。而它的闸门是
- * `assertVisibleProject`,靠每条路由自己记得调。逐条挂就意味着**漏一条就是一个洞**,
+ * 加删掉这个项目所有会话的 jsonl —— 不可逆。而它的闸门是
+ * `assertVisibleProject`,靠每条路由自己记得调。逐条挂就意味着漏一条就是一个洞,
  * 而这件事在 diff 里看不出来。
  *
  * 这个仓库正是这么破过一次:`usage.routes.ts` 从 index.js 迁出来时漏挂了
  * `canViewerSeeSession`,邻居端点都有,就它没有。
  *
- * ## 这里钉的是**当前语义**,不是我认为对的语义
+ * ## 这里钉的是当前语义,不是我认为对的语义
  *
  * 审计里提过"看得见就能硬删别人的项目"(读写不分)这个风险,用户明确答复分享项目
  * 这条不用管。所以下面钉的是:
- *   - **看不见的人** → 一律 404 同形(这条是真闸门,必须严);
+ *   - 看不见的人 → 一律 404 同形(这条是真闸门,必须严);
  *   - 看得见的人可读可写(当前设计,不在这里评判);
  *   - 改属主 → 仅 root(这条路由自己另有 requireRoot 式判定)。
  *
@@ -45,7 +45,7 @@ async function withProjectsServer(
     users: Record<string, TestUser>;
     aliceProjectId: string;
     publicProjectId: string;
-    /** 在公共目录下、但**有主**(alice)的项目:所有人都看得见,只有 alice 是负责人。 */
+    /** 在公共目录下、但有主(alice)的项目:所有人都看得见,只有 alice 是负责人。 */
     ownedPublicProjectId: string;
   }) => Promise<void>,
 ): Promise<void> {
@@ -76,11 +76,9 @@ async function withProjectsServer(
     const alicePath = path.join(dir, 'alice-proj');
     const publicPath = path.join(dir, 'public', 'shared-proj');
     /*
-      gn:要测"看得见但不是负责人"就必须有这么一个 —— **有主 + visibility=public**。
-      只有 alice-proj(bob 看不见)与无主的 shared-proj(没有负责人这一档)的话,
-      "非 owner 归档别人的项目"这个组合根本构造不出来。
-      注意公共目录这件事只对**无主**项目起作用:有主项目要靠 visibility 列才对外可见
-      (实测里那个 lqm 就是 owner=2 且 isPublic=true)。
+      要测"看得见但不是负责人",就必须有一个有主 + visibility=public 的项目:只有 alice-proj
+      (bob 看不见)与无主的 shared-proj 的话,"非 owner 归档别人的项目"这个组合构造不出来。
+      公共目录只对无主项目起作用,有主项目要靠 visibility 列才对外可见。
     */
     const ownedPublicPath = path.join(dir, 'alice-public');
     for (const p of [alicePath, publicPath, ownedPublicPath]) await mkdir(p, { recursive: true });
@@ -179,12 +177,8 @@ describe('项目路由的可见性闸门', () => {
   });
 
   /**
-   * gn:**归档整个项目也要负责人权限。**
-   *
-   * 2026-09-15 实测:非 root 的 test 账号把 root 名下的 lqm 项目整个归档了 ——
-   * 项目从**所有人**的活跃侧栏消失(可一键还原、没丢数据,但当场谁都看不见它)。
-   * 归档以前是"看得见就能做",与会话归档同口径;而项目归档影响的是所有人,
-   * 不是只影响自己那一份列表。收紧到与永久删除同一条规则。
+   * 归档整个项目也要负责人权限,与永久删除同一条规则:项目归档影响的是所有人的活跃侧栏,
+   * 不只是自己那一份列表。
    */
   test('归档整个项目:看得见但不是负责人 → 403', async () => {
     await withProjectsServer(async ({ baseUrl, ownedPublicProjectId, publicProjectId }) => {
@@ -193,7 +187,7 @@ describe('项目路由的可见性闸门', () => {
       assert.equal(bobArchive.status, 403, `归档别人的项目应当 403,实际 ${bobArchive.status}`);
       assert.match(String(bobArchive.body.error ?? ''), /归档/, '403 要说清楚是归档这件事被拦了');
 
-      // 永久删除照旧 403(gk 就有的规则,别被这次改动带坏)
+      // 永久删除同样 403
       const bobDelete = await call(baseUrl, 'bob', 'DELETE', `/api/projects/${ownedPublicProjectId}?force=true`);
       assert.equal(bobDelete.status, 403);
 
@@ -201,8 +195,8 @@ describe('项目路由的可见性闸门', () => {
       const aliceArchive = await call(baseUrl, 'alice', 'DELETE', `/api/projects/${ownedPublicProjectId}`);
       assert.equal(aliceArchive.status, 200, `负责人归档自己的项目应当放行,实际 ${aliceArchive.status}`);
 
-      // hl(动态 P2-7):**无主**(公共目录)项目的归档 / 永久删只给 root —— 它对所有人可见,
-      // "看得见就能归档"等于任何人都能让所有人当场看不见它(用户拍板收紧)。
+      // 无主(公共目录)项目的归档 / 永久删只给 root:它对所有人可见,"看得见就能归档"
+      // 等于任何人都能让所有人当场看不见它。
       const bobArchivesUnowned = await call(baseUrl, 'bob', 'DELETE', `/api/projects/${publicProjectId}`);
       assert.equal(bobArchivesUnowned.status, 403, `无主项目非 root 不能归档,实际 ${bobArchivesUnowned.status}`);
     });
@@ -244,7 +238,7 @@ describe('项目路由的可见性闸门', () => {
       /*
        * `bulkProjectAction` 的语义是"看不见的跳过并计数",不是"整批失败"。
        * 这条钉住它:bob 批量收藏 [公共项目, alice 的项目] → 公共那条成功、
-       * alice 那条被跳过,而**不是**两条都成功(那就是越权)或两条都失败。
+       * alice 那条被跳过,而不是两条都成功(那就是越权)或两条都失败。
        */
       const asBob = await call(baseUrl, 'bob', 'POST', '/api/projects/bulk', {
         action: 'star',
@@ -252,7 +246,7 @@ describe('项目路由的可见性闸门', () => {
       });
       assert.equal(asBob.status, 200, `批量接口异常:${asBob.text}`);
       // 两个坑:响应包在 `createApiSuccessResponse` 的 `{ success, data }` 里,
-      // 而 `succeeded` 是**项目 id 数组**不是计数。断言写错会一直红,
+      // 而 `succeeded` 是项目 id 数组不是计数。断言写错会一直红,
       // 看起来像越权 —— 我第一版就是这么误报的。
       const result = (asBob.body as { data?: { succeeded?: string[]; skipped?: Array<{ reason?: string }> } }).data ?? {};
       assert.deepEqual(result.succeeded, [publicProjectId], '越权:动到了看不见的那个项目');
@@ -265,13 +259,13 @@ describe('项目路由的可见性闸门', () => {
     /*
      * 这条不起服务器,读 index.js 的源码。
      *
-     * `projects.routes.ts` 是个 `export default router`,里面**一处认证都没有** ——
+     * `projects.routes.ts` 是个 `export default router`,里面一处认证都没有 ——
      * 它整体依赖挂载时的那一句:
      *
      *     app.use('/api/projects', authenticateToken, projectModuleRoutes);
      *
      * 也就是说,谁把中间件从这一句里拿掉(或者新加一个不带它的挂载点),
-     * 14 条端点会一起对匿名请求敞开,而**这个路由文件本身的任何测试都发现不了**
+     * 14 条端点会一起对匿名请求敞开,而这个路由文件本身的任何测试都发现不了
      * —— 我一开始就写错了一条用例:在测试里绕过挂载点直接打路由,得到 200,
      * 差点当成越权报出去。真正该钉的是挂载点。
      */

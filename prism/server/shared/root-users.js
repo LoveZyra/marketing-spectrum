@@ -1,7 +1,7 @@
 /**
  * root(管理员)身份的唯一判定来源。
  *
- * 刻意**不落库**:root 由 env `PRISM_ROOT_USERS` 指定(逗号分隔),每次现算。
+ * 刻意不落库:root 由 env `PRISM_ROOT_USERS` 指定(逗号分隔),每次现算。
  * 落库会引入一种没人想要的状态 —— 库里标着 is_root 但 env 里已经没有这个人,
  * 或者反过来;两份真相就得有人去对账。env 单一来源换人只改配置,重启即生效。
  *
@@ -10,11 +10,11 @@
  */
 
 /**
- * hj(审计 P0-2):用户名的**比对键** —— 去首尾空白,只把 ASCII 的 A–Z 折成小写。
+ * 用户名的比对键 —— 去首尾空白,只把 ASCII 的 A–Z 折成小写。
  *
  * 为什么不用 `toLowerCase()`:它按 Unicode 折叠,`"\u212Aate"`(开尔文符号 K)会变成
- * `"kate"`;而库里 `users.username` 的 `COLLATE NOCASE` **只折叠 ASCII**,认为这两者
- * 是不同的名字、都能注册。于是有人注册一个视觉上相同的 `Kate`,`isRootUser` 就判他是 root。
+ * `"kate"`;而库里 `users.username` 的 `COLLATE NOCASE` 只折叠 ASCII,认为这两者
+ * 是不同的名字、都能注册。若用它,有人注册一个视觉上相同的 `Kate` 就会被 `isRootUser` 判成 root。
  * 比对口径必须与唯一性口径逐字相同 —— 这里就是 SQLite NOCASE 的定义。
  */
 export function usernameKey(name) {
@@ -51,8 +51,8 @@ export function listRootUsernames(env = process.env) {
 }
 
 /**
- * 审批闸门是否生效。`PRISM_APPROVAL_REQUIRED=0` 是逃生开关 —— 审批逻辑万一写错,
- * 用它一键退回改动前的行为,不必回滚代码。默认开启。
+ * 审批闸门是否生效。默认开启;`PRISM_APPROVAL_REQUIRED=0` 是逃生开关 —— 审批逻辑
+ * 万一出错,用它一键关掉审批,不必回滚代码。
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {boolean}
  */
@@ -60,15 +60,15 @@ export function isApprovalRequired(env = process.env) {
   return String(env.PRISM_APPROVAL_REQUIRED ?? '1').trim() !== '0';
 }
 
-/** hj:新注册用户名的长度上限。原来没有上限 —— 实测 2MB 的用户名能注册成功,拖垮审批页。 */
+/** 新注册用户名的长度上限。不设上限时 MB 级的用户名也能注册成功,会拖垮审批页。 */
 export const USERNAME_MAX_LENGTH = 64;
 
 const unicodeFold = (name) => String(name ?? '').trim().normalize('NFKC').toLowerCase();
 
 /**
- * hj(审计 P0-2):新注册用户名的校验。返回错误文案,合法则返回 null。
+ * 新注册用户名的校验。返回错误文案,合法则返回 null。
  *
- * 只管**新注册**,已有账号一个不动。三条:
+ * 只管新注册,已有账号一个不动。三条:
  * 1. 长度 3–64;
  * 2. 不许有空白与控制字符(中文等 Unicode 字母照常允许);
  * 3. 不许用「兼容字符」(NFKC 规范化后会变样的写法:开尔文符号 K、全角字母、上标数字……),

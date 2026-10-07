@@ -6,7 +6,7 @@ import { describe, test } from 'vitest';
 import { createSkillWhetSupervisor, identify, resolveSkillWhetConfig, skillWhetEnabled } from '../skillwhet-service.js';
 
 /**
- * gy:技能优化的进程托管。与 ma-service 同一形状,钉三条:不配就什么都不做;
+ * 技能优化的进程托管。与 ma-service 同一形状,钉三条:不配就什么都不做;
  * 配置解析拒绝非回环目标与"外部 serve 却没口令";子进程退出走退避重启、stop 收干净。
  */
 const quiet = { log() {}, warn() {}, error() {} };
@@ -67,7 +67,7 @@ describe('createSkillWhetSupervisor', () => {
     assert.equal(spawned, 0);
   });
 
-  test('gz · 端口上应答的不是 skillwhet(别的 HTTP 服务)→ failed,不拉起,日志指路改 TARGET', async () => {
+  test('端口上应答的不是 skillwhet(别的 HTTP 服务)→ failed,不拉起,日志指路改 TARGET', async () => {
     let spawned = 0;
     const errors = [];
     const sup = createSkillWhetSupervisor(config, {
@@ -80,10 +80,10 @@ describe('createSkillWhetSupervisor', () => {
     assert.match(errors.join('\n'), /PRISM_SKILLWHET_TARGET/);
   });
 
-  test('gz · identify:只认 { ok:true, version, home } 的 JSON', () => {
+  test('identify:只认 { ok:true, version, home } 的 JSON', () => {
     assert.deepEqual(identify(JSON.stringify({ ok: true, version: '0.3.0', home: '/x', python: '3.12' })), { skillwhet: true, version: '0.3.0' });
     assert.deepEqual(identify(JSON.stringify({ status: 'ok' })), { skillwhet: false });
-    // hl:serve 真实的 /healthz 带 { ok, data } 信封
+    // serve 真实的 /healthz 带 { ok, data } 信封
     assert.deepEqual(identify(JSON.stringify({ ok: true, data: { ok: true, version: '0.5.2', home: '/x' } })), { skillwhet: true, version: '0.5.2' });
     assert.deepEqual(identify(JSON.stringify({ ok: true, data: { status: 'ok' } })), { skillwhet: false });
     assert.deepEqual(identify('<html>ok</html>'), { skillwhet: false });
@@ -105,7 +105,7 @@ describe('createSkillWhetSupervisor', () => {
     assert.deepEqual(seen.args, ['-m', 'skillwhet', 'serve', '--host', '127.0.0.1', '--port', '8093', '--home', '/tmp/swhome']);
     assert.equal(seen.opts.env.SKILLWHET_TOKEN, 't');
     assert.match(seen.opts.env.TMPDIR, /prism-skillwhet$/);
-    // gz 审计 #15:Prism 的密钥 / DB 路径不进子进程环境
+    // Prism 的密钥 / DB 路径不进子进程环境
     assert.equal(seen.opts.env.JWT_SECRET, undefined);
     assert.equal(seen.opts.env.DATABASE_PATH, undefined);
     assert.equal(seen.opts.env.ANTHROPIC_AUTH_TOKEN, 'ok');

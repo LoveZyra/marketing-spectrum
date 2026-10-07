@@ -18,8 +18,7 @@
     "newSession": "Новый сеанс",
     "noSessions": "Сеансов пока нет",
     "loadingSessions": "Загрузка сеансов...",
-    "unnamed": "Без имени",
-    "loading": "Загрузка..."
+    "unnamed": "Без имени"
   },
   "tooltips": {
     "hideSidebar": "Скрыть боковую панель",

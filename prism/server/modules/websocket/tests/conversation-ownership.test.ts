@@ -18,9 +18,9 @@ afterEach(() => resetConversationOwnership());
 /**
  * 整个文件都跑在一份临时库上。
  *
- * `releaseShellClaim` 现在会顺手清掉这段对话的显示日志 —— 也就是说这个模块
- * **会碰数据库**。不先把 `DATABASE_PATH` 指到临时目录,连接层会回落到
- * 安装目录里的 `server/database/auth.db`,测试就开始往真库里写了。
+ * `releaseShellClaim` 会顺手清掉这段对话的显示日志 —— 也就是说这个模块
+ * 会碰数据库。不先把 `DATABASE_PATH` 指到临时目录,连接层会回落到
+ * 仓库根的 `database/auth.db`,几个测试文件就共用、互相改写同一份库了。
  */
 let previousDatabasePath: string | undefined;
 let tempDirectory: string;
@@ -72,14 +72,13 @@ describe('对话所有权(chat / 终端互斥)', () => {
   });
 
   /**
-   * fl:语义从"按最后一次算"改成"**先到先得**"。
+   * 接管语义是"先到先得",不是"按最后一次算"。
    *
-   * 原来第二个人接管会盖掉第一个人的记录 —— 而两个 PTY 都还活着。
-   * 后者先退出时把整把锁释放掉,前者仍连着,chat 于是判成"没人接管",
-   * 开始与那个 PTY 双写同一份 transcript。fk 给释放加了令牌,只堵住了
-   * "错误释放"那一半;这一半在接管这一侧。
+   * 第二个人接管若盖掉第一个人的记录,而两个 PTY 都还活着:后者先退出时把整把锁释放掉,
+   * 前者仍连着,chat 判成"没人接管",开始与那个 PTY 双写同一份 transcript。
+   * 释放侧的令牌只防"错误释放",这一半要在接管侧挡住。
    */
-  test('fl:已被别人接管时不覆盖 —— 后来者拿不到令牌', () => {
+  test('已被别人接管时不覆盖 —— 后来者拿不到令牌', () => {
     const first = claimForShell('s1', { userId: 7, username: 'bob' });
     assert.ok(first.token, '第一个接管的人应当拿到令牌');
 
@@ -97,14 +96,13 @@ describe('对话所有权(chat / 终端互斥)', () => {
   });
 
   /**
-   * gh:**同一个人的第二个终端也拿不到令牌。**
+   * 同一个人的第二个终端也拿不到令牌。
    *
-   * fl 对"同一个人"直接把现有令牌原样返回,注释说是重连续期。可真正的重连
-   * 走不到这里(shell 那边按 terminalId 复用 PTY,提前返回);能走到这里的只有
-   * 同一用户的**另一个** PTY。于是第二个终端拿着同一张令牌又起一个 `claude --resume`;
+   * 真正的重连走不到这里(shell 那边按 terminalId 复用 PTY,提前返回),能走到这里的只有同一用户的
+   * 另一个 PTY。若把现有令牌原样返回,第二个终端会拿着同一张令牌再起一个 `claude --resume`;
    * 第一个关闭时令牌匹配 → 锁释放、显示日志被删,而第二个 PTY 还活着,chat 也放行。
    */
-  test('gh:同一个人再来一个终端也拿不到令牌 —— 有持有者就不发第二张', () => {
+  test('同一个人再来一个终端也拿不到令牌 —— 有持有者就不发第二张', () => {
     const first = claimForShell('s2', { userId: 7, username: 'bob' });
     assert.ok(first.token);
     const again = claimForShell('s2', { userId: 7, username: 'bob' });

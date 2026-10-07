@@ -14,11 +14,11 @@ type CodeEditorHeaderProps = {
   notebookRaw?: boolean;
   saving: boolean;
   saveSuccess: boolean;
-  /** hl(P3 文件组):有未保存改动 —— 标题前画 ●。 */
+  /** 有未保存改动:标题前画 ●。 */
   dirty?: boolean;
   /** diff 视图缓冲区是片段,写回会截断真文件 —— false 时整个保存按钮不渲染。 */
   canSave?: boolean;
-  /** hl(动态 P2-11):读失败时没有可下的内容,下载按钮不渲染。 */
+  /** 读失败时没有可下的内容,false 时下载按钮不渲染。 */
   canDownload?: boolean;
   onToggleMarkdownPreview: () => void;
   onToggleHtmlPreview: () => void;
@@ -29,10 +29,9 @@ type CodeEditorHeaderProps = {
   onSave: () => void;
   onToggleFullscreen: () => void;
   /**
-   * ec:侧栏形态下的「最大化 / 还原」。最大化 = 预览栏占满整个主内容区(对话列与
-   * 工作面板只是被隐藏,不卸载),Esc 或再点一次还原。以前这个开关只挂在 CodeMirror
-   * 的工具条上 —— 渲染出来的 HTML / Markdown / notebook / 图片 / PDF 根本不经过
-   * CodeMirror,于是"可展示的文件"反而没有任何放大的办法。现在统一放在头部。
+   * 侧栏形态下的「最大化 / 还原」。最大化 = 预览栏占满整个主内容区(对话列与
+   * 工作面板只是被隐藏,不卸载),Esc 或再点一次还原。开关放在头部而不是 CodeMirror
+   * 工具条上:渲染出来的 HTML / Markdown / notebook / 图片 / PDF 都不经过 CodeMirror。
    */
   isExpanded?: boolean;
   onToggleExpand?: (() => void) | null;

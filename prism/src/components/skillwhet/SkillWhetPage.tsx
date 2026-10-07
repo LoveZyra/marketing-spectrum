@@ -20,14 +20,13 @@ import Versions from './view/Versions';
 import Wiki from './view/Wiki';
 
 /**
- * gy:「技能优化」页(SkillWhet 接入 Prism 的第一期)。
+ * 「技能优化」页:SkillWhet 在 Prism 里的入口。
  *
- * 页内左侧七项子导航照设计稿;第一期真数据的只有 **总览三格数字 / 技能资产 / 任务集 /
- * 经验 Wiki(只读)**。gz 把 **优化运行(作业表 + 新建 + 详情)/ 评测 / 版本(staging →
- * 采纳 → 发布 / 回滚)** 三页接上真数据。技能列表与任务集汇总在这一层拉一次、各子页共用;
+ * 左侧七项子导航:总览、技能资产、任务集、优化训练(作业表 + 新建 + 详情)、评测、经验 Wiki(只读)、
+ * 版本(staging → 采纳 → 发布 / 回滚)。技能列表、任务集汇总与夜训计划在这一层拉一次、各子页共用;
  * 子页做了动作(导入 / bootstrap / 入库 / 采纳 / 发布…)后调 `refresh()` 重拉。
  *
- * 跨页跳转只有三条,状态放这一层:技能卡「新建训练」→ runs(预选 skill);作业表点行 →
+ * 跨页跳转的状态放在这一层:技能卡「新建训练」→ runs(预选 skill);总览 / 作业表点作业 →
  * 运行详情(`openJob`);详情 / 评测「审阅」→ versions(预选 skill + staging)。
  *
  * 权限只在这里读一次(`user.isRoot`)传下去;真正的门在服务端
@@ -38,7 +37,7 @@ export type SkillWhetSection = 'overview' | 'runs' | 'assets' | 'tasks' | 'wiki'
 export type SkillWhetData = {
   skills: SkillsResponse | null;
   taskSummary: TaskSummary[];
-  /** he:夜训计划;serve 老版本 / 路由不在时为 null,各页不画夜训那一块 */
+  /** 夜训计划;serve 不支持夜训或路由不存在时为 null,各页不画夜训那一块。 */
   nightly: NightlyResponse | null;
   loading: boolean;
   error: string | null;
@@ -63,7 +62,7 @@ export default function SkillWhetPage() {
   const [versionTarget, setVersionTarget] = useState<{ skill: string | null; staging: string | null }>({ skill: null, staging: null });
 
   const goRuns = (skill: string | null) => { setRunSkill(skill); setOpenJob(null); setSection('runs'); };
-  // hb:在运行详情里点左栏「优化训练」要回到列表(原来停在详情,切走再回来也还是那条作业)
+  // 点左栏「优化训练」总是回到作业列表:清掉 openJob,否则会停在上次打开的运行详情。
   const goSection = (id: SkillWhetSection) => { if (id === 'runs') setOpenJob(null); setSection(id); };
   const goVersions = (skill: string, staging: string | null) => { setVersionTarget({ skill, staging }); setSection('versions'); };
 
@@ -91,7 +90,7 @@ export default function SkillWhetPage() {
   const data: SkillWhetData = { skills, taskSummary, nightly, loading, error, refresh };
 
   const nav: Array<{ id: SkillWhetSection; icon: typeof LayoutGrid; label: string; count?: number }> = [
-    // hc:按一次训练的先后排 —— 总览 → 技能资产 → 任务集 → 优化训练 → 评测 → 经验 Wiki → 版本
+    // 按一次训练的先后顺序排列。
     { id: 'overview', icon: LayoutGrid, label: t('nav.overview', { defaultValue: '总览' }) },
     { id: 'assets', icon: Layers, label: t('nav.assets', { defaultValue: '技能资产' }), count: skills?.skills.length },
     { id: 'tasks', icon: Database, label: t('nav.tasks', { defaultValue: '任务集' }), count: taskSummary.reduce((sum, row) => sum + row.total, 0) || undefined },
@@ -102,7 +101,7 @@ export default function SkillWhetPage() {
   ];
 
   const crumb = nav.find((item) => item.id === section)?.label ?? '';
-  // hc:左轨那颗开合按钮在这一页管的是这条导航;收起时换成顶上一排横向页签,导航不会丢
+  // 左轨的开合按钮在这一页控制这条子导航;收起时改用顶部横向页签,导航入口不丢。
   const { preferences } = useUiPreferences();
   const navOpen = preferences.skillNavVisible !== false;
 

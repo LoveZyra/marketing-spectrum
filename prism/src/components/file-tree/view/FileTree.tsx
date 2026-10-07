@@ -52,7 +52,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   /**
-   * F9:多选。
+   * 多选。
    *
    * 选择模式明确用一个开关进入,而不是"点着点着就进去了" —— 文件树的默认动作是
    * 打开文件,把它偷偷改成选中会让人删错东西。开关之外,按住 Ctrl/Cmd/Shift
@@ -60,21 +60,19 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
    */
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
-  /** F10:全局内容搜索面板(与文件名搜索是两回事,所以是独立面板而不是同一个输入框)。 */
+  /** 全局内容搜索面板(与文件名搜索是两回事,所以是独立面板而不是同一个输入框)。 */
   const [showSearchPanel, setShowSearchPanel] = useState(false);
   const newItemInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  // Show toast notification
   const showToast = useCallback((message: string, type: ToastMessage['type']) => {
     setToast({ message, type });
   }, []);
 
-  // Auto-hide toast
   useEffect(() => {
     if (toast) {
-      // hl(P3 文件组):info(「已开始打包…」)原来永不消失 —— 浏览器导航式下载拿不到完成事件,
-      // 没有谁会来顶掉它。给 8 秒上限;warning 里带着目录名,3 秒读不完,同样 8 秒。
+      // 提示自动隐藏。info(「已开始打包…」)也要有上限:浏览器导航式下载拿不到完成事件,
+      // 没有谁会来顶掉它。info 与 warning(常带一串文件名,3 秒读不完)停 8 秒,其余 3 秒。
       const timer = setTimeout(
         () => setToast(null),
         toast.type === 'warning' || toast.type === 'info' ? 8000 : 3000,
@@ -85,7 +83,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
 
   const { viewMode, changeViewMode } = useFileTreeViewMode();
   const { expandedDirs, toggleDirectory, collapseAll } = useExpandedDirectories();
-  // hl 复核 P2-1:刷新后只重拉**展开着**的懒加载目录 —— 用 ref 把最新的展开集合交给数据 hook。
+  // 刷新后只重拉展开着的懒加载目录:用 ref 把最新的展开集合交给数据 hook。
   const expandedDirsRef = useRef(expandedDirs);
   expandedDirsRef.current = expandedDirs;
 
@@ -102,7 +100,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     loadingSubtrees,
   } = useFileTreeData(selectedProject, (path) => expandedDirsRef.current.has(path));
 
-  // hl(P3 文件组):编辑器保存成功 → 刷新树,让那一行的大小 / 修改时间跟上。
+  // 编辑器保存成功 → 刷新树,让那一行的大小 / 修改时间跟上。
   useEffect(() => subscribeFileSaved(() => refreshFiles()), [refreshFiles]);
 
 
@@ -110,8 +108,8 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     files,
   });
 
-  // 搜索期间的展开是**临时并集**:命中项的祖先在渲染时临时摊开,清空关键词即还原,
-  // 不再把它们永久写进用户的展开状态(旧行为:搜一次,整棵树永远摊开)。
+  // 搜索期间的展开是临时并集:命中项的祖先在渲染时临时摊开,清空关键词即还原;
+  // 不写进用户自己的展开状态,否则搜一次整棵树就一直摊开着。
   const effectiveExpandedDirs = useMemo(() => {
     if (searchExpandedPaths.size === 0) return expandedDirs;
     const union = new Set(expandedDirs);
@@ -119,21 +117,22 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     return union;
   }, [expandedDirs, searchExpandedPaths]);
 
-  // File operations
   const operations = useFileTreeOperations({
     selectedProject,
     onRefresh: refreshFiles,
     showToast,
   });
+  // `operations` 每次渲染都是新对象,回调与 effect 只依赖从里面取出的这几个函数
+  // (hook 里都是 useCallback,引用稳定),不依赖整个对象。
+  const { handleStartCreate, downloadPaths, deleteItemDirectly } = operations;
 
-  // hl(动态 P2-12):上传前按树里已加载的节点查同名。
+  // 上传前按树里已加载的节点查同名。
   const findExisting = useCallback(
     (relativePaths: string[], targetPath: string) =>
       findExistingUploadTargets(files, location.projectRoot, relativePaths, targetPath),
     [files, location.projectRoot],
   );
 
-  // File upload (drag and drop)
   const upload = useFileTreeUpload({
     selectedProject,
     onRefresh: refreshFiles,
@@ -142,7 +141,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   });
   const operationLoading = operations.operationLoading || upload.operationLoading;
 
-  // hl(动态 P2-10):「…还有更多」→ 单独列这个目录,原地接进树。
+  // 「…还有更多」→ 单独列这个目录,原地接进树。
   const handleLoadMore = useCallback(
     (item: FileTreeNode) => {
       void loadSubtree(item.path).catch((err: unknown) => {
@@ -161,7 +160,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     [t],
   );
 
-  // hl(P2-22):删除确认框接上共用的模态键盘行为(Esc 关、焦点圈、初始焦点落在「取消」)。
+  // 删除确认框接上共用的模态键盘行为(Esc 关、焦点圈、初始焦点落在「取消」)。
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const deleteDialogOpen = operations.deleteConfirmation.isOpen && Boolean(operations.deleteConfirmation.item);
@@ -186,7 +185,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     }
   }, [operations.renamingItem]);
 
-  // hl(P3 文件组):改名失败后仍在改名态 —— 请求结束时把焦点放回输入框,别让它"卡死"。
+  // 改名失败后仍在改名态:请求结束时把焦点放回输入框,别让它"卡死"。
   useEffect(() => {
     if (!operations.operationLoading && operations.renamingItem && renameInputRef.current
       && document.activeElement !== renameInputRef.current) {
@@ -195,10 +194,9 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   }, [operations.operationLoading, operations.renamingItem]);
 
   /**
-   * 图标沿用 `getFileIconData` 的映射,颜色改走**七个语义族**。
+   * 图标沿用 `getFileIconData` 的映射,颜色按七个语义族(见 getFileFamily)。
    *
-   * 族色是 CSS 变量(`--filetype-*`):两套浅色主题给设计稿的七色,霓虹终端
-   * 下落回次级墨色 —— 那一稿没有分色这回事,不该被这轮顺手改掉。
+   * 族色是 CSS 变量(`--filetype-*`):两套浅色主题给设计稿的七色,霓虹终端下落回次级墨色。
    */
   const renderFileIcon = useCallback((filename: string) => {
     const { icon: Icon } = getFileIconData(filename);
@@ -224,25 +222,22 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     [location.externalRead, location.projectRoot],
   );
 
-  // Centralized click behavior keeps file actions identical across all presentation modes.
   /**
-   * 新建文件 / 新建文件夹的稳定引用。
+   * 新建文件 / 新建文件夹,传给子树的回调要保持引用稳定。
    *
-   * 这两个原来是内联箭头 `(path) => operations.handleStartCreate(path, 'file')` ——
-   * 每次渲染都是新函数,把子树的 `memo` **整个击穿**:同文件其它回调都规规矩矩
-   * `useCallback` 了,只有这两个漏了,于是那些 memo 一条也没生效。
-   *
-   * 文件树在大目录下是重渲染成本最高的一块,而它的父组件会被 status 帧高频驱动。
+   * 不能写成内联箭头,也不能依赖整个 `operations`:两者每次渲染都会换引用,把子树的 `memo`
+   * 整个击穿。文件树在大目录下是重渲染成本最高的一块,而它的父组件会被 status 帧高频驱动。
    */
   const handleNewFile = useCallback(
-    (path: string) => operations.handleStartCreate(path, 'file'),
-    [operations],
+    (path: string) => handleStartCreate(path, 'file'),
+    [handleStartCreate],
   );
   const handleNewFolder = useCallback(
-    (path: string) => operations.handleStartCreate(path, 'directory'),
-    [operations],
+    (path: string) => handleStartCreate(path, 'directory'),
+    [handleStartCreate],
   );
 
+  // Centralized click behavior keeps file actions identical across all presentation modes.
   const handleItemClick = useCallback(
     (item: FileTreeNode) => {
       if (item.type === 'directory') {
@@ -292,12 +287,6 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     [canOpenPath, onFileOpen, selectedProject, showToast, t, toggleDirectory],
   );
 
-  /**
-   * Uploads always land in the project folder, so a drop while browsing
-   * elsewhere would silently write somewhere the user is not looking. Refuse
-   * it — and still preventDefault, or the browser navigates away to the
-   * dropped file.
-   */
   const toggleSelect = useCallback((item: FileTreeNode) => {
     setSelectedPaths((current) => {
       const next = new Set(current);
@@ -313,15 +302,10 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   }, []);
 
   /**
-   * 批量下载:**一次请求,一个包**。
+   * 批量下载:一次请求,一个包(服务端打包,浏览器直接下)。
    *
-   * 以前是 `for` 循环逐个 `await` 单文件下载,每个都要等整份字节进完内存 ——
-   * 选 20 个就是 20 次串行的完整下载,期间界面只有按钮置灰。
-   *
-   * 另外那版的失败汇总是**死代码**:它靠 `catch { failed += 1 }` 计数,而
-   * `handleDownload` 自己就 try/catch 弹提示、从不往外抛,所以 `failed` 恒为 0,
-   * 「有 N 项下载失败」一次都没显示过。现在整批只有一次请求,要么成要么败,
-   * 也就不再需要这个汇总。
+   * 不逐个下载:那样选 20 个就是 20 次串行的完整下载,期间界面只有按钮置灰。
+   * 整批只有一次请求,要么成要么败,失败直接提示,不需要逐项汇总。
    */
   const downloadSelected = useCallback(async () => {
     const targets = collectByPaths(filteredFiles, selectedPaths);
@@ -329,15 +313,15 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     const label = targets.length === 1
       ? targets[0].name
       // 用 selected 而不是 count:i18next 见到 count 会去找复数键(_one/_other),
-      // 这条文案不需要复数变体(同 folderDownloadedPartial 那条的 skipped)。
+      // 这条文案不需要复数变体。
       : t('fileTree.batchDownloadLabel', { selected: targets.length, defaultValue: `已选 ${targets.length} 项` });
     try {
-      await operations.downloadPaths(targets.map((item) => item.path), label);
+      await downloadPaths(targets.map((item) => item.path), label);
       clearSelection();
     } catch (err) {
       showToast((err as Error).message, 'error');
     }
-  }, [filteredFiles, selectedPaths, operations, showToast, t, clearSelection]);
+  }, [filteredFiles, selectedPaths, downloadPaths, showToast, t, clearSelection]);
 
   /**
    * 批量删除:确认一次,然后逐个删。
@@ -358,7 +342,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     let failed = 0;
     for (const item of targets) {
       try {
-        await operations.deleteItemDirectly(item);
+        await deleteItemDirectly(item);
       } catch {
         failed += 1;
       }
@@ -368,14 +352,12 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     if (failed > 0) {
       showToast(t('fileTree.batchDeletePartial', { failed, defaultValue: `有 ${failed} 项删除失败` }), 'warning');
     }
-  }, [filteredFiles, selectedPaths, operations, refreshFiles, showToast, t, clearSelection]);
+  }, [filteredFiles, selectedPaths, deleteItemDirectly, refreshFiles, showToast, t, clearSelection]);
 
   /**
-   * F9:Cmd+N / Cmd+Shift+N 做实。
+   * Cmd/Ctrl+N 新建文件、Cmd/Ctrl+Shift+N 新建文件夹(按钮 tooltip 里写着这两个组合)。
    *
-   * 这两个组合原来只写在按钮的 tooltip 里 —— 按下去什么都不会发生,是个纯粹的
-   * 谎言。现在真的接上,并且只在文件页有焦点、且没在输入框里打字时生效
-   * (否则会把编辑器里的 Cmd+N 抢走)。
+   * 只在项目目录内、文件树在屏上、且没在输入框里打字时生效,否则会把编辑器里的 Cmd+N 抢走。
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -387,15 +369,15 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
       if (!upload.treeRef.current?.isConnected) return;
 
       event.preventDefault();
-      operations.handleStartCreate('', event.shiftKey ? 'directory' : 'file');
+      handleStartCreate('', event.shiftKey ? 'directory' : 'file');
     };
 
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [isInProject, operations, upload.treeRef]);
+  }, [isInProject, handleStartCreate, upload.treeRef]);
 
   /**
-   * F10:Ctrl/Cmd+Shift+F 打开全局搜索。
+   * Ctrl/Cmd+Shift+F 打开全局搜索。
    *
    * 与聊天里的 Ctrl+F(会话内查找)错开一个 Shift —— 两者是不同的东西,
    * 共用一个键会让人永远猜不准打开的是哪个。
@@ -412,6 +394,12 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [isInProject, selectedProject, upload.treeRef]);
 
+  /**
+   * Uploads always land in the project folder, so a drop while browsing
+   * elsewhere would silently write somewhere the user is not looking. Refuse
+   * it — and still preventDefault, or the browser navigates away to the
+   * dropped file.
+   */
   const handleTreeDrop = useCallback(
     (event: DragEvent) => {
       if (!isInProject) {
@@ -504,7 +492,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
 
       <FileTreeUploadProgress upload={upload.uploadProgress} />
 
-      {/* F9:多选工具条。只在选择模式或已有选中项时出现,平时不占位置。 */}
+      {/* 多选工具条:只在选择模式或已有选中项时出现,平时不占位置。 */}
       {(selectionMode || selectedPaths.size > 0) && (
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5">
           <span className="text-[11px] text-muted-foreground">
@@ -572,8 +560,8 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
         )}
 
         {truncated && (
-          // 服务端因条目上限截断了列表(X-Prism-Truncated)。此前前端不读这个头,
-          // 大目录静默少显示 —— 用户以为看到的就是全部。
+          // 服务端因条目上限截断了列表(X-Prism-Truncated):明确告诉用户,
+          // 否则会以为看到的就是全部。
           <div className="flex items-center gap-2 border-b border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             <span>{t('fileTree.truncatedNotice', '目录条目过多,只显示了一部分。没列全的文件夹展开后有「…还有更多」,点击即可加载。')}</span>
@@ -605,8 +593,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           handleCancelRename={operations.handleCancelRename}
           renameInputRef={renameInputRef}
           operationLoading={operationLoading}
-          // F9:拖到具体目录上就落在那个目录(此前这两个回调写好了却从没接线,
-          // 拖进来的文件永远落在项目根)。
+          // 拖到具体目录上就落在那个目录,而不是一律落在项目根。
           onItemDragOver={upload.handleItemDragOver}
           onItemDrop={upload.handleItemDrop}
           dropTarget={upload.dropTarget}
@@ -699,7 +686,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           {toast.type === 'success' ? (
             <Check className="h-4 w-4" />
           ) : toast.type === 'warning' ? (
-            // 「做完了但不完整」—— 与失败区分开,否则用户会以为下载压根没成
+            // 「做完了但不完整 / 需要留意」:与失败区分开,否则用户会以为整个操作都没成
             <AlertTriangle className="h-4 w-4 text-amber-500" />
           ) : toast.type === 'info' ? (
             // 「还在做」—— 转圈是这条提示的全部意义,静止图标传达不了"正在进行"

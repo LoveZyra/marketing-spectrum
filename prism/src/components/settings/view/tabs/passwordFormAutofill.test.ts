@@ -4,16 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * ec:密码框必须待在自己的 <form> 里,并且带一个 autocomplete=username 的字段。
+ * 密码框必须放在自己的 <form> 里,并带一个 autocomplete=username 的字段。
  *
- * 用户实测:点开设置 →「我的账号」,侧栏的**项目搜索框**里凭空出现登录名,项目
- * 列表随即被过滤成「未找到匹配的项目」。不是快捷键,是浏览器密码管理器:页面上
- * 一出现 `current-password` 字段,Chrome 就把保存的密码填进去,并顺手找一个
- * "用户名框"填用户名 —— 密码框不在任何 form 里时,Chrome 把整页当一张表单,取
- * 密码框之前最近的文本输入框,那正好是侧栏搜索框。
+ * 页面一出现 `current-password` 字段,Chrome 密码管理器就填入保存的密码,并找一个
+ * 「用户名框」填登录名;密码框不在任何 form 里时,它把整页当一张表单,取密码框之前
+ * 最近的文本输入框 —— 正是侧栏的项目搜索框,项目列表随即被过滤成「未找到匹配的项目」。
  *
- * 客户端测试跑在 node 环境(没有 jsdom),渲染不了;而"密码框在不在 form 里"
- * 又恰恰是密码管理器行为的分水岭。这里读源码把三件事钉死:
+ * 客户端测试跑在 node 环境(没有 jsdom),渲染不了;而「密码框在不在 form 里」
+ * 恰恰是密码管理器行为的分水岭。这里读源码把三件事钉死:
  *   1. 密码框前面有 <form 开头、后面有 </form> 收尾(不是裸 <div>);
  *   2. 同一个 form 里有 autocomplete="username" 的字段;
  *   3. 侧栏搜索框显式 autoComplete="off"。

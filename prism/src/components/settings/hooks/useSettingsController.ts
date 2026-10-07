@@ -33,12 +33,11 @@ type NotificationPreferencesResponse = {
 
 type ActiveLoginProvider = AgentProvider | '';
 
-// 派生自同一份清单。手写的那一版少了 voice,于是 `?tab=voice` 深链会被
-// normalizeMainTab 判为未知值,静默回落到 agents。
+// 派生自 SETTINGS_MAIN_TABS:深链与调用方传入的标签据此校验,未知值回落到 agents。
 const KNOWN_MAIN_TABS: SettingsMainTab[] = SETTINGS_MAIN_TAB_IDS;
 
 const normalizeMainTab = (tab: string): SettingsMainTab => {
-  // Keep backwards compatibility with older callers that still pass "tools".
+  // "tools" is an alias of agents: `openSettings()` in useProjectsState defaults to it.
   if (tab === 'tools') {
     return 'agents';
   }
@@ -108,6 +107,28 @@ const normalizeNotificationPreferences = (
 };
 
 /**
+ * 从服务端读通知偏好。读不到(非 2xx、不是 JSON、请求抛错、响应里没有偏好)返回 null。
+ *
+ * 读不到时不拿默认值顶替:默认值一旦记成「已加载」基线,用户之后改任意一项设置,
+ * 自动保存都会把它整份写回服务端,覆盖已存的偏好。
+ */
+const fetchNotificationPreferences = async (): Promise<NotificationPreferencesState | null> => {
+  try {
+    const response = await authenticatedFetch('/api/settings/notification-preferences');
+    if (!response.ok) {
+      return null;
+    }
+    const data = await toResponseJson<NotificationPreferencesResponse>(response);
+    return data.success && data.preferences ? normalizeNotificationPreferences(data.preferences) : null;
+  } catch {
+    return null;
+  }
+};
+
+/** 通知偏好的加载状态:'failed' 时界面禁用开关,保存时不提交通知偏好。 */
+type NotificationPrefsStatus = 'pending' | 'loaded' | 'failed';
+
+/**
  * 自动保存基线签名:把会自动保存的那几项(权限 / 排序 / 通知偏好)拍成一个串。
  * loadSettings 记录加载后的基线,auto-save 只在当前签名与基线不同时才写。
  */
@@ -122,6 +143,11 @@ const settingsSignature = (
   projectSortOrder: sortOrder,
   notif,
 });
+
+/** 只把基线签名里的通知偏好换掉,权限 / 排序部分原样保留。 */
+const withNotifInSignature = (signature: string, notif: NotificationPreferencesState): string => (
+  JSON.stringify({ ...(JSON.parse(signature) as Record<string, unknown>), notif })
+);
 
 export function useSettingsController({ isOpen, initialTab }: UseSettingsControllerArgs) {
   const closeTimerRef = useRef<number | null>(null);
@@ -142,6 +168,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferencesState>(() => (
     createDefaultNotificationPreferences()
   ));
+  const [notificationPrefsStatus, setNotificationPrefsStatus] = useState<NotificationPrefsStatus>('pending');
 
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginProvider, setLoginProvider] = useState<ActiveLoginProvider>('');
@@ -166,23 +193,14 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
       setClaudePermissions(loadedPerms);
       setProjectSortOrder(loadedSortOrder);
 
-      let loadedNotifPrefs = createDefaultNotificationPreferences();
-      try {
-        const notificationResponse = await authenticatedFetch('/api/settings/notification-preferences');
-        if (notificationResponse.ok) {
-          const notificationData = await toResponseJson<NotificationPreferencesResponse>(notificationResponse);
-          if (notificationData.success && notificationData.preferences) {
-            loadedNotifPrefs = normalizeNotificationPreferences(notificationData.preferences);
-          }
-        }
-      } catch {
-        // 保留默认值。
-      }
+      // 读不到时界面上放默认值,但标成加载失败:开关禁用,保存时也不提交它。
+      const fetchedNotifPrefs = await fetchNotificationPreferences();
+      const loadedNotifPrefs = fetchedNotifPrefs ?? createDefaultNotificationPreferences();
       setNotificationPreferences(loadedNotifPrefs);
+      setNotificationPrefsStatus(fetchedNotifPrefs ? 'loaded' : 'failed');
 
-      // 记录"已加载"基线签名并放开自动保存。auto-save 只在**当前签名 ≠ 该基线**时
-      // 才写 —— 这样 loadSettings 的异步 setState(尤其通知偏好 GET 失败回落默认值时)
-      // 不会把默认值 PUT 回去覆盖服务端已存偏好;只有用户真正改动才触发保存。
+      // 记录「已加载」基线签名并放开自动保存。auto-save 只在当前签名 ≠ 该基线时才写,
+      // 这样 loadSettings 的异步 setState 不会触发回写,只有用户真正改动才保存。
       lastPersistedSigRef.current = settingsSignature(loadedPerms, loadedSortOrder, loadedNotifPrefs);
       loadCompleteRef.current = true;
     } catch (error) {
@@ -191,9 +209,27 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
       const fallbackNotif = createDefaultNotificationPreferences();
       setClaudePermissions(fallbackPerms);
       setNotificationPreferences(fallbackNotif);
+      setNotificationPrefsStatus('failed');
       setProjectSortOrder('name');
       lastPersistedSigRef.current = settingsSignature(fallbackPerms, 'name', fallbackNotif);
       loadCompleteRef.current = true;
+    }
+  }, []);
+
+  /** 通知偏好加载失败后的重试:只重读通知偏好,权限 / 排序不动。 */
+  const retryNotificationPreferences = useCallback(async () => {
+    const fetchedNotifPrefs = await fetchNotificationPreferences();
+    if (!fetchedNotifPrefs) {
+      setNotificationPrefsStatus('failed');
+      return;
+    }
+
+    setNotificationPreferences(fetchedNotifPrefs);
+    setNotificationPrefsStatus('loaded');
+    // 读到的就是服务端现状,换进基线,免得这一换被当成改动又写回去。
+    // 权限 / 排序那部分不动:那里可能还有没保存完的改动。
+    if (lastPersistedSigRef.current !== null) {
+      lastPersistedSigRef.current = withNotifInSignature(lastPersistedSigRef.current, fetchedNotifPrefs);
     }
   }, []);
 
@@ -230,15 +266,18 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         projectSortOrder,
         lastUpdated: now,
       }));
-      // F11:权限清单与项目排序跟着账号走 —— 换台电脑不该从头调一遍。
+      // 权限清单与项目排序跟着账号走,换台电脑不必从头调一遍。
       void pushAccountSettings();
 
-      const notificationResponse = await authenticatedFetch('/api/settings/notification-preferences', {
-        method: 'PUT',
-        body: JSON.stringify(notificationPreferences),
-      });
-      if (!notificationResponse.ok) {
-        throw new Error('Failed to save notification preferences');
+      // 通知偏好没从服务端读到时不提交:界面上的是默认值,写回去会覆盖已存的偏好。
+      if (notificationPrefsStatus === 'loaded') {
+        const notificationResponse = await authenticatedFetch('/api/settings/notification-preferences', {
+          method: 'PUT',
+          body: JSON.stringify(notificationPreferences),
+        });
+        if (!notificationResponse.ok) {
+          throw new Error('Failed to save notification preferences');
+        }
       }
 
       // 更新基线:保存成功后当前值即新的"已持久化"状态,后续没变就不再重复写。
@@ -251,6 +290,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
   }, [
     claudePermissions,
     notificationPreferences,
+    notificationPrefsStatus,
     projectSortOrder,
   ]);
 
@@ -271,9 +311,14 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     void refreshProviderAuthStatuses();
   }, [initialTab, isOpen, loadSettings, refreshProviderAuthStatuses]);
 
+  // 本机提示音开关只跟着从服务端读到的值(及之后的改动)走;还没读到或读失败时
+  // 界面上是默认值,拿它去写会把本机已关掉的提示音重新打开。
   useEffect(() => {
+    if (notificationPrefsStatus !== 'loaded') {
+      return;
+    }
     setNotificationSoundEnabled(notificationPreferences.channels.sound);
-  }, [notificationPreferences.channels.sound]);
+  }, [notificationPrefsStatus, notificationPreferences.channels.sound]);
 
   useEffect(() => {
     localStorage.setItem('codeEditorWordWrap', String(codeEditorSettings.wordWrap));
@@ -283,7 +328,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     window.dispatchEvent(new Event('codeEditorSettingsChanged'));
   }, [codeEditorSettings]);
 
-  // Auto-save permissions and sort order with debounce
+  // Auto-save permissions, sort order and notification preferences (debounced).
   const autoSaveTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -293,8 +338,8 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     }
 
     const currentSig = settingsSignature(claudePermissions, projectSortOrder, notificationPreferences);
-    // 与已加载/已保存的基线一致 → 不是用户改动(通常是 load 的多段 setState 落定),
-    // 不写。这就堵住了"打开设置即回写默认值覆盖服务端偏好"。
+    // 与已加载 / 已保存的基线一致说明不是用户改动(通常是 load 的多段 setState 落定),
+    // 不写,免得一打开设置就用默认值覆盖服务端已存的偏好。
     if (currentSig === lastPersistedSigRef.current) {
       return;
     }
@@ -355,6 +400,8 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     setClaudePermissions,
     notificationPreferences,
     setNotificationPreferences,
+    notificationPreferencesLoadFailed: notificationPrefsStatus === 'failed',
+    retryNotificationPreferences,
     providerAuthStatus,
     openLoginForProvider,
     showLoginModal,

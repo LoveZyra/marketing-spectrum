@@ -33,7 +33,6 @@
   },
   "input": {
     "placeholder": "Komutlar için /, dosyalar için @ yaz ya da {{provider}}'a her şeyi sor...",
-    "attachImages": "Resim ekle",
     "send": "Gönder",
     "stop": "Durdur",
     "hintText": {

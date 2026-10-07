@@ -11,10 +11,10 @@ import type {
 } from 'react';
 import { useDropzone } from 'react-dropzone';
 
-import { schedulePushAccountSettings } from '../../../utils/accountSettings';
 import { authenticatedFetch } from '../../../utils/api';
 import { uploadFormDataWithProgress } from '../../../utils/uploadWithProgress';
 import type { MarkSessionProcessing } from '../../../hooks/useSessionProtection';
+import { hasServerClockSample, serverNow } from '../../../stores/serverClock';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
 import { isImeComposing, shouldCyclePermissionMode } from '../utils/composerKeys';
 import { composerText } from '../utils/composerText';
@@ -60,11 +60,11 @@ import { stepHistoryWalk, type HistoryWalkState } from '../utils/composerHistory
 import { describeSkillInvocationInput } from '../utils/skillNaming';
 
 /**
- * prism: 分片落盘。反向代理(nginx/openresty)的 client_max_body_size 会在请求到
- * 达 Prism 之前就把大请求体砍掉并返回它自己的 413 —— 服务端允许 500MB 也没用,
- * 而且那层拒绝在应用日志里不留痕迹。把文件切成小于代理上限的片逐个发,代理只看
- * 单请求大小,于是任意大小都能穿过去。片大小由服务端 /api/documents/limits 给出
- * (默认 15MB,本部署实测通过的值),前端不再自己硬编码一个会漂移的常量。
+ * 分片落盘。反向代理(nginx / openresty)的 client_max_body_size 会在请求到达 Prism
+ * 之前就把大请求体砍掉、返回它自己的 413,服务端允许 500MB 也没用,而且那层拒绝在应用
+ * 日志里不留痕迹。把文件切成小于代理上限的片逐个发,代理只看单请求大小,任意大小都能
+ * 穿过去。片大小由服务端 /api/documents/limits 给出(默认 15MB),前端不硬编码;
+ * 下面的常量只是拿不到时的兜底。
  */
 const LAND_CHUNK_FALLBACK_BYTES = 15 * 1024 * 1024;
 const LAND_CHUNK_RETRIES = 3;
@@ -87,13 +87,13 @@ const fetchLandLimits = async (): Promise<{ chunkBytes: number }> => {
 
 type LandPayload = {
   name?: string; text?: string; chars?: number; truncated?: boolean;
-  /** ed:服务端落盘时顺带抽出的正文(见 documents.js extractLandedText)。 */
+  /** 服务端落盘时顺带抽出的正文(见 documents.js extractLandedText)。 */
   extractedText?: string; extractedChars?: number; extractedTruncated?: boolean;
 };
 
 /**
- * 附件落盘要落到**会话所属项目**的 attachments/ 下,所以每条上传都得带上
- * projectId。分片上传特别注意:projectId 必须在 **start** 时就交给服务端 ——
+ * 附件落盘要落到会话所属项目的 attachments/ 下,所以每条上传都得带上
+ * projectId。分片上传特别注意:projectId 必须在 start 时就交给服务端 ——
  * complete 请求上没有它,现取会回落到全局目录,同一个功能的文件就落到两处去了。
  */
 const attachmentQuery = (projectId?: string | null, sessionId?: string | null): string => {
@@ -231,7 +231,8 @@ interface UseChatComposerStateArgs {
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onShowSettings?: () => void;
   scrollToBottom: () => void;
-  addMessage: (msg: ChatMessage) => void;
+  /** 往对话里加一条本地消息。`sessionId` 给了就落进那条会话,不给落进正在看的那条。 */
+  addMessage: (msg: ChatMessage, sessionId?: string | null) => void;
   setIsUserScrolledUp: (isScrolledUp: boolean) => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
   /**
@@ -264,8 +265,8 @@ export type ModelCommandData = {
   available?: Partial<Record<LLMProvider, string[]>>;
   availableModels?: string[];
   /**
-   * hn:与 `/api/providers/claude/models` 同一份(目录条目 + 别名组,带 group / vendor / contextWindow …)。
-   * hq:同样按人给 —— 带 gatewayId / gatewayName / private / available / unavailableReason(类型见 ProviderModelOption)。
+   * 与 `/api/providers/claude/models` 同一份(目录条目 + 别名组,带 group / vendor / contextWindow …),
+   * 同样按人下发:带 gatewayId / gatewayName / private / available / unavailableReason(类型见 ProviderModelOption)。
    */
   availableOptions?: Array<Partial<ProviderModelOption> & { value: string }>;
   defaultModel?: string;
@@ -281,11 +282,11 @@ export type CostCommandData = {
     input?: number;
     output?: number;
   };
-  /** 会话累计费用(美元),来自 SDK result 帧;拿不到时缺席。**只活在本次页面里。** */
+  /** 会话累计费用(美元),来自 SDK result 帧;拿不到时缺席。只活在本次页面里。 */
   costUsd?: number;
   /**
-   * fh:服务端台账(`usage_records`)里这条会话的累计花销。
-   * 和上面那个 `costUsd` 并列而不是替代 —— 那个刷新就没,这个跨重启跨设备都在,
+   * 服务端台账(`usage_records`)里这条会话的累计花销。
+   * 和上面的 `costUsd` 并列而不是替代:那个刷新就没,这个跨重启跨设备都在,
    * 口径也不同(那个是最后一个累计值,这个是历次回合的增量之和)。
    */
   ledger?: {
@@ -296,15 +297,15 @@ export type CostCommandData = {
   };
   provider?: string;
   model?: string;
-  /** hn:别名换成的真实模型名(目录条目就是它自己);拿不到为 null。 */
+  /** 别名换成的真实模型名(目录条目就是它自己);拿不到为 null。 */
   realModel?: string | null;
-  /** hn:模型目录里记的厂商(手动指定优先);不在目录里为 null。 */
+  /** 模型目录里记的厂商(手动指定优先);不在目录里为 null。 */
   vendor?: string | null;
 };
 
 export type StatusCommandData = {
   version?: string;
-  /** v2.0.0:「v2.0.0 · 2026-10-01 · 3c84d6c」(服务端读包里的 RELEASE.json);老服务端没有。 */
+  /** 形如「v2.0.0 · 2026-10-01 · 3c84d6c」(服务端读包里的 RELEASE.json);没有版本号时为 null。 */
   release?: string | null;
   packageName?: string;
   uptime?: string;
@@ -338,32 +339,22 @@ export type CommandModalPayload = {
 };
 
 /**
- * 这次提交结束时,**还该不该动这个输入框**。
+ * 这次提交结束时,还该不该动这个输入框。
  *
- * ## 事故(fl 引入,fn 继承)
+ * `currentSessionKey` 必须读 ref(`sessionKeyRef.current`):闭包里的值恒等于发起时的值,
+ * 守不住任何东西。
  *
- * 判据原来是 `sessionKey === submitSessionKey`,而两者是**同一个闭包变量** ——
- * 恒等,这道守卫从来没生效过。fl 把它改成读 ref(`sessionKeyRef.current`),
- * 修好了"发送期间切走、清空了新会话输入框"那件事,**却把新会话这一支一起收窄掉了**:
+ * "还是不是同一条会话"必须把这次发送自己建立的那条算进去:新会话页的 `submitSessionKey`
+ * 是 `null`,而这次发送会自己创建会话,`onSessionEstablished` 一调,当前会话键就变成新 id。
+ * 把它判成"用户切走了"的话,新会话第一条消息发出后那句话还留在输入框里,用户再按回车就被
+ * 收进排队、续发后仍不清,同一句话反复发送。
  *
- *   新会话页 `submitSessionKey` 是 `null`(还没有会话),而这次发送**自己会创建**
- *   一条会话 —— `onSessionEstablished` 一调,`sessionKeyRef.current` 就变成新 id。
- *   收尾时 `id !== null`,守卫判定"用户切走了",**输入框不清**。
- *
- * 于是新会话的第一条消息发出去之后,那句话**还留在输入框里**。用户看到消息已经
- * 发出、输入框却没空,自然会再按一次回车 —— 这次撞上正在跑的回合,被收进排队;
- * 回合结束自动续发,发完输入框依然没清(同一个判据),再排一次……
- * **同一句话反复发送,停不下来**,而排队卡上永远显示着它。
- *
- * ## 判据
- *
- * "还是不是同一条会话"必须把**这次发送自己建立的那条**算进去。
- * 三种情况都成立:
+ * 以下三种情况都算同一条会话:
  *   - 会话没变;
- *   - 从"新会话页"(null)变成了**这次发送创建的**那条;
+ *   - 从"新会话页"(null)变成了这次发送创建的那条;
  *   - 目标会话就是当前会话(路由先落地、id 后到的时序)。
  *
- * 只有"变成了**别的**会话"才是真的切走了。
+ * 只有变成了别的会话才是真的切走了。
  */
 export function composerStillOwnedBySubmit(
   currentSessionKey: string | null,
@@ -379,17 +370,17 @@ export function composerStillOwnedBySubmit(
 }
 
 /**
- * F15:**只有属于这条会话的那一份才算数。**
+ * 只有属于这条会话的那一份才算数。
  *
  * 两个"下一次发送要附带"的东西都可能是在别处装上的:
  *   - 分叉点(编辑重跑)要先走一次 `/api/claude/fork-point`,那期间用户完全
  *     可能切到别的会话去 —— 装上时的 composer 已经不是发起时那个了;
- *   - 隐藏上下文由一个**全局 window 事件**装上,压根没有会话概念。
+ *   - 隐藏上下文由一个全局 window 事件装上,压根没有会话概念。
  *
- * 归属对不上就当没有:否则下一次在另一条会话里发送,会从**别人的** provider
+ * 归属对不上就当没有:否则下一次在另一条会话里发送,会从别人的 provider
  * 会话分叉出去,或者把只该给这条会话看的技术细节送进另一段对话。
  *
- * 取不到时**不清空** —— 那一份还等着它自己的会话来取。
+ * 取不到时不清空 —— 那一份还等着它自己的会话来取。
  */
 export function takeIfOwned<T>(
   armed: { owner: string | null } & T | null,
@@ -437,11 +428,11 @@ const getNotificationSessionSummary = (
 };
 
 /**
- * gk:给那几个"记过哪些幂等键"的集合**封个顶**。
+ * 给那几个"记过哪些幂等键"的集合封个顶。
  *
- * 它们按 mount 活着,而这个页面挂着一整天很常见(每条消息一个幂等键)。判据只关心
- * "最近这些条",所以超了就丢最旧的 —— Set / Map 的插入序天然就是时间序。上限给得比
- * 任何真实会话的往返都宽,只为把"一天下来涨成几万个字符串"这件事封住。
+ * 它们按 mount 活着,而这个页面挂一整天很常见(每条消息一个幂等键)。判据只关心
+ * 最近这些条,所以超了就丢最旧的(Set / Map 的插入序就是时间序)。上限给得比任何
+ * 真实会话的往返都宽,只为不让它一天下来涨成几万个字符串。
  *
  * 写成模块级函数而不是 useCallback:它们不依赖组件里的任何东西,放进组件只会给
  * 四个 hook 的依赖数组添噪声。
@@ -500,7 +491,8 @@ export function useChatComposerState({
       // 草稿按会话分键(新建会话页退回项目键)—— 见 composerDrafts.ts。
       const key = draftStorageKey(selectedSession?.id || currentSessionId || null, selectedProject?.projectId);
       const saved = key ? safeLocalStorage.getItem(key) || '' : '';
-      // cj 版遗留的带票据建任务话术不恢复(与下方换草稿 effect 同一条规则)。
+      // 带任务票据(X-Prism-Task-Ticket / via-ticket)的草稿不恢复、直接丢弃:票据一次性且早已过期
+      // (与下方换草稿 effect 同一条规则)。
       if (saved && /X-Prism-Task-Ticket|\/api\/tasks\/via-ticket/.test(saved)) {
         if (key) safeLocalStorage.removeItem(key);
         return '';
@@ -531,27 +523,22 @@ export function useChatComposerState({
     ((event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>) => Promise<void>) | null
   >(null);
   const inputValueRef = useRef(input);
-  // ho(复审):「立即发送」在回合进行中投递 —— 那时不该把活动指示器上的状态行(重试中…)清掉
+  // 「立即发送」在回合进行中投递:那时不该把活动指示器上的状态行(重试中…)清掉
   const isLoadingRef = useRef(isLoading);
   isLoadingRef.current = isLoading;
   /**
-   * Prism: pending fork descriptor for edit-and-rerun. When set, the next send
+   * Pending fork descriptor for edit-and-rerun. When set, the next send
    * starts a brand-new session branched off the parent's native conversation.
    *
-   * **A 组(F15):连"这是哪条会话的"一起记。**
-   *
-   * `startEditRerun` 在拿分叉点时要走一次网络(`/api/claude/fork-point`),而
-   * 那期间用户完全可能切到别的会话去 —— 分叉点随后**装到新会话的输入框上**,
-   * 下一次在那里发送就会从**另一条会话**的 provider 会话分叉出去。
-   * 隐藏上下文更宽松:它由一个全局 window 事件设置,压根没有会话概念。
-   *
-   * 归属在冻结命令时比对(见 `takeIfOwned`),对不上就当没有。
+   * 连"这是哪条会话的"(owner)一起记:`startEditRerun` 拿分叉点要走一次网络
+   * (`/api/claude/fork-point`),那期间用户完全可能切到别的会话去,分叉点随后
+   * 就会装到别的会话的输入框上。归属在冻结命令时比对(见 `takeIfOwned`),
+   * 对不上就当没有。
    */
   const pendingForkRef = useRef<{ owner: string | null; providerSessionId: string; resumeSessionAt: string | null } | null>(null);
-  // Prism(ck):随下一次发送附带的隐藏上下文(只给模型看,不进气泡/显示日志)。
-  // 「让 Claude 创建定时任务」用它携带一次性票据与接口说明。构包时消费并清空;
-  // 回合占线被排队(isLoading 早退)时 ref 原样保留,排队消息自动重发再消费。
-  // 极端情况(掉线入队)隐藏块不随重发 —— 重新点一次入口即可。
+  // 随下一次发送附带的隐藏上下文(只给模型看,不进气泡 / 显示日志)。
+  // 「让 Claude 创建定时任务」用它携带一次性票据与接口说明。冻结命令时按归属取出
+  // (见 takeIfOwned)并随命令走,排队、离线重发都带着它。
   const pendingHiddenContextRef = useRef<{ owner: string | null; value: string } | null>(null);
   const selectedProjectId = selectedProject?.projectId;
   // Prefer the stable backend-allocated id (selectedSession.id) but fall back
@@ -559,23 +546,22 @@ export function useChatComposerState({
   // handed back to the parent's `selectedSession` prop yet.
   const sessionKey = selectedSession?.id || currentSessionId || null;
   /**
-   * fj:上传是异步的,回来时用户可能已经切走了 —— 结果必须比对归属再落地。
+   * 上传是异步的,回来时用户可能已经切走了,结果必须比对归属再落地。
    *
-   * ref 而不是闭包里的 `sessionKey`:上传函数是 `useCallback` 出去的,闭包里那个
-   * 是**发起时**的值,恒等于自己,守不住任何东西。
+   * 用 ref 而不是闭包里的 `sessionKey`:上传函数是 `useCallback` 出去的,闭包里那个
+   * 是发起时的值,恒等于自己,守不住任何东西。
    */
   const sessionKeyRef = useRef<string | null>(sessionKey);
   sessionKeyRef.current = sessionKey;
 
   /**
-   * fj:提交重入闸。
+   * 提交重入闸。
    *
    * `handleSubmit` 里有两处 await(图片上传、建会话 POST),而清空输入框和
-   * `onSessionProcessing`(它才让 `isLoading` 变真)都在 await **之后** ——
-   * 等待期间输入框里还是原文、按钮 `disabled` 也只看 `!input.trim()`。
-   * 于是"觉得没反应又按一次回车"会完整重跑一遍:图片重复上传、同一条消息发两遍;
-   * 新会话的第一条更糟 —— **建出两个会话**,页面只跳到后一个,前一个在后台
-   * 跑着一整轮(acceptEdits/bypassPermissions 档下会真的改文件),用户看不到它。
+   * `onSessionProcessing`(它才让 `isLoading` 变真)都在 await 之后,等待期间输入框里
+   * 还是原文。没有这道闸,"觉得没反应又按一次回车"会完整重跑一遍:图片重复上传、同一条
+   * 消息发两遍;新会话的第一条更糟,会建出两个会话,页面只跳到后一个,前一个在后台跑着
+   * 一整轮(acceptEdits / bypassPermissions 档下会真的改文件),用户看不到它。
    */
   const submittingRef = useRef(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -585,54 +571,46 @@ export function useChatComposerState({
   const historyWalkRef = useRef<HistoryWalkState>(null);
 
   /**
-   * A 组:排队的那条现在是一个 **outbox 条目**(冻结的命令 + 状态),
-   * 不再是"正文 + File[] + options"三件套。
+   * 排队的那条是一个 outbox 条目(冻结的命令 + 状态)。
    *
    * 状态机在 `utils/sendCommand.ts`;这里只负责它与 React / localStorage 的接线。
    */
   /**
-   * 初始一律为空 —— **从盘恢复只有一个入口**(下面那个换会话 effect,
-   * 它在挂载时也会跑一次)。此前初始 state 也读一次盘,于是"从盘恢复"有两个
-   * 入口、两套判据,而兜底不变式只加在其中一个上就等于没加。
+   * 初始一律为空:从盘恢复只有一个入口(下面那个换会话 effect,它在挂载时也会跑一次)。
+   * 两个入口就会有两套判据,兜底不变式只加在其中一个上就等于没加。
    */
   const [outbox, setOutbox] = useState<OutboxEntry | null>(null);
   /**
-   * **这个标签页已经投递出去的幂等键。**
+   * 这个标签页已经投递出去的幂等键。
    *
-   * 整块排队逻辑的**兜底不变式**:一条命令一旦真的发出去过,就再也不许以任何
-   * 路径回到"待发"。
+   * 整块排队逻辑的兜底不变式:一条命令一旦真的发出去过,就再也不许以任何路径回到"待发"。
    *
-   * 为什么要一条兜底,而不是把每条路径都堵一遍 —— localStorage 那份状态有
-   * **两个写者**:一个 effect(带会跳过的归属守卫)和四处直接调用,其中
-   * `claimQueuedMessage` 认领时会把条目**连认领戳一起写回盘上**。只要清理那一侧
-   * 在某个 commit 被守卫跳过,记录就留在盘上,之后任何一次恢复都会把它读回来:
-   * **几轮之前那句话又变成一张排队卡,还会被自动续发再发一遍**
-   * (线上实测:回答完第二条之后,第一条的「你好」重新排上了队)。
-   *
-   * 逐条堵路径这一轮试过两次,每次都只堵住一半。改成恢复时先问一句
-   * "这条我发过没有" —— 路径再怎么变,这一条都成立。
+   * 用一条兜底而不是把每条路径都堵一遍,因为 localStorage 那份状态有两个写者:一个 effect
+   * (带会跳过的归属守卫)和四处直接调用,其中 `claimQueuedMessage` 认领时会把条目连认领戳
+   * 一起写回盘上。只要清理那一侧在某个 commit 被守卫跳过,记录就留在盘上,之后任何一次恢复
+   * 都会把它读回来:几轮之前那句话又变成一张排队卡,还会被自动续发再发一遍。恢复时先问一句
+   * "这条我发过没有",路径再怎么变这一条都成立。
    *
    * 只在内存里(按标签页):刷新之后不拦,那时盘上那份确实还没被这个标签页发过。
    */
   const dispatchedClientMessageIdsRef = useRef(new Set<string>());
   /**
-   * gk:**这个标签页取消过的幂等键。**
+   * 这个标签页取消过的幂等键。
    *
-   * `deleteQueuedDraft` / `editQueuedDraft` / 停止时并回输入框 —— 三处都只清内存,盘上那份
-   * 靠落盘 effect 的下一拍才清。这一拍里冲队定时器、另一个标签页、换会话恢复都可能把它
-   * 读回来再发出去(2026-09-15 测试环境:取消了排队卡那条照样发了出去)。
-   * 现在取消当场清盘,并把键记在这里:恢复与冲队两处都拒绝它。
+   * `deleteQueuedDraft` / `editQueuedDraft` / 停止时并回输入框,三处都会让一条排队命令作废。
+   * 只清内存、等落盘 effect 下一拍再清盘的话,这一拍里冲队定时器、另一个标签页、换会话恢复
+   * 都可能把它读回来再发出去。所以取消时当场清盘,并把键记在这里:恢复与冲队两处都拒绝它。
    */
   const retiredClientMessageIdsRef = useRef(new Set<string>());
-  /** gk:已经画过乐观回声的幂等键 —— 重投(断线重连 / duplicate ACK)不再多画一个气泡。 */
+  /** 已经画过乐观回声的幂等键:重投(断线重连 / duplicate ACK)不再多画一个气泡。 */
   const echoedClientMessageIdsRef = useRef(new Set<string>());
-  /** gk:冲队对同一条命令的自动投递计数 —— 这条路此前没有上限。 */
+  /** 冲队对同一条命令的自动投递计数,给自动重投封顶(见 flushAttemptAllowed)。 */
   const flushAttemptsRef = useRef(new Map<string, { count: number; firstAt: number }>());
 
   /** 换会话恢复排队命令时要读它,但它不该让那个 effect 重跑。 */
   const selectedProjectIdRef = useRef(selectedProjectId ?? null);
   selectedProjectIdRef.current = selectedProjectId ?? null;
-  /** fj:同步副本 —— 离线入队时要读当前有没有一条在排,而闭包里那个可能是旧的。 */
+  /** 同步副本:离线入队时要读当前有没有一条在排,而闭包里那个可能是旧的。 */
   const outboxRef = useRef(outbox);
   outboxRef.current = outbox;
   // Which session the in-memory outbox entry belongs to. On a session switch
@@ -641,17 +619,17 @@ export function useChatComposerState({
   // effect must not write across that gap.
   const queuedDraftSessionRef = useRef<string | null>(sessionKey);
   /**
-   * fz:恢复 effect **认领到哪条会话了**。落盘 effect 拿它当归属判据 ——
-   * 换会话那一拍它还指着旧 key,落盘整段跳过,不会误清新会话盘上那份。
-   * 初值刻意不是 `sessionKey`:首次挂载也必须等恢复先跑一遍。
+   * 恢复 effect 认领到哪条会话了。落盘 effect 拿它当归属判据:换会话那一拍它还指着
+   * 旧 key,落盘整段跳过,不会误清新会话盘上那份。初值刻意不是 `sessionKey`:首次挂载
+   * 也必须等恢复先跑一遍。
    */
   const restoredForKeyRef = useRef<string | null>(null);
   /**
-   * ga:哪条 `sending` 的命令**经历过一次断线**。
+   * 哪条 `sending` 的命令经历过一次断线。
    *
-   * 判据必须是"断过再连上",不能只看"现在连着" —— 后者在 `markCommandSent`
-   * 刚把状态置成 `sending` 的那一拍就成立,于是刚发出去的命令会被立刻拨回待发
-   * 再发一遍。记的是幂等键而不是布尔,免得张冠李戴到下一条命令头上。
+   * 判据必须是"断过再连上",不能只看"现在连着":后者在 `markCommandSent` 刚把状态置成
+   * `sending` 的那一拍就成立,刚发出去的命令会被立刻拨回待发再发一遍。记的是幂等键而
+   * 不是布尔,免得张冠李戴到下一条命令头上。
    */
   const sendingSawDisconnectRef = useRef<string | null>(null);
 
@@ -663,13 +641,11 @@ export function useChatComposerState({
    */
   const queuedDraft = useMemo<(QueuedDraft & { imageCount: number; status: OutboxStatus; error: string | null }) | null>(() => {
     /**
-     * **只有"还在等着发"的那条才显示排队卡。**
+     * 只有"还在等着发"的那条才显示排队卡。
      *
-     * 原来是"outbox 非空就渲染" —— 而 `markCommandSent` 之后条目停在 `sending`
-     * 等 ACK,于是消息明明已经发出去了,卡片还挂着「已排队 · 本轮结束后自动发送」,
-     * ACK 没到就永远不消失。判据与落盘那一处共用同一个函数(见 isPendingSend):
-     * 那一处我先改了,这一处当时没跟着 —— 于是"刷新之后卡片消失"成了这个 bug
-     * 的指纹(内存里还留着、盘上已经没有)。
+     * `markCommandSent` 之后条目停在 `sending` 等 ACK,消息已经发出去了,不能再挂着
+     * 「已排队 · 本轮结束后自动发送」。判据与落盘那一处共用同一个函数(isPendingSend),
+     * 两处必须一致,否则内存和盘上对"还在排"的看法会分家。
      */
     if (!isPendingSend(outbox)) return null;
     if (!outbox) return null;
@@ -686,9 +662,9 @@ export function useChatComposerState({
   /**
    * 入队:命令进 outbox,同时落盘(带幂等键与图片引用,所以能跨刷新)。
    *
-   * 已经有一条在排时**接上去而不是覆盖掉**(fj 的取舍保留):服务端只收一条排队
-   * 消息,前端这条通道也是一个槽位;覆盖会让断网期间连发的第一条静默消失。
-   * 合并之后用的是**后一条**命令的 options 与幂等键 —— 它是用户最近一次的意图。
+   * 已经有一条在排时接上去而不是覆盖掉:服务端只收一条排队消息,
+   * 前端这条通道也是一个槽位;覆盖会让断网期间连发的第一条静默消失。
+   * 合并之后用的是后一条命令的 options 与幂等键 —— 它是用户最近一次的意图。
    */
   const enqueueCommand = useCallback((
     command: SendCommand,
@@ -696,11 +672,11 @@ export function useChatComposerState({
     initial?: { status: OutboxStatus; error: string },
   ) => {
     /**
-     * **只和"还在等着发"的那条合并。**
+     * 只和"还在等着发"的那条合并。
      *
      * 合并的本意是:断网期间连发两条,后一条接在前一条后面,别把第一条挤掉。
-     * 但如果 outbox 里留着的是一条**已经发出去、正在等 ACK**(`sending`)的命令,
-     * 合并就等于把那句话**再发一遍** —— 它会作为新命令正文的前半段送出去。
+     * 但如果 outbox 里留着的是一条已经发出去、正在等 ACK(`sending`)的命令,
+     * 合并就等于把那句话再发一遍 —— 它会作为新命令正文的前半段送出去。
      * 判据与排队卡、落盘共用同一个 `isPendingSend`。
      */
     const existing = isPendingSend(outboxRef.current) ? outboxRef.current : null;
@@ -708,7 +684,7 @@ export function useChatComposerState({
     const merged = sameSession && existing.command.text.trim()
       ? freezeSendCommand({
         sessionKey: command.sessionKey,
-        // gi 自查:并进去的两条里任一条带分叉点,合并结果也要另起一支(与提交那一刻同一条规则)
+        // 并进去的两条里任一条带分叉点,合并结果也要另起一支(与提交那一刻同一条规则)
         sessionId: (command.forkFrom ?? existing.command.forkFrom) ? null : command.sessionId,
         projectId: command.projectId,
         clientMessageId: command.clientMessageId,
@@ -723,11 +699,11 @@ export function useChatComposerState({
 
     queuedDraftSessionRef.current = owner;
     /**
-     * gh:**并进一条"等图片"的记录,结果仍然是"等图片"。**
+     * 并进一条"等图片"的记录,结果仍然是"等图片"。
      *
-     * `isPendingSend` 把 needs_attachment 算作"还在等着发",合并本身没错;可合并结果
-     * 此前无条件回到 queued —— A 组为 F12 加的"图丢了就停下等用户补"被静默解除,
-     * 合并后的文本自动冲队发出,正是 F12 描述的"引用了不存在图片的话"。
+     * `isPendingSend` 把 needs_attachment 算作"还在等着发",合并本身没错;但合并结果若
+     * 回到 queued,"图丢了就停下等用户补"就被静默解除,合并后的文本会自动冲队发出,
+     * 成了一条引用不存在图片的话。
      */
     const keepWaitingForAttachment = !initial && existing?.status === 'needs_attachment';
     const entry = initial
@@ -740,31 +716,25 @@ export function useChatComposerState({
   }, []);
 
   /**
-   * F09:服务端确认收下了。
+   * 服务端确认收下了。
    *
-   * 只认**同一个 clientMessageId** —— 别的会话、别的命令的 ACK 不动这一条。
-   * 到这一步才清掉落盘的排队记录(持久化 effect 会因为 outbox 变空而清)。
+   * 只认同一个 clientMessageId —— 别的会话、别的命令的 ACK 不动这一条。
+   * 到这一步才清掉落盘的排队记录,而且只在盘上确实是同一条时才清。
    */
   const handleSendAcked = useCallback((ackSessionId: string, clientMessageId: string) => {
     /**
-     * fz:**清盘也要过同一道身份判断。**
+     * 清盘也要过同一道身份判断。
      *
-     * 这里原来对内存按 `clientMessageId` 判身份,对盘上却无条件
-     * `clearQueuedMessage(ackSessionId)` —— 只看会话、不看是哪一条命令。
-     * 而服务端确实会为同一个 `clientMessageId` 发**两次** accepted:
-     * 排队收下时一次、回合结束续发真正跑起来时又一次。
-     *
-     * 于是:第一条被收进排队 → 前端标 acked;用户接着又打了一条 B 排进去;
-     * 几分钟后续发成功,**旧命令的第二次 ACK** 到达 —— 内存守卫认出不是同一条、
-     * 不动内存,可那句清盘照样把 **B** 从盘上删了。B 只剩内存一份,
-     * 此后刷新 / 关标签页 / 切会话,它静默消失。
+     * 服务端会为同一个 `clientMessageId` 发两次 accepted:排队收下时一次、回合结束续发真正
+     * 跑起来时又一次。盘上若只按会话清(`clearQueuedMessage(ackSessionId)`)而不看是哪一条
+     * 命令,旧命令的第二次 ACK 会把用户随后排进去的 B 从盘上删掉;B 只剩内存一份,此后刷新 /
+     * 关标签页 / 切会话就静默消失。
      *
      * 一个判据两处用:内存与盘上要么一起动,要么都不动。
      */
     /**
-     * gk:身份判断改读 `outboxRef`(同步),不再靠 updater 里置的标志 ——
-     * `setOutbox(updater)` 的 updater 在下一次渲染时才跑,紧跟其后的 `if (acknowledged)`
-     * 永远读到 false,那句清盘从来没执行过(app 级处理器另有一份清理,所以没露馅)。
+     * 身份判断读 `outboxRef`(同步),不靠 updater 里置的标志:`setOutbox(updater)` 的
+     * updater 在下一次渲染时才跑,紧跟其后的 `if (acknowledged)` 会永远读到 false。
      */
     const current = outboxRef.current;
     const acknowledged = Boolean(current && current.command.clientMessageId === clientMessageId);
@@ -774,16 +744,15 @@ export function useChatComposerState({
       setOutbox(next);
     }
     /**
-     * 已确认的那条不该再被别的标签页认领 —— 但**盘上现在躺的可能不是它**。
+     * 已确认的那条不该再被别的标签页认领,但盘上现在躺的可能不是它。
      *
-     * 这句让 fz 那个坑原样复活了一半:内存判的是"我这条被确认了",盘上删的是
-     * "这个会话的排队记录"。两个标签页开同一个会话时,B 排进去的新消息就躺在那个
-     * 键上,而 A 这边旧命令的**第二次** accepted(排队收下一次、续发跑起来又一次)
-     * 一到,就把 B 从盘上删掉;紧接着 storage 事件让 B 那边也把内存里那条撤掉 ——
-     * 卡片凭空消失、正文不退回输入框、消息从没发出去。
+     * 内存判的是"我这条被确认了",盘上删的是"这个会话的排队记录"。两个标签页开同一个
+     * 会话时,B 排进去的新消息就躺在那个键上,而 A 这边旧命令的第二次 accepted(排队收下
+     * 一次、续发跑起来又一次)一到,就会把 B 从盘上删掉;紧接着 storage 事件让 B 那边也把
+     * 内存里那条撤掉:卡片凭空消失、正文不退回输入框、消息从没发出去。
      *
-     * 所以清盘前回读一次:只有盘上确实是同一个幂等键才清。fz 的那句话仍然成立 ——
-     * 一个判据两处用,内存与盘上要么一起动,要么都不动。
+     * 所以清盘前回读一次:只有盘上确实是同一个幂等键才清。一个判据两处用,
+     * 内存与盘上要么一起动,要么都不动。
      */
     if (!acknowledged || !ackSessionId) return;
     const stored = readQueuedMessage(ackSessionId) as StoredSendCommand | null;
@@ -797,23 +766,21 @@ export function useChatComposerState({
     queuedDraftSessionRef.current = owner;
 
     /**
-     * **发出去了就记下这个幂等键,并且当场把盘上那份清掉。**
+     * 发出去了就记下这个幂等键,并且当场把盘上那份清掉。
      *
-     * 清理原来只由持久化 effect 做,而那个 effect 带一道归属守卫
-     * (`queuedDraftSessionRef.current !== sessionKey` 就跳过)—— 新会话的第一条
-     * 正好会撞上它(提交时 owner 是 null、落地时 sessionKey 已经是新 id)。
-     * 跳过一次,盘上那份就留下了,之后任何一次恢复都会把它读回来。
+     * 不能只靠持久化 effect 清理:那个 effect 带一道归属守卫
+     * (`queuedDraftSessionRef.current !== sessionKey` 就跳过),新会话的第一条正好会撞上它
+     * (提交时 owner 是 null、落地时 sessionKey 已经是新 id)。跳过一次,盘上那份就留下了,
+     * 之后任何一次恢复都会把它读回来。
      *
-     * 这里直接清,不依赖任何守卫;记 id 是第二道保险(见
-     * `dispatchedClientMessageIdsRef`)。两道都不贵,而这块已经因为"只堵一半"
-     * 出过三次事了。
+     * 这里直接清,不依赖任何守卫;记 id 是第二道保险(见 `dispatchedClientMessageIdsRef`)。
      */
     dispatchedClientMessageIdsRef.current.add(command.clientMessageId);
     boundIdSet(dispatchedClientMessageIdsRef.current);
     /**
-     * gi 自查:槽位里若是一条**等图片**的记录(needs_attachment),直接发出去的这条不占槽、
+     * 槽位里若是一条等图片的记录(needs_attachment),直接发出去的这条不占槽、
      * 不清盘 —— 否则那条连正文带盘上记录一起被抹掉。代价是这条直发消息没有 sending
-     * 条目可供重连重投(与 gg 之前一致),换那条等图片的不丢。
+     * 条目可供重连重投,换那条等图片的不丢。
      */
     const parked = outboxRef.current;
     if (parked && parked.status === 'needs_attachment' && parked.command.clientMessageId !== command.clientMessageId) {
@@ -822,19 +789,13 @@ export function useChatComposerState({
     const storageKey = owner || command.sessionKey || command.sessionId;
     if (storageKey) clearQueuedMessage(storageKey);
     /**
-     * fz:**删掉了那句"顺手把当前在看的那条也清一遍"。**
-     *
-     * 它读的是 `sessionKeyRef.current`(此刻在看哪条),没有任何归属判断。
-     * 而 `dispatchSendCommand` 在新会话/分叉时要 `await` 一次建会话请求,
-     * 这段时间用户可以切走(`submittingRef` 只挡重复提交,不挡切会话)——
-     * 请求回来时这句清的就是**别人**那条会话盘上的排队记录。
-     *
-     * 上面 `storageKey` 那句(owner → 命令自记的会话 → 命令的会话 id)本来就
-     * 覆盖了这条命令所有可能的落键,再加一句"当前在看的"不解决任何问题,
-     * 只是把一个跨会话误删的窗口敞开一次 HTTP 往返那么长。
+     * 只清这条命令自己的落键(上面的 storageKey:owner → 命令自记的会话 → 命令的会话 id),
+     * 不要再按 `sessionKeyRef.current`(此刻在看哪条)清一遍:`dispatchSendCommand` 在新会话 /
+     * 分叉时要 await 一次建会话请求,期间用户可以切走(`submittingRef` 只挡重复提交,不挡
+     * 切会话),那样清掉的就是别的会话盘上的排队记录。
      */
     /**
-     * F09 的一半:这里记的是 `sending`,**不是 acked**。
+     * 这里记的是 `sending`,不是 acked。
      * 真正的 acked 由服务端的 `chat_ack`(带同一个 clientMessageId)翻转 ——
      * `socket.send` 返回 true 只代表本地没抛异常。
      */
@@ -1024,28 +985,10 @@ export function useChatComposerState({
   );
 
   /**
-   * dx:底栏的 token 用量芯片已移除,所以目前没有调用方 —— 保留这条入口是
-   * 因为它和 showModelsModal 是同一形状的 API(走 executeCommand,与手敲
-   * /cost 同一条路径),将来想把用量放回某处时直接接上即可。
-   */
-  const showCostModal = useCallback(() => {
-    executeCommand(
-      {
-        name: '/cost',
-        description: 'Display token usage information',
-        namespace: 'builtin',
-        metadata: { type: 'builtin' },
-      } as SlashCommand,
-      '/cost',
-      { preserveInput: true },
-    );
-  }, [executeCommand]);
-
-  /**
    * 打开 /models 弹窗 —— 给输入框上的模型徽标点击用。
    *
-   * 和 showCostModal 同一个形状:走 executeCommand 而不是直接 set 弹窗状态,
-   * 这样点徽标和敲 /models 是**同一条代码路径**,弹窗拿到的数据(当前模型、
+   * 走 executeCommand 而不是直接 set 弹窗状态,
+   * 这样点徽标和敲 /models 是同一条代码路径,弹窗拿到的数据(当前模型、
    * provider、可选列表)不会因入口不同而分叉。preserveInput:点徽标不该吃掉
    * 用户已经打了一半的消息。
    */
@@ -1137,7 +1080,7 @@ export function useChatComposerState({
           return false;
         }
 
-        // 0 字节和超限是两回事,原来共用一句"超过 5MB",空文件会被报成超大。
+        // 0 字节和超限分开报:共用一句"超过 5MB"的话,空文件会被报成超大。
         if (!file.size) {
           setImageErrors((previous) => {
             const next = new Map(previous);
@@ -1166,7 +1109,7 @@ export function useChatComposerState({
       setAttachedImages((previous) => {
         const merged = [...previous, ...validFiles];
         if (merged.length > 5) {
-          // 原来是默默 slice(0,5),多出来的图片凭空消失。
+          // 超过 5 张时明确提示丢了几张,不能默默截断。
           emitToast({ message: composerText('tooManyImages', `最多附 5 张图片,多出的 ${merged.length - 5} 张没有附上。`, { extra: merged.length - 5 }), variant: 'error' });
         }
         return merged.slice(0, 5);
@@ -1179,17 +1122,13 @@ export function useChatComposerState({
    * and attach the extracted text to the next send.
    */
   /**
-   * fj:异步上传结果的**归属守卫**。
+   * 异步上传结果的归属守卫。
    *
-   * 三个上传入口(选文件、拖拽、抓链接)都是 await 之后无条件
-   * `setAttachedDocs([...previous, doc])`,没有任何会话/项目归属校验;而
-   * `ChatInterface` 在 `MainContent` 上没有 `key`,切会话不会重挂载 —— 所以这些
-   * setState 一定落在**新会话**的 composer 上。
-   *
-   * 后果不是"多一个 chip"那么轻:`/land` 回来的 `text` 是**旧项目** attachments
-   * 目录下的磁盘路径,用户在新会话里一发送,提示词里就带着一条跨项目路径交给
-   * 智能体去读 —— 这一层清理 effect 的注释里管它叫"一条跨项目的信息泄漏",
-   * 而那个 effect 只在切会话的那一刻清一次,拦不住之后才回来的上传。
+   * 三个上传入口(选文件、拖拽、抓链接)都在 await 之后 `setAttachedDocs([...previous, doc])`;
+   * 而 `ChatInterface` 在 `MainContent` 上没有 `key`,切会话不会重挂载,这些 setState 会落在
+   * 新会话的 composer 上。后果不只是多一个 chip:`/land` 回来的 `text` 是旧项目 attachments
+   * 目录下的磁盘路径,用户在新会话里一发送,提示词里就带着一条跨项目路径交给智能体去读。
+   * 切会话时的清理 effect 只清一次,拦不住之后才回来的上传。
    */
   const isStillSameSession = useCallback(
     (owner: string | null) => sessionKeyRef.current === owner,
@@ -1197,7 +1136,7 @@ export function useChatComposerState({
   );
 
   const handleDocFiles = useCallback(async (files: File[] | FileList) => {
-    // fj:发起时的归属快照(见 isStillSameSession)。
+    // 发起时的归属快照(见 isStillSameSession)。
     const uploadOwner = sessionKeyRef.current;
     const list = Array.from(files || []).slice(0, 5);
     for (const file of list) {
@@ -1261,7 +1200,7 @@ export function useChatComposerState({
    * then rides with the prompt so the agent can publish (/upload-html) or
    * analyze (Read) it based on the user's message. */
   const handleAnyFiles = useCallback(async (files: File[] | FileList) => {
-    // fj:发起时的归属快照(见 isStillSameSession)。
+    // 发起时的归属快照(见 isStillSameSession)。
     const uploadOwner = sessionKeyRef.current;
     const list = Array.from(files || []).slice(0, 5);
     for (const [index, file] of list.entries()) {
@@ -1292,7 +1231,7 @@ export function useChatComposerState({
           ));
         };
         const { chunkBytes } = await fetchLandLimits();
-        // 小于一片的文件继续走原来的单请求路径:它本来就能穿过代理,
+        // 不超过一片的文件走单请求:它本来就能穿过代理,
         // 多绕一趟 start/chunk/complete 只是徒增三次往返与失败面。
         let payload: LandPayload;
         if (file.size > chunkBytes) {
@@ -1315,7 +1254,7 @@ export function useChatComposerState({
           truncated: Boolean(payload.truncated),
           source: 'file' as const,
           // /land: `text` is the staged disk path, so it rides with the prompt
-          // as a bare line. ed: the server may also hand back extracted text for
+          // as a bare line. The server may also hand back extracted text for
           // document types — that part goes in an envelope (see buildDocsBlock).
           kind: 'path' as const,
           ...(payload.extractedText
@@ -1342,7 +1281,7 @@ export function useChatComposerState({
 
   /** prism: fetch a public URL's readable text and attach it. */
   const attachDocFromUrl = useCallback(async (url: string) => {
-    // fj:发起时的归属快照(见 isStillSameSession)。
+    // 发起时的归属快照(见 isStillSameSession)。
     const uploadOwner = sessionKeyRef.current;
     const trimmed = (url || '').trim();
     if (!trimmed) return;
@@ -1403,7 +1342,7 @@ export function useChatComposerState({
         throw new Error(data?.error || composerText('forkPointMissing', '无法定位分叉点'));
       }
       pendingForkRef.current = {
-        // 拿分叉点走了一次网络,期间可能切了会话 —— 归属记的是**发起时**那条。
+        // 拿分叉点走了一次网络,期间可能切了会话 —— 归属记的是发起时那条。
         owner: activeSessionId,
         providerSessionId: data.providerSessionId,
         resumeSessionAt: data.resumeSessionAt || null,
@@ -1434,7 +1373,7 @@ export function useChatComposerState({
    *
    * 图片走图片那条(会随消息以 image 块发给模型),其余任何类型走 land ——
    * 和回形针按钮完全一样。原先这里只认 `image/*`,粘一个 PDF 进来是
-   * **静默无反应**:没有附件、没有报错、连一个请求都不发。能力本来就有,
+   * 静默无反应:没有附件、没有报错、连一个请求都不发。能力本来就有,
    * 只是这两个入口没接上去。
    */
   const acceptDroppedFiles = useCallback((files: File[]) => {
@@ -1472,7 +1411,7 @@ export function useChatComposerState({
     // 不再限定 image/*:拖进来的任何类型都收,分流交给 acceptDroppedFiles。
     // 大小上限也不在这里卡 —— 图片 5MB、其他 500MB 是两套阈值,由各自那条路
     // 去判并给出对应的提示;在这里统一卡一个数只会让其中一边的提示是错的。
-    // **不要在这里设 maxFiles。** react-dropzone 超过 maxFiles 时会把**全部**文件
+    // 不要在这里设 maxFiles。 react-dropzone 超过 maxFiles 时会把全部文件
     // 塞进 fileRejections 并清空 acceptedFiles —— 结果是"一次拖 6 个文件,
     // 什么都不发生",而且因为没配 onDropRejected,连一句提示都没有。
     // 数量上限交给 acceptDroppedFiles 去判(它会收下前 5 张并提示多出几张)。
@@ -1515,7 +1454,7 @@ export function useChatComposerState({
       permissionMode: resolvePermissionModeForProvider(provider, permissionMode),
       toolsSettings,
       skipPermissions: toolsSettings?.skipPermissions || false,
-      // do:技能调用当首条消息时,命名用「技能名:参数」而不是斜杠原文。
+      // 技能调用当首条消息时,命名用「技能名:参数」而不是斜杠原文。
       sessionSummary: getNotificationSessionSummary(
         selectedSession,
         describeSkillInvocationInput(currentInput, slashCommands),
@@ -1532,16 +1471,12 @@ export function useChatComposerState({
   ]);
 
   /**
-   * A 组:提交之后的收尾 —— 清输入框、清附件、收起展开态。
+   * 提交之后的收尾:清输入框、清附件、收起展开态。排队、斜杠命令、离线、发送成功
+   * 几个分支都走这里,共用同一道"期间会话切了没"的守卫。
    *
-   * 抽出来是因为它原来在 `runSubmit` 里**一字不差地出现了四次**(排队分支、
-   * 斜杠命令分支、离线分支、发送成功分支),而其中只有最后一处带着
-   * "期间会话切了没"的守卫。fl 修过那一处(判据从闭包变量换成 ref),
-   * 另外三处照旧 —— 也就是同一个 bug 还留着三份。
-   *
-   * `owner` 是**发起这次提交时**所在的会话键。等待期间用户切走了,composer
-   * 已经属于另一条会话,一个字都不许动;而这条会话自己的草稿仍然要清
-   * (它确实发出去了),所以 `activeDraftKey` 单独判。
+   * `owner` 是发起这次提交时所在的会话键。等待期间用户切走了,composer 已经属于另一条
+   * 会话,一个字都不许动;而这条会话自己的草稿仍然要清(它确实发出去了),所以
+   * `draftKey` 单独判。
    */
   const clearComposerAfterSubmit = useCallback((
     owner: string | null,
@@ -1568,11 +1503,11 @@ export function useChatComposerState({
   }, [resetCommandMenuState, setInput]);
 
   /**
-   * A 组:**投递一条已经冻结的命令。**
+   * 投递一条已经冻结的命令。
    *
-   * 这个函数**不读 composer 的任何东西** —— 正文、options、分叉点、隐藏上下文、
-   * 图片全在 `command` 里。它是 F13 的修法:自动续发不再"把正文灌回输入框再走一遍
-   * 提交",而是直接投递排队时冻结的那一份,用户正在打的字一个不动。
+   * 这个函数不读 composer 的任何东西:正文、options、分叉点、隐藏上下文、图片全在
+   * `command` 里。自动续发直接投递排队时冻结的那一份,不把正文灌回输入框再走一遍提交,
+   * 用户正在打的字一个不动。
    *
    * 返回投递结果,由调用方决定 outbox 怎么流转。
    */
@@ -1583,7 +1518,7 @@ export function useChatComposerState({
     | { ok: false; reason: 'offline' | 'error'; message?: string }
   > => {
     let target = command;
-    /** 这一次发送**自己创建**的会话 —— 收尾判归属时要认它(见 composerStillOwnedBySubmit)。 */
+    /** 这一次发送自己创建的会话 —— 收尾判归属时要认它(见 composerStillOwnedBySubmit)。 */
     let establishedSessionId: string | null = null;
 
     // 新会话在提交时还没有 id —— 服务端在这里分配,再补回命令里。
@@ -1622,9 +1557,8 @@ export function useChatComposerState({
     // project path, and provider-native resume id from the session row;
     // `options` only carries composer-level preferences.
     //
-    // F09:带上 `clientMessageId` —— 服务端按它去重。重连之后重投的是**同一个
-    // id**,所以"发出去了没有"这件事第一次有了权威答案(此前只有本地
-    // `socket.send` 没抛异常这一个信号)。
+    // `clientMessageId` 是幂等键,服务端按它去重。重连之后重投的是同一个 id,
+    // "发出去了没有"以服务端的 ACK 为准(本地 `socket.send` 不抛异常不算数)。
     const sent = sendMessage({
       type: 'chat.send',
       sessionId: target.sessionId,
@@ -1643,18 +1577,19 @@ export function useChatComposerState({
     }
 
     // The optimistic echo must carry the SAME text that went over the wire,
-    // not just what the user typed. The store dedupes a `local_*` user row
-    // against its server-backed copy by exact trimmed content
-    // (userTextFingerprint in stores/useSessionStore.ts); echoing the bare
-    // input while the transcript records input + attachments made the two
-    // fingerprints differ, so every attachment send rendered twice — once
-    // clean, once with the raw attachment tail.
+    // not just what the user typed. The store pairs a `local_*` user row with
+    // its server-backed copy by clientMessageId, but falls back to exact
+    // trimmed content when the server row has no key (claimRealtimeUserEchoes
+    // in stores/useSessionStore.ts); echoing the bare input while the
+    // transcript records input + attachments would make the two fingerprints
+    // differ, and every attachment send would render twice — once clean, once
+    // with the raw attachment tail.
     /**
-     * gk:**同一条命令只画一次回声。**
+     * 同一条命令只画一次回声。
      *
-     * 重投是设计允许的(断线重连拨回 queued、服务端按幂等键回 duplicate),但每投一次
-     * 就 addMessage 一次,页面上就是同一句话叠四个气泡,直到刷新才被服务端那份去重掉
-     * (2026-09-15 测试环境截图)。回声按幂等键去重,服务端那份仍照常盖掉它。
+     * 重投是设计允许的(断线重连拨回 queued、服务端按幂等键回 duplicate),但每投一次就
+     * addMessage 一次的话,页面上同一句话会叠好几个气泡,直到刷新才被服务端那份去重掉。
+     * 回声按幂等键去重,服务端那份仍照常盖掉它。
      */
     boundIdSet(echoedClientMessageIdsRef.current);
     if (shouldEchoOnce(echoedClientMessageIdsRef.current, target.clientMessageId)) {
@@ -1662,16 +1597,21 @@ export function useChatComposerState({
         type: 'user',
         content: target.text,
         images: target.images as never,
-        timestamp: new Date(),
-        // ho(ho-1):合流进 CLI 队列时,气泡上的「撤回」按它认
+        // 按服务器时钟打戳:回声要和服务端来的行按时间戳混排(见 stores/serverClock)
+        timestamp: new Date(serverNow()),
+        // 还没有时钟样本时这是浏览器时间,配对时要按宽的时钟偏差容忍
+        ...(hasServerClockSample() ? {} : { clockUnsynced: true }),
+        // 与服务端那份(落库行 / 实时用户帧)按它配对;合流进 CLI 队列时,气泡上的「撤回」也按它认
         clientMessageId: target.clientMessageId,
         /*
-         * hq(复审五轮):回合还在跑时发出去的(立即发送 = 插话,或被服务端排到这一轮后面)—— 进度区数回合时
-         * 不把它算成新回合:合流的 ACK 回来之前、被排队的那段时间里,这一轮的当前步不该消失。
+         * 回合还在跑时发出去的(立即发送 = 插话,或被服务端排到这一轮后面):进度区数回合时
+         * 不把它算成新回合,合流的 ACK 回来之前、被排队的那段时间里,这一轮的当前步不该消失。
          * 只给进度区用,不碰 interjection(那个管时间轴 / 产出卡,由 ACK 定)。服务端那份落库行回来后替掉它。
+         * 这次发送刚建的会话(新会话页的第一条、编辑重跑的分支)不可能有回合在跑,不标。
          */
-        ...(isLoadingRef.current ? { sentDuringTurn: true } : {}),
-      });
+        ...(isLoadingRef.current && !establishedSessionId ? { sentDuringTurn: true } : {}),
+      // 落进这条命令发往的会话:编辑重跑发往刚建的分支,不是发起时正在看的原会话
+      }, target.sessionId);
     } else {
       console.warn(`[queue] 同一条命令再次投递(${target.clientMessageId}),不再重复画气泡`);
     }
@@ -1709,11 +1649,7 @@ export function useChatComposerState({
       event.preventDefault();
       const currentInput = inputValueRef.current;
       /**
-       * fj:只挂附件、不打字也该能发。
-       *
-       * 原来判据只有 `!currentInput.trim()`:粘一张截图或拖一个 PDF 进来直接
-       * 按回车,按钮是灰的、回车毫无反应、也没有任何文案说明要先写字 ——
-       * 用户只能猜。
+       * 只挂附件、不打字也能发:粘一张截图或拖一个 PDF 进来直接按回车,不该毫无反应。
        */
       const hasAttachments = attachedImages.length > 0 || attachedDocs.length > 0;
       if ((!currentInput.trim() && !hasAttachments) || !selectedProject) {
@@ -1721,13 +1657,10 @@ export function useChatComposerState({
       }
 
       /**
-       * fj:附件还在上传时不能发。
+       * 附件还在上传时不能发。
        *
-       * 此前 `handleSubmit` 只读当前的 `attachedDocs`,全程不看 `parsingDocsCount`;
-       * 而 `parsingDocs` 一路传到 `ChatComposer` **只用来画进度条**,发送按钮的
-       * `disabled` 只有 `!input.trim()`。大文件走分片上传要几十秒到几分钟,于是
-       * 消息**不带那个附件**就发出去了,附件随后挂到已清空的输入框上、跟着
-       * **下一条**消息发出 —— 而用户以为"文件已经给它了"。
+       * 大文件走分片上传要几十秒到几分钟;这时发出去,消息不带那个附件,附件随后挂到已清空
+       * 的输入框上、跟着下一条消息发出,而用户以为"文件已经给它了"。
        */
       if (parsingDocsCount > 0) {
         emitToast({ message: composerText('attachmentsUploading', '附件还在上传,等它传完再发送。'), variant: 'error' });
@@ -1735,10 +1668,10 @@ export function useChatComposerState({
       }
 
       /**
-       * 发起这一次提交时**所在的会话**,以及它的草稿键。
+       * 发起这一次提交时所在的会话,以及它的草稿键。
        *
        * 下面有网络等待(上传附件、建会话),等待期间用户完全可能切到别的会话去。
-       * 收尾那段用的是闭包里捕获的 setter,它们作用在**当前**这个 composer 上 ——
+       * 收尾那段用的是闭包里捕获的 setter,它们作用在当前这个 composer 上 ——
        * 也就是新会话的输入框。判据见 `clearComposerAfterSubmit`。
        */
       const submitSessionKey = sessionKey;
@@ -1748,15 +1681,13 @@ export function useChatComposerState({
       const docsBlock = buildDocsBlock(attachedDocs);
 
       /**
-       * A 组:**先把图片传上去,再决定发还是排队。**
+       * 先把图片传上去,再决定发还是排队。
        *
-       * 原来两个排队分支都在上传**之前**,于是排队记录里存的是 `File[]` ——
-       * 而 `File` 进不了 localStorage。刷新之后 `restoreQueuedDraft` 直接
-       * `images: []`,后台自动发送就把一条"引用了不存在图片"的话发了出去,
-       * 用户毫不知情(F12)。
+       * 排队记录要进 localStorage,而 `File` 进不去;若在上传之前就排队,刷新之后图片丢失,
+       * 后台自动发送会把一条"引用了不存在图片"的话发出去,用户毫不知情。
        *
-       * 代价是被删掉的排队消息也会留下一次上传;换来的是排队消息的附件**真的
-       * 能跨刷新活下来**。这个取舍很清楚:上传是可回收的,发错的消息不是。
+       * 代价是被删掉的排队消息也会留下一次上传;换来的是排队消息的附件能跨刷新活下来。
+       * 上传是可回收的,发错的消息不是。
        */
       let uploadedImages: SendCommandImage[] = [];
       if (attachedImages.length > 0) {
@@ -1792,11 +1723,11 @@ export function useChatComposerState({
       }
 
       /**
-       * A 组:**这一次发送到此冻结。**
+       * 这一次发送到此冻结。
        *
-       * 之后无论排队多久、用户在输入框里打了什么、切到了哪条会话,发出去的都是
-       * 这一份。分叉点与隐藏上下文也在这里进命令(F15)—— 它们此前是全局 ref,
-       * 不按会话隔离,而且在确认发出去之前就被消费掉。
+       * 之后无论排队多久、用户在输入框里打了什么、切到了哪条会话,发出去的都是这一份。
+       * 分叉点与隐藏上下文也在这里按归属取出、进命令:它们挂在 ref 上、不按会话隔离,
+       * 取出后随命令走,排队、重试都不会丢。
        */
       const armedFork = takeIfOwned(pendingForkRef.current, submitSessionKey);
       const armedHiddenContext = takeIfOwned(pendingHiddenContextRef.current, submitSessionKey);
@@ -1806,29 +1737,27 @@ export function useChatComposerState({
         sessionId: selectedSession?.id || currentSessionId || null,
         projectId: selectedProjectId ?? null,
         text: currentInput + docsBlock,
-        // du:发送内容用含附件块的那份,但**命名**只能用 currentInput ——
-        // 传含附件的那份,服务端会把会话名落成「总结一下 <attached-document …>」
-        // 这种带标签尾巴的东西,还与前端乐观显示的名字不一致。
+        // 发送内容用含附件块的那份,但命名只能用 currentInput:传含附件的那份,
+        // 服务端会把会话名落成「总结一下 <attached-document …>」这种带标签尾巴的东西,
+        // 还与前端乐观显示的名字不一致。
         namingText: currentInput,
         images: uploadedImages,
         options: buildSendOptions(currentInput),
         /**
-         * F15:**只认属于这条会话的那一份。**
+         * 只认属于这条会话的那一份(见 takeIfOwned)。
          *
          * 两个 ref 都可能是在别处装上的:分叉点要等一次网络才装(期间可能切走),
          * 隐藏上下文由全局 window 事件装(压根没有会话概念)。归属对不上就当没有 ——
-         * 否则下一次在**另一条**会话里发送,会从别人的 provider 会话分叉出去。
+         * 否则下一次在另一条会话里发送,会从别人的 provider 会话分叉出去。
          */
         forkFrom: armedFork.value,
         hiddenContext: armedHiddenContext.value?.value ?? null,
       });
 
       /**
-       * 分叉点与隐藏上下文**冻结即让位**,但只是从"下一条普通消息"的视野里移走 ——
+       * 分叉点与隐藏上下文冻结即让位,但只是从"下一条普通消息"的视野里移走:
        * 它们已经在命令里了,发送失败也不会丢(重试发的是同一个命令)。
-       *
-       * fj 当初为了"建会话失败后再按一次回车仍然是分叉"把清除推迟到了发送之后;
-       * 现在不需要那个补丁:那次重按走的是 outbox 的重试,用的还是这条命令。
+       * 建会话失败后再按一次回车走的是 outbox 的重试,用的还是这条命令,所以不必推迟到发送之后再清。
        */
       // 取到了才清 —— 别人会话的那一份还等着它自己的会话来取。
       if (armedFork.consumed) pendingForkRef.current = null;
@@ -1864,16 +1793,12 @@ export function useChatComposerState({
               } as SlashCommand)
             : undefined);
         /**
-         * 只有**服务端跑得动**的命令才在这里截胡。
+         * 只有服务端跑得动的命令才在这里截胡。
          *
-         * 原来的判断是 `type !== 'skill'` —— 和菜单里那处犯的是同一个错:
-         * 除了技能之外全都送去 `/api/commands/execute`。CLI 自带命令
-         * (`/compact`、`/clear`、`/init`…)在那个端点既没有 handler 也没有 path,
-         * 于是一路撞到「Command path is required for custom commands」。
-         *
-         * ax 轮修了菜单那处,反而让这条路更容易走到:菜单现在会把 `/compact`
-         * **稳稳地放进输入框**,用户再按一次回车发送 —— 正好落进这个截胡分支。
-         * 两处必须用同一个判据。
+         * 判据不能是 `type !== 'skill'`:CLI 自带命令(`/compact`、`/clear`、`/init`…)在
+         * `/api/commands/execute` 既没有 handler 也没有 path,会撞到「Command path is required
+         * for custom commands」。菜单会把 `/compact` 这类命令放进输入框,用户再按回车就落进这个
+         * 分支,所以这里和菜单那处必须用同一个判据(isPromptCommand)。
          */
         if (matchedCommand && !isPromptCommand(matchedCommand)) {
           executeCommand(matchedCommand, isHelpAlias ? '/help' : commandInput);
@@ -1896,13 +1821,13 @@ export function useChatComposerState({
       }
 
       /**
-       * gh:**这条会话已经有一条在等(排队 / 等图片)时,新的一句并进去,由冲队按序发。**
+       * 这条会话已经有一条排队(queued)时,新的一句并进去,由冲队按序发。
        *
-       * 直接发的话 `markCommandSent` 会用这一条整个覆盖 outbox 并清掉盘上记录 ——
-       * 原来那条连正文一起消失,无提示。outbox 是单槽位,合并是它唯一不丢东西的路。
+       * 直接发的话 `markCommandSent` 会用这一条整个覆盖 outbox 并清掉盘上记录,已在排的那条
+       * 连正文一起消失,没有提示。outbox 是单槽位,合并是它唯一不丢东西的路。
        */
       /**
-       * gi 自查:只并进**冲队发得出去**的那条(queued)。并进 needs_attachment 的话,
+       * 只并进冲队发得出去的那条(queued)。并进 needs_attachment 的话,
        * 那条永远不会自动发(冲队只认 queued、retry 对它是空操作),用户之后每一次回车
        * 都被吞进去 —— 会话明明空闲,却一条都发不出。needs_attachment 照旧直接发
        * (markCommandSent 会绕开它,见那边)。
@@ -1918,7 +1843,7 @@ export function useChatComposerState({
       const result = await dispatchSendCommandRef.current(dispatchable);
       if (result.ok) {
         /**
-         * 收尾放在投递**之后**:新会话是在投递里建起来的,而
+         * 收尾放在投递之后:新会话是在投递里建起来的,而
          * `composerStillOwnedBySubmit` 需要知道"这一次发送建了哪条会话" ——
          * 提前清就拿不到它,那正是那个反复发送的循环的由来。
          */
@@ -1933,14 +1858,10 @@ export function useChatComposerState({
         /**
          * 连通性检查之后、真正 send 之前的一瞬掉线:同样入队,恢复后自动发。
          *
-         * ga:**收尾也要做。** 上面那条"检查之前就发现断网"的分支是
-         * `enqueueCommand` + `clearComposerAfterSubmit` 两件都做;这一条只做了
-         * 前一件 —— 于是同一句话**既进了队列,又留在输入框里**(草稿键也还在,
-         * 刷新都活得下来)。网络恢复后队列自动发出,用户看着输入框里一模一样的
-         * 字以为没发成功,再按一次回车 —— 同一句话发两遍,两个不同的幂等键,
-         * 服务端认不出来,模型跑两轮、改两遍文件。
-         *
-         * 两条分支是同一件事的两种时机,收尾动作必须一样。
+         * 收尾也要做,与上面"检查之前就发现断网"的分支一样:`enqueueCommand` +
+         * `clearComposerAfterSubmit`。只入队不收尾的话,同一句话既进了队列又留在输入框里
+         * (草稿键也还在,刷新都活得下来),网络恢复后队列自动发出,用户以为没发成功再按一次
+         * 回车,同一句话就以两个不同的幂等键发两遍,模型跑两轮、改两遍文件。
          */
         enqueueCommand(dispatchable, submitSessionKey);
         clearComposerAfterSubmit(submitSessionKey, submitDraftKey);
@@ -1974,10 +1895,9 @@ export function useChatComposerState({
   );
 
   /**
-   * fj:对外的提交入口 —— 重入闸包在最外层。
+   * 对外的提交入口,重入闸包在最外层。
    *
-   * 单独一层包装,而不是给 `runSubmit` 整个函数体套 try/finally:那要给三百多行
-   * 重新缩进,改动面远大于修复本身,而每一行缩进变化都是一次 review 噪音。
+   * 单独包一层,让 `runSubmit` 本体不必整体套 try/finally。
    */
   const handleSubmit = useCallback(
     async (
@@ -2004,16 +1924,16 @@ export function useChatComposerState({
   }, [handleSubmit]);
 
   /**
-   * gk:一条**还没发出去的**排队命令被别处的动作挤掉时,把正文退回输入框。
+   * 一条还没发出去的排队命令被别处的动作挤掉时,把正文退回输入框。
    *
-   * 用在跨标签页那两处(盘上换成了另一条 / 盘上那条被别人删了)。排队槽一个会话
-   * 只有一个,两个标签页各排一句时后写的会覆盖先写的 —— 先写的那句若连提示都没有,
-   * 用户看到的是"我明明排了一条,它自己没了",而这类现场事后根本查不出来。
+   * 用在跨标签页那两处(盘上换成了另一条 / 盘上那条被别人删了)。排队槽一个会话只有一个,
+   * 两个标签页各排一句时后写的会覆盖先写的;先写的那句若连提示都没有,用户看到的是
+   * "我明明排了一条,它自己没了",事后也查不出来。
    *
    * 输入框已经有字就并在后面(`mergeQueuedIntoInput`,与封顶那条路同一套)。
    * 图片退不回来(输入框那侧是 File[]),按「编辑排队草稿」的口径提示重新添加。
    *
-   * **声明位置有讲究**:下面那个冲队 effect 的依赖数组在 render 期间就会读到它 ——
+   * 声明位置有讲究:下面那个冲队 effect 的依赖数组在 render 期间就会读到它,
    * 声明放到 effect 之后会是 TDZ,整个输入框当场崩。
    */
   const returnQueuedTextToInput = useCallback((entry: OutboxEntry | null, reason: string) => {
@@ -2030,12 +1950,12 @@ export function useChatComposerState({
   }, [setInput]);
 
   /**
-   * ho:**「立即发送」(send now)—— 排队的那条不等这一轮结束,现在就投给服务端。**
+   * 「立即发送」(send now):排队的那条不等这一轮结束,现在就投给服务端。
    *
-   * 服务端看到会话正忙,会把它**合流**进 CLI 的命令队列(priority `'next'`):在下一个工具间隙折进
+   * 服务端看到会话正忙,会把它合流进 CLI 的命令队列(priority `'next'`):在下一个工具间隙折进
    * 正在跑的这一轮,模型带着它继续干(与 Claude 应用里中途发话的 send now 同一个方式),
-   * 送到模型面前之前还能撤回。合流不成立(带图片、没有常驻 runtime……)服务端就自己收下排队,
-   * 卡片换成「服务端已收下」—— 与原来一样,只是不再由这个标签页攒着。
+   * 送到模型面前之前还能撤回。合流不成立(没有常驻 runtime 等)时服务端自己收下排队,
+   * 卡片换成「服务端已收下」,不再由这个标签页攒着。带图片的这里直接不发(合流不收图片)。
    * 实现上只是给冲队开一个口子:记下"这一条要立即发",冲队 effect 对它不看 isLoading、不等 750ms。
    */
   const [sendNowId, setSendNowId] = useState<string | null>(null);
@@ -2063,21 +1983,15 @@ export function useChatComposerState({
     }
 
     /**
-     * ga:**`sending` 卡住的那条,重连之后要拨回 `queued` 重投。**
+     * `sending` 卡住的那条,重连之后要拨回 `queued` 重投。
      *
-     * `markCommandSent` 记的是 `sending`,并且**当场清盘**、输入框也已清空 ——
-     * 真正的 `acked` 由服务端 `chat_ack` 翻转。可如果这一帧还没被服务端读到
-     * 连接就断了(切网 / 合盖唤醒 / 代理超时),此后:盘上没记录、`sending`
-     * 不落盘、排队卡不显示、冲队只认 `queued` —— **全仓库没有任何路径把它拨回去**。
-     * 用户的气泡挂在那里,没有回答、没有报错、没有重试入口。
+     * `markCommandSent` 记的是 `sending`,并且当场清盘、输入框也已清空;真正的 `acked` 由服务端
+     * `chat_ack` 翻转。如果这一帧还没被服务端读到连接就断了(切网 / 合盖唤醒 / 代理超时),
+     * 此后盘上没记录、`sending` 不落盘、排队卡不显示、冲队只认 `queued`,没有别的路径会把它
+     * 拨回去,用户的气泡就挂在那里,没有回答、没有报错、没有重试入口。
      *
-     * 而落盘 effect 的注释写着"重投用的是内存里那份"、`canClearDraft` 写着
-     * "断网重连后我们会带着同一个 clientMessageId 重投,服务端按它去重" ——
-     * **那个重投在代码里不存在**,整套幂等键因此只在后台续发那条路上被用过。
-     *
-     * 现在补上:连接恢复的那一拍,把还停在 `sending` 的那条拨回待发。
-     * 重投用的是**同一个幂等键**,服务端 `registerSend` 认得出来,
-     * 真收到过的那条只会回一个 `duplicate` ACK,不会跑两遍。
+     * 所以连接恢复的那一拍,把还停在 `sending` 的那条拨回待发。重投用的是同一个幂等键,
+     * 服务端 `registerSend` 认得出来,真收到过的那条只会回一个 `duplicate` ACK,不会跑两遍。
      */
     if (outbox?.status === 'sending') {
       if (!isConnected) {
@@ -2100,9 +2014,9 @@ export function useChatComposerState({
     // 断网期间不冲队:投递只会再次入队(750ms 一圈的空转)。
     // isConnected 翻真时本 effect 会重跑,那时再发。
     //
-    // A 组:附件恢复不回来的那条(`needs_attachment`)同样不发 —— 它在等用户
-    // 重新添加图片,自动发出去的会是一条"引用了不存在图片"的话(F12)。
-    // ho:用户点了「立即发送」的那一条不等这一轮结束(见 sendQueuedNow)
+    // 附件恢复不回来的那条(`needs_attachment`)同样不发:它在等用户重新添加图片,
+    // 自动发出去的会是一条"引用了不存在图片"的话。
+    // 用户点了「立即发送」的那一条不等这一轮结束(见 sendQueuedNow)。
     const sendNow = Boolean(outbox && sendNowId === outbox.command.clientMessageId);
     if ((isLoading && !sendNow) || !isSendable(outbox) || !isConnected) {
       return;
@@ -2117,22 +2031,19 @@ export function useChatComposerState({
     const timer = setTimeout(() => {
       const dispatch = () => {
         /**
-         * A 组(F13):**投递排队时冻结的那条命令,不碰输入框。**
+         * 投递排队时冻结的那条命令,不碰输入框。
          *
-         * 原来冲队是"把排队正文灌回输入框 → 再走一遍 handleSubmit"。而回合刚
-         * 结束、输入框刚解锁,正是用户开始打下一句的那一刻 —— fj 为此把覆盖改成
-         * 了"两段合起来发",但那只是止血:**用户正在写的下一句仍然会被连带发出去**,
-         * 而且 options 是按当前输入框重建的,不是排队时那一份。
-         *
-         * 现在排队的是一个冻结的命令,直接投递它:输入框里的字一个不动。
+         * 回合刚结束、输入框刚解锁,正是用户开始打下一句的时候。若把排队正文灌回输入框再走一遍
+         * handleSubmit,用户正在写的下一句会被连带发出去,options 也是按当前输入框重建的,不是
+         * 排队时那一份。直接投递冻结的命令,输入框里的字一个不动。
          */
         const owner = queuedDraftSessionRef.current;
         /**
-         * gk:**同一条命令的自动投递封顶。**
+         * 同一条命令的自动投递封顶。
          *
-         * 后台会话那条路(useQueuedMessageAutoSend)gh 就封了 3 次,这条路一直没有上限:
-         * 任何一种"投出去又被拨回 queued"的时序(断线重连、别的标签页改盘、isLoading 抖动)
-         * 都能让它无限重投。超过就停下来、说清楚,交给用户点重试。
+         * 任何一种"投出去又被拨回 queued"的时序(断线重连、别的标签页改盘、isLoading 抖动)都能
+         * 让它无限重投(后台会话那条路 useQueuedMessageAutoSend 同样有上限)。超过就停下来、说清楚,
+         * 正文退回输入框,发不发交回给用户。
          */
         boundAttemptMap(flushAttemptsRef.current);
         if (!flushAttemptAllowed(flushAttemptsRef.current, pending.command.clientMessageId, Date.now())) {
@@ -2156,7 +2067,7 @@ export function useChatComposerState({
           return Promise.resolve();
         }
         /**
-         * gi 自查:**投递之前就把它标成 sending。**
+         * 投递之前就把它标成 sending。
          *
          * 分叉命令的投递要先 POST 建会话(几百毫秒);这期间它还是 queued,用户此刻回车
          * 会把新的一句并进这条(见 handleSubmit 的合并分支),而 POST 回来后
@@ -2198,14 +2109,14 @@ export function useChatComposerState({
 
       // The saved key is the claim ticket shared with the app-level auto-send
       // (which handles sessions that finish while not viewed). 认领不到 = 键已经
-      // 没了(已经发过),或者**别的标签页**刚抢走 —— 都不能再发一次。
+      // 没了(已经发过),或者别的标签页刚抢走 —— 都不能再发一次。
       /**
-       * gk:**锁要盖住"投递 → 清盘"整段,认领到的必须是内存里要投的那一条。**
+       * 锁要盖住"投递 → 清盘"整段,认领到的必须是内存里要投的那一条。
        *
-       * 原来回调同步返回、投递是 fire-and-forget:锁释放时盘上那份还在(markCommandSent
-       * 在投递的 .then 里才清),这段窗口里再来一次冲队照样认领得到 → 同一条命令再投一次。
-       * 现在 await 到投递收尾;认领到的记录若与内存里这条不是同一个幂等键,说明盘上已经
-       * 换了内容(别的标签页 / 旧会话),按盘上那份重装,不投内存这条。
+       * markCommandSent 在投递的 .then 里才清盘;回调若同步返回、投递 fire-and-forget,锁释放时
+       * 盘上那份还在,这段窗口里再来一次冲队照样认领得到,同一条命令会再投一次。所以 await 到
+       * 投递收尾。认领到的记录若与内存里这条不是同一个幂等键,说明盘上已经换了内容(别的
+       * 标签页 / 旧会话),按盘上那份重装,不投内存这条。
        */
       void runExclusive(queueLockName(sessionKey), async () => {
         const claimed = claimQueuedMessage(sessionKey) as StoredSendCommand | null;
@@ -2242,11 +2153,11 @@ export function useChatComposerState({
   /**
    * 「编辑」排队的那条:正文退回输入框,命令作废。
    *
-   * 图片**不退回** —— 它们已经上传了,而输入框那侧的 `attachedImages` 是
+   * 图片不退回 —— 它们已经上传了,而输入框那侧的 `attachedImages` 是
    * `File[]`,拿不回原文件。正文退回、图片提示重新添加,比装作还在诚实。
    */
   /**
-   * gk:取消 / 编辑 / 停止并回 —— 三处共用的"作废这条排队命令":
+   * 取消 / 编辑 / 停止并回,三处共用的"作废这条排队命令":
    * 当场清盘(不等落盘 effect 的下一拍)、摘掉认领戳、把幂等键记成已作废。
    */
   const retireQueuedCommand = useCallback((entry: OutboxEntry | null) => {
@@ -2286,14 +2197,13 @@ export function useChatComposerState({
   }, [retireQueuedCommand]);
 
   /**
-   * 服务端那份排队被中止带走了 —— 把正文退回输入框。
+   * 服务端那份排队被中止带走了:把正文退回输入框。
    *
-   * 与本地 `queuedDraft` 走的是同一套语义(见 handleAbortSession):停止不替用户
-   * 开跑下一段,但也不吞掉他打过的字。
+   * 与本地 `queuedDraft` 同一套语义(见 handleAbortSession):停止不替用户开跑下一段,
+   * 但也不吞掉他打过的字。
    *
-   * **只在输入框为空时回填** —— 用户可能在中止之后已经开始打别的了,
-   * 覆盖他正在打的字比丢掉那条排队更糟。回填不了时调用方会退回原来那条提示,
-   * 至少不会让消息看起来凭空消失。
+   * 只在输入框为空时回填:用户可能在中止之后已经开始打别的了,覆盖他正在打的字比丢掉
+   * 那条排队更糟。回填不了时调用方退回提示文案,至少不会让消息看起来凭空消失。
    */
   const restoreQueuedContent = useCallback((content: string): boolean => {
     if (!content || inputValueRef.current.trim()) return false;
@@ -2321,7 +2231,7 @@ export function useChatComposerState({
     return () => window.removeEventListener('prism:prefill-chat-input', onPrefill);
   }, []);
 
-  // 「让 Claude 创建定时任务」等入口的**直发**:一句人话直接作为用户消息发出去
+  // 「让 Claude 创建定时任务」等入口的直发:一句人话直接作为用户消息发出去
   // (像 Cowork 那样),技术细节(票据、接口用法)走 hiddenContext,页面上不出现。
   useEffect(() => {
     const onDirectSend = (event: Event) => {
@@ -2332,7 +2242,7 @@ export function useChatComposerState({
       setInput(text);
       inputValueRef.current = text;
       pendingHiddenContextRef.current = typeof detail?.hiddenContext === 'string' && detail.hiddenContext
-        // 事件是全局的,但上下文只对**触发它时所在的**会话有效。
+        // 事件是全局的,但上下文只对触发它时所在的会话有效。
         ? { owner: sessionKeyRef.current, value: detail.hiddenContext }
         : null;
       // 等切页/渲染落定再提交;submit 读的是 inputValueRef,不受 state 时序影响。
@@ -2347,7 +2257,7 @@ export function useChatComposerState({
   // 输入草稿持久化,owner-ref 防跨会话串写(和下面 queuedDraft 的写法同款):
   // 切会话的那一个 commit 里,`activeDraftKey` 已指向新会话而 `input` 还是旧
   // 会话的文字 —— 持久化 effect 靠 ref 不相等跳过那一拍,换草稿 effect 随后
-  // 更新 ref 并从新键恢复。持久化 effect 必须声明在换草稿 effect **之前**。
+  // 更新 ref 并从新键恢复。持久化 effect 必须声明在换草稿 effect 之前。
   const inputDraftKeyRef = useRef<string | null>(activeDraftKey);
 
   useEffect(() => {
@@ -2359,17 +2269,14 @@ export function useChatComposerState({
     } else {
       safeLocalStorage.removeItem(activeDraftKey);
     }
-    // dl:草稿进账号级同步(F11),停笔 8 秒推一次 —— 换台设备接着打。
-    schedulePushAccountSettings();
   }, [input, activeDraftKey]);
 
   useEffect(() => {
     inputDraftKeyRef.current = activeDraftKey;
     historyWalkRef.current = null;
     let savedInput = (activeDraftKey ? safeLocalStorage.getItem(activeDraftKey) : null) || '';
-    // ck:cj 版「让 Claude 创建定时任务」把整段带票据的 curl 话术预填进过输入框,
-    // 没发送就会作为会话草稿存进 localStorage —— 升级后打开目标会话,这坨机器
-    // 文本还会被恢复出来(用户反馈)。票据一次性且早已过期,识别到就直接丢弃。
+    // 含任务票据的整段 curl 话术(X-Prism-Task-Ticket / via-ticket)不从草稿恢复:
+    // 票据一次性且早已过期,识别到就直接丢弃。
     if (savedInput && /X-Prism-Task-Ticket|\/api\/tasks\/via-ticket/.test(savedInput)) {
       savedInput = '';
       if (activeDraftKey) safeLocalStorage.removeItem(activeDraftKey);
@@ -2389,48 +2296,36 @@ export function useChatComposerState({
   useEffect(() => {
     if (!sessionKey) return;
     /**
-     * 归属判据换成**条目自己记的那条会话**,不再用一个会漂的 ref。
+     * 归属判据看条目自己记的那条会话(命令冻结时记下的 `sessionKey`),不看会漂的
+     * `queuedDraftSessionRef`:用它整段跳过的话,既挡住了"写到别的会话头上",也挡住了该做的
+     * 清理(新会话的第一条:提交时 owner 是 null、落地时 sessionKey 已经是新 id)。
      *
-     * 原来是 `queuedDraftSessionRef.current !== sessionKey` 就整段跳过 ——
-     * 它既挡住了"写到别的会话头上",也挡住了**该清没清**。新会话的第一条正好
-     * 撞上:提交时 owner 是 null、落地时 sessionKey 已经是新 id,守卫一跳过,
-     * 盘上那份就留下了。
-     *
-     * 命令里本来就带着 `sessionKey`(冻结时记的),用它判归属既准确又不会漂;
-     * 而"没有条目"这种情况一律执行清理 —— 清一个本来就该空的键,没有风险。
+     * "没有条目"一律执行清理:清一个本来就该空的键,没有风险。
      */
     /**
-     * fz:**这一拍的账,得等恢复先认领这条会话。**
+     * 这一拍的账,得等恢复先认领这条会话。
      *
-     * 这个 effect 声明在恢复那个之前,依赖里都有 `sessionKey` —— 换会话那一拍
-     * 它先跑,而此时 `sessionKey` 已经是**新**会话、`outbox` 还是旧会话的
-     * (旧会话没排队时就是 `null`)。下面那句"没有条目就清理"于是清掉的是
-     * **新会话**盘上那份 —— 紧接着恢复 effect 去读,读到空。
+     * 这个 effect 声明在恢复那个之前,依赖里都有 `sessionKey`:换会话那一拍它先跑,此时
+     * `sessionKey` 已经是新会话、`outbox` 还是旧会话的(旧会话没排队时就是 `null`),"没有条目
+     * 就清理"清掉的会是新会话盘上那份;紧接着恢复 effect 去读,读到空,排队消息活不过一次
+     * 刷新,也活不过切走再切回。
      *
-     * 后果:排队消息**活不过一次刷新,也活不过切走再切回**;而且它把
-     * A 组整套"跨刷新恢复 / 附件描述符 / needs_attachment"一起关掉了
-     * (盘上那份根本不再被读回来 —— 这也是 fr 之后"重复发送"不再复现的真相)。
-     *
-     * fr 把守卫从 `queuedDraftSessionRef.current !== sessionKey`(整段跳过)
-     * 换成 `outbox.command.sessionKey !== sessionKey`,守卫从"两条路都堵"
-     * 退化成"只在有条目时堵一条" —— 又是只收窄了一半。
-     *
-     * 现在的判据是**恢复认领没认领这条会话**:换会话那一拍它还指着旧 key,
-     * 整段跳过;恢复跑完把 key 记上,之后的每一拍照常写/清。既堵住了跨会话
-     * 误清,也没有把"该清没清"那条路重新打开(同会话内的清理照旧发生)。
+     * 所以判据两条缺一不可(见 mayPersistQueuedCommand):恢复已认领这条会话(换会话那一拍
+     * 它还指着旧 key,整段跳过);有条目时条目自己记的会话对得上。这样既堵住跨会话误清,
+     * 同会话内的清理也照常发生。
      */
     if (!mayPersistQueuedCommand(restoredForKeyRef.current, sessionKey, outbox?.command.sessionKey)) {
       return;
     }
     /**
-     * **落盘的是"还没发出去的那条",不是"outbox 里有东西"。**
+     * 落盘的是"还没发出去的那条",不是"outbox 里有东西"。
      *
      * `markCommandSent` 之后条目会停在 `sending` 等 ACK。如果这时候还写盘,
      * 而 ACK 因为任何原因没到(服务端是旧版本、帧丢了、页面在 ACK 之前被关掉),
      * 这条记录就永久留在 localStorage 里 —— 而"换会话"那个 effect 每次都会把它
-     * 读回来并置成 `queued`,冲队随即又发一次。**同一句话反复发送,停不下来。**
+     * 读回来并置成 `queued`,冲队随即又发一次。同一句话反复发送,停不下来。
      *
-     * 判据收成一句:**只有还等着发的才落盘**(`queued`);附件缺失的那条也要留
+     * 判据收成一句:只有还等着发的才落盘(`queued`);附件缺失的那条也要留
      * (它在等用户补图,刷新之后卡片还得在)。`sending` / `acked` / `failed` 一律清 ——
      * 已经交出去的那条由 ACK 负责收尾,重投用的是内存里那份,不需要盘上这份。
      */
@@ -2438,16 +2333,11 @@ export function useChatComposerState({
 
     if (shouldPersist && outbox) {
       /**
-       * A 组(F12):落盘的是**整条命令** —— 幂等键、图片引用、options、
-       * 分叉点、隐藏上下文都在里面。
+       * 落盘的是整条命令 —— 幂等键、图片引用、options、分叉点、隐藏上下文都在里面。
        *
-       * fj 那版只能存正文和 options:图片是 `File[]`,序列化不了。于是
-       * "我排了一条带图的消息"会静默变成纯文本消息发出去,而 fj 的止血是
-       * **在正文里补一行说明**——那行字会真的发给模型,读起来像用户自己写的。
-       *
-       * 现在图片在提交时就已经上传完了,存的是路径描述符(纯 JSON),
-       * 刷新之后原样读回来还能用;真丢了(老记录 / 存坏了)就落到
-       * `needs_attachment`,停下来等用户重新添加,而不是照发。
+       * 图片在提交时就已经上传完了,存的是路径描述符(纯 JSON),刷新之后原样读回来
+       * 还能用;只存正文的话,"排了一条带图的消息"会静默变成纯文本消息发出去。
+       * 真丢了(老记录 / 存坏了)就落到 `needs_attachment`,停下来等用户重新添加,而不是照发。
        */
       writeQueuedMessage(sessionKey, toStoredCommand(outbox.command));
     } else {
@@ -2456,7 +2346,7 @@ export function useChatComposerState({
   }, [outbox, sessionKey]);
 
   /**
-   * 换会话(以及首次挂载)时装入这条会话盘上那份排队命令 —— **恢复的唯一入口**。
+   * 换会话(以及首次挂载)时装入这条会话盘上那份排队命令 —— 恢复的唯一入口。
    */
   useEffect(() => {
     queuedDraftSessionRef.current = sessionKey;
@@ -2468,8 +2358,8 @@ export function useChatComposerState({
     }
     const stored = readQueuedMessage(sessionKey) as StoredSendCommand | null;
 
-    // 兜底不变式:这个标签页已经发出去的命令,不许再回到待发(见上面的说明)。
-    // gk:取消过的同样不许回来。
+    // 兜底不变式:这个标签页已经发出去的命令,不许再回到待发(见上面的说明);
+    // 取消过的同样不许回来。
     if (!shouldRestoreStored(stored?.clientMessageId, dispatchedClientMessageIdsRef.current, retiredClientMessageIdsRef.current)) {
       clearQueuedMessage(sessionKey);
       setOutbox(null);
@@ -2478,14 +2368,13 @@ export function useChatComposerState({
     }
 
     /**
-     * gh:**正在等 ACK 的那条(sending)不能被盘上的空记录抹掉。**
+     * 正在等 ACK 的那条(sending)不能被盘上的空记录抹掉。
      *
-     * `sending` 从不落盘(重投用的是内存里那份),而这个 effect 对任何一次 sessionKey
-     * 变化都无条件用盘上内容覆盖内存。新会话的第一条消息:`onSessionEstablished(N)`
-     * 与 `markCommandSent` 同一批落地 → 下一次 commit sessionKey 变成 N → 读到空 →
-     * outbox 置 null。这条消息若正好落进"写进发送缓冲但服务端没读到"的断线窗口,
-     * ga 补的"重连后把 sending 拨回 queued 重投"就没有条目可拨。
-     * 内存里那条属于这条会话、且盘上没有更新的记录时,留着它。
+     * `sending` 从不落盘(重投用的是内存里那份),而这个 effect 对任何一次 sessionKey 变化都会
+     * 用盘上内容覆盖内存。新会话的第一条消息:`onSessionEstablished(N)` 与 `markCommandSent`
+     * 同一批落地 → 下一次 commit sessionKey 变成 N → 读到空 → outbox 置 null;这条消息若正好
+     * 落进"写进发送缓冲但服务端没读到"的断线窗口,重连后就没有 sending 条目可拨回重投。
+     * 内存里那条属于这条会话、且盘上没有记录时,留着它。
      */
     const inFlight = outboxRef.current;
     const inFlightBelongsHere = Boolean(
@@ -2508,11 +2397,11 @@ export function useChatComposerState({
   }, [sessionKey]);
 
   /**
-   * gk:**别的标签页动了盘上这条会话的排队记录 —— 这边跟着对齐。**
+   * 别的标签页动了盘上这条会话的排队记录,这边跟着对齐。
    *
-   * 盘上那份是跨标签页共享的,而内存里每个标签页各有一份;此前没有任何同步:
-   * A 标签页取消了,B 标签页内存里那条还在,B 的落盘 effect 下一次跑就把它**写回盘上**,
-   * 随后无论哪边冲队都会把用户已经取消的那句话发出去。
+   * 盘上那份是跨标签页共享的,而内存里每个标签页各有一份。不同步的话,A 标签页取消了,
+   * B 标签页内存里那条还在,B 的落盘 effect 下一次跑就把它写回盘上,随后无论哪边冲队都会
+   * 把用户已经取消的那句话发出去。
    */
   useEffect(() => {
     if (!sessionKey || typeof window === 'undefined') return;
@@ -2560,12 +2449,12 @@ export function useChatComposerState({
   /**
    * 换会话时把附件清掉。
    *
-   * 文本草稿是**按会话存的**(`draftStorageKey(sessionKey, projectId)`),切过去会换成
-   * 那条会话自己的。但 `attachedImages` / `attachedDocs` 是**跨会话共用的一份 state** ——
+   * 文本草稿是按会话存的(`draftStorageKey(sessionKey, projectId)`),切过去会换成
+   * 那条会话自己的。但 `attachedImages` / `attachedDocs` 是跨会话共用的一份 state ——
    * 在 A 里挂了三个文件、还没发,切到 B,那三个文件仍然挂在输入框上,下一次在 B 里
    * 发送就把它们一起发出去了。用户完全看不出这是 A 的东西。
    *
-   * 更要紧的是**附件已经落盘在 A 的项目目录下**(见 attachment-storage:附件按
+   * 更要紧的是附件已经落盘在 A 的项目目录下(见 attachment-storage:附件按
    * projectPath 归档并计入配额)。在 B 里发出去,提示词里就带着一条指向另一个项目的
    * 路径 —— 这违反了这个文件顶部立的不变量,也是一条跨项目的信息泄漏。
    *
@@ -2628,13 +2517,12 @@ export function useChatComposerState({
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
       /**
-       * fj:输入法组合期不让菜单/提及抢键。
+       * 输入法组合期不让菜单 / 提及抢键。
        *
-       * 这两个 handler 排在 `isComposing` 判据**之前**,而 ↑/↓ 历史回看
-       * (第 1859 行)和发送(第 1885 行)都带了保护。中文/日文输入法按回车
-       * 确认候选时,若命令菜单恰好开着且有高亮项,那一下回车就被截胡去插入命令了。
+       * 这两个 handler 必须排在组合期判据之后:中文 / 日文输入法按回车确认候选时,若命令菜单
+       * 恰好开着且有高亮项,那一下回车会被截胡去插入命令。
        */
-      // hl(静态 P2-30):Safari 确认候选的那次回车 isComposing 已是 false,只剩 keyCode 229。
+      // Safari 确认候选的那次回车 isComposing 已是 false,只剩 keyCode 229(isImeComposing 两者都认)。
       if (isImeComposing(event)) {
         return;
       }
@@ -2647,7 +2535,7 @@ export function useChatComposerState({
         return;
       }
 
-      // hl(P3 键盘可访问性):只有 Shift+Tab 切执行模式;普通 Tab 不再被吞(原来键盘用户出不去)。
+      // 只有 Shift+Tab 切执行模式;普通 Tab 不拦,键盘用户要能用它离开输入框。
       if (shouldCyclePermissionMode(event) && !showFileDropdown && !showCommandMenu) {
         event.preventDefault();
         cyclePermissionMode();
@@ -2747,14 +2635,12 @@ export function useChatComposerState({
 
     // 停止 = 刹车,不是"停这一条然后接着跑下一条"。
     //
-    // 原来这里只发 abort:中止同样产生 `complete` → isLoading 由 true 变 false →
-    // 下面那个 flush effect 以 `wasLoading ? 0 : 750` 的 0ms 立刻把排队那条**发出去**。
-    // 于是用户会看到服务端广播的"排队那条已取消",同时一个新回合开跑 ——
-    // 跳过权限档下这意味着刹车没刹住,agent 继续动文件。
+    // 中止同样产生 `complete`,isLoading 由 true 变 false,下面那个 flush effect 会以 0ms
+    // 立刻把排队那条发出去:用户看到服务端广播"排队那条已取消",同时一个新回合开跑,
+    // 跳过权限档下就是刹车没刹住、agent 继续动文件。所以停止时要先把排队那条拿下来。
     //
-    // 也不能默默丢掉:排一条纠正再按停止,是引导 agent 最顺手的操作,
-    // 丢了就得重敲。所以退回输入框 —— 不丢东西,也不会有任何东西自动开跑,
-    // 要不要发交回给用户的下一次按键。
+    // 也不能默默丢掉:排一条纠正再按停止,是引导 agent 最顺手的操作,丢了就得重敲。
+    // 所以退回输入框:不丢东西,也不会有任何东西自动开跑,要不要发交回给用户的下一次按键。
     if (queuedDraft) {
       // dn-B2:输入框已有内容时不覆盖 —— 合并(排队在前、正在打的在后)留在
       // 输入框;图片同样并起来。输入框为空时保持原行为(整条退回,含图片)。
@@ -2767,8 +2653,8 @@ export function useChatComposerState({
         outboxRef.current = null;
         setInput(merged);
         inputValueRef.current = merged;
-        // A 组:图片**不退回输入框** —— 它们在提交时就已经上传了,而输入框那侧
-        // 是 `File[]`,原文件拿不回来。说一声比装作还挂着诚实。
+        // 图片不退回输入框 —— 它们在提交时就已经上传了,而输入框那侧
+        // 是 `File[]`,原文件拿不回来。提示一声比装作还挂着诚实。
         if (queuedImageCount > 0) {
           emitToast({ message: composerText('queuedImagesLostGeneric', '排队时附带的图片需要重新添加。') });
         }
@@ -2815,7 +2701,7 @@ export function useChatComposerState({
 
       // 「允许并记住」必须落到 localStorage 的 claude-settings 里:服务端虽然会把
       // 这条规则记进当前 runtime,但下一条消息的 chat.send 会用这里读出的列表
-      // **整体覆盖**运行时设置 —— 不落盘的话,"记住"只活到下一条消息之前。
+      // 整体覆盖运行时设置 —— 不落盘的话,"记住"只活到下一条消息之前。
       // 落盘后与设置页「权限」里的 Allow rule 完全同一份数据,那里可见可删。
       if (decision?.allow && typeof decision.rememberEntry === 'string' && decision.rememberEntry) {
         try {
@@ -2841,7 +2727,7 @@ export function useChatComposerState({
         }
       }
 
-      // 逐条发,并记下哪些**真的发出去了**。断线瞬间点"允许/拒绝"时,
+      // 逐条发,并记下哪些真的发出去了。断线瞬间点"允许/拒绝"时,
       // sendMessage 会返回 false(socket 没连上),但旧代码不看返回值就把请求
       // 从列表里抹掉 —— 弹窗消失、run 却仍挂着那条待批,要等重连 ack 才重新冒
       // 出来,中间一片空白。只移除确认送达的,发失败的留在原地并提示。
@@ -2935,11 +2821,11 @@ export function useChatComposerState({
     removeAttachedDoc,
     handleDocFiles,
     handleAnyFiles,
-    // ed:「+」菜单第一项「添加附件」—— 与拖拽 / 粘贴同一条分流(图片给模型看,其它存进项目)。
+    // 「+」菜单第一项「添加附件」:与拖拽 / 粘贴同一条分流(图片给模型看,其它存进项目)。
     handleAttachFiles: acceptDroppedFiles,
     attachDocFromUrl,
     parsingDocs: parsingDocsCount > 0,
-    // fj:提交在飞 —— 发送按钮据此变灰,是重入闸在界面上的那一半。
+    // 提交在飞:发送按钮据此变灰,是重入闸在界面上的那一半。
     isSubmitting,
     docUploadProgress,
     startEditRerun,
@@ -2968,7 +2854,6 @@ export function useChatComposerState({
     isInputFocused,
     commandModalPayload,
     closeCommandModal,
-    showCostModal,
     showModelsModal,
   };
 }

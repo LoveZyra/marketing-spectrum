@@ -18,11 +18,8 @@ interface BashCommandDisplayProps {
 }
 
 /**
- * Codex-in-VSCode style command row: a compact, single-line command with a
- * chevron on the left. When the command produced output, the row becomes a
- * dropdown that expands to reveal the output inline. Theme-integrated surfaces
- * keep it clean in both light and dark mode; consecutive commands stack tightly
- * into a clean list.
+ * Compact single-line command row with a chevron on the left. Once the command
+ * has output, the row toggles an inline output panel; otherwise it is static.
  */
 export const BashCommandDisplay: React.FC<BashCommandDisplayProps> = ({
   command,
@@ -67,7 +64,7 @@ export const BashCommandDisplay: React.FC<BashCommandDisplayProps> = ({
   return (
     <div
       className={cn(
-        // 面按一档实色(card),深浅只由发丝线区分;hover 走 border-strong 那一档
+        // 实色 card 面,层次只靠发丝线区分;可展开时 hover 加深到 border-strong
         'group/cmd overflow-hidden rounded-lg border border-border bg-card transition-colors duration-200',
         hasOutput && !open && 'hover:border-border-strong',
       )}
@@ -135,7 +132,6 @@ export const BashCommandDisplay: React.FC<BashCommandDisplayProps> = ({
         </div>
       )}
 
-      {/* Expanded output */}
       {open && hasOutput && (
         <div className="settings-content-enter border-t border-border bg-background">
           {description && (

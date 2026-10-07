@@ -91,7 +91,7 @@ docker inspect --format '{{.State.Health.Status}}' prism
 curl -fsS http://127.0.0.1:8080/api/ready
 ```
 
-探针用的是 node 内置的 `fetch`——slim 基础镜像里既没有 `curl` 也没有 `wget`，node 是唯一保证存在的二进制。`--start-period=45s` 是留给首次启动建表和老数据目录迁移的时间，这段时间内探测失败不计入重启判定。
+探针用的是 node 内置的 `fetch`——slim 基础镜像里既没有 `curl` 也没有 `wget`，node 是唯一保证存在的二进制。`--start-period=45s` 是留给首次启动建表和数据库迁移的时间，这段时间内探测失败不计入重启判定。
 
 ---
 

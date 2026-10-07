@@ -30,7 +30,7 @@ type SidebarHeaderProps = {
   onRefresh: () => void;
   isRefreshing: boolean;
   onCreateProject: () => void;
-  /** eo:项目多选开关。只在「项目」这一档、并且确实有项目时才画。 */
+  /** 项目多选开关。只在「项目」这一档、并且确实有项目时才画。 */
   selectionMode?: boolean;
   canSelectProjects?: boolean;
   onToggleSelectionMode?: () => void;
@@ -79,7 +79,7 @@ export default function SidebarHeader({
   const runningBadgeText = runningSessionsCount > 99 ? '99+' : String(runningSessionsCount);
 
   /**
-   * ef:桌面端的模式切换收进搜索框左侧的小下拉,四个分段按钮撤掉(移动端仍用分段)。
+   * 桌面端的模式切换收在搜索框左侧的小下拉里,移动端仍用分段按钮。
    * 四种模式 + 各自的计数;当前模式显示在搜索框里,占位符随模式变。
    */
   const modes: Array<{ id: SidebarSearchMode; icon: LucideIcon; label: string; count?: number }> = [
@@ -90,12 +90,9 @@ export default function SidebarHeader({
   ];
   const activeMode = modes.find((mode) => mode.id === searchMode) ?? modes[0];
   /**
-   * eh:模式菜单 **portal 到 body**,不再是搜索框里的 absolute 浮层。
-   *
-   * 侧栏的项目行是定位元素,和这个 z-50 的浮层在同一个层叠上下文里较劲 ——
-   * 线上表现为菜单打开后项目名穿透压在菜单上(用户截图)。这类"浮层被同层内容
-   * 盖住 / 被滚动容器裁掉"的问题在这套界面里只有一个可靠解:portal 出去 + fixed
-   * 定位到触发器,和「+」菜单、导出菜单、顶栏「…」用的是同一套做法。
+   * 模式菜单 portal 到 body、fixed 定位到触发器,不做搜索框里的 absolute 浮层:
+   * 侧栏的项目行是定位元素,和 z-50 的浮层在同一个层叠上下文里,项目名会压到菜单上,
+   * 浮层还可能被滚动容器裁掉。「+」菜单、导出菜单、顶栏「…」用的是同一套做法。
    */
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [modeMenuAnchor, setModeMenuAnchor] = useState<{ left: number; top: number } | null>(null);
@@ -255,8 +252,7 @@ export default function SidebarHeader({
         <MessageSquare className="h-3 w-3" />
         {t('search.modeConversations')}
       </button>
-      {/* 「运行中」原来是三个汉字挤在 1/3 宽的格子里,把前两个带图标的分段也压瘦了。
-          改成和归档同一档的图标按钮:有在跑的会话时才挂一个等宽计数。 */}
+      {/* 「运行中」用和归档同一档的图标按钮(三个汉字的文字分段会把旁边带图标的分段压瘦);有在跑的会话时才挂一个等宽计数。 */}
       <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">
         <button
           onClick={() => onSearchModeChange('running')}
@@ -291,9 +287,7 @@ export default function SidebarHeader({
 
   const searchInput = (isMobileVariant: boolean) => (
     <div className="relative">
-      {/* ec:这是页面上第一个文本框,浏览器密码管理器给"没有 form 的密码框"配用户名时
-          就会盯上它(见 AccountSettingsTab)。根治在密码表单那边;这里再关掉自动填充、
-          起一个不像用户名的 name,并挂上主流密码管理器认的忽略标记,双保险。 */}
+      {/* 页面上第一个文本框,密码管理器给"没有 form 的密码框"配用户名时会盯上它(见 AccountSettingsTab);这里关掉自动填充、起个不像用户名的 name,并挂上主流密码管理器的忽略标记。 */}
       <Input
         type="text"
         name="sidebar-filter"
@@ -350,9 +344,7 @@ export default function SidebarHeader({
           <div className="px-3 pb-1">{searchWithMode}</div>
         )}
 
-        {/* ef:列表标题行 —— 「项目 · N」+ 右侧描边「+」(创建新项目)与刷新。
-            墨黑实心大按钮撤掉:主区只留一个实心主按钮(发送),侧栏 CTA 降为描边。
-            新建 + 刷新**永远可见**:一个项目都没有时恰恰最需要"新建"。 */}
+        {/* 列表标题行:「当前模式 · N」+ 右侧的描边「+」(新建项目)与刷新。侧栏 CTA 用描边,实心主按钮只留给主区的发送;新建与刷新始终可见,没有项目时恰恰最需要"新建"。 */}
         <div className="flex items-center gap-1 px-3 pb-1 pt-2">
           <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[11px] font-semibold tracking-[0.4px] text-muted-foreground">
             <span className="truncate">{activeMode.label}</span>
@@ -360,8 +352,7 @@ export default function SidebarHeader({
               <span className="font-mono text-[11px] font-normal tabular-nums">{sectionCount > 99 ? '99+' : sectionCount}</span>
             )}
           </span>
-          {/* eo:多选开关。**显式进入**才让点击变成勾选 —— 默认动作(打开项目)
-              被悄悄改掉,是人删错东西的开始。 */}
+          {/* 多选开关:显式进入多选后点击才变成勾选;默认动作(打开项目)不能被悄悄改掉,否则容易删错东西。 */}
           {canSelectProjects && onToggleSelectionMode && (
             <button
               type="button"
@@ -435,12 +426,14 @@ export default function SidebarHeader({
               className="flex h-8 w-8 items-center justify-center rounded-md bg-muted active:translate-y-px"
               onClick={onRefresh}
               disabled={isRefreshing}
+              aria-label={t('tooltips.refresh')}
             >
               <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'text-primary' : 'text-muted-foreground'}`} strokeWidth={2} />
             </button>
             <button
               className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground active:translate-y-px"
               onClick={onCreateProject}
+              aria-label={t('tooltips.createProject')}
             >
               <FolderPlus className="h-4 w-4" />
             </button>

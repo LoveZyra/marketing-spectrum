@@ -1,7 +1,7 @@
 import { getConnection } from '@/modules/database/connection.js';
 
 /**
- * hn(B1):模型目录(表结构与语义见 `schema.ts` 的 `MODEL_CATALOG_TABLE_SCHEMA_SQL`)。
+ * 模型目录(表结构与语义见 `schema.ts` 的 `MODEL_CATALOG_TABLE_SCHEMA_SQL`)。
  *
  * 只做存取;校验、缓存、别名解析、播种在 providers 模块的 claude-model-catalog.service 里。
  * 写入口全是 root 的管理动作(路由里判)。
@@ -23,9 +23,9 @@ export type ModelCatalogRow = {
   created_at: string;
   updated_at: string;
   updated_by: number | null;
-  /** hq:走哪个网关;NULL = settings.json 那一套(网关 0)。 */
+  /** 走哪个网关;NULL = settings.json 那一套(网关 0)。 */
   gateway_id: number | null;
-  /** hq:可用人员(用户 id 的 JSON 数组);NULL = 所有人。 */
+  /** 可用人员(用户 id 的 JSON 数组);NULL = 所有人。 */
   allowed_users: string | null;
 };
 
@@ -42,9 +42,9 @@ export type ModelCatalogWrite = {
   sortOrder: number;
   enabled: boolean;
   isDefault: boolean;
-  /** hq:null = 网关 0(settings.json)。 */
+  /** null = 网关 0(settings.json)。 */
   gatewayId: number | null;
-  /** hq:null = 所有人;数组 = 只有这些用户 id(空数组 = 只有 root)。 */
+  /** null = 所有人;数组 = 只有这些用户 id(空数组 = 只有 root)。 */
   allowedUsers: number[] | null;
 };
 
@@ -125,7 +125,7 @@ export const modelCatalogDb = {
     getConnection().prepare('UPDATE model_catalog SET last_probe = ? WHERE id = ?').run(JSON.stringify(probe), id);
   },
 
-  /** hq:挂在某个网关上的目录条目数(删网关前要看)。 */
+  /** 挂在某个网关上的目录条目数(删网关前要看)。 */
   countByGateway(gatewayId: number): number {
     return (getConnection().prepare('SELECT COUNT(*) AS c FROM model_catalog WHERE gateway_id = ?').get(gatewayId) as { c: number }).c;
   },

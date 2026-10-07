@@ -8,10 +8,10 @@ import { afterEach, describe, test } from 'vitest';
 import { auditLogDb, closeConnection, getConnection, initializeDatabase } from '@/modules/database/index.js';
 
 /**
- * gk:审计日志的"对我做的"那一支 + 删除类事件不被常规裁剪冲掉。
+ * 审计日志的"对我做的"那一支,以及删除类事件不被常规裁剪冲掉。
  *
- * 2026-09-14 的事故里,被删的人在审计页什么都看不到 —— 非 root 只看"自己做的"。
- * 现在 `target_user_id = 我` 的行也在范围内,但那些行的 ip / user_agent 是别人的,列表里抹掉。
+ * 非 root 除了"自己做的",还能看到 `target_user_id = 我` 的行(例如自己的会话被别人删了);
+ * 那些行的 ip / user_agent 属于别人,列表里抹掉。
  * 第三条钉裁剪:5000 条 ws_ticket_issued 之后,上个月那条 session_deleted 还在。
  */
 
@@ -75,7 +75,7 @@ describe('审计:对我做的', () => {
 
   /**
    * 第二档也要真的裁 —— 不然"删除类不参与常规裁剪"就等于"删除类无上限",
-   * 一张永远长大的表。这里把上限压到 5 条来验证那一刀确实落下,并且**留下的是最新的**。
+   * 一张永远长大的表。这里把上限压到 5 条来验证那一刀确实落下,并且留下的是最新的。
    */
   test('删除类事件自己有上限:超过 PRISM_AUDIT_LOG_MAX_DURABLE_ROWS 的最旧那些被裁掉', async () => {
     const previousMax = process.env.PRISM_AUDIT_LOG_MAX_DURABLE_ROWS;

@@ -1,6 +1,6 @@
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
 
-/** ho(hq-2):非 git 目录「撤销这一轮之后的文件改动」能用的轮次(服务端落库、带 turnUuid、没被撤回的用户行),新的在前。 */
+/** 非 git 目录「撤销这一轮之后的文件改动」可选的轮次:服务端已落库、带 turnUuid、未撤回的用户消息;fileRewindTurns 去重后按新到旧返回。 */
 export type FileRewindTurn = { turnUuid: string; prompt: string; timestamp: string };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

@@ -31,17 +31,17 @@ type Props = {
   onCancel: () => void;
   onSave: (input: CatalogInput) => Promise<void>;
   /**
-   * hq:
+   * 编辑器的两种用法:
    * - `catalog`(默认,root 的模型目录):网关 = 默认网关 + 共享网关;多一栏「可用人员」;
    * - `private`(每个人的私有模型):网关只能选自己的私有网关;没有说明 / 推荐 / 默认 / 排序 / 可用人员。
    */
   variant?: 'catalog' | 'private';
   /**
-   * hq:可选的网关。catalog:共享网关(默认网关由编辑器自己补在最前);private:我的私有网关。
-   * 不传 = 老用法,不画网关一栏、也不往服务端发 gatewayId。
+   * 可选的网关。catalog:共享网关(默认网关由编辑器自己补在最前);private:我的私有网关。
+   * 不传则不画网关一栏,也不往服务端发 gatewayId。
    */
   gateways?: GatewayChoice[] | null;
-  /** hq:「可用人员」的候选(仅 catalog)。null = 没拉到(只按 id 显示已选的人)。 */
+  /** 「可用人员」的候选(仅 catalog)。null = 没拉到(只按 id 显示已选的人)。 */
   users?: BasicUser[] | null;
 };
 
@@ -65,7 +65,7 @@ export default function ModelCatalogEditor({ entry, defaultSortOrder, onCancel, 
   const [enabled, setEnabled] = useState(entry?.enabled ?? true);
   const [isDefault, setIsDefault] = useState(entry?.isDefault ?? false);
   const [sortOrder, setSortOrder] = useState(String(entry?.sortOrder ?? defaultSortOrder));
-  // hq:网关(0 = 默认网关;私有模型新建时默认挂第一个私有网关)与可用人员
+  // 网关(0 = 默认网关;私有模型新建时默认挂第一个私有网关)与可用人员
   const [gatewayId, setGatewayId] = useState<number>(entry?.gatewayId ?? (isPrivate ? (gateways?.[0]?.id ?? 0) : 0));
   const [audience, setAudience] = useState<'everyone' | 'some'>(Array.isArray(entry?.allowedUsers) ? 'some' : 'everyone');
   const [allowedUsers, setAllowedUsers] = useState<number[]>(entry?.allowedUsers ?? []);

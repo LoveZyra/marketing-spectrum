@@ -5,14 +5,13 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
- * fy(F14):**老库补列这条路要真的走一遍。**
+ * 老库补列这条路要真的走一遍。
  *
- * `INIT_SCHEMA_SQL` 里的 `CREATE TABLE IF NOT EXISTS` 对已有的库是空操作 ——
- * 新列只能靠迁移补。这里的做法是:先正常建库,再把新列 `DROP` 掉造出"老形状",
- * 灌两行历史,然后重跑一次初始化,验证:
+ * `INIT_SCHEMA_SQL` 里的 `CREATE TABLE IF NOT EXISTS` 对已有的库是空操作,新列只能靠迁移补。
+ * 做法:先正常建库,再把新列 `DROP` 掉造出缺列的形状,灌两行数据,然后重跑一次初始化,验证:
  *
  * 1. 列补回来了;
- * 2. **既有的行一条不少、内容不动**(可空加列,不重建表 —— 所以不需要备份);
+ * 2. 既有的行一条不少、内容不动(可空加列,不重建表,所以不需要备份);
  * 3. 补完之后新写进去的 assistant 行能算出锚点,后面的用户消息就能分叉。
  */
 let tempDir: string;

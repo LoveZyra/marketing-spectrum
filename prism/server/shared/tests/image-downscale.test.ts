@@ -1,12 +1,12 @@
 /**
  * 发给模型前缩图。
  *
- * 用户贴什么就传什么,一张手机原图就是 3.6MB 的 base64,而且它躺在 transcript 里
- * **以后每一轮都会再发一次**。模型端反正也会把长边缩到 ~1568px,多传的字节纯粹浪费;
- * 在把 base64 当文本计数的网关下,它们直接变成"Input exceeds the context limit"。
+ * 不缩的话一张手机原图就是 3.6MB 的 base64,而且它躺在 transcript 里以后每一轮都会
+ * 再发一次。模型端反正也会把长边缩到 ~1568px,多传的字节纯粹浪费;在把 base64 当
+ * 文本计数的网关下,它们直接变成"Input exceeds the context limit"。
  *
- * 下面每一条都对应设计里的一条边界,最要紧的是第一条:**磁盘原图一个字节都不动**。
- * 用户明确问过"不会把上传的图片清晰度压低吧" —— 这条测试就是那句承诺。
+ * 下面每一条都对应设计里的一条边界,最要紧的是第一条:磁盘原图一个字节都不动,
+ * 用户上传的图片清晰度不受影响。
  */
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -71,9 +71,8 @@ describe('缩图规则', () => {
   });
 
   test('小图一个字节都不改 —— 连重编码都省了', async () => {
-    // 400×300 的满噪点 PNG 约 360KB:尺寸和体积都在线内。
-    // (第一版用 800×600,噪点 PNG 压不动、1.4MB 超了体积线,于是被正确地无损重压 ——
-    //  那是代码对、夹具错。)
+    // 400×300 的满噪点 PNG 约 360KB:尺寸和体积都在线内。噪点 PNG 几乎压不动,
+    // 夹具再大(如 800×600 约 1.4MB)就会超过体积线、正确地走无损重压分支。
     const small = await noisyImage(400, 300, 'png');
     const r = await downscaleImageForModel(small, 'image/png', settings);
     expect(r.changed).toBe(false);

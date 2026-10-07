@@ -31,8 +31,7 @@ export default function AppearanceSettingsTab({
 
   return (
     <div className="space-y-8">
-      {/* 原来这里是一枚「深色模式」开关。浅色分成两种材质之后布尔表达不了三个值,
-          换成三张带缩略预览的卡片 —— 选主题是看着选的,不是读文字选的。 */}
+      {/* 三套主题用带缩略预览的卡片选择:选主题是看着选的,不是读文字选的。 */}
       <SettingsSection title={t('appearanceSettings.uiTheme.label', { defaultValue: '界面主题' })}>
         <SettingsCard>
           <ThemePicker />

@@ -7,19 +7,13 @@ import type { SettingsProject } from '../../sidebar/types/types';
 import type { Project } from '../../../types/app';
 
 /**
- * 设置弹窗的挂载点 —— **挂在应用外层,不挂在侧栏里**。
+ * 设置弹窗的挂载点:挂在应用外层(AppContent),不挂在侧栏里。
  *
- * 这一条是修一个真 bug:弹窗原来住在 `SidebarModals` 里,而侧栏折叠时
- * `AppContent` 是 `isSidebarCollapsed ? null : <Sidebar/>` —— 整棵侧栏根本没渲染。
- * 于是折叠状态下点轨上的齿轮,`showSettings` 确实变成了 true,**但没有任何东西
- * 在渲染它**,表现就是"按了没反应"。命令面板的「打开设置」和主区那个入口
- * 一样中招 —— 三个入口全都在侧栏之外,却依赖侧栏活着。
+ * 侧栏折叠时 `AppContent` 整棵不渲染 `<Sidebar/>`,而设置的三个入口(轨上的齿轮、命令面板、
+ * 主区)都在侧栏之外;若挂在侧栏里,折叠状态下 `showSettings` 变成 true 也没有东西渲染它。
+ * 弹窗 `createPortal` 到 `document.body`,挂在哪一层不影响显示。
  *
- * 弹窗本来就是 `createPortal` 到 `document.body` 的,它待在侧栏子树里
- * 从来只是历史位置,没有任何理由。搬到这里之后,谁开都一样。
- *
- * 新建项目 / 删除确认那几个仍然留在 `SidebarModals`:它们的唯一入口就在侧栏里,
- * 侧栏没渲染时本来也点不到。
+ * 新建项目 / 删除确认等弹窗留在 `SidebarModals`:它们的入口只在侧栏里。
  */
 
 // 懒加载:设置页牵着 MCP、技能、权限、API key 几屏,大多数会话根本不会打开。

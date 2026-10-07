@@ -8,28 +8,27 @@ import { afterEach, beforeEach, describe, test } from 'vitest';
 import { buildLookupMap, extractFirstValidJsonlData } from '@/shared/utils.js';
 
 /**
- * 两个 JSONL 读取函数**不许漏文件描述符**,坏行也不许让整份文件白读。
+ * 两个 JSONL 读取函数不许漏文件描述符,坏行也不许让整份文件白读。
  *
  * ## 为什么值得钉
  *
  * 这两个函数用 `for await (const line of readline)` 逐行读。异步迭代器被 throw 或
  * break 打断时(abrupt completion),底层流没走到 'end' —— autoClose 不触发,GC 也
- * 不回收,fd 是**永久泄漏**。原来的写法只在成功路径上关流,两条 abrupt 出口都漏。
+ * 不回收,fd 是永久泄漏,所以每一条出口都必须关流。
  *
- * 这不是理论问题,两条路都极其容易踩:
- *   - `~/.claude/history.jsonl` 只要有一行坏 JSON(CLI 崩在 append 中途、盘满,
- *     都会留下永久截断的一行),`buildLookupMap` 就抛 —— 而这个文件**每来一条
- *     prompt 就重读一次**;
- *   - `extractFirstValidJsonlData` 的语义就是"命中即停",每次成功都是一次 break。
+ * 两条路都很容易踩:
+ *   - `~/.claude/history.jsonl` 可能留着永久截断的坏行(CLI 崩在 append 中途、盘满),
+ *     而这个文件每来一条 prompt 就重读一次;
+ *   - `extractFirstValidJsonlData` 的语义就是"命中即停",每次成功都是一次提前退出。
  *
  * 泄漏到 `ulimit -n` 之后,服务表现为"活着但什么都干不了":accept 失败、
  * transcript 读不了、SQLite 打不开,只能重启。
  *
  * ## 为什么顺带钉"坏行不丢整份文件"
  *
- * 修 fd 的同时把 `JSON.parse` 单独兜住了。之前一行坏行会让循环整个抛出去,
- * 前面已经解析好的行**一起丢掉**——history 里一行截断,整个会话名字映射就空了。
- * 这条断言防止以后有人"简化"掉那层 try。
+ * `JSON.parse` 是单独兜住的:否则一行坏行会让循环整个抛出去,前面已经解析好的行
+ * 一起丢掉 —— history 里一行截断,整个会话名字映射就空了。这条断言防止以后有人
+ * "简化"掉那层 try。
  */
 
 const FD_DIR = '/proc/self/fd';
@@ -53,7 +52,7 @@ afterEach(() => {
 describe('JSONL 读取:fd 与坏行', () => {
   test('坏行不会让整份文件白读', async () => {
     const map = await buildLookupMap(goodAndBad, 'a', 'b');
-    // 坏行之前那条必须还在。原来的写法会在坏行处抛出整个循环,这里会是空 Map。
+    // 坏行之前那条必须还在;若坏行抛出整个循环,这里会是空 Map。
     assert.equal(map.get('1'), 'x');
     assert.equal(map.size, 1);
   });

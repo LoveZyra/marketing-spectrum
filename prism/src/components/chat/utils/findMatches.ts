@@ -1,5 +1,5 @@
 /**
- * 会话内查找的纯匹配逻辑(F1)。
+ * 会话内查找的纯匹配逻辑。
  *
  * DOM 端(ChatFindBar)拿它算出每个文本节点里的命中区间,再包成 Range 丢给
  * CSS Custom Highlight API —— 匹配本身与 DOM 无关,单测在这里做。

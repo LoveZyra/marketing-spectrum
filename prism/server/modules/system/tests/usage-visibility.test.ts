@@ -19,17 +19,15 @@ import {
 import { createUsageRouter } from '../usage.routes.js';
 
 /**
- * bu 轮回归:fork-point 与 token-usage 两个端点的可见性闸门。
+ * fork-point 与 token-usage 两个端点的可见性闸门(canViewerSeeSession)。
  *
- * 这两条路由当年从 index.js 迁进 usage.routes.ts 时漏挂了 canViewerSeeSession ——
- * 邻居端点(context-usage / slash-commands / active-model)都有。漏掉的后果:
- * 任何登录用户拿会话 id 就能套出别人会话的 provider_session_id 与项目路径
+ * 少了这道闸,任何登录用户拿会话 id 就能套出别人会话的 provider_session_id 与项目路径
  * (fork-point),或读别人的 token 用量(token-usage)。
  *
  * 测试策略:起一个真 express 实例(路由工厂 + 假鉴权中间件,身份由请求头指定),
- * 用返回文案区分"被闸门挡下的 404"(Session not found)与"过了闸门后的正常
- * 404"(no provider transcript / Project not found)—— 后者证明闸门对合法访问
- * 者是放行的,防止未来有人把闸门挪成一刀切。
+ * 用返回文案区分"被闸门挡下的 404"(Session not found)与"过了闸门后的正常 404"
+ * (no provider transcript / Project not found):后者证明闸门对合法访问者是放行的,
+ * 防止闸门被改成一刀切。
  */
 
 type TestUser = { id: number; username: string };

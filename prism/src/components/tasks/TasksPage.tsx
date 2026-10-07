@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Bot, ChevronDown, Clock, Loader2, Pencil, Play, Plus, Search,
+  AlertTriangle, ArrowLeft, Bot, ChevronDown, Clock, Loader2, Pencil, Play, Plus, RefreshCw, Search,
   Settings2, Trash2,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -19,20 +19,20 @@ import type { AppTab, Project } from '../../types/app';
 import { useModalKeyboard } from '../../shared/view/hooks/useModalKeyboard';
 import { uiLocale } from '../../utils/uiLocale';
 
+import { fetchTaskList, taskListView } from './taskList';
+
 /**
- * 定时任务页(cj 轮起,版式对照用户给的 Scheduled tasks 参考图)。
+ * 定时任务页。
  *
  * 列表:大标题 + 搜索 + 「新建任务 ▾」(点开二选一:让 Claude 创建 / 手动填写表单)+ 双列卡片;
- * 详情:标题 + 启停开关 + 立即运行/编辑/删除,左栏最近运行,右栏指令/目标/频率;
- * 手动表单弹窗:对照 Create scheduled task 截图(名称与指令必填,指令大框
- * 内嵌项目与模型选择,另有频率、会话策略、权限、目标会话)。
+ * 详情:标题 + 启停开关 + 立即运行 / 编辑 / 删除,左栏最近运行,右栏指令 / 目标 / 频率;
+ * 手动表单弹窗:名称与指令必填,指令大框内嵌项目与模型选择,另有频率、会话策略、权限、目标会话。
  *
- * **创建的推荐路径是对话**(cm 轮,用户定):菜单里第一项「让 Claude 创建」切到
- * 对话页发一句人话,Claude 解析需求、缺什么问什么、齐了就建;第二项「手动填写
- * 表单」给要精确控制的场合,编辑已有任务也走它。按钮本身只展开菜单、不直接
- * 触发任何一种 —— 点一下就跳走会让人措手不及(用户反馈)。技术细节(一次性票据 + 接口用法)作为隐藏上下文随消息
- * 带给模型,页面上不出现 —— 全程不暴露登录 token,票据一次即焚、可撤销自己
- * 刚建的那一个。会话归属由 Claude 出选择题让用户二选一,不替他决定。
+ * 创建的推荐路径是对话:菜单第一项「让 Claude 创建」切到对话页发一句人话,Claude 解析需求、
+ * 缺什么问什么、齐了就建;第二项「手动填写表单」给要精确控制的场合,编辑已有任务也走它。
+ * 按钮本身只展开菜单、不直接触发任何一种,点一下就跳走会让人措手不及。
+ * 技术细节(一次性票据 + 接口用法)作为隐藏上下文随消息带给模型,页面上不出现:全程不暴露登录 token,
+ * 票据一次即焚、可撤销自己刚建的那一个。会话归属由 Claude 出选择题让用户二选一,不替他决定。
  */
 
 export type WireTask = {
@@ -50,7 +50,7 @@ export type WireTask = {
 
 type TasksPageProps = {
   selectedProject: Project | null;
-  /** 用户当前所在的对话 —— 「就写进这条对话」靠它绑定(cm 轮)。 */
+  /** 用户当前所在的对话 —— 「就写进这条对话」靠它绑定。 */
   selectedSession?: { id?: string | null } | null;
   setActiveTab: (tab: AppTab) => void;
   onNavigateToSession?: (sessionId: string) => void;
@@ -99,10 +99,9 @@ interface WireRun {
 const RUNS_PAGE = 8;
 
 /**
- * hl(09-24 P2-12):服务器时区的自述,随 GET /api/tasks 下发(与 skillwhet 夜训同形)。
- * 任务的时刻按**服务器本地时区**调度;表单、「下一次」、给 Claude 的隐藏上下文
- * 全部按它显示 / 描述,并标注时区名 —— 此前按浏览器时区,Docker 默认 UTC 时差 8 小时,
- * 用户填 10:00 看到「下一次 18:00」。
+ * 服务器时区的自述,随 GET /api/tasks 下发(与 skillwhet 夜训同形)。
+ * 任务的时刻按服务器本地时区调度,所以表单、「下一次」、给 Claude 的隐藏上下文都按它显示 / 描述,
+ * 并标注时区名;按浏览器时区显示会差出时差(Docker 默认 UTC,与东八区差 8 小时)。
  */
 export type ServerTime = { tz: string; offsetMin: number; local: string; now: string };
 
@@ -156,11 +155,11 @@ function TaskFormModal({
   editingId: string | null;
   projects: Array<{ path: string; name: string }>;
   models: FancyOption[];
-  /** ho:收起来的别名行(存量任务的模型恰好是别名时拿来显示)。 */
+  /** 收起来的别名行(已有任务的模型恰好是别名时拿来显示)。 */
   aliasModels: FancyOption[];
   /** 「默认模型」实际指向谁(能查到就写在主行,别名退到副行)。 */
   defaultModelReal: string | null;
-  /** hl:服务器时区(表单里的时刻按它理解)。 */
+  /** 服务器时区(表单里的时刻按它理解)。 */
   serverTime: ServerTime | null;
   onClose: () => void;
   onSaved: (task: WireTask) => void;
@@ -172,8 +171,7 @@ function TaskFormModal({
   // 「选择其它目录…」的文件夹浏览器挂在表单这一层(下拉面板一关就会卸载 footer)
   const [browsingFolder, setBrowsingFolder] = useState(false);
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((f) => ({ ...f, [key]: value }));
-  /** 数字时刻框:允许清空(空串),其余取整并夹进 [min,max]。 */
-  // hh:时 / 分 / 日三个数字框改用 NumberInput —— 打字时不夹取(原来 9 后面敲 1 → "91" → 被夹成 23),
+  // 时 / 分 / 日三个数字框用 NumberInput:打字时不夹取(否则 9 后面敲 1 → "91" 会被夹成 23),
   // 离开输入框时才夹到范围里;空着提交用 placeholder 的默认值(见 submit)。
 
   // 三个下拉的选项全部走共享 hook,不许各写一份。
@@ -208,11 +206,11 @@ function TaskFormModal({
         ? await authenticatedFetch(`/api/tasks/${editingId}`, { method: 'PATCH', body })
         : await authenticatedFetch('/api/tasks', { method: 'POST', body });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || '保存失败');
+      if (!response.ok) throw new Error(payload.error || t('tasksPage.errors.saveFailed', { defaultValue: '保存失败' }));
       onSaved(payload.task as WireTask);
       onClose();
     } catch (error) {
-      toast({ message: error instanceof Error ? error.message : '保存失败', variant: 'error' });
+      toast({ message: error instanceof Error ? error.message : t('tasksPage.errors.saveFailed', { defaultValue: '保存失败' }), variant: 'error' });
     } finally {
       setSaving(false);
     }
@@ -268,8 +266,7 @@ function TaskFormModal({
                   variant="chip"
                   className="max-w-[55%] flex-1"
                   value={form.projectPath}
-                  // hl(09-24 P2-13):换项目就清掉已选的固定会话 —— 会话挂在项目上,
-                  // 带着别的项目的会话提交会被服务端 400。
+                  // 换项目就清掉已选的固定会话:会话挂在项目上,带着别的项目的会话提交会被服务端 400。
                   onChange={(next) => setForm((f) => (f.projectPath === next ? f : { ...f, projectPath: next, fixedSessionId: '' }))}
                   placeholder={t('tasksPage.form.pickProject', { defaultValue: '选择项目…' })}
                   searchable
@@ -426,11 +423,15 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
   const [tasks, setTasks] = useState<WireTask[]>([]);
   const [serverTime, setServerTime] = useState<ServerTime | null>(null);
   const [loading, setLoading] = useState(true);
+  /** 最近一次拉列表失败。还没拉到过时整页显示加载失败;拉到过时保留旧列表,提示可能已过期。 */
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [query, setQuery] = useState('');
   const [detailId, setDetailId] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  // hl(动态 P2-22):「新建任务」菜单 —— Esc 关、点菜单外任意处关且**不吞这次点击**
-  // (原来是一层透明遮罩接走第一次点击,点任务卡片要点两下)。
+  // 「新建任务」菜单:Esc 关、点菜单外任意处关,且不吞这次点击
+  // (不用透明遮罩,否则第一次点击被遮罩接走,点任务卡片要点两下)。
   const newMenuRef = useRef<HTMLDivElement | null>(null);
   const newMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
@@ -458,23 +459,39 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
   const { models, aliasModels, defaultModelReal } = useModelCatalog();
 
   const refresh = useCallback(async () => {
-    try {
-      const response = await authenticatedFetch('/api/tasks');
-      const payload = await response.json();
-      if (response.ok) {
-        setTasks((payload.tasks ?? []) as WireTask[]);
-        if (payload.serverTime && typeof payload.serverTime.tz === 'string') setServerTime(payload.serverTime as ServerTime);
-      }
-    } catch { /* 列表读不到就保持现状 */ } finally {
-      setLoading(false);
+    const list = await fetchTaskList();
+    if (list) {
+      setTasks(list.tasks);
+      if (list.serverTime) setServerTime(list.serverTime);
+      setHasLoaded(true);
     }
+    // 拉不到时列表保持现状,界面按 loadFailed 提示。
+    setLoadFailed(!list);
+    setLoading(false);
   }, []);
 
+  const retryLoad = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await refresh();
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   useEffect(() => { void refresh(); }, [refresh]);
-  // 运行状态是活的:页面开着时轻轮询
+  // 运行状态是活的:页面开着时轻轮询。浏览器标签页在后台时不轮询,切回来立刻补拉一次。
   useEffect(() => {
-    const timer = window.setInterval(() => void refresh(), 15_000);
-    return () => window.clearInterval(timer);
+    const pollIfVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    const timer = window.setInterval(pollIfVisible, 15_000);
+    document.addEventListener('visibilitychange', pollIfVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', pollIfVisible);
+    };
   }, [refresh]);
 
   const filtered = useMemo(() => {
@@ -542,24 +559,24 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
   });
 
   /**
-   * ea:三个动作原来都可能**静默失败**。
+   * 三个动作的失败都要说出来,不能静默。
    *
-   * `patchTask` 的 `await response.json()` 没有兜底 —— 代理拦下请求回一页 HTML
-   * (或干脆断连),json() 一抛整个 async 函数就以未处理拒绝收场:没有 toast、
-   * 状态不变、控制台里也只有一行 Unhandled rejection。用户看到的就是"开关点了
-   * 没反应"(Windows 实测)。删除那条更彻底:非 ok 连 toast 都没有。
-   * 网络层的失败一律要说出来 —— 带上状态码,排查时才知道是代理拦的还是服务端拒的。
+   * 代理拦下请求时可能回一页 HTML 或直接断连,`response.json()` 必须兜底,否则 async 函数
+   * 以未处理拒绝收场:没有 toast、状态不变,用户看到的就是"开关点了没反应"。
+   * 失败提示带上状态码,排查时才知道是代理拦的还是服务端拒的。
    */
   const describeFailure = (error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
     return message === 'Failed to fetch' || /NetworkError|Load failed/.test(message)
-      ? '网络请求没有发出去(可能被代理拦截),请检查网络后重试'
+      ? t('tasksPage.errors.network', { defaultValue: '网络请求没有发出去(可能被代理拦截),请检查网络后重试' })
       : message;
   };
+  const withReason = (action: string, error: unknown) =>
+    t('tasksPage.errors.withReason', { action, reason: describeFailure(error), defaultValue: '{{action}}:{{reason}}' });
   const readPayload = async (response: Response): Promise<{ task?: WireTask; error?: string }> =>
     (await response.json().catch(() => ({}))) as { task?: WireTask; error?: string };
   const failureMessage = (response: Response, payload: { error?: string }, fallback: string) =>
-    payload.error || `${fallback}(HTTP ${response.status})`;
+    payload.error || t('tasksPage.errors.withStatus', { action: fallback, status: response.status, defaultValue: '{{action}}(HTTP {{status}})' });
 
   const patchTask = async (id: string, body: Record<string, unknown>) => {
     try {
@@ -569,10 +586,10 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
         const saved = payload.task;
         setTasks((current) => current.map((task) => (task.id === id ? saved : task)));
       } else {
-        toast({ message: failureMessage(response, payload, '操作失败'), variant: 'error' });
+        toast({ message: failureMessage(response, payload, t('tasksPage.errors.actionFailed', { defaultValue: '操作失败' })), variant: 'error' });
       }
     } catch (error) {
-      toast({ message: `操作失败:${describeFailure(error)}`, variant: 'error' });
+      toast({ message: withReason(t('tasksPage.errors.actionFailed', { defaultValue: '操作失败' }), error), variant: 'error' });
     }
   };
 
@@ -585,10 +602,10 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
         setDetailId(null);
       } else {
         const payload = await readPayload(response);
-        toast({ message: failureMessage(response, payload, '删除失败'), variant: 'error' });
+        toast({ message: failureMessage(response, payload, t('tasksPage.errors.deleteFailed', { defaultValue: '删除失败' })), variant: 'error' });
       }
     } catch (error) {
-      toast({ message: `删除失败:${describeFailure(error)}`, variant: 'error' });
+      toast({ message: withReason(t('tasksPage.errors.deleteFailed', { defaultValue: '删除失败' }), error), variant: 'error' });
     }
   };
 
@@ -603,27 +620,23 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
         toast({
           message: payload.error === 'already_running'
             ? t('tasksPage.alreadyRunning', { defaultValue: '任务正在运行中' })
-            : failureMessage(response, payload, '启动失败'),
+            : failureMessage(response, payload, t('tasksPage.errors.runFailed', { defaultValue: '启动失败' })),
           variant: 'error',
         });
       }
     } catch (error) {
-      toast({ message: `启动失败:${describeFailure(error)}`, variant: 'error' });
+      toast({ message: withReason(t('tasksPage.errors.runFailed', { defaultValue: '启动失败' }), error), variant: 'error' });
     }
   };
 
   /**
-   * 「新建任务」的主路径(cm 轮起是默认入口):页面上只发一句人话,让 Claude
-   * 解析需求、缺什么问什么;票据与接口用法作为**隐藏上下文**随消息带给模型 ——
-   * 气泡和历史里不出现 curl。
+   * 「新建任务」的主路径(默认入口):页面上只发一句人话,让 Claude 解析需求、缺什么问什么;
+   * 票据与接口用法作为隐藏上下文随消息带给模型,气泡和历史里不出现 curl。
    *
-   * 会话归属这件事在 cm 轮才算说清楚。以前隐藏说明里只有"最近会话清单",模型
-   * 选了 `fixed` 却没填 id,服务端就新开了一个会话 —— 用户以为"固定"却看见
-   * 侧栏多出一条(用户反馈)。现在:
-   * - 领票时把**当前所在对话**随票记在服务端,模型写 `sessionMode:"current"`
-   *   即可绑定它,**不用手抄 UUID**;
-   * - 隐藏说明要求模型把「写进当前对话 / 新开专属会话」作为选择题问用户,
-   *   不许自己替用户决定。
+   * 会话归属:
+   * - 领票时把当前所在对话随票记在服务端,模型写 `sessionMode:"current"` 即可绑定它,不用手抄 UUID
+   *   (模型选了 `fixed` 却没填 id 时,服务端会新开一个会话,与用户以为的"固定"不符);
+   * - 隐藏说明要求模型把「写进当前对话 / 新开专属会话」作为选择题问用户,不许自己替用户决定。
    */
   const createWithClaude = async () => {
     setMenuOpen(false);
@@ -639,7 +652,7 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
         body: JSON.stringify(currentSessionId ? { originSessionId: currentSessionId } : {}),
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || '领票据失败');
+      if (!response.ok) throw new Error(payload.error || t('tasksPage.errors.ticketFailed', { defaultValue: '领取票据失败' }));
       const ticket = payload.ticket as string;
       const hasOriginSession = payload.hasOriginSession === true;
       const origin = window.location.origin;
@@ -662,7 +675,7 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
       const text = '我想设置一个定时任务。先简单说明 Prism 的定时任务是怎么工作的,然后问我几个问题,弄清楚要让 Claude 定期做什么、什么时候运行、结果写到哪个会话;我确认后你就直接创建,并把任务名、频率和下一次运行时间告诉我。';
       const hiddenContext = [
         '[系统随消息附带的技术说明,用户在页面上看不到这段;不要复述它,更不要把 ticket 展示出来]',
-        // hl(09-24 P2-12):写服务端真实时区与偏移,不再假设"与用户同一时区"。
+        // 写服务端真实时区与偏移,不假设"与用户同一时区"。
         serverTime
           ? `现在服务器时间是 ${formatWhen(serverTime.now, serverTime)}(服务器时区 ${tzLabel(serverTime)};用户浏览器时区偏移 ${offsetLabel(-now.getTimezoneOffset())});任务的 runAtHour / runAtMinute **按服务器时区**理解,用户说的时间若是他本地时区,要按两者的偏移差换算后再填。`
           : `现在是 ${now.toLocaleString()}(浏览器时区,偏移 ${offsetLabel(-now.getTimezoneOffset())};服务器时区未知,任务的时刻按服务器本地时区理解)。`,
@@ -679,9 +692,28 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
       setActiveTab('chat');
       toast({ message: t('tasksPage.claudeStarted', { defaultValue: '已把需求发给 AI,到对话页继续聊即可。' }), variant: 'success' });
     } catch (error) {
-      toast({ message: error instanceof Error ? error.message : '发起失败', variant: 'error' });
+      toast({ message: error instanceof Error ? error.message : t('tasksPage.errors.startFailed', { defaultValue: '发起失败' }), variant: 'error' });
     }
   };
+
+  // 轮询失败但手里有上次的数据:照常显示,并说明可能不是最新的(运行状态、下一次时间都靠轮询更新)。
+  const staleNotice = loadFailed && hasLoaded ? (
+    <div
+      role="status"
+      className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground"
+    >
+      <span>{t('tasksPage.staleData', { defaultValue: '刷新失败,下面显示的可能不是最新状态。' })}</span>
+      <button
+        type="button"
+        onClick={() => void retryLoad()}
+        disabled={retrying}
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-sm text-foreground hover:border-border-strong disabled:opacity-60"
+      >
+        <RefreshCw className={`h-3.5 w-3.5 ${retrying ? 'animate-spin' : ''}`} /> {t('tasksPage.retry', { defaultValue: '重试' })}
+      </button>
+    </div>
+  ) : null;
+  const listView = taskListView({ loading, loadFailed, hasLoaded, total: tasks.length, shown: filtered.length });
 
   /* ── 详情视图 ── */
   if (detail) {
@@ -692,6 +724,8 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
             className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
             <ArrowLeft className="h-4 w-4" /> {t('tasksPage.back', { defaultValue: '返回任务列表' })}
           </button>
+
+          {staleNotice}
 
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -789,7 +823,7 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
                   )}
                 </>
               ) : detail.lastRunAt ? (
-                // 存量任务:cz 之前跑的那些没有明细行,只剩摘要,照旧显示一条。
+                // 没有明细行的旧运行记录只剩任务上的 lastRun* 摘要,显示成一条。
                 <div className="flex items-center justify-between gap-2 border-b border-border pb-2 text-sm">
                   <span className="text-foreground">{formatWhen(detail.lastRunAt, serverTime)}</span>
                   <span className={`rounded px-1.5 py-px text-[11.5px] font-medium ${detail.lastRunStatus === 'completed' ? 'bg-primary/10 text-foreground' : 'bg-muted text-muted-foreground'}`}>
@@ -881,8 +915,8 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
                       defaultValue: '模型 {{model}}',
                     })}
                     <span className="ml-2 text-muted-foreground">{detail.permissionMode}</span>
-                    {/* hn(B4):任务存的模型已不在目录里(下架 / 删了)—— 运行时按默认模型跑,运行记录里写明 */}
-                    {/* ho:别名不再当选项,但存的是别名不算下架 */}
+                    {/* 任务存的模型已不在目录里(下架 / 删了):运行时按默认模型跑,运行记录里写明 */}
+                    {/* 别名不作为选项,但存的是别名不算下架 */}
                     {detail.model && detail.model !== 'default' && models.length > 0 && ![...models, ...aliasModels].some((model) => model.value === detail.model) && (
                       <span className="ml-2 rounded border border-amber-500/40 px-1 py-px text-[11px] text-amber-700 dark:text-amber-400">
                         {t('tasksPage.modelRetired', { defaultValue: '已下架 · 运行时按默认模型' })}
@@ -981,13 +1015,30 @@ export default function TasksPage({ selectedProject, selectedSession, setActiveT
           </div>
         </div>
 
-        {loading ? (
+        {staleNotice}
+
+        {listView === 'loading' ? (
           <p className="mt-10 text-center text-sm text-muted-foreground">{t('tasksPage.loading', { defaultValue: '加载中…' })}</p>
-        ) : filtered.length === 0 ? (
+        ) : listView === 'loadFailed' ? (
+          <div className="mt-14 text-center" role="alert">
+            <AlertTriangle className="mx-auto h-8 w-8 text-muted-foreground/50" />
+            <p className="mt-3 text-sm text-muted-foreground">
+              {t('tasksPage.loadFailed', { defaultValue: '定时任务列表加载失败,请稍后重试。' })}
+            </p>
+            <button
+              type="button"
+              onClick={() => void retryLoad()}
+              disabled={retrying}
+              className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm text-foreground hover:border-border-strong disabled:opacity-60"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${retrying ? 'animate-spin' : ''}`} /> {t('tasksPage.retry', { defaultValue: '重试' })}
+            </button>
+          </div>
+        ) : listView !== 'list' ? (
           <div className="mt-14 text-center">
             <Clock className="mx-auto h-8 w-8 text-muted-foreground/50" />
             <p className="mt-3 text-sm text-muted-foreground">
-              {tasks.length === 0
+              {listView === 'empty'
                 ? t('tasksPage.empty', { defaultValue: '还没有定时任务。点右上角「新建任务」,让 AI 问齐细节帮你建,或自己填表。' })
                 : t('tasksPage.noMatch', { defaultValue: '没有匹配的任务。' })}
             </p>

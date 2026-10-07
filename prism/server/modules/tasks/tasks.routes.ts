@@ -11,21 +11,22 @@ import {
   type ScheduledTaskRow,
   type TaskFrequency,
   type TaskSessionMode,
+  type VisibilityScope,
 } from '@/modules/database/index.js';
 import { isRootUser } from '@/shared/root-users.js';
 import { assertViewerMayCreateSessionAt, claudeModelCatalog, modelViewerFor, type ModelViewer } from '@/modules/providers/index.js';
 import { computeNextRunAt, runTaskNow, serverTimeInfo, toDbUtc } from '@/modules/tasks/services/scheduled-tasks.service.js';
 
 /**
- * 定时任务 REST(cj 轮)。
+ * 定时任务 REST。
  *
- * 可见性:任务只有**主人和 root** 能看/改/删 —— 它带着指令全文与目标项目,
- * 语义等同私人自动化,不做共享。
+ * 可见性见 `canTouch`:主人、root,以及看得见任务所在项目的人;看 / 改 / 删 / 立即运行
+ * 是同一道判据。
  *
- * 「让 Claude 创建」的通道:前端先 `POST /ticket` 领一张**一次性票据**
- * (绑定当前登录用户,30 分钟有效),作为隐藏上下文随消息带给会话里的 Claude,
- * `curl -H "X-Prism-Task-Ticket: …" POST /via-ticket` 落任务 —— 全程不暴露
- * 用户的登录 token,票据一次即焚、过期作废。
+ * 「让 Claude 创建」的通道:前端先 `POST /ticket` 领一张票据(绑定当前登录用户,30 分钟有效),
+ * 作为隐藏上下文随消息带给会话里的 Claude,由它 `curl -H "X-Prism-Task-Ticket: …" POST /via-ticket`
+ * 落任务。全程不暴露用户的登录 token;一张票只能建一个任务(有效期内可撤销它自己建的那个),
+ * 过期作废。
  */
 
 type RequestUser = { id: number; username: string };
@@ -34,9 +35,9 @@ const readUser = (req: express.Request): RequestUser | null =>
   ((req as express.Request & { user?: RequestUser }).user) ?? null;
 
 /**
- * 谁能碰这个任务 —— **看 / 改 / 删 / 立即运行是同一道判据**,不分读写。
+ * 谁能碰这个任务 —— 看 / 改 / 删 / 立即运行是同一道判据,不分读写。
  *
- * 判据就是项目可见性:**项目分享给谁,任务就跟着给谁,而且是全权**。
+ * 判据就是项目可见性:项目分享给谁,任务就跟着给谁,而且是全权。
  * 会话已经是这么做的(`canViewerSeeSession` 原样转发 `canViewerSeeProject`),
  * 任务再造一套就是第三套语义,三套之间的组合会产生说不清的情形 ——
  * 比如"任务分享给了 B,但 B 看不见任务的项目",那 B 点「立即运行」跑在哪?
@@ -55,33 +56,19 @@ const canTouch = (task: ScheduledTaskRow, user: RequestUser | null): boolean => 
  * 任务允许的权限档。
  *
  * 默认仍是 `bypassPermissions`(无人值守任务弹权限框等于永远卡住)。
- * 收白名单是为了**健壮性**不是权限:以前任意字符串都会被原样塞进 SDK。
+ * 收白名单是为了健壮性,不是权限:不认识的字符串不能原样塞进 SDK。
  */
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto']);
 
 /**
- * 任务的 `projectPath` 必须**既是合法工作区路径,又对这个人可见**。
+ * 任务的 `projectPath` 必须既是合法工作区路径,又对这个人可见。
  *
- * 权限模式默认跳过确认、且可见者全权可改 —— 这条校验因此是**唯一的边界**。
+ * 权限模式默认跳过确认、且可见者全权可改,这条校验因此是唯一的边界。判据直接用会话路由
+ * 那份 `assertViewerMayCreateSessionAt`,不在这里另写一份:两份必然漂移,漂出来的缝就是
+ * 权限洞,例如同一个已登记项目开得了会话、却建不了定时任务(那份对已登记项目跳过工作区重验),
+ * 或把 `validateWorkspacePath` 的原始错误串回显给客户端,让任意登录用户读到服务端配置的工作区根。
  *
- * ## 这里原来是第二份实现,而且已经漂了
- *
- * 会话路由有同样的两道门,抽成了 `assertViewerMayCreateSessionAt`(有 100% 覆盖的
- * 测试)。任务路由这边是**内联的另一份**,两份已经不一样了,而且不一样的正是判据:
- *
- * 1. **已登记项目的处理**。service 那份显式跳过对已登记项目的工作区重验,注释写明了
- *    理由:免得 `WORKSPACES_ROOT` 后来改过时把 root 自己的老项目也拦住。这份则无条件
- *    先跑 `validateWorkspacePath` —— 同一个项目**开会话可以、建定时任务被 400 挡掉**。
- * 2. **反探针性质丢了**。service 那份对两种失败一律返回同形的 404;这份把
- *    `validateWorkspacePath` 的**原始错误串**直接回给客户端,而那个串可能是
- *    「Workspace path must be within the allowed workspace root: <WORKSPACES_ROOT>」
- *    —— 任意登录用户提交 `projectPath:"/"` 就能把服务端配置的工作区根读回来。
- *
- * 这个仓库在 eo 轮为项目权限总结过一句:"三档语义里有两条不是一眼能看出来的,
- * 写两遍必然漂,而漂出来的那条缝就是权限洞"。这里就是又漂了一次。
- *
- * 所以现在**直接调那份 service**,不再自己判。返回值语义保持不变(null = 通过,
- * 字符串 = 拒绝原因),调用点不用改;但拒绝时统一成同形文案,不再回显服务端配置。
+ * 返回 null = 通过,字符串 = 拒绝原因;拒绝时一律是同形文案,不回显服务端配置。
  */
 async function checkProjectPath(projectPath: string, user: RequestUser): Promise<string | null> {
   try {
@@ -96,7 +83,7 @@ async function checkProjectPath(projectPath: string, user: RequestUser): Promise
 }
 
 const FREQUENCIES: TaskFrequency[] = ['manual', 'hourly', 'daily', 'weekdays', 'weekly', 'monthly'];
-/** hl(动态 P3):执行指令的字节上限。 */
+/** 执行指令的字节上限。 */
 export const INSTRUCTIONS_MAX_BYTES = 64 * 1024;
 const SESSION_MODES: TaskSessionMode[] = ['fixed', 'new'];
 
@@ -113,7 +100,7 @@ const readInt = (value: unknown): number | null => {
   return Number.isInteger(parsed) ? parsed : null;
 };
 
-/** hq:`viewer` = 任务的主人 —— 模型按他的「可用人员」与私有模型判。 */
+/** `viewer` 是任务的主人:模型按他的「可用人员」与私有模型判。 */
 function validateBody(body: TaskBody, partial: boolean, viewer?: ModelViewer | null): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
   const out: Record<string, unknown> = {};
   const name = typeof body.name === 'string' ? body.name.trim() : undefined;
@@ -126,8 +113,8 @@ function validateBody(body: TaskBody, partial: boolean, viewer?: ModelViewer | n
   }
   if (!partial || body.instructions !== undefined) {
     if (!instructions) return { ok: false, error: '执行指令不能为空' };
-    // hl(动态 P3):via-ticket 的 256KB 解析上限被全局解析器架空(全局那份先跑、
-    // 更大);指令本身给个上限 —— 它每次运行都整段发给模型,几百 KB 只会白花钱。
+    // 指令本身要有上限:via-ticket 的 256KB 解析上限会被先跑、且更大的全局解析器架空;
+    // 而指令每次运行都整段发给模型,几百 KB 只会白花钱。
     if (Buffer.byteLength(instructions, 'utf8') > INSTRUCTIONS_MAX_BYTES) {
       return { ok: false, error: `执行指令过长(上限 ${Math.round(INSTRUCTIONS_MAX_BYTES / 1024)}KB)` };
     }
@@ -152,7 +139,7 @@ function validateBody(body: TaskBody, partial: boolean, viewer?: ModelViewer | n
     out.frequency = frequency;
   }
   /**
-   * hl(09-24 P2-11):时 / 分 / 星期 / 日按范围校验,越界 400。
+   * 时 / 分 / 星期 / 日按范围校验,越界 400。
    *
    * UI 走 NumberInput 夹在范围里,但 via-ticket(Claude 手写 JSON)与 API 直调
    * 可以传 `hour=99`(卡片显示「每天 99:00」,`setHours(99)` 推到 4 天后)、
@@ -173,7 +160,7 @@ function validateBody(body: TaskBody, partial: boolean, viewer?: ModelViewer | n
   if (rangeError) return { ok: false, error: rangeError };
   if (body.model !== undefined) out.model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null;
   /*
-   * hn(B2):模型要在目录里(上架的)或是别名组 —— POST / PATCH / via-ticket(Claude 在对话里建任务)
+   * 模型要在目录里(上架的)或是别名组:POST / PATCH / via-ticket(Claude 在对话里建任务)
    * 三处共用这里。已存着的下架模型不影响旧任务的读取;运行时由调度器按默认模型回落并写进运行记录。
    */
   if (typeof out.model === 'string' && !claudeModelCatalog.isAllowed(out.model, viewer)) {
@@ -186,8 +173,8 @@ function validateBody(body: TaskBody, partial: boolean, viewer?: ModelViewer | n
     out.permission_mode = mode;
   }
   if (body.enabled !== undefined) out.enabled = body.enabled ? 1 : 0;
-  // hl(动态 P3):`sessionMode:"new"` 与 `fixedSessionId` 同时给是自相矛盾的 ——
-  // 原来静默收下,库里留着一个永远用不上的会话 id,详情页还把它当"固定会话"显示。
+  // `sessionMode:"new"` 与 `fixedSessionId` 同时给是自相矛盾的:收下的话,库里会留着一个
+  // 永远用不上的会话 id,详情页还会把它当"固定会话"显示。
   if (out.session_mode === 'new' && typeof out.fixed_session_id === 'string' && out.fixed_session_id) {
     return { ok: false, error: 'sessionMode 为 "new" 时不能同时指定 fixedSessionId' };
   }
@@ -195,10 +182,10 @@ function validateBody(body: TaskBody, partial: boolean, viewer?: ModelViewer | n
 }
 
 /**
- * hl(09-24 P2-13):固定会话必须**属于任务的项目**。
+ * 固定会话必须属于任务的项目。
  *
- * 前端切项目不清 `fixedSessionId`、服务端也不校验 —— 任务会 resume 一段挂在别的
- * 项目上的对话,cwd 却是任务项目:每次都按错误的目录跑,或者干脆失败并重试 3 次。
+ * 前端切项目时不清 `fixedSessionId`;服务端不校验的话,任务会 resume 一段挂在别的项目上的
+ * 对话,cwd 却是任务项目:每次都按错误的目录跑,或者干脆失败并重试。
  * 建 / 改 / via-ticket 三条入口共用;`projectPath` 取"这次请求里的,没有就取任务上的"。
  */
 function validateFixedSessionProject(sessionId: string, projectPath: string): string | null {
@@ -241,22 +228,24 @@ function toWire(task: ScheduledTaskRow) {
 /**
  * 一次性票据:ticket → { userId, expiresAt, originSessionId, usedTaskId }。
  *
- * 创建仍是一次即焚(usedTaskId 一旦落下,再拿它建第二个必拒);但条目保留到
- * 过期为止 —— TTL 内允许拿**同一张票**删除它自己刚建的那一个任务
+ * 创建一次即焚(usedTaskId 一旦落下,再拿它建第二个必拒);但条目保留到
+ * 过期为止 —— TTL 内允许拿同一张票删除它自己刚建的那一个任务
  * (`DELETE /via-ticket/:id`)。这样会话里的 Claude 建错了能当场撤销,而票据
  * 的权限面永远不超过"这一次创建 + 撤销这一次创建"。
  *
- * `originSessionId` = 领票时用户所在的那条对话(cm 轮)。会话里的 Claude 只需
- * 写 `"sessionMode":"current"`,服务端就把任务绑到这条对话上 —— **不用让模型
- * 手抄 UUID**(抄错一位就悄悄新开了一个会话,正是用户踩到的坑)。
+ * `originSessionId` = 领票时用户所在的那条对话。会话里的 Claude 只需
+ * 写 `"sessionMode":"current"`,服务端就把任务绑到这条对话上,不用让模型
+ * 手抄 UUID(抄错一位就会悄悄新开一个会话)。
  */
 const claudeTickets = new Map<string, {
   userId: number;
-  /** hj:签票时的 token_version,建任务时比对。 */
+  /** 签票时的 token_version,建任务时比对。 */
   tokenVersion?: number | null;
   expiresAt: number;
   originSessionId: string | null;
   usedTaskId?: string;
+  /** 有一个请求正拿这张票建任务(已过同步检查、还没落库)。 */
+  claiming?: boolean;
 }>();
 const TICKET_TTL_MS = 30 * 60 * 1000; // 让 Claude 创建是一场对话,聊满半小时也来得及建
 
@@ -268,7 +257,7 @@ function pruneTickets(): void {
 }
 
 /**
- * fixedSessionId 必须是这个用户**看得见**的会话 —— 不验的话,拿到任意会话 id
+ * fixedSessionId 必须是这个用户看得见的会话 —— 不验的话,拿到任意会话 id
  * 就能把定时任务的输出(连带用户行)写进别人的对话里。
  * 返回错误文案;null = 通过。
  */
@@ -310,7 +299,7 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
   const router = express.Router();
 
   /**
-   * Claude 直建通道 —— 放在 authenticateToken **之前**,自己验票。
+   * Claude 直建通道 —— 放在 authenticateToken 之前,自己验票。
    * 票据由已登录用户签发,权限面等同其本人。
    */
   router.post('/via-ticket', express.json({ limit: '256kb' }), async (req, res) => {
@@ -323,10 +312,13 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
     if (entry.usedTaskId) {
       return res.status(401).json({ error: '这张票据已经建过任务了(一张票只许建一次);要再建请让用户重新发起「让 Claude 创建」' });
     }
+    if (entry.claiming) {
+      return res.status(409).json({ error: '这张票据正在建任务(同一张票的上一个请求还没返回);一张票只许建一次,请以那个请求的结果为准' });
+    }
 
     const body = { ...((req.body ?? {}) as TaskBody) };
     /**
-     * `sessionMode: "current"` 是给会话里的 Claude 的**语法糖**:绑到领票时用户
+     * `sessionMode: "current"` 是给会话里的 Claude 的语法糖:绑到领票时用户
      * 所在的那条对话。展开成标准的 fixed + fixed_session_id,DB 里不留新枚举。
      * 没有来源会话(比如从任务页直接领的票)就退回"新开专属会话并固定"。
      */
@@ -342,32 +334,38 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
 
     const parsed = validateBody(body, false, modelViewerFor(entry.userId));
     if (!parsed.ok) return res.status(400).json({ error: parsed.error });
-    // 票据的权限面等同签发人 —— 项目路径走和登录路由完全一样的两道门。
-    // 这条通道是给会话里的 Claude 用的,更不能比人工建任务松。
-    // hj(审计 P1-2):签票的人**现在**还得能用 —— 停用 / 驳回 / 退出所有设备之后,
-    // 30 分钟内这张票原来照样能建出一个以他名义、按 bypass 跑的定时任务。
+    // 票据的权限面等同签发人,项目路径走和登录路由完全一样的两道门;这条通道是给会话里的
+    // Claude 用的,更不能比人工建任务松。签票的人现在还得能用:否则停用 / 驳回 / 退出所有设备之后,
+    // 30 分钟内这张票仍能建出一个以他名义、按 bypass 跑的定时任务。
     const ticketUser = userDb.getUsableUser(entry.userId, entry.tokenVersion ?? null) ?? null;
     if (!ticketUser) {
       claudeTickets.delete(ticket);
       return res.status(401).json({ error: '票据已失效(签发人的登录状态已变化),请回到定时任务页重新发起「让 Claude 创建」' });
     }
-    const pathError = await checkProjectPath(
-      parsed.value.project_path as string,
-      { id: entry.userId, username: ticketUser?.username ?? '' },
-    );
-    if (pathError) return res.status(400).json({ error: pathError });
-    const fixedSessionId = parsed.value.fixed_session_id as string | null | undefined;
-    if (fixedSessionId) {
-      const sessionError = validateFixedSession(fixedSessionId, entry.userId, null)
-        ?? validateFixedSessionProject(fixedSessionId, parsed.value.project_path as string);
-      if (sessionError) return res.status(400).json({ error: sessionError });
+    // 第一个 await 之前同步占位:路径校验可能让出事件循环(未登记的路径要查文件系统),
+    // 同一张票的并发请求会在上面的 `claiming` 检查处被挡下。校验没过就放开占位,票据还能再用。
+    entry.claiming = true;
+    try {
+      const pathError = await checkProjectPath(
+        parsed.value.project_path as string,
+        { id: entry.userId, username: ticketUser?.username ?? '' },
+      );
+      if (pathError) return res.status(400).json({ error: pathError });
+      const fixedSessionId = parsed.value.fixed_session_id as string | null | undefined;
+      if (fixedSessionId) {
+        const sessionError = validateFixedSession(fixedSessionId, entry.userId, null)
+          ?? validateFixedSessionProject(fixedSessionId, parsed.value.project_path as string);
+        if (sessionError) return res.status(400).json({ error: sessionError });
+      }
+      const task = applyScheduleAndInsert(parsed.value, entry.userId);
+      entry.usedTaskId = task.id; // 创建额度烧掉;条目留到过期,供撤销自己这单
+      return res.status(201).json({ success: true, task: toWire(task), serverTime: serverTimeInfo() });
+    } finally {
+      entry.claiming = false;
     }
-    const task = applyScheduleAndInsert(parsed.value, entry.userId);
-    entry.usedTaskId = task.id; // 创建额度烧掉;条目留到过期,供撤销自己这单
-    return res.status(201).json({ success: true, task: toWire(task), serverTime: serverTimeInfo() });
   });
 
-  /** 同一张票据在 TTL 内可删除**它自己刚建的那一个**任务 —— 建错当场可撤。 */
+  /** 同一张票据在 TTL 内可删除它自己刚建的那一个任务 —— 建错当场可撤。 */
   router.delete('/via-ticket/:id', (req, res) => {
     pruneTickets();
     const ticket = String(req.headers['x-prism-task-ticket'] ?? '');
@@ -392,7 +390,7 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
     // 自己建的 ∪ 跑在自己能看见的项目上的(root 全看)。
     const rows = isRootUser(user.username) ? scheduledTasksDb.listAll() : scheduledTasksDb.listVisibleTo(user.id);
-    // hl(09-24 P2-12):带上服务器时区,前端按它显示「下一次」与表单时刻。
+    // 带上服务器时区,前端按它显示「下一次」与表单时刻。
     res.json({ success: true, tasks: rows.map(toWire), serverTime: serverTimeInfo() });
   });
 
@@ -476,7 +474,7 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
     const user = readUser(req);
     const task = scheduledTasksDb.getById(req.params.id);
     if (!task || !canTouch(task, user)) return res.status(404).json({ error: 'Task not found' });
-    // hq:模型按任务的**主人**判(root 改别人的任务时也一样 —— 跑的时候用的是主人的身份与 key)
+    // 模型按任务的主人判(root 改别人的任务时也一样:跑的时候用的是主人的身份与 key)。
     const parsed = validateBody((req.body ?? {}) as TaskBody, true, modelViewerFor(task.owner_user_id ?? null));
     if (!parsed.ok) return res.status(400).json({ error: parsed.error });
     // 改 projectPath 等于把任务搬到另一个项目 —— 必须重新过一次同样的两道门,
@@ -486,10 +484,16 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
       if (pathError) return res.status(400).json({ error: pathError });
     }
     const fixedSessionId = parsed.value.fixed_session_id as string | null | undefined;
-    // 改 projectPath 但没换会话:原来的固定会话也要对得上新项目。
+    // 改 projectPath 但没换会话:原来的固定会话也要对得上新项目。只在改完仍是固定会话模式时才算数:
+    // 「每次新建」下调度器不读库里的固定会话,拿它校验会误报「不属于这个项目」。
     const effectiveProjectPath = (parsed.value.project_path as string | undefined) ?? task.project_path;
-    const effectiveFixedSessionId = fixedSessionId
-      ?? (parsed.value.project_path !== undefined && parsed.value.fixed_session_id === undefined ? task.fixed_session_id : null);
+    const effectiveSessionMode = (parsed.value.session_mode as TaskSessionMode | undefined) ?? task.session_mode;
+    const inheritedFixedSessionId = parsed.value.project_path !== undefined
+      && parsed.value.fixed_session_id === undefined
+      && effectiveSessionMode === 'fixed'
+      ? task.fixed_session_id
+      : null;
+    const effectiveFixedSessionId = fixedSessionId ?? inheritedFixedSessionId;
     if (fixedSessionId) {
       const sessionError = validateFixedSession(fixedSessionId, user!.id, user!.username);
       if (sessionError) return res.status(400).json({ error: sessionError });
@@ -498,7 +502,7 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
       const projectError = validateFixedSessionProject(effectiveFixedSessionId, effectiveProjectPath);
       if (projectError) return res.status(400).json({ error: projectError });
     }
-    // hl(动态 P3):部分更新也要拦"new + 固定会话"—— 只改 sessionMode 时看库里那个 id。
+    // 部分更新只把 sessionMode 改成 "new" 时,清掉库里留着的固定会话 id,不留下"new + 固定会话"的矛盾组合。
     if (parsed.value.session_mode === 'new' && parsed.value.fixed_session_id === undefined && task.fixed_session_id) {
       parsed.value.fixed_session_id = null;
     }
@@ -531,24 +535,26 @@ export function createTasksRouter(dependencies: { authenticateToken: RequestHand
   });
 
   /**
-   * 会话下拉的数据源:该项目下**这个用户看得见的**会话(名称+id),按最近
-   * 活跃排序。不过滤可见性的话,任何登录用户都能枚举全站会话名。
+   * 会话下拉的数据源:该项目下这个用户看得见的会话(名称+id),按最近
+   * 活跃排序,最多 100 条。不过滤可见性的话,任何登录用户都能枚举全站会话名。
+   *
+   * 可见性与项目过滤都在 SQL 里做(`getVisibleSessionsPage`):整表取回再逐行
+   * `canViewerSeeSession` 的话,每行都要同步查库,会话一多就把事件循环按住。
    */
   router.get('/options/sessions', (req, res) => {
     const user = readUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
     const projectPath = String(req.query.projectPath ?? '');
-    const viewer = { userId: user.id, username: user.username };
-    const rows: Array<{ sessionId: string; name: string; projectPath: string | null }> = [];
-    const all = sessionsDb.getAllSessions()
-      .filter((row) => !projectPath || row.project_path === projectPath)
-      .sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')));
-    for (const row of all) {
-      if (rows.length >= 100) break;
-      if (!canViewerSeeSession(row.session_id, viewer)) continue;
-      rows.push({ sessionId: row.session_id, name: row.custom_name || row.session_id.slice(0, 8), projectPath: row.project_path });
-    }
-    res.json({ success: true, sessions: rows });
+    const scope: VisibilityScope = isRootUser(user.username) ? { kind: 'all' } : { kind: 'user', userId: user.id };
+    const { rows } = sessionsDb.getVisibleSessionsPage(scope, 100, 0, { archived: 'exclude', projectPath });
+    res.json({
+      success: true,
+      sessions: rows.map((row) => ({
+        sessionId: row.session_id,
+        name: row.custom_name || row.session_id.slice(0, 8),
+        projectPath: row.project_path,
+      })),
+    });
   });
 
   return router;

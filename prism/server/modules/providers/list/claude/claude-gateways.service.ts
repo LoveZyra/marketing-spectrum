@@ -31,27 +31,28 @@ import {
 const log = createLogger('providers');
 
 /**
- * hq:**模型网关与 key** —— 哪个模型走哪个网关、这一轮用谁的 key。
+ * 模型网关与 key:哪个模型走哪个网关、这一轮用谁的 key。
  *
  * ## 网关
- * - **网关 0** = `~/.claude/settings.json`(或进程环境)里的 `ANTHROPIC_BASE_URL` + token,不进库;
- * - **共享网关**(root 管):地址、鉴权方式、可选的默认 key;目录条目可以挂上去;
- * - **私有网关**(每个人自己加,root 可整体关掉):只有本人看得到,只能挂本人的私有模型。
+ * - 网关 0 = `~/.claude/settings.json`(或进程环境)里的 `ANTHROPIC_BASE_URL` + token,不进库;
+ * - 共享网关(root 管):地址、鉴权方式、可选的默认 key;目录条目可以挂上去;
+ * - 私有网关(每个人自己加,root 可整体关掉):只有本人看得到,只能挂本人的私有模型。
  *
  * ## 这一轮用谁的 key(`resolveTurnGateway`)
  * 「这一轮的人」= 发这条消息的人 / 定时任务的主人 / 调 API 的账号。按顺序:
- * 1. 本人在这个网关上的**个人 key**(本人填的,或 root 代填的);
- * 2. 网关的**默认 key**(共享网关;私有网关的 key 就是主人自己的);
+ * 1. 本人在这个网关上的个人 key(本人填的,或 root 代填的);
+ * 2. 网关的默认 key(共享网关;私有网关的 key 就是主人自己的);
  * 3. 网关 0:settings.json 里的 token(什么都不传,CLI 自己读)。
  * 都没有 → 这一轮直接拒(`GATEWAY_KEY_MISSING`),选择器里这个模型置灰。
  *
- * ## 怎么交给 CLI(实测 2.1.285,见 hq 部署文档的「实测」一节)
- * SDK 的 `options.settings` 是 flag 层,**压得过 settings.json 的 env**(进程环境压不过),按键合并。
- * 所以 Prism 不改 settings.json,终端里的 claude 照旧。但合并是逐键的,**不清就会串**:
+ * ## 怎么交给 CLI
+ * SDK 的 `options.settings` 是 flag 层,压得过 settings.json 的 env(进程环境压不过),按键合并。
+ * 所以 Prism 不改 settings.json,终端里的 claude 不受影响。但合并是逐键的,不清就会串:
  * - 转到别的网关只给 `ANTHROPIC_API_KEY` 时,settings.json 里的 `ANTHROPIC_AUTH_TOKEN` 会一起发过去(反之亦然);
  * - settings.json 的 `apiKeyHelper` 会把它的 key 也塞进请求(`apiKeyHelper: null` 会让整份 flag 设置失效,只能给空串);
  * - settings.json 的 `ANTHROPIC_CUSTOM_HEADERS` 同样会跟过去。
- * 所以补丁里**另一种鉴权变量、apiKeyHelper、自定义头一律清成空串**(`buildGatewaySettingsPatch`,单测钉着)。
+ * 所以补丁里另一种鉴权变量与 apiKeyHelper 一律清成空串,转到别的网关时自定义头也清空
+ * (`buildGatewaySettingsPatch`,单测钉着)。
  */
 
 export const DEFAULT_GATEWAY_ID = 0;
@@ -335,10 +336,10 @@ export function buildGatewaySettingsPatch(input: {
 /**
  * runtime 签名用:同一网关 + 地址 + 鉴权方式 + key → 同一个指纹。
  *
- * 复审(P2-2):**别的网关上连模型一起算** —— 补丁把别名映射(ANTHROPIC_DEFAULT_*_MODEL / SMALL_FAST)都钉在
- * 这一轮的模型上,只在进程启动时生效;不算模型的话,同网关内换模型复用进程,子代理点名别名、CLI 的后台小请求
- * 还落在上一个模型上(共享会话里甚至落在别人的限人模型上)。代价:别的网关上换模型 = resume 重建一次。
- * 网关 0 不算模型(别名映射走 settings.json,补丁不碰它们;换模型照旧 setModel)。
+ * 别的网关上连模型一起算:补丁把别名映射(ANTHROPIC_DEFAULT_*_MODEL / SMALL_FAST)都钉在这一轮的模型上,
+ * 只在进程启动时生效;不算模型的话,同网关内换模型会复用进程,子代理点名的别名、CLI 的后台小请求
+ * 仍落在上一个模型上(共享会话里甚至落在别人的限人模型上)。代价:别的网关上换模型要 resume 重建一次。
+ * 网关 0 不算模型(别名映射走 settings.json,补丁不碰它们;换模型照常 setModel)。
  */
 export function gatewayFingerprint(input: {
   gatewayId: number;
@@ -363,8 +364,8 @@ export type TurnGateway = {
   /** null 同上。进 runtime 签名。别的网关上含模型(见 gatewayFingerprint)。 */
   fingerprint: string | null;
   /**
-   * 不含模型的那一份(网关 + 地址 + 鉴权方式 + key)。复审(二轮 P2-4):后台任务在跑时,
-   * 只有它变了(换网关 / 换 key / 换人)才必须拒;只是同网关换模型就不重建、就地 setModel。
+   * 不含模型的那一份(网关 + 地址 + 鉴权方式 + key)。后台任务在跑时,只有它变了(换网关 / 换 key / 换人)
+   * 才必须拒;只是同网关换模型就不重建,就地 setModel。
    */
   credentialFingerprint: string | null;
 };
@@ -385,8 +386,8 @@ export function gatewayIdForModel(model: string | null | undefined, viewer: Mode
 }
 
 /**
- * **这一轮的网关与 key。** 不可用时抛 GatewayError(带 prismModelRejected,调度器直接报错)。
- * 网关 0 且没有个人 key → 不传任何东西(与 hq 之前完全一样)。
+ * 这一轮的网关与 key。不可用时抛 GatewayError(带 prismModelRejected,调度器直接报错)。
+ * 网关 0 且没有个人 key → 不传任何东西,CLI 照常读 settings.json。
  */
 export async function resolveTurnGateway(input: { model: string | null | undefined; viewer: ModelViewer | null }): Promise<TurnGateway> {
   try {
@@ -394,7 +395,7 @@ export async function resolveTurnGateway(input: { model: string | null | undefin
   } catch (error) {
     if (error instanceof GatewayError) throw error;
     /*
-     * 复审(P2-5):读库 / 解密失败(库坏了、PRISM_ENCRYPTION_KEY 换了)—— **不退回** settings.json 的 key
+     * 读库 / 解密失败(库坏了、PRISM_ENCRYPTION_KEY 换了)时不退回 settings.json 的 key
      * (那等于悄悄用公用 token 记账),也不让它变成调度器眼里的"进程问题"去走一次性路径重试一遍。
      */
     log.error('[网关] 解析这一轮的网关 / key 失败:', error instanceof Error ? error.message : error);
@@ -794,7 +795,6 @@ export async function testGatewayConnection(input: { baseUrl: string | null; aut
  * 网关 0 没有个人 key 时用 settings.json 里的 token(只在服务端用,不回给前端)。
  */
 export async function testGatewayFor(gatewayId: number, viewer: ModelViewer, rawKey?: unknown): Promise<GatewayTestResult> {
-  // 复审(nit):非 root 只能测启用的共享网关(停用的网关上的模型本来就用不了,不该借它的默认 key 去探)
   const provided = rawKey !== undefined && rawKey !== null && rawKey !== '' ? normalizeKey(rawKey) : null;
   if (gatewayId === DEFAULT_GATEWAY_ID) {
     const info = await readDefaultGatewaySecrets();
@@ -804,6 +804,7 @@ export async function testGatewayFor(gatewayId: number, viewer: ModelViewer, raw
   const row = modelGatewaysDb.get(gatewayId);
   if (!row) throw new GatewayError('NOT_FOUND', '这个网关不存在', 404);
   if (row.owner_user_id !== null && row.owner_user_id !== viewer.userId) throw new GatewayError('NOT_FOUND', '这个网关不存在', 404);
+  // 非 root 只能测启用的共享网关:停用网关上的模型本来就用不了,不该借它的默认 key 去探
   if (row.owner_user_id === null && row.enabled !== 1 && !viewer.isRoot) throw new GatewayError('GATEWAY_DISABLED', `网关「${row.name}」已停用`);
   const key = provided ?? readKeyFor(row, gatewayId, viewer.userId).key;
   return testGatewayConnection({ baseUrl: row.base_url, authType: asAuthType(row.auth_type), key });

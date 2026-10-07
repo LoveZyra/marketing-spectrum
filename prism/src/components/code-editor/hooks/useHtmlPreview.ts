@@ -9,26 +9,23 @@ type PreviewTicketResponse = {
 };
 
 /**
- * hl(P3 文件组):票 5 分钟过期(server/shared/preview-tickets.js 的 PREVIEW_TICKET_TTL_MS)。
- * 过期后 iframe 里是一份 401 JSON、页面上是一块空白 —— iframe 是不透明源,从外面看不出来。
- * 所以在客户端自己计时,到点把 `expired` 置真,预览区显示「预览已过期 · 重新加载」。
+ * 预览票 5 分钟过期(server/shared/preview-tickets.js 的 PREVIEW_TICKET_TTL_MS)。
+ * 过期后 iframe 里再发的请求都是 401(重新载入就是一份 401 JSON、一块空白),而 iframe
+ * 是不透明源,从外面看不出来。所以在客户端自己计时,到点把 `expired` 置真,预览区显示
+ * 过期提示与「重新加载」。
  */
 export const HTML_PREVIEW_TICKET_TTL_MS = 5 * 60_000;
 
 /**
  * The sandboxed HTML preview's source URL.
  *
- * The preview used to open a new window and hand the iframe a `srcdoc` of the
- * editor buffer. That renders the markup but nothing it references: `srcdoc`
- * documents have no base URL, so `<link href="style.css">` and
- * `<img src="./chart.png">` resolve to nothing and every agent-generated report
- * with a separate stylesheet previewed as unstyled text.
+ * The iframe points at a real URL under `/preview/<ticket>/` rather than a
+ * `srcdoc` of the editor buffer: `srcdoc` documents have no base URL, so
+ * `<link href="style.css">` and `<img src="./chart.png">` would resolve to
+ * nothing. Relative references resolve against the ticket URL and load through
+ * the same directory-scoped, 5-minute ticket.
  *
- * Pointing the iframe at a real URL under `/preview/<ticket>/` fixes that —
- * relative references resolve against it and load through the same
- * directory-scoped, 5-minute ticket.
- *
- * The trade-off is that the preview shows the file **on disk**, not the unsaved
+ * The trade-off is that the preview shows the file on disk, not the unsaved
  * buffer. That is surfaced in the UI rather than hidden: previewing your own
  * unsaved edits and not seeing them would be the more confusing failure.
  */

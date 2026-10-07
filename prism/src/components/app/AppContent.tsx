@@ -70,12 +70,11 @@ function AppContentInner() {
   const pendingApprovalCount = usePendingApprovalCount(Boolean(authUser?.isRoot));
 
   /**
-   * F11:登录后把账号级界面偏好拉下来。
+   * 登录后拉取账号级界面偏好。
    *
-   * localStorage 仍然是**读的那一份**(同步、无网络、不会在启动时闪一下默认值);
-   * 服务端只是它的备份与跨设备通道。服务端那份更新时落到本机并整页重载 ——
-   * 权限清单、编辑器偏好散在十几个组件的初始 state 里,逐个通知比重载复杂得多,
-   * 而这条路径一个账号一次登录只会走一次。
+   * 读取始终走 localStorage(同步、无网络、启动时不会先闪一下默认值);服务端只做备份与跨设备同步。
+   * 服务端那份更新时写回本机并整页重载:权限清单、编辑器偏好散在十几个组件的初始 state 里,
+   * 逐个通知比重载复杂得多,而这条路径每次登录只走一次。
    */
   const accountSettingsPulledRef = useRef(false);
   useEffect(() => {
@@ -86,7 +85,7 @@ function AppContentInner() {
     });
   }, [authUser]);
   const { preferences: uiPreferences, setPreference } = useUiPreferences();
-  // ee:预览最大化期间,项目侧栏也收起(不写偏好,还原即回到用户自己的开合状态)。
+  // 预览最大化期间项目侧栏也收起(不写偏好,还原后回到用户自己的开合状态)。
   const [editorMaximized, setEditorMaximized] = useState(false);
 
   const {
@@ -125,23 +124,10 @@ function AppContentInner() {
   });
 
   /**
-   * 切标签页时自动收放项目侧栏(用户点名)。
+   * 顶栏的会话改名与删除。
    *
-   * 聊天要靠侧栏挑会话,所以进聊天就展开;定时任务 / 终端 / 文件 / Notebook
-   * 都是"整页内容",侧栏在那儿只是占宽,自动折叠成图标轨。
-   *
-   * 只在 activeTab **变化**的那一拍写偏好:
-   * - 同一个标签页里用户手动开合不会被这条规则覆盖回去;
-   * - ref 用当前标签页初始化,所以**首次挂载不动手** —— 刷新页面时保留用户
-   *   上次存下的展开/折叠状态,而不是一进来就强行展开。
-   * 移动端侧栏是抽屉(由 sidebarOpen 管),这条规则不适用。
-   */
-  /**
-   * ef:顶栏的改名与删除。
-   *
-   * 侧栏折叠时 `<Sidebar/>` 整棵不渲染 —— 它那套改名 / 删除的实现和确认框
-   * 跟着一起消失,所以顶栏这两件事必须住在这一层。改完 / 删完都刷一次项目列表,
-   * 侧栏跟着更新。
+   * 侧栏折叠时 `<Sidebar/>` 整棵不渲染,它自带的改名 / 删除实现和确认框也随之消失,
+   * 所以顶栏这两项操作必须放在这一层。改名或删除后刷新项目列表,侧栏随之更新。
    */
   const [sessionDeleteTarget, setSessionDeleteTarget] = useState<SessionDeleteTarget | null>(null);
 
@@ -157,8 +143,7 @@ function AppContentInner() {
   }, [refreshProjectsSilently]);
 
   const handleHeaderDeleteSession = useCallback((targetSessionId: string, sessionTitle: string) => {
-    // 顶栏「…」这条路同样要按"是不是项目负责人"决定画不画那枚红按钮
-    // (与侧栏那条同一个判据,见 utils/sessionDeletePermission)。
+    // 是否显示「永久删除」按钮按是否为项目负责人判断,与侧栏同一判据(见 utils/sessionDeletePermission)。
     setSessionDeleteTarget({
       sessionId: targetSessionId,
       sessionTitle,
@@ -178,8 +163,8 @@ function AppContentInner() {
     try {
       const response = await api.deleteSession(target.sessionId, hardDelete);
       if (!response.ok) {
-        // gk:403(只有项目负责人可以永久删)/ 409(正在跑)这两种"重试也没用"的原因要说出来;
-        // 其余失败仍不弹窗:列表下一次刷新会把真实状态带回来。
+        // 403(只有项目负责人能永久删除)/ 409(会话正在运行)重试也没用,要把原因告诉用户;
+        // 其余失败不弹窗,列表下次刷新会带回真实状态。
         if (response.status === 403 || response.status === 409) {
           alert(describeDeleteFailure(await response.text(), tSidebar('messages.deleteSessionFailed')));
         }
@@ -192,15 +177,13 @@ function AppContentInner() {
     }
   }, [navigate, refreshProjectsSilently, sessionDeleteTarget, sessionId, tSidebar]);
 
-  // 折叠后只留图标轨:侧栏与它的外层边框一起不渲染。
-  // hc:技能优化是全局页面(不挂在项目下),项目 / 会话侧栏在那里没有用处 —— 一律不渲染;
-  // 左轨的开合按钮在那一页改管技能优化自己的导航(见 AppRail)。
-  // hh:Notebook 同理 —— JupyterLab 的文件树从 home 起,自带文件浏览器,不看当前项目;项目栏在那一页只占地方。
+  // 桌面端折叠后只留图标轨:侧栏连同外层边框都不渲染。
+  // 技能优化是全局页面(不挂在项目下),Notebook 用 JupyterLab 自带的文件浏览器(从 home 起,与当前项目无关),
+  // 这两页一律不渲染项目 / 会话侧栏;技能优化页上左轨的开合按钮改管它自己的导航(见 AppRail)。
   //
-  // hl(动态 P3 轮询 / 偏好):原来切标签页就 `setPreference('sidebarVisible', tab === 'chat')` ——
-  // 这个偏好随 uiPreferences 同步到账号,于是**另一台设备**停在文件页,会让本机聊天页刷新后
-  // 侧栏消失。现在:聊天页跟着持久化的偏好(只有用户在聊天页亲手开合才写);其他页默认收起,
-  // 在那一页里开合只改本地状态、不落盘,换页即复位。
+  // 开合状态:聊天页跟随持久化偏好 sidebarVisible(只有在聊天页亲手开合才写);其他页默认收起,
+  // 在那里开合只改本地状态、不落盘,换页即复位。该偏好随账号同步到其他设备,
+  // 若按当前标签页去写它,另一台设备停在文件页就会让本机聊天页刷新后侧栏消失。
   const [offChatSidebarOpen, setOffChatSidebarOpen] = useState(false);
   const lastSidebarTabRef = useRef(activeTab);
   useEffect(() => {
@@ -268,8 +251,7 @@ function AppContentInner() {
     void refreshRunningSessions();
   }, [refreshRunningSessions]);
 
-  // hl(动态 P3 轮询):5 秒一次的 /sessions/running 原来不看页面可见性 —— 后台标签页整天在打。
-  // 不可见时停;回到前台立刻补一次再恢复周期。
+  // 每 5 秒轮询 /sessions/running;页面不可见时暂停,免得后台标签页一直请求。回到前台立即补一次再恢复周期。
   useEffect(() => {
     let interval: number | null = null;
     const start = () => {
@@ -357,16 +339,11 @@ function AppContentInner() {
         />
       )}
       {/*
-        * 侧栏套错误边界。
+        * 侧栏套错误边界:它是全应用数据最杂的一块(项目树、会话列表、运行状态、多选、权限徽标),
+        * 任何一处渲染抛错都会整页白屏,连回到聊天都做不到。`Suspense` 只管懒加载的等待,兜不住运行时异常。
         *
-        * 聊天区(MainContent)和每个懒加载面板(LazyPanel)都有兜底,**侧栏没有** ——
-        * 而侧栏是这个应用里数据最杂的一块:项目树、会话列表、运行状态、多选、
-        * 权限徽标,任何一处渲染时抛错,整页白屏,连"回到聊天"都做不到。
-        *
-        * `Suspense` 兜不住这个:它只管懒加载的等待,不管运行时异常。
-        *
-        * `resetKeys` 给 selectedProject —— 换个项目就重试一次。侧栏崩多半是某条
-        * 数据的形状不对(比如一个字段意外为 null),换项目正好换掉那批数据。
+        * `resetKeys` 用 selectedProject:侧栏崩溃多半是某条数据形状不对(比如字段意外为 null),
+        * 换个项目正好换掉那批数据并重试一次。
         */}
       {!isMobile ? (
         isSidebarCollapsed ? null : (
@@ -440,11 +417,6 @@ function AppContentInner() {
         />
       </div>
 
-      {/* 设置弹窗挂在这里,**不在侧栏里**。
-          侧栏折叠时 `<Sidebar/>` 整棵都不渲染,而设置的三个入口(轨上的齿轮、
-          命令面板、主区)都在侧栏之外 —— 弹窗跟着侧栏一起消失,表现就是
-          "折叠后点设置没反应"。它本来就是 portal 到 body 的,住在侧栏子树里
-          只是历史位置。 */}
       <SessionDeleteDialog
         target={sessionDeleteTarget}
         onCancel={() => setSessionDeleteTarget(null)}
@@ -452,6 +424,9 @@ function AppContentInner() {
         t={tSidebar}
       />
 
+      {/* 设置弹窗挂在这一层而不在侧栏里:侧栏折叠时 `<Sidebar/>` 整棵不渲染,而设置的三个入口
+          (轨上的齿轮、命令面板、主区)都在侧栏之外,挂在侧栏里会出现「折叠后点设置没反应」。
+          弹窗 portal 到 body,挂在哪一层不影响显示位置。 */}
       <SettingsModalHost
         isOpen={showSettings}
         initialTab={settingsInitialTab}

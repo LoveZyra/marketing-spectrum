@@ -50,7 +50,7 @@ describe('项目可见性(列表与实时广播共用)', () => {
   });
 
   /**
-   * 创建项目的权限三选(2026-08-18):visibility='public' 全员可见;
+   * 创建项目的权限三选:visibility='public' 全员可见;
    * sharedUserIds(project_shares)逐用户授权。
    */
   describe('显式公共与指定用户授权', () => {
@@ -87,9 +87,8 @@ describe('项目可见性(列表与实时广播共用)', () => {
   });
 
   /**
-   * 新口径(2026-08-14)的核心:无主项目**不再默认公开**。
-   * 只有落在 PRISM_PUBLIC_WORKSPACE 之下的无主项目才对所有人可见,其余仅 root。
-   * 这一条堵的是"任何被扫描进来、还没认领的目录自动对全员可见"的默认漏。
+   * 无主项目默认不公开:只有落在 PRISM_PUBLIC_WORKSPACE 之下的无主项目才对所有人可见,
+   * 其余仅 root。否则任何被扫描进来、还没认领的目录都会自动对全员可见。
    */
   describe('无主项目的公共目录口径', () => {
     test('配了公共目录:目录下的无主项目所有人可见,目录外的只有 root', () => {
@@ -139,14 +138,14 @@ describe('项目可见性(列表与实时广播共用)', () => {
 
     /**
      * 侧栏"公共"徽标的口径 —— 后端 isPublic 字段用的就是这条:
-     * 无主 **且** 落在公共目录下。钉死"无主 ≠ 公共",正是 jovyan / prism
-     * 在没配公共目录时被误标"公共"的那个 bug。
+     * 无主且落在公共目录下。钉死"无主 ≠ 公共":没配公共目录时,
+     * 无主项目不能被标成"公共"。
      */
     test('公共徽标口径:无主且在公共目录下才算公共(有主/目录外/未配置都不是)', () => {
       const isPublicBadge = (ownerUserId, projectPath) =>
         (ownerUserId ?? null) === null && isPublicWorkspacePath(projectPath);
 
-      // 没配公共目录:无主的 jovyan / prism 也不是"公共"(这就是用户报的现象)
+      // 没配公共目录:无主的 jovyan / prism 也不是"公共"
       delete process.env.PRISM_PUBLIC_WORKSPACE;
       assert.equal(isPublicBadge(null, '/home/jovyan'), false);
       assert.equal(isPublicBadge(null, '/home/jovyan/prism'), false);
@@ -160,12 +159,12 @@ describe('项目可见性(列表与实时广播共用)', () => {
   });
 
   /**
-   * bq:「公共 → 个人」改不回的根因与修复不变量。
+   * 「个人」必须让项目有主。
    *
-   * 无主项目落在公共目录下 = 对所有人可见(= 公共)。此前选「个人」只清 visibility 列、
-   * 不认领归属,项目仍无主 → 仍在公共目录下 → 还是所有人可见,于是"改回个人还是公共"。
-   * 修复:选「个人 / 共享」时把无主项目认领给操作者。这里锁住的正是"一旦有主,
-   * 公共目录下的无主口径就不再适用、他人立即看不见"这个不变量。
+   * 无主项目落在公共目录下 = 对所有人可见(= 公共)。只清 visibility 列、不认领归属的话,
+   * 项目仍无主、仍在公共目录下,还是所有人可见;所以选「个人 / 共享」时要把无主项目
+   * 认领给操作者。这里锁住的不变量:一旦有主,公共目录下的无主口径就不再适用,
+   * 他人立即看不见。
    */
   describe('bq 权限互斥:个人必须让项目有主', () => {
     test('无主 + 公共目录 = 所有人可见(改之前的"公共"态)', () => {
@@ -200,13 +199,13 @@ describe('项目可见性(列表与实时广播共用)', () => {
   });
 });
 
-test('dv:readRequestViewer 认 id 与 userId 两种形状(WS 三条路盖的是 userId)', () => {
+test('readRequestViewer 认 id 与 userId 两种形状(WS 三条路盖的是 userId)', () => {
   // REST 中间件形状
   assert.deepEqual(
     readRequestViewer({ user: { id: 7, username: 'alice' } }),
     { userId: 7, username: 'alice' },
   );
-  // OSS token / SSE 票据 / 平台模式的 WebSocket 形状 —— 修前这里 userId 是 null,
+  // WebSocket 认证盖的形状:读不出 userId 的话,
   // 非 root 用户会被自己项目的可见性判定拒之门外。
   assert.deepEqual(
     readRequestViewer({ user: { userId: 7, username: 'alice' } }),

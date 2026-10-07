@@ -12,13 +12,9 @@ type SettingsSidebarProps = {
   onChange: (tab: SettingsMainTab) => void;
 };
 
-// 图标类型跟着单一来源走。原来写死成 `typeof Bot`(lucide 的
-// ForwardRefExoticComponent),比 constants.ts 里声明的 ComponentType 更窄,
-// 派生时会对不上 —— 以清单那边为准。
 type NavItem = SettingsMainTabMeta;
 
-// 派生自 SETTINGS_MAIN_TABS —— 这份清单曾经是手写的第二份,结果只有它有 voice,
-// 命令面板和深链校验那两份没有。加标签只改 constants.ts。
+// 导航项(连同类型)派生自 SETTINGS_MAIN_TABS,加标签只改 constants.ts。
 const NAV_ITEMS: NavItem[] = SETTINGS_MAIN_TABS;
 
 export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebarProps) {

@@ -6,11 +6,11 @@ import { authenticatedFetch } from './api';
  * Builds an authenticated websocket URL, or `null` if it cannot right now.
  *
  * Browsers cannot set headers on a `WebSocket` constructor, so the credential
- * has to travel in the URL. It used to be the raw JWT (`?token=<jwt>`), which
- * put a long-lived credential into every proxy access log and browser history
- * entry along the way. The server now refuses that by default and instead
- * accepts `?ticket=` — a 64-hex value from `POST /api/auth/ws-ticket` that
- * lives 60 seconds and is consumed on first use (`server/shared/ws-tickets.js`).
+ * has to travel in the URL. A raw JWT there would land in every proxy access
+ * log and browser history entry along the way, so by default the server
+ * refuses `?token=` and accepts `?ticket=` instead — a 64-hex value from
+ * `POST /api/auth/ws-ticket` that lives 60 seconds and is consumed on first
+ * use (`server/shared/ws-tickets.js`).
  *
  * Two consequences for callers:
  *

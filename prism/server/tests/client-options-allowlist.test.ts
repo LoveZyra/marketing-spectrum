@@ -3,12 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { pickClientRuntimeOptions } from '@/modules/websocket/services/chat-websocket.service.js';
 
 /**
- * fz(安全回归):`chat.send` 的客户端 options 是**白名单**。
+ * `chat.send` 的客户端 options 按白名单挑选,不能展开后再用黑名单覆盖。
  *
- * 病灶:这里原来是 `{ ...clientOptions, ...服务端覆盖项 }`,覆盖名单是一份黑名单。
- * 漏掉的 `oneShot` + `newSessionId` 组合起来能让运行时把**别人的会话 id**
- * 当成自己的 transcript id 回灌上来,进而在 `assignProviderSessionId` 里
- * 把别人那一行 DELETE 掉。会话 id 是 uuid,就在浏览器地址栏里。
+ * 黑名单漏一个键就是一个洞:例如 `oneShot` + `newSessionId` 能让运行时把别人的会话 id
+ * 当成自己的 transcript id 回灌,进而在 `assignProviderSessionId` 里删掉别人那一行。
+ * 会话 id 是 uuid,就在浏览器地址栏里,不是密钥。
  */
 describe('pickClientRuntimeOptions', () => {
   it('前端真正会发的那几项照常放行', () => {
@@ -22,7 +21,7 @@ describe('pickClientRuntimeOptions', () => {
     });
   });
 
-  it('**`newSessionId` / `oneShot` 一律不进**(这就是那个洞)', () => {
+  it('`newSessionId` / `oneShot` 一律不进', () => {
     const picked = pickClientRuntimeOptions({
       model: 'claude-x',
       oneShot: true,
@@ -33,7 +32,7 @@ describe('pickClientRuntimeOptions', () => {
     expect('newSessionId' in picked).toBe(false);
   });
 
-  it('**其余服务端内部键一个都不许进** —— 白名单的意义就在这儿', () => {
+  it('其余服务端内部键一个都不许进 —— 白名单的意义就在这儿', () => {
     const picked = pickClientRuntimeOptions({
       cwd: '/别人的项目', env: { ANTHROPIC_API_KEY: 'x' }, ownerUserId: 1,
       usageSource: 'forged', resumeSessionId: 'x', runId: 'x', sessionId: 'x',

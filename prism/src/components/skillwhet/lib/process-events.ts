@@ -1,6 +1,6 @@
 import type { ProgressEvent } from './types';
 
-/** hd:优化过程事件的分组(纯函数,供 ProcessTimeline 与测试用)。 */
+/** 优化过程事件的分组(纯函数,供 ProcessTimeline 与测试用)。 */
 export type StepGroup = {
   kind: 'step';
   key: string;

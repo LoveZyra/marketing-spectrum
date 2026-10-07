@@ -3,6 +3,9 @@ import type { TFunction } from 'i18next';
 
 import { api } from '../../../utils/api';
 import { describeDeleteFailure } from '../utils/deleteFailure';
+import { runConversationSearch } from '../utils/conversationSearch';
+import { summarizeArchivedBulkShortfall, type ArchivedBulkReceipt } from '../utils/archivedBulkReceipt';
+import type { ConversationSearchFailure, ConversationSearchStream } from '../utils/conversationSearch';
 import { useToast } from '../../../shared/view/ui';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
 import { useAuth } from '../../auth/context/AuthContext';
@@ -72,7 +75,7 @@ type ArchivedSessionsApiPayload = {
   success?: boolean;
   data?: {
     sessions?: ArchivedSessionListItem[];
-    /** E10:服务端分页后的总数与"还有没有下一页"。老响应没有这两个字段。 */
+    /** 服务端分页后的总数与"还有没有下一页"。缺字段时按"就这些"处理。 */
     total?: number;
     hasMore?: boolean;
   };
@@ -139,36 +142,36 @@ export function useSidebarController({
   const [deletingProjects, setDeletingProjects] = useState<Set<string>>(new Set());
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteProjectConfirmation | null>(null);
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
-  const [showVersionModal, setShowVersionModal] = useState(false);
   const [searchMode, setSearchMode] = useState<SidebarSearchMode>('projects');
   const [conversationResults, setConversationResults] = useState<ConversationSearchResults | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchProgress, setSearchProgress] = useState<SearchProgress | null>(null);
+  /** 搜索没跑完(取票失败或流中途断开);null 表示没有出错。界面据此区分「出错」与「真没结果」。 */
+  const [searchFailure, setSearchFailure] = useState<ConversationSearchFailure | null>(null);
+  /** 点「重试」时 +1,让搜索 effect 用同一个词重跑一次。 */
+  const [searchRetryToken, setSearchRetryToken] = useState(0);
   const [archivedProjects, setArchivedProjects] = useState<ArchivedProjectListItem[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<ArchivedSessionListItem[]>([]);
   const [isArchivedSessionsLoading, setIsArchivedSessionsLoading] = useState(false);
-  // E10:归档会话改成服务端分页。这两个状态是"别静默截断"的凭据 —— 页面要能
-  // 说清还有多少条没列出来,并且给得出下一页。
+  // 归档会话走服务端分页。这两个状态保证不静默截断:页面要能说清还有多少条
+  // 没列出来,并且给得出下一页。
   const [archivedSessionsTotal, setArchivedSessionsTotal] = useState(0);
   const [archivedSessionsHasMore, setArchivedSessionsHasMore] = useState(false);
   const [isLoadingMoreArchivedSessions, setIsLoadingMoreArchivedSessions] = useState(false);
   /**
-   * gk:「最近删除」那一段自己拉数据,它不知道这边刚永久删了什么 —— 每做一次
-   * 会往回收站里放东西的操作就 +1,让它重拉。
-   *
-   * 少了这个计数,「清空归档」之后同一屏上那一段还写着"没有最近删除的会话",
-   * 而确认弹窗刚说过「移入最近删除,保留期内可恢复」—— 用户看到的是"它真删了"。
+   * 「最近删除」那一段自己拉数据,不知道这边刚删了什么:每做一次会往回收站里放东西的操作就 +1,让它重拉。
+   * 否则「清空归档」之后同一屏上那一段还写着"没有最近删除的会话",看起来像是真删了。
    */
   const [trashReloadToken, setTrashReloadToken] = useState(0);
   const bumpTrashReload = useCallback(() => { setTrashReloadToken((value) => value + 1); }, []);
-  /** F8:回收站多选。攒到几百条时一条条点纯粹是体力活。 */
+  /** 归档会话多选。攒到几百条时一条条点纯粹是体力活。 */
   const [selectedArchivedIds, setSelectedArchivedIds] = useState<Set<string>>(new Set());
   const [isBulkArchiving, setIsBulkArchiving] = useState(false);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [optimisticStarByProjectId, setOptimisticStarByProjectId] = useState<Map<string, boolean>>(new Map());
   const [loadingMoreProjects, setLoadingMoreProjects] = useState<Set<string>>(new Set());
   const searchSeqRef = useRef(0);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const eventSourceRef = useRef<ConversationSearchStream | null>(null);
   const starToggleSequenceByProjectRef = useRef<Map<string, number>>(new Map());
   const migrationStartedRef = useRef(false);
   const archivedSessionsFetchedRef = useRef(0);
@@ -281,7 +284,7 @@ export function useSidebarController({
 
       setArchivedProjects(nextProjects);
       setArchivedSessions(nextStandaloneSessions);
-      // total/hasMore 是这一轮才有的字段;老响应缺字段时按"就这些"处理。
+      // 服务端版本较旧时响应里没有 total/hasMore,按"就这些"处理。
       setArchivedSessionsTotal(archivedSessionsPayload.data?.total ?? returnedSessions.length);
       setArchivedSessionsHasMore(Boolean(archivedSessionsPayload.data?.hasMore));
       archivedSessionsFetchedRef.current = returnedSessions.length;
@@ -422,81 +425,28 @@ export function useSidebarController({
       setConversationResults(null);
       setSearchProgress(null);
       setIsSearching(false);
+      setSearchFailure(null);
       return;
     }
 
     setIsSearching(true);
+    setSearchFailure(null);
     const seq = ++searchSeqRef.current;
-    // 取票是异步的:期间若查询被后续输入取代(seq 变了)或组件卸载(cancelled)
-    // 就别再开流,否则会漏一个没人 close 的 EventSource。
     let cancelled = false;
 
-    const accumulated: ConversationProjectResult[] = [];
-    let totalMatches = 0;
-
-    void (async () => {
-      let ticket: string;
-      try {
-        ticket = await api.issueSearchTicket();
-      } catch {
-        if (!cancelled && seq === searchSeqRef.current) setIsSearching(false);
-        return;
-      }
-      if (cancelled || seq !== searchSeqRef.current) return;
-      const es = new EventSource(api.searchConversationsUrl(query, ticket));
-      eventSourceRef.current = es;
-
-    es.addEventListener('result', (evt) => {
-      if (seq !== searchSeqRef.current) { es.close(); return; }
-      try {
-        const data = JSON.parse(evt.data) as {
-          projectResult: ConversationProjectResult;
-          totalMatches: number;
-          scannedProjects: number;
-          totalProjects: number;
-        };
-        accumulated.push(data.projectResult);
-        totalMatches = data.totalMatches;
-        setConversationResults({ results: [...accumulated], totalMatches, query });
-        setSearchProgress({ scannedProjects: data.scannedProjects, totalProjects: data.totalProjects });
-      } catch {
-        // Ignore malformed SSE data
-      }
+    void runConversationSearch(query, {
+      issueTicket: () => api.issueSearchTicket(),
+      openStream: (streamQuery, ticket) => new EventSource(api.searchConversationsUrl(streamQuery, ticket)),
+      isCurrent: () => !cancelled && seq === searchSeqRef.current,
+      onStreamOpened: (stream) => { eventSourceRef.current = stream; },
+      onStreamClosed: () => { eventSourceRef.current = null; },
+      apply: (patch) => {
+        if (patch.results !== undefined) setConversationResults(patch.results);
+        if (patch.progress !== undefined) setSearchProgress(patch.progress);
+        if (patch.isSearching !== undefined) setIsSearching(patch.isSearching);
+        if (patch.failure !== undefined) setSearchFailure(patch.failure);
+      },
     });
-
-    es.addEventListener('progress', (evt) => {
-      if (seq !== searchSeqRef.current) { es.close(); return; }
-      try {
-        const data = JSON.parse(evt.data) as { totalMatches: number; scannedProjects: number; totalProjects: number };
-        totalMatches = data.totalMatches;
-        setSearchProgress({ scannedProjects: data.scannedProjects, totalProjects: data.totalProjects });
-      } catch {
-        // Ignore malformed SSE data
-      }
-    });
-
-    es.addEventListener('done', () => {
-      if (seq !== searchSeqRef.current) { es.close(); return; }
-      es.close();
-      eventSourceRef.current = null;
-      setIsSearching(false);
-      setSearchProgress(null);
-      if (accumulated.length === 0) {
-        setConversationResults({ results: [], totalMatches: 0, query });
-      }
-    });
-
-      es.addEventListener('error', () => {
-        if (seq !== searchSeqRef.current) { es.close(); return; }
-        es.close();
-        eventSourceRef.current = null;
-        setIsSearching(false);
-        setSearchProgress(null);
-        if (accumulated.length === 0) {
-          setConversationResults({ results: [], totalMatches: 0, query });
-        }
-      });
-    })();
 
     return () => {
       cancelled = true;
@@ -505,7 +455,7 @@ export function useSidebarController({
         eventSourceRef.current = null;
       }
     };
-  }, [debouncedSearchQuery, searchMode]);
+  }, [debouncedSearchQuery, searchMode, searchRetryToken]);
 
   // All sidebar state keys (expanded, starred, loading, etc.) use the DB
   // `projectId` as their identifier after the migration.
@@ -770,9 +720,9 @@ export function useSidebarController({
           setEditingProject(null);
           setEditingName('');
         } else {
-          // 失败不再静默 console:会话改名/删除都有反馈,唯独这里没有 —— 界面看起来
-          // 和成功一模一样,直到刷新才发现名字没变。给提示并**保留编辑态**,让用户
-          // 能直接重试,不必重新点开重命名。
+          // 失败要给提示,不能只打 console:会话改名/删除都有反馈,这里没有的话界面看起来
+          // 和成功一模一样,直到刷新才发现名字没变。保留编辑态,让用户能直接重试,
+          // 不必重新点开重命名。
           console.error('Failed to rename project');
           toast({ message: t('messages.updateProjectError', '重命名失败,请重试。'), variant: 'error' });
         }
@@ -785,8 +735,8 @@ export function useSidebarController({
   );
 
   const showDeleteSessionConfirmation = useCallback(
-    // Kept with project/provider arguments for component wiring compatibility;
-    // deletion now uses only `sessionId` via /api/providers/sessions/:sessionId.
+    // The project/provider arguments match how the components call it; the deletion
+    // itself only needs `sessionId` (/api/providers/sessions/:sessionId).
     (
       projectId: string | null,
       sessionId: string,
@@ -797,10 +747,9 @@ export function useSidebarController({
       } = {},
     ) => {
       /*
-        gk 的权限规则在服务端拦得很干净,但界面没跟上:说明文字写着「只有项目
-        负责人或管理员可以永久删除」,红色主按钮照样可点,点下去撞 403
-        (2026-09-15 非 root 实测)。在这里就把结论算出来,按钮该不画就不画。
-        找不到项目时传 projectKnown:false —— 回到老行为,由服务端兜底。
+        永久删除只有项目负责人或管理员能做(服务端会拦),这里先把结论算出来,
+        没权限就不画红色主按钮,免得点下去撞 403。
+        找不到项目时传 projectKnown:false:按钮照画,由服务端兜底。
       */
       const project = projectId ? projects.find((candidate) => candidate.projectId === projectId) : undefined;
       setSessionDeleteConfirmation({
@@ -841,8 +790,8 @@ export function useSidebarController({
           status: response.status,
           error: errorText,
         });
-        // gk:服务端给了原因(403 只有项目负责人可以永久删、409 正在跑……)就原样告诉用户,
-        // 不再一律「删除失败,请重试」—— 重试对这两种情况都没用。
+        // 服务端给了原因(403 只有项目负责人可以永久删、409 正在跑……)就原样告诉用户,
+        // 不要一律「删除失败,请重试」:重试对这两种情况都没用。
         alert(describeDeleteFailure(errorText, t('messages.deleteSessionFailed')));
       }
     } catch (error) {
@@ -964,10 +913,10 @@ export function useSidebarController({
   const clearArchivedSelection = useCallback(() => setSelectedArchivedIds(new Set()), []);
 
   /**
-   * F8:对选中的归档会话批量恢复或永久删除。
+   * 对选中的归档会话批量恢复或永久删除。
    *
-   * 删除要二次确认(不可逆),恢复不用(错了再归档一次就行)。服务端逐条鉴权,
-   * 看不见的会被静默跳过 —— 所以这里如实报"实际处理了几条",而不是假设全成。
+   * 删除要二次确认(会话进「最近删除」,只在保留期内可恢复),恢复不用(错了再归档一次就行)。
+   * 服务端逐条鉴权,看不见的静默跳过,所以按回执里实际处理的条数核对,不假设全成。
    */
   const bulkArchivedAction = useCallback(async (action: 'restore' | 'delete') => {
     const ids = [...selectedArchivedIds];
@@ -984,11 +933,23 @@ export function useSidebarController({
     try {
       const response = await api.bulkSessions(action, ids);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = (await response.json()) as { data?: { succeeded?: string[] } };
-      const done = payload.data?.succeeded?.length ?? 0;
-      if (done < ids.length) {
-        // 少于请求数说明有的看不见或失败了 —— 说出来,不要装作全成。
-        console.warn(`[Sidebar] 批量${action}:请求 ${ids.length} 条,实际 ${done} 条`);
+      const payload = (await response.json()) as { data?: ArchivedBulkReceipt };
+      const shortfall = summarizeArchivedBulkShortfall(ids.length, payload.data);
+      if (shortfall) {
+        // 少于请求数说明有的看不见、无权操作或出错了:说出来,不要装作全成。
+        const counts = { requested: shortfall.requested, done: shortfall.done, skipped: shortfall.skipped, failed: shortfall.failed };
+        toast({
+          message: action === 'delete'
+            ? t('messages.bulkDeleteShortfall', {
+              ...counts,
+              defaultValue: '选中 {{requested}} 条,删除了 {{done}} 条(没有权限或已不在归档里:{{skipped}} 条;处理出错:{{failed}} 条)。',
+            })
+            : t('messages.bulkRestoreShortfall', {
+              ...counts,
+              defaultValue: '选中 {{requested}} 条,恢复了 {{done}} 条(没有权限或已不在归档里:{{skipped}} 条;处理出错:{{failed}} 条)。',
+            }),
+          variant: shortfall.failed > 0 ? 'error' : 'default',
+        });
       }
       clearArchivedSelection();
       if (action === 'delete') bumpTrashReload();
@@ -999,9 +960,9 @@ export function useSidebarController({
     } finally {
       setIsBulkArchiving(false);
     }
-  }, [selectedArchivedIds, isBulkArchiving, bumpTrashReload, clearArchivedSelection, fetchArchivedSessions, onRefresh, t]);
+  }, [selectedArchivedIds, isBulkArchiving, bumpTrashReload, clearArchivedSelection, fetchArchivedSessions, onRefresh, t, toast]);
 
-  /** F8:清空归档。gk 起被清掉的会话先进「最近删除」,保留期内可恢复;确认里写清会动多少条。 */
+  /** 清空归档:被清掉的会话先进「最近删除」,保留期内可恢复;确认里写清会动多少条。 */
   const emptyArchive = useCallback(async () => {
     if (isBulkArchiving) return;
     if (!window.confirm(t('messages.emptyTrashConfirm', {
@@ -1062,8 +1023,8 @@ export function useSidebarController({
   }, [fetchArchivedSessions, onRefresh]);
 
   const updateSessionSummary = useCallback(
-    // `_projectId` and `_provider` are preserved for compatibility with
-    // existing sidebar callback signatures; backend rename only needs sessionId.
+    // `_projectId` and `_provider` match the sidebar callback signature; the
+    // backend rename only needs sessionId.
     async (_projectId: string, sessionId: string, summary: string, _provider: LLMProvider) => {
       const trimmed = summary.trim();
       if (!trimmed) {
@@ -1122,7 +1083,7 @@ export function useSidebarController({
     archivedSessionsCount: archivedProjects.length + archivedSessions.length,
     archivedSessionsTotal,
     archivedSessionsHasMore,
-    /** gk:「最近删除」那一段的重拉信号(永久删除 / 批量删除 / 清空归档之后 +1)。 */
+    /** 「最近删除」那一段的重拉信号(永久删除 / 批量删除 / 清空归档之后 +1)。 */
     trashReloadToken,
     bumpTrashReload,
     isLoadingMoreArchivedSessions,
@@ -1164,6 +1125,10 @@ export function useSidebarController({
     conversationResults,
     isSearching,
     searchProgress,
+    searchFailure,
+    retryConversationSearch: useCallback(() => {
+      setSearchRetryToken((value) => value + 1);
+    }, []),
     clearConversationResults: useCallback(() => {
       searchSeqRef.current += 1;
       if (eventSourceRef.current) {
@@ -1173,6 +1138,7 @@ export function useSidebarController({
       setIsSearching(false);
       setSearchProgress(null);
       setConversationResults(null);
+      setSearchFailure(null);
     }, []),
     setSearchFilter,
     setDeleteConfirmation,

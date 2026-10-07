@@ -1,4 +1,5 @@
-import { Bell, Play, Volume2 } from 'lucide-react';
+import { useState } from 'react';
+import { Bell, Play, RefreshCw, Volume2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -8,13 +9,29 @@ import type { NotificationPreferencesState } from '../../types/types';
 type NotificationsSettingsTabProps = {
   notificationPreferences: NotificationPreferencesState;
   onNotificationPreferencesChange: (value: NotificationPreferencesState) => void;
+  /** 没从服务端读到偏好:显示的是默认值,开关禁用,免得改动把默认值写回去。 */
+  loadFailed?: boolean;
+  onRetryLoad?: () => Promise<void>;
 };
 
 export default function NotificationsSettingsTab({
   notificationPreferences,
   onNotificationPreferencesChange,
+  loadFailed = false,
+  onRetryLoad,
 }: NotificationsSettingsTabProps) {
   const { t } = useTranslation('settings');
+  const [retrying, setRetrying] = useState(false);
+
+  const handleRetry = async () => {
+    if (!onRetryLoad || retrying) return;
+    setRetrying(true);
+    try {
+      await onRetryLoad();
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   return (
     <div className="space-y-6 md:space-y-8">
@@ -25,6 +42,25 @@ export default function NotificationsSettingsTab({
         </div>
         <p className="text-sm text-muted-foreground">{t('notifications.description')}</p>
       </div>
+
+      {loadFailed && (
+        <div
+          className="flex flex-col gap-3 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between"
+          role="alert"
+        >
+          <span>
+            {t('notifications.loadFailed', {
+              defaultValue: '通知偏好加载失败。为免覆盖已保存的设置,下面的开关暂时不可用。',
+            })}
+          </span>
+          {onRetryLoad && (
+            <Button type="button" variant="outline" size="sm" onClick={() => void handleRetry()} disabled={retrying}>
+              <RefreshCw className={`h-4 w-4 ${retrying ? 'animate-spin' : ''}`} />
+              {t('notifications.retryLoad', { defaultValue: '重试' })}
+            </Button>
+          )}
+        </div>
+      )}
 
       <div className="overflow-hidden rounded-lg border border-border">
         <div className="flex items-center gap-2 border-b border-border bg-card px-4 py-2.5">
@@ -55,8 +91,9 @@ export default function NotificationsSettingsTab({
                     },
                   })
                 }
-                // hl(P3 可访问性):可见文字只有「已启用」,读屏器单念它不知道启用的是什么。
+                // 可见文字只有「已启用」,读屏器单念它不知道启用的是什么,所以显式给名称。
                 aria-label={t('notifications.sound.title', { defaultValue: 'Completion sound' })}
+                disabled={loadFailed}
                 className="h-4 w-4 accent-primary"
               />
               {t('notifications.sound.enabled', { defaultValue: 'Enabled' })}
@@ -95,6 +132,7 @@ export default function NotificationsSettingsTab({
                   },
                 })
               }
+              disabled={loadFailed}
               className="h-4 w-4 accent-primary"
             />
             {t('notifications.events.actionRequired')}
@@ -113,6 +151,7 @@ export default function NotificationsSettingsTab({
                   },
                 })
               }
+              disabled={loadFailed}
               className="h-4 w-4 accent-primary"
             />
             {t('notifications.events.stop')}
@@ -131,6 +170,7 @@ export default function NotificationsSettingsTab({
                   },
                 })
               }
+              disabled={loadFailed}
               className="h-4 w-4 accent-primary"
             />
             {t('notifications.events.error')}

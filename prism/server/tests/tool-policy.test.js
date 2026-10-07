@@ -9,17 +9,12 @@ import {
 /**
  * 服务端强制的工具策略。
  *
- * ## 在此之前服务端一句话都说不上
+ * 权限档位在聊天框的下拉里人人可选,定时任务的 `permission_mode` 默认就是 `bypassPermissions`
+ * (所有工具调用都不弹确认框);客户端的工具黑白名单存在浏览器 localStorage 里,是用户自己的偏好,
+ * 随时能清空。所以在多用户部署里,"谁能用 bypass""哪些工具一律禁掉"只能由服务端决定。
+ * `.env.example` 里关于 `IS_SANDBOX` 的那段说明写清了代价:放行等于每个登录用户都拿到不受限的执行权限。
  *
- * 权限档位在聊天框的下拉里**人人可选**,定时任务的 `permission_mode` 更是默认就用
- * `bypassPermissions`(所有工具调用都不弹确认框);而客户端的工具黑白名单存在
- * **浏览器 localStorage** 里 —— 那是用户自己的偏好,随时能清空。
- *
- * 也就是说在多用户部署里,"谁能用 bypass""哪些工具一律禁掉"这两件事,
- * 服务端**没有任何手段**。`.env.example` 里关于 `IS_SANDBOX` 的那段注释已经把代价
- * 写清楚了:放行等于每个登录用户都拿到不受限的执行权限。
- *
- * 这两个开关补上那个手段。都**默认不开** —— 升级上来的部署行为不变。
+ * PRISM_FORCED_DENY_TOOLS 与 PRISM_ALLOW_BYPASS_USERS 就是这两个手段,都默认不开:没配时部署行为不变。
  */
 
 const baseOptions = {
@@ -63,7 +58,7 @@ describe('PRISM_FORCED_DENY_TOOLS', () => {
     });
   });
 
-  test('没配时行为不变(hm 起无条件多出跨会话消息的两个工具,见 hm-sdk-upgrade.test.js)', () => {
+  test('没配时行为不变(跨会话消息的两个工具总在列,见 sdk-integration.test.js)', () => {
     withEnv({ PRISM_FORCED_DENY_TOOLS: undefined }, () => {
       const sdk = mapCliOptionsToSDK({
         ...baseOptions,
@@ -130,15 +125,13 @@ describe('PRISM_ALLOW_BYPASS_USERS', () => {
 });
 
 /**
- * fj:两条执行路径必须给出**同一个**策略结果。
+ * 两条执行路径必须给出同一个策略结果。
  *
- * 修之前:强制黑名单与 bypass 白名单只写在 `mapCliOptionsToSDK` 里,而那个函数
- * 只被一次性路径(外部 API)调用。网页聊天默认走常驻 runtime,它的 settings 由
- * `runtimeSettingsFromOptions` 构造 —— 两道闸一道都不过。
- *
- * 也就是说:**越是交互式、人人可用的那条路,管得越松**。这一组把两条路钉在一起。
+ * 一次性路径(外部 API 等)的选项由 `mapCliOptionsToSDK` 构造,网页聊天默认走的常驻 runtime 的 settings
+ * 由 `runtimeSettingsFromOptions` 构造。强制黑名单与 bypass 白名单只要漏了其中一条,最交互式、
+ * 人人可用的那条路反而管得最松。这一组把两条路钉在一起(都经 applyServerToolPolicy)。
  */
-describe('fj:常驻路径与一次性路径的策略必须一致', () => {
+describe('常驻路径与一次性路径的策略必须一致', () => {
   const env = { ...process.env };
   afterEach(() => {
     process.env = { ...env };
@@ -182,7 +175,7 @@ describe('fj:常驻路径与一次性路径的策略必须一致', () => {
   });
 });
 
-describe('fj:常驻路径的 settings 构造点本身', () => {
+describe('常驻路径的 settings 构造点本身', () => {
   const env = { ...process.env };
   afterEach(() => {
     process.env = { ...env };

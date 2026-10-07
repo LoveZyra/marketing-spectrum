@@ -10,8 +10,9 @@ import { closeConnection, getConnection, initializeDatabase, userDb } from '@/mo
 import { REQUIRED_COLUMNS, findMissingColumns } from '@/modules/database/migrations.js';
 
 /**
- * hq:老库(hn / ho)升级上来 —— `model_catalog` 没有 `gateway_id` / `allowed_users`,三张新表不存在。
- * 迁移要把两列补上(老条目 = 网关 0、所有人)、建出三张表与它们的唯一索引,列清单自检不报缺。
+ * 缺列的老库:`model_catalog` 没有 `gateway_id` / `allowed_users`,`model_gateways` /
+ * `gateway_user_keys` / `user_models` 三张表不存在。迁移要把两列补上(已有条目 = 网关 0、
+ * 所有人)、建出三张表与它们的唯一索引,列清单自检不报缺。
  */
 
 const previousDatabasePath = process.env.DATABASE_PATH;
@@ -25,7 +26,7 @@ afterEach(async () => {
   tempDir = null;
 });
 
-/** hn 时的 model_catalog(没有 hq 的两列)。 */
+/** 加上网关相关两列之前的 model_catalog,用来测旧库升级。 */
 const HN_MODEL_CATALOG_DDL = `
 CREATE TABLE model_catalog (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +75,7 @@ const columnsOf = (table: string) => (getConnection().prepare(`PRAGMA table_info
 const indexes = (table: string) => getConnection().prepare(`PRAGMA index_list(${table})`).all() as Array<{ name: string; unique: number }>;
 const indexColumns = (index: string) => (getConnection().prepare(`PRAGMA index_info(${index})`).all() as Array<{ name: string }>).map((c) => c.name);
 
-describe('hq 迁移', () => {
+describe('网关与 key 的迁移', () => {
   test('老 model_catalog 补上 gateway_id / allowed_users;老条目 = 网关 0、所有人;三张新表与唯一索引建好', async () => {
     await legacyDatabase();
     await initializeDatabase();
@@ -84,7 +85,7 @@ describe('hq 迁移', () => {
     assert.ok(catalogColumns.includes('allowed_users'));
     const row = getConnection().prepare('SELECT model_id, gateway_id, allowed_users, is_default FROM model_catalog').get();
     assert.deepEqual(row, { model_id: 'glm-5.2', gateway_id: null, allowed_users: null, is_default: 1 });
-    // (服务层把 NULL 读成「网关 0、所有人」—— 见 server/tests/hq-model-visibility.test.ts)
+    // (服务层把 NULL 读成「网关 0、所有人」—— 见 server/tests/model-visibility.test.ts)
 
     const missing = findMissingColumns(getConnection());
     for (const table of ['model_catalog', 'model_gateways', 'gateway_user_keys', 'user_models']) {

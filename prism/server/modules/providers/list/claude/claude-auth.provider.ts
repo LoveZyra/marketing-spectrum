@@ -25,7 +25,7 @@ export class ClaudeProviderAuth implements IProviderAuth {
    * Checks whether the Claude Code CLI is available on this host.
    */
   private checkInstalled(): boolean {
-    // hm(A2):没配 `CLAUDE_CLI_PATH` 时 Prism 用的是 SDK 随包的那一份 —— 查它,不查 PATH 上的全局 claude
+    // 没配 `CLAUDE_CLI_PATH` 时 Prism 用的是 SDK 随包的那一份 —— 查它,不查 PATH 上的全局 claude
     // (机器上没装全局 CLI 不等于 Prism 用不了)。
     const configured = configuredClaudeCliPath();
     const cliPath = configured

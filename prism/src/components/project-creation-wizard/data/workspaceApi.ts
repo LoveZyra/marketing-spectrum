@@ -87,16 +87,15 @@ export const fetchShareableUsers = async (): Promise<ShareableUser[]> => {
 };
 
 /**
- * hl(09-24 P2-14):**别把 `revived` / `message` 丢掉。** 路径命中一个已归档的项目时,
- * 服务端是把它还原(并应用向导里选的可见性),不是新建;此前这里只回 `project`,
- * 界面一律说"创建成功",用户不知道自己刚把一个旧项目连同旧会话一起拉了回来。
+ * 要把 `revived` / `message` 一起带回去:路径命中一个已归档的项目时,服务端是把它还原
+ * (并应用向导里选的可见性),不是新建;界面要据此告诉用户旧项目连同旧会话一起回来了。
  */
 export const createProjectRequest = async (payload: CreateProjectPayload) => {
   const response = await api.createProject(payload);
   const data = await parseJson<CreateProjectResponse>(response);
 
   if (!response.ok) {
-    // hl(P3 中英混排):把服务端的错误码带出去,向导按码翻成界面语言(原文英文直出)。
+    // 把服务端的错误码带出去,向导按码翻成界面语言(服务端原文是英文)。
     const error = new Error(resolveCreateProjectErrorMessage(data) || 'Failed to create project') as Error & { code?: string };
     const rawError = (data as { error?: unknown }).error;
     const code = rawError && typeof rawError === 'object' ? (rawError as { code?: unknown }).code : (data as { code?: unknown }).code;
@@ -112,10 +111,10 @@ export const createProjectRequest = async (payload: CreateProjectPayload) => {
 };
 
 /**
- * fh:拉可用模板。
+ * 拉可用模板。
  *
  * 失败时返回空数组而不是抛 —— 模板是锦上添花,取不到不该让「新建项目」整个打不开。
- * 界面上那一格自然消失,用户走原来的空目录流程。
+ * 界面上那一格自然消失,用户走空目录流程。
  */
 export const fetchProjectTemplates = async (): Promise<ProjectTemplate[]> => {
   try {

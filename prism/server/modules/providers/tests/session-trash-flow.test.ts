@@ -5,16 +5,16 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 /**
- * gk:永久删除的整条链 —— 收 runtime → 行 + 显示日志进回收站 → transcript 搬走 →
- * 审计(带 target_user_id)→ 给看得见的人推 `session_removed` → 恢复原样搬回。
+ * 永久删除的整条链:收 runtime → 行与显示日志进回收站 → transcript 搬走 →
+ * 审计(带 target_user_id)→ 给看得见的人推 `session_removed` → 恢复时原样搬回。
  *
  * 用真库、真文件、真的 websocket 连接集合(塞一个假 socket 进 `connectedClients`),
- * 只有 runtime 释放是注入的。每一条都对应 2026-09-14 事故链上的一个断点:
- *   - 删的时候 runtime 还活着 → 这里先收,收不掉就拒绝
- *   - 删了找不回 → 回收站里全在,恢复后逐字相同
- *   - 谁删的查不出来 → 审计行 + 回收站行都记了操作者
- *   - 开着的页面不知道 → session_removed 帧
- *   - 谁都能删 → 共享用户 403、批量跳过
+ * 只有 runtime 释放是注入的。逐条钉住:
+ *   - 删的时候 runtime 还活着 → 先收,收不掉就拒绝
+ *   - 删了要找得回 → 回收站里全在,恢复后逐字相同
+ *   - 要查得出谁删的 → 审计行与回收站行都记了操作者
+ *   - 开着的页面要知道 → session_removed 帧
+ *   - 不是谁都能删 → 共享用户 403、批量跳过
  */
 let tempDir: string;
 let db: typeof import('@/modules/database/index.js');
@@ -159,9 +159,9 @@ describe('永久删除 → 最近删除', () => {
   });
 
   /**
-   * **收不掉 ≠ 在跑。** dispose 自己抛错时(传输已经关了之类)releaseClaudeSession
+   * 收不掉 ≠ 在跑。 dispose 自己抛错时(传输已经关了之类)releaseClaudeSession
    * 也返回 `released:false`,reason 是 `error`。把这一类也当 409 的后果是:一个
-   * dispose 坏掉的 runtime 让这条会话**永远删不掉**,而用户看到的是"它没在跑啊"。
+   * dispose 坏掉的 runtime 让这条会话永远删不掉,而用户看到的是"它没在跑啊"。
    */
   it('runtime 收不掉但不是回合在飞(dispose 抛错)→ 照常删除,只记一行', async () => {
     providers.setSessionRuntimeReleaser(async () => ({ released: false, reason: 'error' }));
@@ -201,14 +201,11 @@ describe('永久删除 → 最近删除', () => {
   });
 
   /**
-   * gl:**归档态的会话恢复后,前端也要收到"它回来了"。**
+   * 归档态的会话恢复后,前端也要收到"它回来了"。
    *
-   * gk 这里只发 `session_upserted`,而那条广播带着 `if (row.isArchived) return`
-   * 的闸门(侧栏不该让归档会话弹回活跃列表)—— 于是归档态的会话恢复时一帧都不发,
-   * 页面永远停在「这条会话已被删除」,输入框回不来,只能刷新
-   * (2026-09-15 测试环境实测,稳定复现)。
-   *
-   * 这一条钉的正是那个分水岭:**活跃态能收到、归档态也必须能收到**。
+   * `session_upserted` 广播带着 `if (row.isArchived) return` 的闸门(侧栏不该让归档会话弹回
+   * 活跃列表),只靠它的话,归档态的会话恢复时一帧都不发,页面会停在「这条会话已被删除」、
+   * 输入框回不来。这一条钉住:活跃态能收到 `session_restored`,归档态也必须能收到。
    */
   it('恢复归档态的会话:照样推 session_restored(gk 在这里一帧都不发)', async () => {
     const conn = db.getConnection();
@@ -226,7 +223,7 @@ describe('永久删除 → 最近删除', () => {
     await providers.sessionsService.restoreTrashedSession('s1', viewerOf(owner));
     await new Promise((resolve) => setTimeout(resolve, 30));
 
-    // 恢复回来仍是归档态(gk 的正确行为,不动)
+    // 恢复回来仍是归档态(预期行为)
     expect(db.sessionsDb.getSessionById('s1')?.isArchived).toBe(1);
     // 侧栏那条照旧被闸门挡住 —— 这正是为什么需要一条独立的帧
     expect(ownerFrames.filter((frame) => frame.kind === 'session_upserted')).toEqual([]);
@@ -252,9 +249,9 @@ describe('永久删除 → 最近删除', () => {
   });
 
   /**
-   * 建回来的项目行**连 visibility 一起**按快照来。丢了它,一个 `public` 项目会
-   * 变回默认语义:原来看得见这条会话的人(以及被共享的同事)当场看不到恢复出来的那条。
-   * 共享关系随项目行 CASCADE 掉、找不回来 —— 所以至少 public 这一档不能再丢。
+   * 建回来的项目行连 visibility 一起按快照来。丢了它,一个 `public` 项目会变回默认语义:
+   * 原来看得见这条会话的人(以及被共享的同事)当场看不到恢复出来的那条。
+   * 共享关系随项目行 CASCADE 掉、找不回来,所以至少 public 这一档不能再丢。
    */
   it('删项目之后恢复:visibility=public 的项目照旧是 public(别人还看得见)', async () => {
     const conn = db.getConnection();
@@ -272,7 +269,7 @@ describe('永久删除 → 最近删除', () => {
   });
 
   /**
-   * **文件先搬回来,再动库。** 反过来的话,回收站行一提交就没了,而搬运失败时那份
+   * 文件先搬回来,再动库。 反过来的话,回收站行一提交就没了,而搬运失败时那份
    * transcript 留在 `<trash>/…` 里再没有任何记录指向它(连清扫器都找不到),
    * 而接口回的却是 `restored: true`。
    */
@@ -295,7 +292,7 @@ describe('永久删除 → 最近删除', () => {
     expect(db.getConnection().prepare("SELECT COUNT(*) AS n FROM session_trash_messages WHERE session_id = 's1'").get()).toEqual({ n: 2 });
   });
 
-  it('权限:共享用户看得见但不能永久删(403);批量删除时被跳过;归档同门(hl 动态 P2-6)', async () => {
+  it('权限:共享用户看得见但不能永久删(403);批量删除时被跳过;归档同门', async () => {
     expect(db.canViewerSeeSession('s1', viewerOf(sharedUser))).toBe(true);
     expect(() => providers.sessionsService.assertViewerMayPermanentlyDelete('s1', viewerOf(sharedUser)))
       .toThrow(expect.objectContaining({ code: 'SESSION_DELETE_FORBIDDEN' }));
@@ -306,7 +303,7 @@ describe('永久删除 → 最近删除', () => {
     expect(bulk.skipped).toEqual(['s1']);
     expect(db.sessionsDb.getSessionById('s1')).not.toBeNull();
 
-    // hl(动态 P2-6):归档是全局的一列,共享用户不能归档别人发起的会话 —— 单条 403、批量跳过
+    // 归档是全局的一列,共享用户不能归档别人发起的会话:单条 403、批量跳过。
     expect(() => providers.sessionsService.assertViewerMayArchiveOrRestore('s1', viewerOf(sharedUser), 'archive'))
       .toThrow(expect.objectContaining({ code: 'SESSION_ARCHIVE_FORBIDDEN' }));
     const archived = await providers.sessionsService.bulkSessionAction(['s1'], 'archive', viewerOf(sharedUser));

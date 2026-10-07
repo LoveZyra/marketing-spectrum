@@ -146,13 +146,10 @@ export function createMaProxyRouter({
         method: req.method,
         path: query ? `${resolved.path}?${query}` : resolved.path,
         headers: buildUpstreamHeaders(req, upstream.label),
-        // 每次都开新连接,绝不复用。Node 19 起全局 agent 默认 keepAlive:true,
-        // 而上游是 Python 标准库的 http.server —— 它在 401/413 这类提前返回的分支上
-        // 曾经不读请求体就回话,残留字节会被下一个复用该连接的请求当成请求行解析
-        // (症状:莫名其妙的 501 `Unsupported method ('{"activity_id":...}POST')`,
-        // 而且报在下一个请求头上,跟肇事者隔了一整个请求)。
-        // 上游那边已经修了(ma_core.py 的 _drain_body),这里再断一次是故意的:
-        // 反代不该指望上游的 HTTP 实现没毛病。回环连接的握手成本可以忽略。
+        // 每次都开新连接,绝不复用。Node 19 起全局 agent 默认 keepAlive:true;上游是 Python 标准库的
+        // http.server,它在提前返回(401/413 等)的分支上若不读完请求体,残留字节会被下一个复用该连接的
+        // 请求当成请求行解析,表现为下一个请求莫名其妙的 501 `Unsupported method ('{"activity_id":...}POST')`。
+        // 反代不该指望上游的 HTTP 实现没毛病,回环连接的握手成本可以忽略。
         agent: false,
       },
       (upstreamRes) => {

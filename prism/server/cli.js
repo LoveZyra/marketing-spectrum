@@ -89,13 +89,24 @@ function getInstallDir() {
     return APP_ROOT;
 }
 
+/**
+ * CONTEXT_WINDOW 在 status 里的说法,与 claude-sdk.js 的 resolveContextWindowTokens 同口径:
+ * 用量显示的上下文窗口按 实测 → 模型目录 → CONTEXT_WINDOW → 200000 取,这个变量只是兜底。
+ */
+function describeContextWindow(raw) {
+    if (!raw) return '(未配置 —— 按 实测 → 模型目录 → 200000)';
+    const parsed = parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return `${parsed}(兜底:实测与模型目录优先)`;
+    return `${raw}(不是正整数,忽略 —— 按 实测 → 模型目录 → 200000)`;
+}
+
 // Show status command
 function showStatus() {
     console.log(`\n${c.bright('Prism - Status')}\n`);
     console.log(c.dim('═'.repeat(60)));
 
     // Version info
-    // v2.0.0:带发布日期与提交号(包里的 RELEASE.json);`prism --version` 仍只打版本号,给脚本用
+    // 带发布日期与提交号(包里的 RELEASE.json);`prism --version` 只打版本号,给脚本用。
     console.log(`\n${c.info('[INFO]')} Version: ${c.bright(readReleaseInfo(APP_ROOT).label ?? packageJson.version)}`);
 
     // Installation location
@@ -121,7 +132,7 @@ function showStatus() {
     console.log(`       SERVER_PORT: ${c.bright(process.env.SERVER_PORT || process.env.PORT || '8080')} ${c.dim(process.env.SERVER_PORT || process.env.PORT ? '' : '(default)')}`);
     console.log(`       DATABASE_PATH: ${c.dim(process.env.DATABASE_PATH || '(using default location)')}`);
     console.log(`       CLAUDE_CLI_PATH: ${c.dim(process.env.CLAUDE_CLI_PATH || '(未配置 —— 用 Agent SDK 随包的 claude)')}`);
-    console.log(`       CONTEXT_WINDOW: ${c.dim(process.env.CONTEXT_WINDOW || '160000 (default)')}`);
+    console.log(`       CONTEXT_WINDOW: ${c.dim(describeContextWindow(process.env.CONTEXT_WINDOW))}`);
 
     // Claude projects folder
     const claudeProjectsPath = path.join(os.homedir(), '.claude', 'projects');
@@ -177,7 +188,7 @@ Environment Variables:
   PORT                Set server port (default: 8080) (LEGACY)
   DATABASE_PATH       Set custom database location
   CLAUDE_CLI_PATH     Use this Claude CLI instead of the one bundled with the Agent SDK
-  CONTEXT_WINDOW      Set context window size (default: 160000)
+  CONTEXT_WINDOW      Fallback context window for usage display (measured → model catalog → this → 200000)
 ${packageJson.homepage ? `\nDocumentation:\n  ${packageJson.homepage}\n` : ''}${packageJson.bugs?.url ? `\nReport Issues:\n  ${packageJson.bugs.url}\n` : ''}`);
 }
 

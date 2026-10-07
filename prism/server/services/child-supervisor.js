@@ -1,12 +1,9 @@
 /**
- * 受管子进程的公共监管逻辑 —— `ma-service.js`(营销诊断 Python 服务)与
+ * 受管子进程的公共监管逻辑:`ma-service.js`(营销诊断 Python 服务)与
  * `skillwhet-service.js`(`whet serve`)共用。
  *
- * hl(静态 P3「工程」):两份 supervisor 各自不到二百行,却有 108 行逐字重复(按行拆日志、
- * 退出分类、退避重启、healthz 轮询、TERM → KILL 收尾)。gy 当时的判断是"抽了反而要为两种
- * 子进程各留一堆钩子";实际两边的差异只有五处 —— 怎么 spawn、就绪怎么判、端口上已有人
- * 时怎么处置、以及两条报错文案。这五处做成钩子,其余合并;两边原有的测试一条没改、全绿,
- * 日志文案逐字保留。
+ * 按行拆日志、退出分类、退避重启、healthz 轮询、TERM → KILL 收尾都在这里;两种子进程的差异
+ * (怎么 spawn、就绪怎么判、端口上已有人时怎么处置、两条报错文案)做成钩子。
  *
  * 钩子(`spec`):
  *   tag            日志前缀,如 '[ma-service]'
@@ -93,7 +90,7 @@ export function createChildSupervisor(spec, {
       const lived = now() - startedAt;
       if (stopping) { state = 'stopped'; info(`子进程已退出(code=${code} signal=${signal})`); return; }
 
-      // 体检没过时服务自己会 exit 2。那是**配置问题**,重启一百次也一样,
+      // 体检没过时服务自己会 exit 2。那是配置问题,重启一百次也一样,
       // 而且日志会被刷屏 —— 直接放弃,把原因留在上面那几行子进程日志里。
       if (code === 2 && lived < infantMs) {
         state = 'failed';

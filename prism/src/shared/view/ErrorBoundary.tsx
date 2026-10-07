@@ -8,11 +8,8 @@ import {
 /**
  * App-wide error boundary.
  *
- * This lived under `main-content/view/` and had exactly one consumer — the chat
- * pane — which is why its fallback copy used to read "An error occurred while
- * loading the chat interface" no matter what it wrapped. Every lazily-loaded
- * panel is wrapped now, so the copy is generic and the caller passes a `label`
- * (already-translated) naming the thing that failed.
+ * It wraps every lazily loaded panel, so the fallback copy is generic and the
+ * caller passes an already-translated `label` naming the thing that failed.
  *
  * A thrown chunk-load error reaches here too: when the network drops between
  * app load and the first time a user opens, say, the Git tab, `React.lazy`

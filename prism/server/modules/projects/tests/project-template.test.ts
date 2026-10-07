@@ -8,19 +8,20 @@ import { afterEach, describe, test } from 'vitest';
 import { closeConnection, initializeDatabase, projectsDb } from '@/modules/database/index.js';
 import { createProject } from '@/modules/projects/services/project-management.service.js';
 import {
-  applyProjectTemplate,
   listProjectTemplates,
+  prepareProjectTemplate,
   resolveTemplateDir,
   TEMPLATE_MAX_FILES,
+  writePreparedTemplate,
 } from '@/modules/projects/services/project-template.service.js';
 
 /**
  * 项目模板。
  *
- * ## 这个文件里绝大多数用例是**反向**的
+ * ## 这个文件里绝大多数用例是反向的
  *
  * "按用户给的 id 把服务器上一棵树复制到另一个位置"是个危险的形状。
- * 正向功能(复制成功)只需要一条用例;剩下的都在验它**拒绝**得对不对:
+ * 正向功能(复制成功)只需要一条用例;剩下的都在验它拒绝得对不对:
  *
  * - id 逃不出模板根;
  * - 符号链接一律拒(跟随 = 把 `~/.prism/auth.db` 的内容复制进一个别人看得见的
@@ -28,8 +29,7 @@ import {
  * - 已存在的文件不覆盖(新建项目可能是"复活一条归档路径",里面有真东西);
  * - 文件数/字节封顶。
  *
- * 这个仓库的审计里,最贵的几个洞都是这个形状 —— 一个按用户输入去动文件系统的
- * 操作,少了一道门。所以这里宁可测得啰嗦。
+ * 按用户输入去动文件系统的操作,少一道门就是一个洞。所以这里宁可测得啰嗦。
  */
 
 const previousTemplatesDir = process.env.PRISM_PROJECT_TEMPLATES_DIR;
@@ -53,6 +53,11 @@ async function setup(): Promise<{ root: string; target: string; outside: string 
   await fs.writeFile(path.join(outside, 'secret.txt'), '这是不该被复制出去的东西', 'utf8');
   process.env.PRISM_PROJECT_TEMPLATES_DIR = root;
   return { root, target, outside };
+}
+
+/** 验 + 铺,与 createProject 里的两步同一顺序。 */
+async function applyTemplate(templateId: string, targetDir: string) {
+  return writePreparedTemplate(await prepareProjectTemplate(templateId), targetDir);
 }
 
 async function writeTemplate(root: string, id: string, files: Record<string, string>): Promise<string> {
@@ -100,23 +105,23 @@ describe('铺模板', () => {
       'data/.gitkeep': '',
     });
 
-    const result = await applyProjectTemplate('etl', target);
+    const result = await applyTemplate('etl', target);
     assert.equal(result.filesWritten, 3);
     assert.deepEqual(result.filesSkipped, []);
     assert.equal(await fs.readFile(path.join(target, 'CLAUDE.md'), 'utf8'), '# 团队约定\n数据在 /data 下。\n');
     assert.ok((await fs.stat(path.join(target, 'src/main.py'))).isFile(), '子目录也要建出来');
   });
 
-  test('⚠️ 已存在的文件跳过,不覆盖', async () => {
+  test('已存在的文件跳过,不覆盖', async () => {
     const { root, target } = await setup();
     await writeTemplate(root, 'etl', { 'CLAUDE.md': '模板的内容\n', 'new.txt': '新文件\n' });
     await fs.writeFile(path.join(target, 'CLAUDE.md'), '用户自己写的,不能被盖掉\n', 'utf8');
 
     /*
      * 新建项目也可能是"复活一条归档路径" —— 那个目录里有真东西。
-     * 拿模板盖上去就是数据丢失,而且是**静默**的数据丢失。
+     * 拿模板盖上去就是数据丢失,而且是静默的数据丢失。
      */
-    const result = await applyProjectTemplate('etl', target);
+    const result = await applyTemplate('etl', target);
     assert.equal(
       await fs.readFile(path.join(target, 'CLAUDE.md'), 'utf8'),
       '用户自己写的,不能被盖掉\n',
@@ -126,7 +131,7 @@ describe('铺模板', () => {
     assert.equal(result.filesWritten, 1);
   });
 
-  test('⚠️ 模板里有符号链接:整体拒绝,一个文件都不写', async () => {
+  test('模板里有符号链接:整体拒绝,一个文件都不写', async () => {
     const { root, target, outside } = await setup();
     const dir = await writeTemplate(root, 'evil', { 'README.md': '看起来很正常\n' });
     await fs.symlink(path.join(outside, 'secret.txt'), path.join(dir, 'secrets.txt'));
@@ -135,12 +140,12 @@ describe('铺模板', () => {
      * 跟随链接 = 把外面的内容复制进一个别人看得见的项目;
      * 照抄链接 = 在项目里种一条指向外面的路。两种都不行。
      *
-     * 而且必须**整体拒绝**,不能只跳过那一个:
+     * 而且必须整体拒绝,不能只跳过那一个:
      *   1. 静默跳过会让模板作者以为那个文件生效了;
      *   2. 部分成功会留下半棵树,而调用方拿到的是"成功"。
      */
     await assert.rejects(
-      () => applyProjectTemplate('evil', target),
+      () => applyTemplate('evil', target),
       /符号链接/,
       '模板里的符号链接必须让整次操作失败',
     );
@@ -151,12 +156,12 @@ describe('铺模板', () => {
     );
   });
 
-  test('⚠️ 指向目录的符号链接同样拒', async () => {
+  test('指向目录的符号链接同样拒', async () => {
     const { root, target, outside } = await setup();
     const dir = await writeTemplate(root, 'evil2', { 'a.txt': 'x\n' });
     await fs.symlink(outside, path.join(dir, 'linked-dir'));
 
-    await assert.rejects(() => applyProjectTemplate('evil2', target), /符号链接/);
+    await assert.rejects(() => applyTemplate('evil2', target), /符号链接/);
     assert.equal((await fs.readdir(target)).length, 0);
   });
 
@@ -166,20 +171,20 @@ describe('铺模板', () => {
     for (let i = 0; i <= TEMPLATE_MAX_FILES + 1; i += 1) files[`f${i}.txt`] = 'x';
     await writeTemplate(root, 'huge', files);
 
-    await assert.rejects(() => applyProjectTemplate('huge', target), /文件数超过/);
+    await assert.rejects(() => applyTemplate('huge', target), /文件数超过/);
     assert.equal((await fs.readdir(target)).length, 0);
   });
 
   test('模板不存在:404 而不是把空目录当成空模板', async () => {
     const { target } = await setup();
-    await assert.rejects(() => applyProjectTemplate('nope', target), /模板不存在/);
+    await assert.rejects(() => applyTemplate('nope', target), /模板不存在/);
   });
 
   test('模板根自己是符号链接目录:不认', async () => {
     const { root, target, outside } = await setup();
     // 模板根下放一条指向外面的目录软链,名字看着像个正常模板
     await fs.symlink(outside, path.join(root, 'looks-normal'));
-    await assert.rejects(() => applyProjectTemplate('looks-normal', target), /模板不存在/);
+    await assert.rejects(() => applyTemplate('looks-normal', target), /模板不存在/);
   });
 });
 
@@ -196,12 +201,11 @@ describe('列模板', () => {
     assert.equal(templates.length, 2);
 
     /*
-     * 按 **id**(目录名)排,不是按显示名。
+     * 按 id(目录名)排,不是按显示名。
      *
-     * 我第一版按 name 排、并断言 'ETL 脚手架' 在 'b-plain' 前面 —— 结果红了:
-     * 这台机器的 ICU 里 `'E'.localeCompare('b') === 1`,E 排在 b 后面。
-     * 换台机器可能又反过来。所以改成按目录名排 + 写死 locale:
-     * 运维在服务器上看到的顺序和界面上的一致,而且两台机器上一样。
+     * 按显示名排的话,顺序取决于机器的 ICU:有的环境里 `'E'.localeCompare('b') === 1`,
+     * 「ETL 脚手架」会排在 b-plain 后面,换台机器可能又反过来。按目录名排 + 写死 locale:
+     * 运维在服务器上看到的顺序和界面上的一致,而且每台机器上一样。
      */
     assert.deepEqual(templates.map((entry) => entry.id), ['a-meta', 'b-plain']);
     assert.equal(templates[0]!.name, 'ETL 脚手架');
@@ -237,26 +241,15 @@ describe('列模板', () => {
   });
 });
 
-describe('⚠️ 模板失败不能留下幽灵项目', () => {
+describe('模板失败不能留下幽灵项目', () => {
   /*
-   * 这一组钉的是探针里真抓到的一个 bug —— **我自己在这一轮引入的**。
+   * 模板校验必须发生在建任何东西之前(prepare / write 分开)。否则 `templateId: "../evil"`
+   * 会走成「建目录 → 项目行落库 → 铺模板时才发现名字不合法 → 抛」:接口回 success:false,
+   * 项目却已经在库里,下次刷新自己出现在侧栏。
    *
-   * 第一版把铺模板放在 `createProject` 的**末尾**,于是
-   * `templateId: "../evil"` 走的是:
-   *   建目录 → 项目行落库 → 铺模板时才发现名字不合法 → 抛 → 接口回 success:false
-   *
-   * 用户被告知"创建失败",而项目**已经在库里了**,下次刷新自己出现在侧栏。
-   * 探针上连打五个非法请求 = 五个幽灵项目。
-   *
-   * 修法是把校验整体提到函数最前面(prepare / write 拆开),而不是"失败了再回滚"
-   * —— 回滚本身也会失败,而且"复活归档路径"那种情形根本不该回滚。
-   *
-   * ## 为什么注入 validatePath
-   *
-   * 真的 `validateWorkspacePath` 把 `/tmp` 列为禁地,而 `WORKSPACES_ROOT` 是
-   * **模块加载时**读的常量 —— 测试里改 `process.env` 已经晚了。
-   * 这里要测的是"模板校验发生在建东西之前"这个**顺序**,和路径策略无关
-   * (那条有它自己的测试)。所以把路径校验注入成放行,让被测的东西露出来。
+   * 注入 validatePath 放行:真的 `validateWorkspacePath` 把 `/tmp` 列为禁地,而 `WORKSPACES_ROOT`
+   * 是模块加载时读的常量,测试里改 `process.env` 已经晚了。这里测的是校验的顺序,和路径策略
+   * 无关(那条有它自己的测试)。
    */
   const previousDb = process.env.DATABASE_PATH;
 

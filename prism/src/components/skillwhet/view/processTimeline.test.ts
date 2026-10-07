@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ProgressEvent } from '../lib/types';
 import { currentActivity, groupEvents } from '../lib/process-events';
 
-/** hd:优化过程的分组 —— step 与它里面的任务 / 候选收成一行,汇总事件照旧一条一行。 */
+/** 优化过程的分组:step 与它里面的任务 / 候选收成一行,汇总事件一条一行。 */
 let seq = 0;
 const ev = (kind: string, extra: Record<string, unknown> = {}): ProgressEvent => ({ seq: ++seq, ts: '2026-09-24T00:00:00Z', kind, ...extra } as ProgressEvent);
 

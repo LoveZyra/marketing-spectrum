@@ -5,17 +5,14 @@ import type { NormalizedMessage } from '../../../stores/useSessionStore';
 import { normalizedToChatMessages } from './useChatMessages';
 
 /**
- * gd:**后台子代理的进展与汇报,要归到它那张卡上,不在主对话流里另起一行。**
+ * 后台子代理的进展与汇报要归到它那张卡上,不在主对话流里另起一行。
  *
- * 线上现象:两张子代理卡都写着「2 步 ✓」,而它们跑出来的东西(十几条命令、
- * 十几个文件)全在外面;完成汇报又变成独立的一行「✅ 后台任务完成 …」。
- *
- * 病根在 SDK 的行为里(`background_tasks` 那条控制请求的原话):
- * **任务一转后台,那次工具调用立刻返回一个 "running in the background" 的
- * tool_result,回合继续**;任务自己在后台跑,settle 时发一条 `task_notification`。
- * 也就是说 —— 子代理的内部步骤在后台化之后**不再走实时流**,卡片当场"收工"
- * 停在转后台之前的那几步,之后的一切只存在于 `task_progress` /
- * `task_notification` 里,而它们**都带 `tool_use_id`**,那正是卡片的身份。
+ * SDK 的行为(`background_tasks` 那条控制请求的说明):任务一转后台,那次工具调用立刻
+ * 返回一个 "running in the background" 的 tool_result,回合继续;任务自己在后台跑,
+ * settle 时发一条 `task_notification`。也就是说,子代理后台化之后的内部步骤不再走实时流,
+ * 卡片停在转后台之前的那几步,之后的一切只存在于 `task_progress` / `task_notification` 里,
+ * 而它们都带 `tool_use_id`,那正是卡片的身份。不归过来的话,卡片停在「2 步 ✓」,
+ * 真正跑出来的命令和文件散在外面,完成汇报也变成独立的一行。
  *
  * 这一份跑的是真实转换链路(`normalizedToChatMessages`),不是手搓卡片对象。
  */
@@ -78,7 +75,7 @@ describe('后台子代理:进展与汇报归卡片', () => {
     expect(card?.subagentState?.background?.lastToolName).toBe('Bash');
   });
 
-  it('**"running in the background" 的 tool_result 不算完成**(老判据就是被它骗的)', () => {
+  it('"running in the background" 的 tool_result 不算完成', () => {
     const rows = normalizedToChatMessages([
       container('toolu_B'),
       backgroundedResult('toolu_B'),
@@ -102,7 +99,7 @@ describe('后台子代理:进展与汇报归卡片', () => {
     expect(card?.subagentState?.background?.summary).toContain('已核对 12 个文件');
   });
 
-  it('**有主的汇报不在主对话流里另起一行**', () => {
+  it('有主的汇报不在主对话流里另起一行', () => {
     const rows = normalizedToChatMessages([
       container('toolu_D'),
       notification('toolu_D', 'completed', '✅ 后台任务完成'),
@@ -110,7 +107,7 @@ describe('后台子代理:进展与汇报归卡片', () => {
     expect(rows.filter((row) => row.isTaskNotification)).toHaveLength(0);
   });
 
-  it('进展行**永远**不出顶层(每几秒一条)', () => {
+  it('进展行永远不出顶层(每几秒一条)', () => {
     const rows = normalizedToChatMessages([
       container('toolu_E'),
       progress('toolu_E', 3),
@@ -121,11 +118,10 @@ describe('后台子代理:进展与汇报归卡片', () => {
   });
 
   /**
-   * ge:标准变了 —— 「后台任务完成」**一行都不许出现在主对话流里**。
+   * 带 tool_use_id 的「后台任务完成」不出现在主对话流里,即使这一屏没有那张卡。
    *
-   * gd 还留了两种独立成行的情况(卡片被裁出窗口、没有 tool_use_id)。实机看下来
-   * 那一串「✅ 后台任务完成 X」把一条本该连贯的时间轴切得七零八落,而它说的事
-   * **那次工具调用自己那一行就能说**(见下面"归到工具行"那几条)。
+   * 一串「后台任务完成 X」会把一条本该连贯的时间轴切碎,而它说的事那次工具调用
+   * 自己那一行就能说(见下面「终态归到那一行」那条)。
    */
   it('这一屏没有那张卡时也不单独成行(内容仍在显示日志里)', () => {
     const rows = normalizedToChatMessages([
@@ -135,11 +131,10 @@ describe('后台子代理:进展与汇报归卡片', () => {
   });
 
   /**
-   * gh:**没有 tool_use_id 的照旧渲染成回执行。**
+   * 没有 tool_use_id 的 task_notification 照旧渲染成回执行。
    *
-   * ge 把所有 task_notification 一刀切掉,连定时任务的三条回执
-   * (「⏰ 开始执行」「✅ 执行完成」「⚠️ 执行失败:<原因>」)也没了 —— 它们从来
-   * 没有 tool_use_id,不是旁白,是那条会话唯一的成败说明。
+   * 定时任务的三条回执(「开始执行」「执行完成」「执行失败:<原因>」)都没有
+   * tool_use_id,它们不是旁白,是那条会话唯一的成败说明。
    */
   it('没有 tool_use_id 的(定时任务回执)照旧成行;有 tool_use_id 的归行不出顶层', () => {
     const receipt = normalizedToChatMessages([
@@ -157,7 +152,7 @@ describe('后台子代理:进展与汇报归卡片', () => {
     expect(owned.filter((row) => row.isTaskNotification)).toHaveLength(0);
   });
 
-  it('**普通工具行(不是子代理)转后台之后,终态归到那一行**', () => {
+  it('普通工具行(不是子代理)转后台之后,终态归到那一行', () => {
     const bash = msg({ kind: 'tool_use', toolName: 'Bash', toolId: 'toolu_BASH', toolInput: { command: 'pytest' } });
     const rows = normalizedToChatMessages([
       bash,
@@ -190,9 +185,9 @@ describe('后台子代理:进展与汇报归卡片', () => {
   });
 
   /**
-   * **这一条是最容易漏的那种。**
+   * 这一条是最容易漏的那种。
    *
-   * 转换有一层按 `msg` 对象缓存的结果,而后台进展是**另一条消息**带来的 ——
+   * 转换有一层按 `msg` 对象缓存的结果,而后台进展是另一条消息带来的 ——
    * 容器那一行自己一个字都没变。不把后台状态放进缓存签名的话,进度涨了、
    * 任务完成了,这张卡还是缓存里那份旧的:"修复代码在,数据到不了它"。
    */

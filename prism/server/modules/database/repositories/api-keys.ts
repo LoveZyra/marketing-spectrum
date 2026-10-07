@@ -22,7 +22,7 @@ type ApiKeyRow = {
   last_used: string | null;
   is_active: number;
   /**
-   * hl(动态 P3):这把 key 是否因为「退出所有设备 / 改密 / 重置密码」而作废
+   * 这把 key 是否因为「退出所有设备 / 改密 / 重置密码」而作废
    * (签发时的 token_version 已落后于 users.token_version)。作废的 key 在列表里
    * `is_active` 也报 0;重新「启用」会把它重新签到当前版本(见 toggleApiKey)。
    */
@@ -40,7 +40,7 @@ type CreateApiKeyResult = {
 type ValidatedApiKeyUser = {
   id: number;
   username: string;
-  /** hj:给调用方做「账号现在能不能用」判定(审批状态)。 */
+  /** 连同 approval_status 一起,给调用方判定「账号现在能不能用」。 */
   is_active: number;
   approval_status: string | null;
   api_key_id: number;
@@ -75,8 +75,8 @@ export const apiKeysDb = {
   /**
    * Creates a new API key for the given user and returns it for one-time display.
    *
-   * hl(动态 P3):签发时记下 users.token_version —— 退出所有设备 / 改密 / 重置密码递增它,
-   * 这把 key 随之作废(此前只作废 JWT 与票据,key 永远有效)。
+   * 签发时记下 users.token_version —— 退出所有设备 / 改密 / 重置密码会递增它,
+   * 这把 key 随之作废(与 JWT、票据同一套失效机制)。
    */
   createApiKey(userId: number, keyName: string): CreateApiKeyResult {
     const db = getConnection();
@@ -93,7 +93,7 @@ export const apiKeysDb = {
 
   /**
    * Lists a user's API keys, most recent first.
-   * Only the display prefix is returned — the full key no longer exists here.
+   * Only the display prefix is returned; the full key is never stored.
    * 被版本作废的 key `is_active` 报 0 并带 `revoked = 1`,列表上看得出"它已经不能用了"。
    */
   getApiKeys(userId: number): ApiKeyRow[] {
@@ -114,7 +114,7 @@ export const apiKeysDb = {
    * Validates an API key and resolves the owning user.
    * If the key is valid, its `last_used` timestamp is updated as a side effect.
    * Returns undefined when the key is invalid or the user is inactive.
-   * hl(动态 P3):签发时的 token_version 落后于用户当前版本的 key 一律无效。
+   * 签发时的 token_version 落后于用户当前版本的 key 一律无效(NULL 视为有效)。
    */
   validateApiKey(apiKey: string): ValidatedApiKeyUser | undefined {
     if (typeof apiKey !== 'string' || apiKey.length === 0) return undefined;
@@ -151,7 +151,7 @@ export const apiKeysDb = {
   /**
    * Enables or disables an API key without deleting it.
    *
-   * hl(动态 P3):「启用」同时把 token_version 重新签到用户当前版本 —— 这是一次登录态下
+   * 「启用」同时把 token_version 重新签到用户当前版本 —— 这是一次登录态下
    * 的明确动作,等于说"这把 key 我要继续用"。停用不动版本号。
    */
   toggleApiKey(

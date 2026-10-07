@@ -2,13 +2,6 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight, Loader2, Square } from 'lucide-react';
 
-/**
- * ho(hq-1):**后台任务条** —— 输入框上方,列出这段对话此刻在后台跑的任务(后台 Bash、后台子代理、workflow),
- * 每个可以单独停。数据来自服务端的 `background_tasks`(CLI 的 `background_tasks_changed`,全量替换)。
- *
- * 为什么要有:Prism 声明了"能逐个停止后台任务"(`perTaskStopAffordance`),于是按「停止」只停当前这一轮、
- * 不再连带杀掉后台子代理;后台的东西就得有个地方看得见、停得掉。
- */
 export type BackgroundTaskItem = { taskId: string; taskType: string; description: string };
 
 type Props = {
@@ -23,6 +16,13 @@ const typeLabelKey = (taskType: string): string => {
   return 'backgroundTasks.types.task';
 };
 
+/**
+ * 后台任务条:输入框上方,列出这段对话此刻在后台跑的任务(后台 Bash、后台子代理、workflow),
+ * 每个可以单独停。数据来自服务端的 `background_tasks`(CLI 的 `background_tasks_changed`,全量替换)。
+ *
+ * 服务端声明了能逐个停止后台任务(`perTaskStopAffordance`),所以「停止」只停当前这一轮、
+ * 不会连带杀掉后台子代理;后台的东西因此要有个地方看得见、停得掉。
+ */
 export default function BackgroundTasksBar({ tasks, onStop }: Props) {
   const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);

@@ -56,11 +56,10 @@ describe('renderHtmlExport', () => {
 });
 
 /**
- * F12:JSON 格式 + 「含工具过程」开关。
+ * JSON 格式 + 「含工具过程」开关。
  *
- * 两条都是"默认不变、按需打开":默认导出仍然只有正文(多数导出是给人读的),
- * 打开开关才带上过程。这里第一条钉的就是默认没变 —— 否则这不是加了个选项,
- * 而是悄悄改了所有人已有的导出。
+ * 两者都按需打开:默认导出只有正文(多数导出是给人读的),打开开关才带上
+ * 工具过程。第一条钉的就是默认不带工具。
  */
 const TOOL_MESSAGES = [
   { kind: 'text', role: 'user' as const, content: '删掉临时文件', timestamp: '2026-08-27T10:00:00Z' },
@@ -76,14 +75,14 @@ const TOOL_INPUT = {
   messages: TOOL_MESSAGES,
 };
 
-describe('F12 · includeTools', () => {
+describe('includeTools', () => {
   test('默认不带工具 —— 已有导出的行为一个字都没变', () => {
     assert.equal(selectExportMessages(TOOL_MESSAGES).length, 2);
     const md = renderMarkdownExport(TOOL_INPUT);
     assert.ok(!md.includes('rm -rf'), '默认导出里不该出现工具输入');
   });
 
-  test('打开后工具按**原始顺序**混在正文里 —— 工具的意义全在它发生在哪两句之间', () => {
+  test('打开后工具按原始顺序混在正文里 —— 工具的意义全在它发生在哪两句之间', () => {
     const selected = selectExportMessages(TOOL_MESSAGES, { includeTools: true });
     assert.deepEqual(selected.map((m) => m.kind), ['text', 'tool_use', 'tool_result', 'text']);
 
@@ -143,14 +142,11 @@ describe('F12 · includeTools', () => {
 });
 
 /**
- * fj:导出里工具调用与结果必须能配对。
- *
- * 字段名原来写成 `toolUseId`,而归一化消息上的真名是 `toolId`;路由又用
- * `as ExportableMessage[]` 强转,类型系统因此完全静默 —— 运行时恒为 undefined,
- * JSON 导出里每个 tool_call / tool_result 的 `toolUseId` 都是 null,
- * 而 JSON 导出的自述目标就是"喂给别的工具做二次分析"。
+ * 导出里工具调用与结果必须能配对:归一化消息上的字段叫 `toolId`,对外输出成 `toolUseId`。
+ * 路由用 `as ExportableMessage[]` 强转,读错字段名时类型系统完全静默,只会让每个
+ * tool_call / tool_result 的 `toolUseId` 都变成 null,而 JSON 导出就是给别的工具做二次分析的。
  */
-describe('fj:导出的工具关联 id', () => {
+describe('导出的工具关联 id', () => {
   const messages = [
     { kind: 'tool_use', toolName: 'Read', toolId: 'tu_1', toolInput: { path: '/a' }, timestamp: 'T1' },
     { kind: 'tool_result', toolId: 'tu_1', content: 'ok', timestamp: 'T2' },
@@ -175,16 +171,13 @@ describe('fj:导出的工具关联 id', () => {
 });
 
 /**
- * F38:导出要带**附件清单**和**原生会话 id**。
+ * 导出要带附件清单和原生会话 id。
  *
- * 此前导出完全不提附件 —— 一条「看这张图,里面的报错是什么」导出来只剩那句话,
- * 读的人无从知道当时还给了模型一张图;而 JSON 导出的自述目标是"喂给别的工具做
- * 二次分析",少了附件那份分析建立在残缺的输入上。
- *
- * 原生 id 同理:transcript、检查点、工具日志全按它组织,导出里只有 app id,
- * 拿着导出去对 jsonl 第一步就断了。
+ * 不带附件清单,一条「看这张图,里面的报错是什么」导出来只剩那句话,读的人无从知道当时
+ * 还给了模型一张图;JSON 导出是给别的工具做二次分析的,少了附件,分析就建立在残缺的输入上。
+ * 原生 id 同理:transcript、检查点、工具日志全按它组织,导出里只有 app id 就对不上 jsonl。
  */
-describe('F38 · 附件清单与原生 id', () => {
+describe('附件清单与原生 id', () => {
   const withAttachment = {
     title: '带图的会话',
     sessionId: 'app-1',
@@ -204,7 +197,7 @@ describe('F38 · 附件清单与原生 id', () => {
     ],
   };
 
-  it('Markdown 列出附件,但**不内嵌内容**', () => {
+  it('Markdown 列出附件,但不内嵌内容', () => {
     const md = renderMarkdownExport(withAttachment);
     expect(md).toContain('附件(2)');
     expect(md).toContain('shot.png');

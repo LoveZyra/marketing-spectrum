@@ -4,7 +4,7 @@ import { Check, ChevronDown, FolderPlus, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 /**
- * 项目 / 会话 / 模型三个下拉的**唯一实现**(从 TasksPage 抽出来)。
+ * 项目 / 会话 / 模型三个下拉的唯一实现(从 TasksPage 抽出来)。
  *
  * 抽出来是为了别处要用同一套交互时用同一段代码 —— 抄出来的第二份迟早会漂。
  * 所以这里连同它的行为细节一起搬:搜索、名称/路径两行、选中勾、面板
@@ -17,14 +17,14 @@ export type FancyOption = {
   sublabel?: string;
   /** 主行用等宽字体(模型名、路径这类"机器串"),对齐 /models 卡片的排版。 */
   mono?: boolean;
-  /** hn:行首图标(模型的厂商图标);触发器上也画。 */
+  /** 行首图标(模型的厂商图标);触发器上也画。 */
   icon?: ReactNode;
   /**
-   * hq:置灰、点不了(模型下拉里这个人此刻用不了的模型:网关没 key / 停用)。仍然列出来,
+   * 置灰、点不了(模型下拉里这个人此刻用不了的模型:网关没 key / 停用)。仍然列出来,
    * 副行写原因(悬停看全文);当前值恰好是它时触发器照常显示。
    */
   disabled?: boolean;
-  /** hq:主行后面的小标(模型下拉的「私有」)。 */
+  /** 主行后面的小标(模型下拉的「私有」)。 */
   badge?: string;
 };
 
@@ -43,7 +43,7 @@ export function FancySelect({
   /** 面板底部动作区(项目下拉的「新建项目 / 其他目录…」)。 */
   footer?: (close: () => void) => ReactNode;
   /**
-   * hn:搜索词不等于任何选项时,在列表顶上给一行「用这个值」(root 手填任意模型名)。
+   * 搜索词不等于任何选项时,在列表顶上给一行「用这个值」(root 手填任意模型名)。
    * 返回这一行的文案;返回 null = 这个词不能用(比如字符集不对),不给这一行。
    */
   customOption?: (query: string) => string | null;
@@ -124,7 +124,7 @@ export function FancySelect({
         <ChevronDown className="h-3.5 w-3.5 flex-none text-muted-foreground" />
       </button>
       {/*
-        面板 **portal 到 body**:留在原地会被祖先的 overflow 裁掉 —— 指令框那圈
+        面板 portal 到 body:留在原地会被祖先的 overflow 裁掉 —— 指令框那圈
         `overflow-hidden`、以及弹窗自身的 `overflow-y-auto`,两处都把弹层切成
         半截(用户反馈)。挂到 body + position:fixed 就谁也裁不到,代价是位置
         得自己算(measure)。
@@ -205,12 +205,12 @@ export function FancySelect({
 }
 
 /**
- * 项目下拉底部的「选择其它目录…」:开**创建新项目那套「选择文件夹」浏览器**
+ * 项目下拉底部的「选择其它目录…」:开创建新项目那套「选择文件夹」浏览器
  * (FolderBrowserModal,能逐级浏览、能新建文件夹),而不是让用户手打绝对路径
  * (用户点名)。
  *
  * 点它先把下拉面板收起来:面板是 z-101 的 portal,folder 浏览器是 z-70,
- * 不收起来面板会压在浏览器弹窗上面。浏览器本体由**表单**持有(见 TaskFormModal),
+ * 不收起来面板会压在浏览器弹窗上面。浏览器本体由表单持有(见 TaskFormModal),
  * 因为面板一关这个 footer 就卸载了,弹窗挂在这儿会跟着消失。
  */
 export function BrowseFolderFooter({ onBrowse, close }: { onBrowse: () => void; close: () => void }) {

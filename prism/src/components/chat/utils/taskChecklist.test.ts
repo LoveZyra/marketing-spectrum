@@ -183,7 +183,7 @@ describe('todoProgress', () => {
   });
 });
 
-describe('hq:回合信息(进度时间轴分辨当前轮)', () => {
+describe('回合信息(进度时间轴分辨当前轮)', () => {
   it('每条任务记下最后一次被碰到时是第几个用户回合;插话不算新回合', () => {
     const extract = extractSessionChecklist;
     const user = (text: string, extra: Record<string, unknown> = {}) => ({ type: 'user', content: text, timestamp: 0, ...extra });

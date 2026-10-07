@@ -1,6 +1,6 @@
 /**
  * ip-guard: pure, unit-testable IP classification used by SSRF guards
- * (server/routes/documents.js fetch-url). No I/O — string in, boolean out.
+ * (documents fetch-url, notification webhooks). No I/O — string in, boolean out.
  *
  * isPrivateIp(address) returns true when the address must NOT be dialed by an
  * outbound fetch on the user's behalf: loopback, RFC 1918, link-local (incl.

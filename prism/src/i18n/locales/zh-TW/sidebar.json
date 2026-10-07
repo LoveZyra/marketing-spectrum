@@ -19,7 +19,6 @@
     "noSessions": "暫無工作階段",
     "loadingSessions": "載入工作階段中...",
     "unnamed": "未命名",
-    "loading": "載入中...",
     "runningMeta": "執行中 · {{age}}",
     "messageCount": "{{count}} 條"
   },
@@ -66,7 +65,9 @@
     "restoreProjectFailed": "還原專案失敗，請重試。",
     "restoreProjectError": "還原專案時出錯，請重試。",
     "restoreSessionFailed": "還原工作階段失敗，請重試。",
-    "restoreSessionError": "還原工作階段時出錯，請重試。"
+    "restoreSessionError": "還原工作階段時出錯，請重試。",
+    "bulkRestoreShortfall": "選取 {{requested}} 筆,還原了 {{done}} 筆(沒有權限或已不在封存中:{{skipped}} 筆;處理出錯:{{failed}} 筆)。",
+    "bulkDeleteShortfall": "選取 {{requested}} 筆,刪除了 {{done}} 筆(沒有權限或已不在封存中:{{skipped}} 筆;處理出錯:{{failed}} 筆)。"
   },
   "search": {
     "modeProjects": "專案",
@@ -75,6 +76,13 @@
     "searching": "搜尋中...",
     "noResults": "找不到結果",
     "tryDifferentQuery": "嘗試不同的搜尋詞",
+    "failedTitle": "搜尋沒有完成",
+    "ticketFailed": "無法連上搜尋服務,請稍後重試。",
+    "interrupted": "搜尋中途中斷,請重試。",
+    "interruptedAt": "搜尋中途中斷(已掃描 {{scanned}}/{{total}} 個專案),請重試。",
+    "incomplete": "結果不完整:搜尋中途中斷。",
+    "incompleteAt": "結果不完整:搜尋在掃描到 {{scanned}}/{{total}} 個專案時中斷。",
+    "retry": "重試",
     "modeRunning": "執行中",
     "modeArchived": "封存",
     "switchMode": "切換搜尋範圍",

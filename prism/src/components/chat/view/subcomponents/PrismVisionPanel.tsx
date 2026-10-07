@@ -7,18 +7,10 @@ import PrismWordmark from '../../../PrismWordmark';
  * 首页空态左栏的品牌区 —— 品牌标识 + 产品主张,让落地页一眼读得出这是一个
  * 算法分析工作台,同时在宽屏上把左半边填住。
  *
- * ## 它被撤过一轮,又被要回来了
- *
- * ef 把首页改成了「问候语 + 内嵌输入框 + 半高起手卡 + 最近会话」,理由是
- * "每开一个新会话都要再看一遍登录页讲过的口号"。ex 按用户要求整体还原回
- * ef 之前的两栏版式 —— 那套理由没有错,但**这是产品口味的选择,不是对错题**:
- * 谁天天开新会话谁嫌口号啰嗦,而把 Prism 打开给别人看的时候,这块正是要讲的东西。
- *
- * 所以这个文件是原样取回的(ee 版逐字),不要顺手"优化"它 —— 下次若再要换回
- * ef 那版,对着 CHANGELOG 的 ef / ex 两条互查即可。
+ * 保留这块是产品上的取舍(把 Prism 打开给别人看时,这里正是要讲的东西),
+ * 不要顺手"优化"掉它。
  */
 export default function PrismVisionPanel() {
-  // hl(P3 中英混排):版式与中文原文一字不动,只是文案走 t() —— en 界面下原来整块中文。
   const { t } = useTranslation('chat');
   const pillars = [
     { key: 'entry', title: t('visionPanel.pillars.entry.title', { defaultValue: '一个入口' }), desc: t('visionPanel.pillars.entry.desc', { defaultValue: '算法研发 · 数据分析 · 多 Agent 协作' }) },

@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 /**
- * dv:归档清理的翻页不变量。
+ * 归档清理的翻页不变量:这一页留下几条,游标就往前跨几条。
  *
- * 原实现恒取 offset 0 且 `targets.length === 0` 即 break —— 带
- * `olderThanDays` 时,只要最新那一页 archived 全是近期的,后面真正够旧的
- * 一条都清不到(清理静默地什么也没做);少量删不动的条目也会把游标钉死。
- * 这里把游标推进规则单独钉住:**留下几条就往前跨几条**。
+ * 若恒取 offset 0、遇到没有目标的页就收工,带 `olderThanDays` 时只要最新那一页全是近期的,
+ * 后面真正够旧的一条都清不到(清理静默地什么也没做);少量删不动的条目也会把游标钉死。
  */
 
 type Row = { id: string; old: boolean; deletable: boolean };

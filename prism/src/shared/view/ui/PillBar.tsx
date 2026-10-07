@@ -22,7 +22,7 @@ type PillProps = {
   onClick: () => void;
   children: ReactNode;
   className?: string;
-  /** hl(P3 可访问性):只画图标时(手机顶栏)必须给一个可访问名称。 */
+  /** 只画图标时(手机顶栏)必须给一个可访问名称。 */
   ariaLabel?: string;
 };
 

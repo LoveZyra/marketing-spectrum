@@ -47,7 +47,7 @@ describe('锚点(当前步)', () => {
     expect(timeline.rows.filter((row) => row.isAnchor).map((row) => row.index)).toEqual([2]);
   });
 
-  it('复审 P1:被停止的老回合留下的 in_progress / pending 不当锚点;之后完成的照样折叠', () => {
+  it('被停止的老回合留下的 in_progress / pending 不当锚点;之后完成的照样折叠', () => {
     // 第 1 轮:1–2 完成,3 被停在 in_progress,4 pending;第 2 轮:8 条全完成;第 3 轮:13–14 完成,15 进行中,16 pending
     const todos = list('ddap|dddddddd|ddap');
     const timeline = buildProgressTimeline(todos);
@@ -69,7 +69,7 @@ describe('锚点(当前步)', () => {
     expect(findProgressAnchor(list('dp|dd'))).toEqual({ index: -1, started: false });
   });
 
-  it('复审 P1(二轮):老回合停下的 in_progress,在这一轮"两步之间"和"做完之后"都不当锚点,完成的照样折', () => {
+  it('老回合停下的 in_progress,在这一轮"两步之间"和"做完之后"都不当锚点,完成的照样折', () => {
     // 两步之间:第 3 轮 13–15 完成、16 还没标开工
     const between = buildProgressTimeline(list('ddap|dddddddd|dddp'));
     expect(between.anchorIndex).toBe(15);
@@ -100,7 +100,7 @@ describe('锚点(当前步)', () => {
     expect(findProgressAnchor(list('|ddddapdpd'))).toEqual({ index: 4, started: true });
   });
 
-  it('复审三轮 P1:刷新后窗口里没有这一轮的用户消息 —— 回合号来自服务端基线,照样认得出老回合', async () => {
+  it('刷新后窗口里没有这一轮的用户消息 —— 回合号来自服务端基线,照样认得出老回合', async () => {
     const { extractSessionChecklist } = await import('./taskChecklist');
     const { workFramesToMessages } = await import('./workFrames');
     const create = (id: number, subject: string, turn: number) => ({
@@ -120,7 +120,7 @@ describe('锚点(当前步)', () => {
     expect(findProgressAnchor(todos)).toEqual({ index: 3, started: true });
   });
 
-  it('复审四轮 P3-1:基线还停在上一轮(这一轮还没有任务帧)时,回合号标记把窗口里的新任务推到这一轮', async () => {
+  it('基线还停在上一轮(这一轮还没有任务帧)时,回合号标记把窗口里的新任务推到这一轮', async () => {
     const { extractSessionChecklist } = await import('./taskChecklist');
     const { turnMarkerMessage, workFramesToMessages } = await import('./workFrames');
     // 基线:第 1 轮建了 1、2,2 停在 in_progress;服务端说一共 2 个用户回合(第 2 轮刚开始,还没有任务帧)
@@ -145,7 +145,7 @@ describe('锚点(当前步)', () => {
     expect(turnMarkerMessage('x')).toEqual([]);
   });
 
-  it('复审五轮 P1:最近这条用户消息之后还没动过清单 → 没有当前步(上一轮停下的老任务不充数);一动清单锚点回来', async () => {
+  it('最近这条用户消息之后还没动过清单 → 没有当前步(上一轮停下的老任务不充数);一动清单锚点回来', async () => {
     const { extractSessionChecklistWithTurn } = await import('./taskChecklist');
     const { turnMarkerMessage, workFramesToMessages } = await import('./workFrames');
     const round1 = workFramesToMessages([
@@ -181,11 +181,11 @@ describe('锚点(当前步)', () => {
     // 插话(并进正在跑的那一轮)不算新回合
     const interjected = anchorOf([...round1, ...turnMarkerMessage(1), { ...userMsg, interjection: true }]);
     expect(interjected.anchorIndex).toBe(1);
-    // 不传 currentTurn(老调用方)= 原来的行为
+    // 不传 currentTurn(默认 0):只按清单本身找锚点
     expect(findProgressAnchor(list('da'))).toEqual({ index: 1, started: true });
   });
 
-  it('复审五轮(二):回合在跑时发出去的本地回声(合流 ACK 未到 / 被排到后面)不算新回合 —— 当前步不消失', async () => {
+  it('回合在跑时发出去的本地回声(合流 ACK 未到 / 被排到后面)不算新回合 —— 当前步不消失', async () => {
     const { extractSessionChecklistWithTurn } = await import('./taskChecklist');
     const user = { type: 'user', content: '开始', timestamp: 0 };
     const tool = (name: string, input: Record<string, unknown>, result: string) => ({
@@ -208,7 +208,7 @@ describe('锚点(当前步)', () => {
     expect(anchorOf([...running, { type: 'user', content: '顺便看下乙', timestamp: 0 }])).toBe(-1);
   });
 
-  it('复审五轮:停靠行 —— 有锚点 = 锚点;没有锚点 = 第一条没完成的(折叠范围不变);全部完成 = -1', () => {
+  it('停靠行 —— 有锚点 = 锚点;没有锚点 = 第一条没完成的(折叠范围不变);全部完成 = -1', () => {
     const between = buildProgressTimeline(list('ddap|dddddddd|dddp'));
     expect(between.focusIndex).toBe(15);
     expect(between.rows.filter((row) => row.isFocus).map((row) => row.index)).toEqual([15]);
@@ -222,7 +222,7 @@ describe('锚点(当前步)', () => {
     expect(buildProgressTimeline(list('ddd')).focusIndex).toBe(-1);
   });
 
-  it('复审五轮(三):一轮结束时摘掉排队回声的 sentDuringTurn(收尾刷新可能抢在服务端落库之前)—— 源码钉住', () => {
+  it('一轮结束时摘掉排队回声的 sentDuringTurn(收尾刷新可能抢在服务端落库之前)—— 源码钉住', () => {
     const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
     const handlers = read('../hooks/useChatRealtimeHandlers.ts');
     const clearAt = handlers.indexOf('sessionStore.clearSentDuringTurn(sid)');
@@ -233,7 +233,7 @@ describe('锚点(当前步)', () => {
     expect(store).toMatch(/if \(!row\.sentDuringTurn \|\| row\.interjection\) return row;/);
   });
 
-  it('复审五轮:TodoWrite 清单没有回合号 → currentTurn 0,照旧按状态认锚点', async () => {
+  it('TodoWrite 清单没有回合号 → currentTurn 0,照旧按状态认锚点', async () => {
     const { extractSessionChecklistWithTurn } = await import('./taskChecklist');
     const todoWrite = {
       type: 'assistant', isToolUse: true, toolName: 'TodoWrite', timestamp: 0,

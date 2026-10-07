@@ -13,7 +13,7 @@ import { canArchiveOrDeleteProject } from '../../../../utils/sessionDeletePermis
 /**
  * 侧栏自己的弹窗。
  *
- * **设置弹窗不在这里** —— 它搬去了 `settings/view/SettingsModalHost`,挂在应用外层。
+ * 设置弹窗不在这里 —— 它搬去了 `settings/view/SettingsModalHost`,挂在应用外层。
  * 原因是侧栏折叠时 `AppContent` 压根不渲染 `<Sidebar/>`,而设置的三个入口
  * (轨上的齿轮、命令面板、主区)全在侧栏之外:住在这里等于"折叠后按了没反应"。
  *
@@ -79,9 +79,8 @@ export default function SidebarModals({
   }, []);
 
   /*
-    gn:项目的归档与永久删除都收紧到"负责人 / 管理员"了(服务端
-    `canArchiveProject === canDeleteProject`)。界面按同一条算 —— 不是负责人就
-    两枚按钮都不画,而不是给两个必然撞 403 的按钮。
+    项目的归档与永久删除都只给负责人 / 管理员(服务端 `canArchiveProject === canDeleteProject`)。
+    界面按同一条算:没权限就两枚按钮都不画,不给两个必然撞 403 的按钮。
   */
   const mayRemoveProject = deleteConfirmation
     ? canArchiveOrDeleteProject({
@@ -167,7 +166,7 @@ export default function SidebarModals({
           document.body,
         )}
 
-      {/* ef:会话删除确认抽成 shared/view/SessionDeleteDialog —— 顶栏「…」也用它。 */}
+      {/* 会话删除确认用 shared/view/SessionDeleteDialog,与顶栏「…」共用。 */}
       <SessionDeleteDialog
         target={sessionDeleteConfirmation
           ? {

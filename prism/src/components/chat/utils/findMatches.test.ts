@@ -3,7 +3,7 @@ import { describe, test, expect } from 'vitest';
 import { findOccurrenceStarts, stepMatchIndex } from './findMatches';
 
 /**
- * F1 回归:会话内查找的纯匹配逻辑。
+ * 会话内查找的纯匹配逻辑。
  */
 describe('findOccurrenceStarts', () => {
   test('大小写不敏感,返回全部起点', () => {

@@ -21,8 +21,8 @@ export type ProviderModelOption = {
     }[];
   };
   /**
-   * hn(B2):`catalog` = 模型目录里的网关模型;`alias` = 内置别名组(子代理与 CLI 内部任务用,
-   * 选择器里默认收起)。老数据没有这个字段,当 alias 看。
+   * `catalog` = 模型目录里的网关模型;`alias` = 内置别名组(子代理与 CLI 内部任务用,
+   * 选择器里默认收起)。缺省当 alias 看。
    */
   group?: 'catalog' | 'alias';
   /** 厂商(图标与分组);null = 认不出,画首字母徽标。 */
@@ -33,17 +33,17 @@ export type ProviderModelOption = {
   contextWindow?: number | null;
   /** 真实的网关模型名 —— 目录条目就是 value 本身;别名组靠 configMappings 另查。 */
   realModel?: string;
-  /** hq:走哪个网关(0 = settings.json 那一套)。 */
+  /** 走哪个网关(0 = settings.json 那一套)。 */
   gatewayId?: number;
-  /** hq:网关名(只在不是默认网关时给,选择器里小字显示)。 */
+  /** 网关名(只在不是默认网关时给,选择器里小字显示)。 */
   gatewayName?: string;
-  /** hq:本人的私有模型(服务端排在最前)。 */
+  /** 本人的私有模型(服务端排在最前)。 */
   private?: boolean;
-  /** hq:这个人现在能不能用(网关没有默认 key、他也没填自己的 key / 网关停用 → false)。缺省 = 能用。 */
+  /** 这个人现在能不能用(网关没有默认 key、他也没填自己的 key / 网关停用 → false)。缺省 = 能用。 */
   available?: boolean;
-  /** hq:不能用的原因(服务端给的中文,原样显示)。 */
+  /** 不能用的原因(服务端给的中文,原样显示)。 */
   unavailableReason?: string;
-  /** hq:不能用的原因码 —— no_key 才给「去填 key」;网关停用 / 不见了只能找管理员。 */
+  /** 不能用的原因码:no_key 才给「去填 key」;网关停用 / 不见了只能找管理员。 */
   unavailableCode?: 'no_key' | 'gateway_disabled' | 'gateway_missing';
 };
 
@@ -84,10 +84,9 @@ export interface ProjectSessionMeta {
   [key: string]: unknown;
 }
 
-// After the projectName → projectId migration the backend no longer returns a
-// folder-derived `name` string. Projects are now addressed everywhere by the
-// DB-assigned `projectId` (primary key in the `projects` table), and the UI
-// uses the same identifier for routing, state keys and API calls.
+// Projects are addressed everywhere by the DB-assigned `projectId` (primary key
+// in the `projects` table); the UI uses the same identifier for routing, state
+// keys and API calls. There is no folder-derived `name`.
 export interface Project {
   projectId: string;
   displayName: string;
@@ -96,8 +95,7 @@ export interface Project {
   isStarred?: boolean;
   /**
    * Owning account id. `null` = unclaimed (only root sees it, unless it sits
-   * under PRISM_PUBLIC_WORKSPACE). Undefined on payloads produced before
-   * ownership existed. NOTE: null no longer implies "public" —— use `isPublic`.
+   * under PRISM_PUBLIC_WORKSPACE). `null` does not imply "public": use `isPublic`.
    */
   ownerUserId?: number | null;
   /**
@@ -112,7 +110,7 @@ export interface Project {
   sharedUserCount?: number;
   sessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
-  /** hl 复核 P3-8:正在看的项目已被移除(归档 / 删除 / 收回可见性);对话区保留,只显示提示。 */
+  /** 正在看的项目已被移除(归档 / 删除 / 收回可见性);对话区保留,只显示提示。 */
   removedFromView?: boolean;
   [key: string]: unknown;
 }

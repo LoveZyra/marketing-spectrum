@@ -1,9 +1,6 @@
 /**
- * 非聊天页签的顶栏标题。
- *
- * 2026-09-15 实测:中文界面下点开「定时任务」,顶栏写着英文 **Project** ——
- * `getTabTitle` 除了 files / notebook 之外一律回落到一个写死的 `'Project'`。
- * 终端页签同样。侧栏那排页签早就有 `tabs.*` 这组键,只是这里没用。
+ * 非聊天页签的顶栏标题:钉住每个页签都取 `tabs.*` 的本地化文案,
+ * 中文界面下不会回落成英文占位 `Project`。
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +17,7 @@ const localeDir = path.join(here, '../../../../i18n/locales');
 const readLocale = (lang: string) =>
   JSON.parse(readFileSync(path.join(localeDir, lang, 'common.json'), 'utf8')) as Record<string, Record<string, string>>;
 
-/** 按 locale 文件真取值的翻译器(取不到就用兜底),这样断言的是**用户真会看到的字**。 */
+/** 按 locale 文件真实取值的翻译器(取不到就用兜底),这样断言的是用户真会看到的字。 */
 const translatorFor = (lang: string) => {
   const dict = readLocale(lang);
   return (key: string, fallback: string) => {
@@ -46,7 +43,7 @@ describe('getTabTitle', () => {
     expect(getTabTitle('tasks', zh)).toBe('定时任务');
     expect(getTabTitle('shell', zh)).toBe('终端');
     expect(getTabTitle('files', zh)).toBe('项目文件');
-    // gy:技能优化页签走同一组键
+    // 技能优化页签走同一组键
     expect(getTabTitle('skillwhet', zh)).toBe('技能优化');
 
     const en = translatorFor('en');

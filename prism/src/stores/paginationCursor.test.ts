@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 /**
- * du:分页游标与本地窗口的不变量。
+ * 分页游标与本地窗口的不变量。
  *
- * store 的 `slot.offset` 是"服务端尾部偏移"游标,而 `serverMessages` 是本地
- * 已加载窗口。`fetchFromServer` 与(修复后的)`refreshFromServer` 都必须让
- * 二者对齐;`fetchMore` 按服务端本页返回条数推进。这里把这条规则单独钉住 ——
- * 它被破坏时的症状(整页消息永久缺失)在集成测试里几乎抓不到。
+ * store 的 `slot.offset` 是"服务端尾部偏移"游标,而 `serverMessages` 是本地已加载窗口。
+ * `fetchFromServer` 与 `refreshFromServer` 都必须让二者对齐;`fetchMore` 按服务端本页返回条数推进。
+ * 这里把这条规则单独钉住:它被破坏时的症状(整页消息永久缺失)在集成测试里几乎抓不到。
  */
 
 type Slot = { serverMessages: { id: string }[]; offset: number };
@@ -20,14 +19,14 @@ function applyFetch(slot: Slot, requestOffset: number, page: { id: string }[]): 
   slot.offset = requestOffset + page.length;
 }
 
-/** fetchMore 落地:老消息前插(按 id 去重),游标按**服务端返回条数**推进。 */
+/** fetchMore 落地:老消息前插(按 id 去重),游标按服务端返回条数推进。 */
 function applyFetchMore(slot: Slot, page: { id: string }[]): void {
   const seen = new Set(slot.serverMessages.map((m) => m.id));
   slot.serverMessages = [...page.filter((m) => !seen.has(m.id)), ...slot.serverMessages];
   slot.offset += page.length;
 }
 
-/** refreshFromServer 落地(du 修复后):窗口换成新的尾窗,游标跟着改写。 */
+/** refreshFromServer 落地:窗口换成新的尾窗,游标跟着改写。 */
 function applyRefresh(slot: Slot, tailWindow: { id: string }[]): void {
   slot.serverMessages = tailWindow;
   slot.offset = slot.serverMessages.length;

@@ -6,19 +6,13 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, it } from 'vitest';
 
 /**
- * **压缩不许动时间轴。**
+ * 压缩不许动时间轴。
  *
- * gt 把压缩交还给 CLI 之后,压缩从「Prism 的 internal 维护回合」变成「用户回合内部
- * 由 CLI 自己做」。第一反应是担心:会话的时间轴会不会因此被截断?
- *
- * 结论是不会,而且理由是结构性的 —— 时间轴读的是 Prism 自己的
- * `session_display_messages`(`sessions.service.ts` 里 `logIsAuthoritative` 那道判据),
- * 而压缩相关的帧**根本进不了这张表**:
- *   · `normalizeMessage` 对 `type:'system'` 产出 0 条(压根没有 system 分支);
+ * 压缩由 CLI 在用户回合内部完成。时间轴读的是 Prism 自己的 `session_display_messages`
+ * (`sessions.service.ts` 里 `logIsAuthoritative` 那道判据),而压缩相关的帧进不了这张表:
+ *   · `normalizeMessage` 对 `type:'system'` 产出 0 条(没有 system 分支);
  *   · `status` 不在 `DURABLE_KINDS` 白名单里,`append` 直接 return false。
- *
- * 问题是这个不变量**此前一条测试都没有** —— 结构上成立,但没人钉住。
- * 这一类"靠结构成立、没有判据"的地方,正是下一次改动最容易踩塌的。钉在这里。
+ * 这个不变量靠结构成立,没有别的判据守着,所以钉在这里。
  */
 
 let sessionMessagesDb: typeof import('@/modules/database/index.js')['sessionMessagesDb'];
@@ -70,7 +64,7 @@ describe('压缩不动时间轴', () => {
     assert.equal(isDurableDisplayMessage(compactingStatus()), false);
   });
 
-  it('**关键**:一轮压缩前后,显示日志的行数与内容一个字不变', () => {
+  it('一轮压缩前后,显示日志的行数与内容一个字不变', () => {
     sessionMessagesDb.append(SESSION, text('m1', '压缩之前的第一条'));
     sessionMessagesDb.append(SESSION, text('m2', '压缩之前的第二条'));
     const before = sessionMessagesDb.countForSession(SESSION);
@@ -95,7 +89,7 @@ describe('压缩不动时间轴', () => {
     assert.equal(sessionMessagesDb.countForSession(SESSION), before + 1);
   });
 
-  it('**关键**:压缩不会删掉任何既有行(时间轴不被截断)', () => {
+  it('压缩不会删掉任何既有行(时间轴不被截断)', () => {
     const rows = sessionMessagesDb.listForSession(SESSION) as Array<Record<string, unknown>>;
     const contents = rows.map((row) => String((row as { content?: unknown }).content ?? ''));
     assert.ok(contents.some((c) => c.includes('压缩之前的第一条')), '压缩前的历史被截断了');

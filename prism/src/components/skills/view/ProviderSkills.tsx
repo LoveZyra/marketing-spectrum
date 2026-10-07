@@ -58,9 +58,6 @@ type QueuedSkillFile = {
 const MAX_SKILL_FOLDER_FILES = 500;
 const MAX_SKILL_FOLDER_BYTES = 30 * 1024 * 1024;
 
-// These two maps used to be keyed by provider, and `PROVIDER_SKILL_PATHS`
-// carried an `Exclude<SkillsProvider, 'opencode'>` key because OpenCode had no
-// on-disk skills directory to name. One provider is left, so both are constants.
 const PROVIDER_NAME = 'Claude';
 const PROVIDER_SKILL_PATH = '~/.claude/skills/<skill-name>/SKILL.md';
 
@@ -196,8 +193,7 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
   } = useProviderSkills({ selectedProvider, currentProjects });
   const { toast } = useToast();
   /**
-   * F13:卸载确认。装错一个技能之前只能登服务器删目录 —— 现在界面上有入口了,
-   * 但删目录是不可逆的,所以要**二次确认**,而且确认里写清删的是哪个目录。
+   * 卸载确认。删目录不可逆,所以要二次确认,并在确认里写清删的是哪个目录。
    */
   const [pendingRemoval, setPendingRemoval] = useState<ProviderSkill | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
@@ -537,7 +533,6 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
         <div className="min-w-0 space-y-1">
           <h3 className="text-lg font-medium text-foreground">{t('tabs.skills', { defaultValue: 'Skills' })}</h3>
           <p className="text-sm text-muted-foreground">
-            {/* hl(P3 中英混排):中文界面下原来是一句英文。 */}
             {t('skills.description', {
               provider: providerName,
               defaultValue: `管理 ${providerName} 的技能:可从本地文件、整个文件夹或项目目录添加。`,
@@ -768,8 +763,7 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
                     <code className="mt-1 block whitespace-normal break-all text-xs text-foreground">{skill.sourcePath}</code>
                   </div>
 
-                  {/* F13:卸载入口。只有服务端标了 directoryName 的(用户级、受管
-                      目录下一层)才画 —— 项目级用文件树删,插件级属于插件包。 */}
+                  {/* 卸载入口:只有服务端标了 directoryName 的(用户级、受管目录下一层)才画;项目级用文件树删,插件级属于插件包。 */}
                   {skill.directoryName && (
                     <div className="mt-3 flex justify-end">
                       <button
@@ -792,7 +786,7 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
       {/* 删目录不可逆,所以要二次确认,并且把要删的目录写在确认里。 */}
       <Dialog open={Boolean(pendingRemoval)} onOpenChange={(open) => { if (!open) setPendingRemoval(null); }}>
         {/*
-          这个确认框开在**设置弹窗之上**,而设置弹窗自己是 z-[9999]。Dialog 默认
+          这个确认框开在设置弹窗之上,而设置弹窗自己是 z-[9999]。Dialog 默认
           外壳是 z-50,不抬高的话确认框会整个躺在设置弹窗底下 —— 界面上什么都看
           不见,点也点不到(探针第一次就是这么发现的)。
         */}
@@ -804,12 +798,7 @@ export default function ProviderSkills({ selectedProvider, currentProjects }: Pr
               defaultValue: `将删除「${pendingRemoval?.name ?? ''}」的整个技能目录,不可撤销。`,
             })}
           </p>
-          {/*
-            fd:这一句不是客套话。技能目录是**服务进程自己的 home**,一台机器上所有
-            用户共用同一份 —— 卸载不是"从我的列表里移除",是把这台机器上所有人的
-            那个 `/xxx` 命令一起删掉,而且对方不会收到任何通知。确认框里不写清楚,
-            点的人根本意识不到自己在替别人做决定。
-          */}
+          {/* 技能目录在服务进程自己的 home 下、全机用户共用:卸载会把所有人的这个 `/xxx` 命令一起删掉且不通知对方,确认框里必须写清楚。 */}
           <p className="mt-2 text-sm font-medium text-amber-600 dark:text-amber-400">
             {t('skills.removeShared', {
               defaultValue: '技能库是这台服务器上所有人共用的 —— 卸载会影响全部用户的会话行为,不只是你自己。',

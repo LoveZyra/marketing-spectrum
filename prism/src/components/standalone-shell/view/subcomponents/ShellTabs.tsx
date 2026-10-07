@@ -13,13 +13,10 @@ type Props = {
 };
 
 /**
- * 终端标签条(F10)。
+ * 终端标签条。每个标签一个 id,服务端的 PTY 池按它各开一个 shell
+ * (见 shell-websocket 的 `terminalId`)。
  *
- * 一个终端跑着构建、另一个想看日志 —— 之前只能等,或者去别处开一个 shell。
- * 服务端的 PTY 池本来就按键分,天然支持多个;缺的只是给每个标签一个 id
- * (见 shell-websocket 的 `terminalId`)与这条标签条。
- *
- * 标签**不随切换卸载**:调用方把非活动的终端用 CSS 藏起来而不是拆掉 ——
+ * 标签不随切换卸载:调用方把非活动的终端用 CSS 藏起来而不是拆掉 ——
  * 卸载会断开 websocket,回来时只能靠回放缓冲捞一小段,正在跑的命令看不到了。
  */
 export default function ShellTabs({ tabs, activeId, onSelect, onClose, onAdd, canAdd }: Props) {

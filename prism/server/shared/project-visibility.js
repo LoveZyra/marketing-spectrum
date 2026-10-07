@@ -1,22 +1,16 @@
 /**
  * 谁能看到哪个项目 —— 列表接口与实时广播共用的同一条判定。
  *
- * 存在的理由是一次真实的串台:HTTP 列表按 owner 过滤了,`session_upserted`
- * 广播却没有。于是 A 在自己项目里发消息时,B 的侧边栏会突然冒出 A 的项目,
- * 刷新一下(重新走 HTTP)又消失。两条路必须用同一个判定,否则永远会漂移。
+ * HTTP 列表与 `session_upserted` 等广播必须用同一个判定:只要一条路漏了过滤,
+ * A 在自己项目里发消息时,B 的侧边栏就会冒出 A 的项目,刷新一下(重新走 HTTP)又消失。
  *
- * 规则(2026-08-14 改)—— 无主项目**不再默认公开**:
- *   - root 看全部;
- *   - 有主项目:owner 本人 + root;
- *   - **无主项目:只有落在公共目录(PRISM_PUBLIC_WORKSPACE)之下才对所有人可见**,
- *     否则仅 root。以前无主 = 全公开,是个默认就漏的口子:任何在工作区根下被
- *     扫描进来、还没被认领的目录,都会自动对全体登录用户可见。
- *
- * 因此判定现在**需要项目路径**:无主 + 在公共目录下 = 公开,无主 + 不在 = 仅 root。
- * 不传 projectPath 时按"不在公共目录"处理(更安全的方向:宁可多挡)。
+ * 无主项目默认不公开,只有落在公共目录(PRISM_PUBLIC_WORKSPACE)之下才对所有人可见:
+ * 否则任何在工作区根下被扫描进来、还没被认领的目录,都会自动对全体登录用户可见。
+ * 因此判定需要项目路径;不传 projectPath 时按"不在公共目录"处理(宁可多挡)。
+ * 完整规则见 `canViewerSeeProject`。
  *
  * SQL 侧 `projectsDb.getProjectPaths(visibleTo)` 编码的是同一条规则,
- * `project-visibility-parity` 测试在同一组样本上交叉验证两者不漂移。
+ * `visibility-parity` 测试在同一组样本上交叉验证两者不漂移。
  */
 import path from 'node:path';
 
@@ -25,8 +19,8 @@ import { isRootUser } from './root-users.js';
 /**
  * 一个项目路径算不算"公共目录下"。
  *
- * 公共目录由 PRISM_PUBLIC_WORKSPACE 指定(一个绝对路径)。不配 = 没有任何公共
- * 项目,所有无主项目都只有 root 看得到 —— 这正是用户要的默认。
+ * 公共目录由 PRISM_PUBLIC_WORKSPACE 指定(一个绝对路径)。不配 = 没有公共目录,
+ * 没有显式设为公共的无主项目只有 root 看得到。
  *
  * 词法包含判定(不 realpath):项目路径来自 DB,建项目时已 resolve 过;而这里
  * 是可见性判定不是文件读写边界,词法足够,也不想为一次判定去戳磁盘。
@@ -45,7 +39,7 @@ export function isPublicWorkspacePath(projectPath) {
 }
 
 /**
- * 规则(2026-08-18 扩展,创建项目的权限三选落地):
+ * 规则(按顺序判定):
  *   1. root → 全可见;
  *   2. `visibility === 'public'`(创建时选「公共」)→ 所有登录用户可见;
  *   3. 无主项目 → 仅当落在公共目录(PRISM_PUBLIC_WORKSPACE)下才对非 root 可见;
@@ -108,16 +102,10 @@ export function canViewerSeeProject({ ownerUserId, viewerUserId, viewerUsername,
 export function readRequestViewer(request) {
   const user = request?.user;
   /**
-   * dv:`id` 与 `userId` **两种形状都认**。
-   *
-   * REST 中间件盖的是 `{ id, username }`,而 WebSocket 那三条路
-   * (OSS token 分支、SSE 票据分支、平台模式)盖的是 `{ userId, username }`
-   * —— 只读 `id` 的话,自建部署里**每一条 WS 连接的身份都是空的**。
-   * 后果分两半:root 用户靠 username 那条规则侥幸放行,所以一直没露馅;
-   * 非 root 用户的 viewerUserId 恒为 null,`canViewerSeeProject` 在
-   * "有主且非公共"这一支直接返回 false —— 队列广播收不到,而 du 轮给
-   * `attachSessionViewers` 加上每轮重判之后,他们会被整个踢出推流。
-   * shell 侧同理:`claimForShell` 记录的持有者恒为 null。
+   * `id` 与 `userId` 两种形状都认:REST 中间件盖的是 `{ id, username }`,
+   * WebSocket 认证盖的是 `{ userId, username }`。只读 `id` 的话 WS 连接的身份为空:
+   * 非 root 用户在"有主且非公共"这一支被判为不可见,收不到队列广播、会被
+   * `attachSessionViewers` 的每轮重判踢出推流;`claimForShell` 记录的持有者也会是 null。
    */
   const rawId = user?.id ?? user?.userId ?? null;
   return {
@@ -130,8 +118,8 @@ export function readRequestViewer(request) {
  * 把访问者身份盖在 WebSocket 上。
  *
  * 广播和订阅都只拿得到裸 socket,拿不到当初的 HTTP 请求,所以身份必须在连接
- * 建立时就盖上去。**chat 和 shell 两条连接都要盖** —— 只盖 chat 那半,是
- * `claimForShell` 记录的持有者恒为 null 的原因。
+ * 建立时就盖上去。chat 和 shell 两条连接都要盖,否则 `claimForShell` 记录的
+ * 持有者会是 null。
  *
  * @param {object} ws
  * @param {{ user?: { id?: number|string|null, username?: string|null } }} request

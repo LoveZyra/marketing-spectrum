@@ -39,12 +39,12 @@ type CommandResultModalProps = {
   onHardRefreshProviderModels: () => void;
   currentSessionId: string | null;
   /**
-   * 会话此刻用的**档位别名**(default / sonnet / opus …),也就是输入框那枚 chip
+   * 会话此刻用的档位别名(default / sonnet / opus …),也就是输入框那枚 chip
    * 显示的那个。卡片的「当前」必须按它判,不能按 `data.current.model` ——
    * 自定义网关下后者是解析后的真实模型名,与档名不是一个命名空间。
    */
   activeModelAlias?: string | null;
-  /** hn:当前上下文用量 —— 选择器标出"切过去就超压缩线"的模型。 */
+  /** 当前上下文用量:选择器据此标出"切过去就超压缩线"的模型。 */
   contextUsedTokens?: number | null;
   onSelectProviderModel: (
     provider: LLMProvider,
@@ -55,7 +55,7 @@ type CommandResultModalProps = {
     changed: boolean;
     model: string;
   }>;
-  /** hq:`/models` 里不能用的模型旁「去填 key」—— 开 设置 → 模型网关。 */
+  /** `/models` 里不可用模型旁的「去填 key」:打开 设置 → 模型网关。 */
   onOpenKeySettings?: () => void;
 };
 
@@ -66,8 +66,7 @@ type CommandEntry = {
 };
 
 // Keyed by the `provider` string the server echoes back on a command result.
-// Cursor, Codex and OpenCode used to have entries here; anything unrecognised
-// still falls through to the raw string below rather than the fallback.
+// An unrecognised provider is shown as its raw string; the fallback only covers a missing one.
 const PROVIDER_LABELS: Record<string, string> = {
   claude: 'Claude',
 };
@@ -217,7 +216,6 @@ function HelpContent({ data }: { data: HelpCommandData }) {
         <div className="rounded-lg border border-border bg-card p-4">
           <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
             <TerminalSquare className="h-4 w-4 text-primary" />
-            {/* hl(P3 中英混排):中文界面下原来这一栏整块英文。 */}
             {t('commandResult.help.syntax', { defaultValue: '语法' })}
           </div>
           <div className="space-y-2 text-sm text-muted-foreground">
@@ -279,7 +277,7 @@ function CostContent({ data }: { data: CostCommandData }) {
     ...(total > 0
       ? [{ label: t('commandResult.contextWindow'), value: formatNumber(total), icon: Gauge }]
       : []),
-    // 会话累计费用(F4):只有本次浏览器会话里跑过回合、拿到过 result 帧才有。
+    // 会话累计费用:只有本次浏览器会话里跑过回合、拿到过 result 帧才有。
     ...(typeof data.costUsd === 'number' && data.costUsd > 0
       ? [{
           label: t('commandResult.sessionCost', { defaultValue: '本会话累计费用' }),
@@ -288,18 +286,17 @@ function CostContent({ data }: { data: CostCommandData }) {
         }]
       : []),
     /*
-     * fh:台账里的累计花销。和上面那行的区别值得说清楚 ——
-     *
-     * 上面那个来自**浏览器内存**:只有你这次打开页面之后跑过回合才有,刷新就没。
-     * 这一行来自服务端台账(`usage_records`),**跨重启、跨设备都在**。
-     *
-     * 两个并列而不是合并:它们口径不同,对不上的时候正好说明"你这次打开之前
-     * 它还花过钱"。合成一个数会把这层信息抹掉。
+     * 服务端台账(usage_records)里的累计花销,跨重启、跨设备都在;上面那行来自浏览器内存,
+     * 只算这次打开页面之后跑过的回合,刷新就没。两者口径不同,并列显示而不合并:
+     * 对不上正说明这次打开之前还花过钱。
      */
     ...(data.ledger && Number(data.ledger.costUsd) > 0
       ? [{
           label: t('commandResult.ledgerCost', { defaultValue: '台账累计(含历史)' }),
-          value: `$${Number(data.ledger.costUsd).toFixed(4)} · ${Number(data.ledger.runs) || 0} 轮`,
+          value: `$${Number(data.ledger.costUsd).toFixed(4)} · ${t('commandResult.ledgerRuns', {
+            count: Number(data.ledger.runs) || 0,
+            defaultValue: '{{count}} 轮',
+          })}`,
           icon: Coins,
         }]
       : []),
@@ -328,7 +325,7 @@ function CostContent({ data }: { data: CostCommandData }) {
         })}
       </div>
 
-      {/* hn(Q12):CLI 对不认识的模型按默认 Claude 价计费 —— 非 Claude 模型的费用只是估算 */}
+      {/* CLI 对不认识的模型按默认 Claude 价计费,非 Claude 模型的费用只是估算 */}
       {nonClaudeVendor && (typeof data.costUsd === 'number' || data.ledger) && (
         <p className="rounded-lg border border-border bg-muted px-3 py-2 text-[12px] leading-5 text-muted-foreground">
           {t('commandResult.cost.estimateNote', { vendor: nonClaudeVendor })}

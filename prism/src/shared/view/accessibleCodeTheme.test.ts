@@ -21,7 +21,7 @@ const toRgb = (hsl: string) => {
   return [f(0), f(8), f(4)] as [number, number, number];
 };
 
-describe('hl(P3 可访问性)浅色代码高亮对比度', () => {
+describe('浅色代码高亮对比度(可访问性)', () => {
   test('基线 oneLight 的注释色在浅底上不到 4.5:1(反向:证明这条修复有东西可修)', () => {
     const comment = (oneLight as Record<string, { color?: string }>).comment.color!;
     assert.ok(LIGHT_CODE_BACKGROUNDS.some((bg) => contrastRatio(toRgb(comment), bg) < 4.5));

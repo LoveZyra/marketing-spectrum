@@ -9,13 +9,13 @@ import { closeConnection, initializeDatabase, userDb } from '@/modules/database/
 import { getAttachmentQuotaBytes } from '@/shared/attachment-storage.js';
 
 /**
- * F6:附件配额的每用户覆盖。
+ * 附件配额的每用户覆盖。
  *
- * 之前只有一个全局值(PRISM_ATTACHMENT_QUOTA_MB)。多数账号用不到 1 GB,个别人
- * 要传一堆设计稿 —— 为那一个人抬高全局值,等于给所有人都开了那么大的口子。
+ * 全局值(PRISM_ATTACHMENT_QUOTA_MB)是所有人的默认;个别人要传一堆设计稿时单独
+ * 给他抬高,而不是抬高全局值、给所有人开同样大的口子。
  *
- * 关键是**默认不变**:没设过覆盖的账号(以及所有存量账号,列是新加的、值为 NULL)
- * 必须与改动前拿到一模一样的数,否则这就不是加了个旋钮,而是悄悄改了所有人的配额。
+ * 这里钉住的关键是默认不变:没设过覆盖的账号(列值为 NULL)拿到的配额必须与
+ * 全局值完全一致。
  */
 const previousDatabasePath = process.env.DATABASE_PATH;
 const previousQuota = process.env.PRISM_ATTACHMENT_QUOTA_MB;

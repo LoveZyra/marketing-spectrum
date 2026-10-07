@@ -11,7 +11,7 @@ import { Octokit } from '@octokit/rest';
 import { createLogger } from '@/shared/logger.js';
 
 import { userDb, apiKeysDb, githubTokensDb, projectsDb, sessionsDb, sessionMessagesDb, canViewerSeeSession } from '../modules/database/index.js';
-import { chatRunRegistry, drainPendingSendForSession } from '../modules/websocket/index.js';
+import { chatRunRegistry, drainPendingSendForSession, withdrawUnstartedUserTurn } from '../modules/websocket/index.js';
 import { claudeModelCatalog, modelViewerFor, sessionsService } from '../modules/providers/index.js';
 import { assertViewerMayCreateSessionAt } from '../modules/providers/services/session-project-path-guard.service.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
@@ -89,15 +89,10 @@ const validateExternalApiKey = (req, res, next) => {
   }
 
   /*
-   * Self-hosted mode: API key **只从请求头取**(cp 轮收口,G4)。
+   * Self-hosted mode: API key 只从请求头取。
    *
-   * 原来还认 `?apiKey=`。query 会落进访问日志、Referer、浏览器历史和各级
-   * 反代日志 —— 和 bo 轮把 JWT 赶出 URL 是同一类问题,只是这次泄漏的是长期
-   * 有效的 API 密钥,危害更大。前端与文档都没用过这个 query 形式(全仓检索
-   * 零命中),所以直接去掉,而不是留个过渡期。
-   *
-   * 若仍有老脚本按 query 调:这里给一句明确提示,让人知道改哪儿,而不是
-   * 收到一个含糊的 401。
+   * 不认 `?apiKey=`:query 会落进访问日志、Referer、浏览器历史和各级反代日志,而这是长期有效的
+   * API 密钥。仍按 query 调的老脚本会收到一句明确提示,知道该改哪儿,而不是一个含糊的 401。
    */
   const apiKey = req.headers['x-api-key'];
 
@@ -112,8 +107,7 @@ const validateExternalApiKey = (req, res, next) => {
 
   const user = apiKeysDb.validateApiKey(apiKey);
 
-  // hj(审计 P1-2):key 有效还不够,账号本身得「现在能用」—— 驳回一个已批准的人之后,
-  // 他的 key 原来照样能跑 Claude(这里只查了 is_active,没查审批状态)。
+  // key 有效还不够,账号本身得「现在能用」(已激活且审批状态允许):被驳回的人,key 也不能再跑 Claude。
   if (!user || !isAccountUsable(user)) {
     return res.status(401).json({ error: 'Invalid or inactive API key' });
   }
@@ -386,22 +380,19 @@ async function createGitHubPR(octokit, owner, repo, branchName, title, body, bas
 }
 
 /**
- * F05:**续会话时,工作目录只能是这条会话登记的那个。**
+ * 续会话时,工作目录只能是这条会话登记的那个。
  *
  * `finalProjectPath` 完全来自请求(`projectPath` / 克隆目标),而会话行里有它
  * 自己的 `project_path` —— 两者可以不一样。不校验的后果是"续 A 会话的对话,
  * 却在 B 目录里执行":transcript 记的是 A 的历史,改的却是 B 的文件,而侧栏、
- * 检查点、附件归属全都按 A 记账。
- *
- * 网页那条路早就收口了(`cwd` **只从会话行取**,见 chat-websocket.service),
- * 外部 API 这条一直没有。
+ * 检查点、附件归属全都按 A 记账。网页那条路的 `cwd` 同样只从会话行取
+ * (见 chat-websocket.service)。
  *
  * 三种结果:
  *   - `{ ok: true, projectPath }` —— 用这个目录跑(会话登记的那个);
- *   - `{ ok: false, conflict }` —— 调用方明确给了一个**不同的**目录,拒绝。
- *     选择明确拒绝而不是静默改写:悄悄换掉一个调用方明明白白传进来的目录,
- *     比报错更难查;
- *   - 会话没登记路径(老行)→ 按请求那个跑,不拦。
+ *   - `{ ok: false, conflict }` —— 调用方明确给了一个不同的目录,拒绝。
+ *     明确拒绝而不是静默改写:悄悄换掉调用方明明白白传进来的目录,比报错更难查;
+ *   - 会话行没有 project_path → 按请求那个跑,不拦。
  *
  * @param {string|null} sessionProjectPath 会话行里的 project_path(已归一)
  * @param {string} requestedProjectPath 这次请求解析出来的路径(已归一)
@@ -578,6 +569,32 @@ async function cleanupProject(projectPath, sessionId = null) {
 }
 
 /**
+ * 调用方断开时回调一次(同步回合据此中止)。返回解除监听的函数。
+ *
+ * 听 `res` 的 'close',不听 `req` 的:body parser 读完请求体后 IncomingMessage 就 autoDestroy 了,
+ * `req` 的 'close' 早在路由跑到开回合那一步之前就发过,这时注册的监听永远不会触发。`res` 的 'close'
+ * 在底层连接断开时发出,响应正常写完时也会发,后者 `writableFinished` 为真,不算断开。
+ *
+ * 开始盯的时候连接已经断了('close' 已经错过)也要回调,放到 setImmediate 里:调用方紧接着同步开回合,
+ * 回调落在回合登记之后。
+ */
+export function watchClientDisconnect(res, onDisconnect) {
+  let done = false;
+  const fire = () => {
+    if (done || res.writableFinished) return;
+    done = true;
+    onDisconnect();
+  };
+  res.once('close', fire);
+  const missed = res.destroyed ? setImmediate(fire) : null;
+  return () => {
+    done = true;
+    res.off('close', fire);
+    if (missed) clearImmediate(missed);
+  };
+}
+
+/**
  * SSE Stream Writer - Adapts SDK/CLI output to Server-Sent Events
  */
 class SSEStreamWriter {
@@ -625,15 +642,14 @@ class ResponseCollector {
     /**
      * 已缓冲字节数与是否已经截断过。
      *
-     * 原来这里是无上限的 `push`,注释写着 "Store ALL messages for now" —— 而
-     * 缓冲的是完整帧:`tool_result` 是整份文件内容、`tool_use` 是整份写入内容、
-     * `changed_files` 带 20KB diff。`stream:false` 跑一个读几十个大文件的长任务,
-     * 单请求就是几十到几百 MB 常驻,并发几个直接 OOM;而且回合结束才释放,
-     * 一次性路径悬死时(见 claude-sdk 的看门狗)**永不释放**。
+     * 缓冲必须有上限:缓冲的是完整帧(`tool_result` 是整份文件内容、`tool_use` 是整份写入内容、
+     * `changed_files` 带 20KB diff),`stream:false` 跑一个读几十个大文件的长任务,单请求就是几十到
+     * 几百 MB 常驻,并发几个直接 OOM;而且回合结束才释放,一次性路径悬死时(见 claude-sdk 的看门狗)
+     * 永不释放。
      *
-     * 上限之外的帧直接丢:非流式的返回值本来就只用得上 assistant 文本和用量汇总,
-     * 中间过程帧在这条路上没有消费者。丢弃时留一条 `truncated` 标记,免得调用方
-     * 以为自己拿到的是完整过程。
+     * 放不下的帧直接丢:非流式的返回值只用得上 assistant 文本和用量汇总,撑满缓冲的大多是没有消费者的
+     * 中间过程帧。缓冲真满了之后正文与用量帧同样放不下,所以丢过帧时响应里带 `truncated: true`
+     * (见路由的非流式分支),免得调用方把不全的 `messages` / `tokens` 当成完整结果。
      */
     this.bufferedBytes = 0;
     this.truncated = false;
@@ -711,13 +727,9 @@ class ResponseCollector {
    */
   getAssistantMessages() {
     /**
-     * 这里原来只认 `type: 'claude-response'` 的**字符串**帧 —— 那是老 CLI 的
-     * 线格式。走 SDK 之后运行时推过来的一律是规范化**对象**
-     * (`{ kind: 'text' | 'tool_use' | … }`),两个条件一个都对不上,
-     * 于是非流式响应的 `messages` **恒为空数组**,静默了很久。
-     *
-     * 现在按 kind 取:`text` 就是助手真正说出来的那几段。工具调用不在内 ——
-     * 要看完整过程去页面上看,这个字段的语义是"回答"。
+     * 按 kind 取助手文本:运行时推过来的是规范化对象(`{ kind: 'text' | 'tool_use' | … }`),
+     * `text` 就是助手真正说出来的那几段。工具调用不在内:这个字段的语义是"回答",
+     * 要看完整过程去页面上看。
      */
     const assistantMessages = [];
 
@@ -769,7 +781,7 @@ class ResponseCollector {
       if (!data || typeof data !== 'object') continue;
 
       // SDK 路径:每条助手消息的用量以 `status / token_budget` 帧推过来。
-      // 和下面那段老格式一样是**逐条累加**,不是取最后一条。
+      // 和下面那段老格式一样是逐条累加,不是取最后一条。
       if (data.kind === 'status' && data.text === 'token_budget' && data.tokenBudget) {
         const budget = data.tokenBudget;
         totalOutput += budget.outputTokens || 0;
@@ -823,7 +835,7 @@ ResponseCollector.MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
 // ===============================
 
 /**
- * POST /api/agent/sessions —— **先领一个会话号**。
+ * POST /api/agent/sessions:先领一个会话号。
  *
  * 不跑任何回合,毫秒级返回。用途是把"拿 id"和"干活"拆成两步:
  *
@@ -831,12 +843,11 @@ ResponseCollector.MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
  *   2. 立刻就能拼链接:  https://<host>/session/<sessionId>
  *   3. POST /api/agent           { projectPath, message, sessionId }
  *
- * 关键是这里**真的在库里占了一行**,不是发一个 UUID 就完事 —— 占了行,
- * 第 2 步那个链接当场就能打开(先是一段空对话),而不是"会话不存在"。
+ * 这里真的在库里占一行,不只是发一个 UUID:占了行,第 2 步的链接当场就能打开(先是一段空对话),
+ * 而不是"会话不存在"。
  *
- * 第 3 步传这个 id 时会被当成"**用这个 id 新建**"而不是续对话:判据是库里
- * 那行的 `provider_session_id` 还空着。老调用方传的是 provider 原生 id
- * (磁盘发现的会话两列同值,一定非空),所以走的还是原来的 resume,行为不变。
+ * 第 3 步传这个 id 时会被当成"用这个 id 新建"而不是续对话:判据是库里那行的 `provider_session_id`
+ * 还空着。传 provider 原生 id 的调用方(磁盘发现的会话两列同值,一定非空)走的仍是 resume。
  *
  * Request:  { projectPath: "/path/to/project", provider?: "claude" }
  * Response: 201 { success, sessionId, sessionPath, projectPath }
@@ -859,12 +870,11 @@ router.post('/sessions', validateExternalApiKey, async (req, res) => {
     await assertInsideWorkspaceRoot(finalProjectPath);
 
     /*
-     * hl(动态 P1-6):**项目可见性也要过**,而且要在 fs.access 之前。
+     * 项目可见性也要过,而且要在 fs.access 之前。
      *
-     * 此前只有工作区包含判定 + 存在性检查:bob 的 key 往 alice 的私有项目路径 POST 一下,
-     * alice 的侧栏立刻多一条无名会话;不存在的路径 400「does not exist」、存在的 201 ——
-     * 顺手成了一个"工作区下任意目录存不存在"的探针。跑回合那支(下面 POST /)早就有
-     * `assertViewerMayCreateSessionAt`,领号这支漏了。看不见 / 不存在一律 404 同形。
+     * 只做工作区包含判定 + 存在性检查的话,bob 的 key 往 alice 的私有项目路径 POST 一下,alice 的侧栏
+     * 就多一条无名会话;路径存在与否返回不同,顺手成了"工作区下任意目录存不存在"的探针。
+     * 与跑回合那支(下面 POST /)用同一个 `assertViewerMayCreateSessionAt`;看不见 / 不存在一律 404 同形。
      */
     await assertViewerMayCreateSessionAt(readRequestViewer(req), finalProjectPath);
 
@@ -894,7 +904,7 @@ router.post('/sessions', validateExternalApiKey, async (req, res) => {
 });
 
 /**
- * GET /api/agent/sessions — 本 key 可见的会话列表(F5)。
+ * GET /api/agent/sessions — 本 key 可见的会话列表。
  *
  * 可见性与网页端同一道闸(canViewerSeeSession):自己项目的会话 + 公共目录
  * 项目的会话。默认不含已归档,`?includeArchived=1` 才带。`running` 来自
@@ -908,17 +918,11 @@ router.get('/sessions', validateExternalApiKey, (req, res) => {
     const includeArchived = req.query.includeArchived === '1' || req.query.includeArchived === 'true';
 
     /**
-     * 可见性、排序、分页**全在 SQL 里做**。
+     * 可见性、排序、分页全在 SQL 里做。
      *
-     * 这里原来是 `getAllSessions()` 整表捞出来,再 `.filter(canViewerSeeSession)` ——
-     * 而那个函数每行要查库。better-sqlite3 是**同步**的,于是 4000 条会话就是
-     * 4000+ 次同步查询把**事件循环整个按住**:实测 219ms 内所有人的 WebSocket 帧、
-     * 所有 HTTP 请求全部停摆,而这只是别人调了一次列表接口。
-     *
-     * 而且"先捞后过滤"根本没法分页(先分页再过滤,每页剩几条全看运气),
-     * 所以连 total 都得靠捞全表才算得出来。下推之后同数据量 2.18ms,total 由 COUNT 给。
-     *
-     * 归档面板在 E10 轮做过同一件事,当时只改了那一处。
+     * 不能整表捞出来再 `.filter(canViewerSeeSession)`:那个函数每行要查库,better-sqlite3 是同步的,
+     * 4000 条会话就是 4000+ 次同步查询把事件循环整个按住(约 200ms 内所有人的 WebSocket 帧、HTTP 请求
+     * 全部停摆)。先捞后过滤也没法分页,total 只能靠捞全表算。下推之后同数据量约 2ms,total 由 COUNT 给。
      */
     const { rows, total } = sessionsService.listVisibleSessionsPage(viewer, limit, offset, {
       includeArchived,
@@ -944,7 +948,7 @@ router.get('/sessions', validateExternalApiKey, (req, res) => {
 });
 
 /**
- * GET /api/agent/runs/:sessionId — 会话的运行状态(F5)。
+ * GET /api/agent/runs/:sessionId — 会话的运行状态。
  *
  * 不可见与不存在同形 404。空闲会话返回 status:'idle';跑过的返回注册表里的
  * 最后状态(running/completed)与起止时间。
@@ -973,11 +977,15 @@ router.get('/runs/:sessionId', validateExternalApiKey, (req, res) => {
 });
 
 /**
- * POST /api/agent/sessions/:sessionId/abort — 中止正在跑的回合(F5)。
+ * POST /api/agent/sessions/:sessionId/abort — 中止正在跑的回合。
  *
- * 与网页端 chat.abort 同一条路:先按 provider 原生 id 中止,拿不到(新会话
- * 第一轮)再按 runId(app 会话 id)兜底;随后在注册表里落终态,订阅中的
- * 浏览器会照常收到 complete 帧。
+ * 停这一轮的几步与网页端 chat.abort 相同:先按 provider 原生 id 中止,拿不到(新会话第一轮)再按
+ * runId(app 会话 id)兜底;网页上还没开跑的那一条标成撤回;随后在注册表里落终态,订阅中的浏览器
+ * 会照常收到 complete 帧。
+ *
+ * 与 chat.abort 不同,这里只停当前这一轮,不碰网页用户排在后面的消息:chat.abort 会撤掉排队的那条
+ * (dropPendingSend)、作废正在续发的那条,这里都不做。这一轮收尾之后,排队的那条照常续发成新的一轮,
+ * 所以停止之后再查 GET /runs/:sessionId,可能又是 running。
  */
 router.post('/sessions/:sessionId/abort', validateExternalApiKey, async (req, res) => {
   const { sessionId } = req.params;
@@ -992,29 +1000,36 @@ router.post('/sessions/:sessionId/abort', validateExternalApiKey, async (req, re
   }
 
   try {
+    /**
+     * 发起中止,随即把网页上还没开跑的那一条标成撤回(与 chat.abort 同一个顺序,见 withdrawUnstartedUserTurn)。
+     *
+     * provider 在中止的第一个 await 之前就记下停止标记,这一条从此不会再开跑;等中止落定再标的话,这一轮可能已被
+     * 那一条自己的收尾关掉,撤回帧推不出去。这一轮的用户回合已开跑、或不是网页发起的,这一步什么都不做。
+     */
+    const requestAbort = async (providerSessionId) => {
+      const attempt = abortClaudeSDKSession(providerSessionId, { runId: sessionId });
+      withdrawUnstartedUserTurn(run);
+      return Boolean(await attempt);
+    };
     let success = false;
     if (run.provider === 'claude') {
       if (run.providerSessionId) {
-        success = Boolean(await abortClaudeSDKSession(run.providerSessionId, { runId: sessionId }));
+        success = await requestAbort(run.providerSessionId);
       }
       if (!success) {
-        success = Boolean(await abortClaudeSDKSession('', { runId: sessionId }));
+        success = await requestAbort('');
       }
     }
 
     /**
-     * fz:**按这一次拿到的那个 run 收尾,不按会话键重查表。**
+     * 按这一次拿到的那个 run 收尾,不按会话键重查表。
      *
-     * 上面两个 `await` 最长要等 ~10 秒(两次 interruptWithTimeout 各 5 秒)。
-     * 这段时间里上一轮可能已经自己收尾、排队消息被续发、注册表里已经换成
-     * **新一轮**了。按会话 id 重查表拿到的就是那一轮 —— 给它盖上 aborted
-     * 之后,注册表对它的**每一帧**返回 null:既不推给浏览器,也不落显示日志。
+     * 上面两个 `await` 最长要等约 10 秒(两次 interruptWithTimeout 各 5 秒)。这段时间里上一轮可能已经
+     * 自己收尾、排队消息被续发、注册表里已经换成新一轮;按会话 id 重查拿到的就是那一轮,给它盖上
+     * aborted 之后,注册表对它的每一帧返回 null:既不推给浏览器,也不落显示日志。用户看到停止按钮
+     * 消失、转圈停了,模型却还在改文件、执行命令,输出全部进黑洞,刷新之后历史里只有自己那句话。
      *
-     * 用户端看到的是:停止按钮消失、转圈停了,像是这一轮结束了;可模型还在真跑,
-     * 还在改文件、执行命令,输出全部进黑洞;刷新之后历史里只有自己那句话。
-     *
-     * 网关侧的同功能路径早就改用 `completeRunIfCurrent` 并把危害逐条写在注释里,
-     * 这条外部 API 路径没跟上 —— 同一个判据,两处实现,只改了一处。
+     * 与网关侧的 chat.abort 用同一个 `completeRunIfCurrent`。
      */
     chatRunRegistry.completeRunIfCurrent(run, { exitCode: success ? 0 : 1, aborted: true });
     return res.json({ success: true, aborted: success, sessionId });
@@ -1062,7 +1077,7 @@ router.post('/sessions/:sessionId/abort', validateExternalApiKey, async (req, re
  *
  * @param {string} model - (Optional) Model identifier.
  *
- *                        hn 起:能用的模型以 `GET /api/providers/claude/models` 为准 —— 模型目录里上架的
+ *                        能用的模型以 `GET /api/providers/claude/models` 为准:模型目录里上架的
  *                        网关模型(`group: 'catalog'`)加内置别名组(`group: 'alias'`:default / sonnet /
  *                        opus / haiku / sonnet[1m] / opus[1m] / fable)。不在里面的回 400 MODEL_NOT_ALLOWED。
  *
@@ -1163,6 +1178,7 @@ router.post('/sessions/:sessionId/abort', validateExternalApiKey, async (req, re
  *   - Valid GitHub token (from settings or githubToken parameter)
  *   - Token must have 'repo' scope for private repos
  *   - Project must have commits (for PR creation)
+ *   - The agent turn must succeed (a failed turn creates no branch or PR)
  *
  * ================================================================================================
  * VALIDATION & ERROR HANDLING
@@ -1197,16 +1213,19 @@ router.post('/sessions/:sessionId/abort', validateExternalApiKey, async (req, re
  *   Content-Type: text/event-stream
  *   Events:
  *     - { type: "status", message: "...", projectPath: "..." }
- *     - { type: "claude-response", data: {...} }
+ *     - { type: "session-id", sessionId: "..." }
+ *     - { kind: "text" | "tool_use" | "tool_result" | ..., ... }   (normalized runtime messages)
  *     - { type: "github-branch", branch: { name: "...", url: "..." } }
  *     - { type: "github-pr", pullRequest: { number: 42, url: "..." } }
  *     - { type: "github-error", error: "..." }
+ *     - { type: "error", error: "...", message: "...", status: "failed" | "aborted" }   (failed turn)
  *     - { type: "done" }
  *
  * Non-Streaming Response (stream=false):
  *   Content-Type: application/json
  *   {
  *     success: true,
+ *     status: "completed",    // "failed" / "aborted" (HTTP 502, with error) when the turn fails
  *     sessionId: "session-123",
  *     messages: [...],        // Assistant messages only (filtered)
  *     tokens: {
@@ -1238,7 +1257,7 @@ router.post('/sessions/:sessionId/abort', validateExternalApiKey, async (req, re
  *     status: "running"
  *   }
  *
- *   响应在回合**开跑之前**就发出去,拿到 sessionId 直接拼前端链接即可,
+ *   响应在回合开跑之前就发出去,拿到 sessionId 直接拼前端链接即可,
  *   点进去就能实时看着这一轮跑完(输出走聊天网关广播,断线重连有补发)。
  *
  *   注意:
@@ -1246,10 +1265,10 @@ router.post('/sessions/:sessionId/abort', validateExternalApiKey, async (req, re
  *     带 sessionId 时续那段对话(会查可见性,看不见按 404 处理)。
  *   - 与 createBranch / createPR 互斥:响应先发,结果没地方回报。
  *   - cleanup 不生效:会话是留着给人看的,不能把它的项目目录删掉。
- *   - 同一会话已有回合在跑时返回 409。
+ *   - 同一会话已有回合在跑(或被终端接管)时返回 409。
  *
  * Error Response:
- *   HTTP Status: 400, 401, 404, 409, 500
+ *   HTTP Status: 400, 401, 404, 409, 500, 502
  *   Content-Type: application/json
  *   { success: false, error: "Error description" }
  *
@@ -1300,10 +1319,10 @@ router.post('/', validateExternalApiKey, async (req, res) => {
   const stream = req.body.stream === undefined ? true : (req.body.stream === true || req.body.stream === 'true');
   const cleanup = req.body.cleanup === undefined ? true : (req.body.cleanup === true || req.body.cleanup === 'true');
   /**
-   * 异步模式:**先把会话 id 返回,再去跑回合**。
+   * 异步模式:先把会话 id 返回,再去跑回合。
    *
-   * 默认(false)是原来的行为 —— 一直等到回合结束才回响应。那种形态下调用方
-   * 拿到 id 时对话早就结束了,"拿链接去页面上看着它跑"根本无从谈起。
+   * 默认(false)一直等到回合结束才回响应,调用方拿到 id 时对话早已结束;
+   * 要"拿链接去页面上看着它跑",就用异步模式。
    */
   const asyncMode = req.body.async === true || req.body.async === 'true';
 
@@ -1324,7 +1343,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     return res.status(400).json({ error: 'provider must be "claude"' });
   }
 
-  // hn(B2):模型前置检查(同步 / 异步两种模式都在这里拦)。真正的闸口在 claude-sdk 里再判一次。
+  // 模型前置检查(同步 / 异步两种模式都在这里拦)。真正的闸口在 claude-sdk 里再判一次。
   if (model !== undefined && model !== null && model !== '') {
     if (typeof model !== 'string' || !claudeModelCatalog.isAllowed(model, modelViewerFor(req.user?.id ?? null, req.user?.username ?? null))) {
       return res.status(400).json({
@@ -1359,10 +1378,9 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
       let targetPath;
       if (projectPath) {
-        // 用户指定的克隆目标必须落在工作区根之下 —— 这道校验以前只在"已存在
-        // 路径"那支有,克隆这支漏了。少了它,一把自助 API key + githubUrl 就能
-        // 把攻击者仓库克隆到 /root/.ssh 之类任意可写路径(服务常以 root 跑),
-        // 是一个先于 agent 执行、独立于 bypassPermissions 的"任意路径写"原语。
+        // 用户指定的克隆目标必须落在工作区根之下:少了这道校验,一把自助 API key + githubUrl
+        // 就能把攻击者仓库克隆到 /root/.ssh 之类任意可写路径(服务常以 root 跑),是一个先于
+        // agent 执行、独立于 bypassPermissions 的"任意路径写"原语。
         targetPath = normalizeProjectPath(path.resolve(projectPath));
         await assertInsideWorkspaceRoot(targetPath);
       } else {
@@ -1372,18 +1390,14 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       }
 
       /**
-       * F05:**克隆这一支也要过归属门。**
+       * 克隆这一支也要过归属门,与下面已有 projectPath 那支同一道 `assertViewerMayCreateSessionAt`。
        *
-       * 下面那支(已存在 projectPath)有 `assertViewerMayCreateSessionAt`,
-       * 这一支只有工作区包含判定 —— 而 `cloneGitHubRepo` 在目标目录已存在、
-       * 且 remote 与请求的 URL 相同时会**直接把那个目录返回**(不重新克隆)。
+       * 只靠工作区包含判定不够:`cloneGitHubRepo` 在目标目录已存在、且 remote 与请求的
+       * URL 相同时会直接把那个目录返回(不重新克隆)。知道别人克隆过哪个仓库、放在哪个
+       * 路径,就能用同一个 githubUrl + 他的 projectPath 拿到他的目录,随后这一轮以
+       * bypassPermissions 在里面跑起来 —— 那条路径本来就在工作区里,包含判定挡不住。
        *
-       * 于是:知道别人克隆过哪个仓库、放在哪个路径,就能用同一个 githubUrl +
-       * 他的 projectPath 走到这里 —— 克隆步骤原样返回**他的目录**,随后这一轮
-       * 以 bypassPermissions 在里面跑起来。工作区包含判定挡不住它,因为那条路径
-       * 本来就在工作区里。
-       *
-       * 与另一支同一道门、同样统一 404,不给"这个路径存不存在"的探针。
+       * 同样统一 404,不给"这个路径存不存在"的探针。
        */
       await assertViewerMayCreateSessionAt(readRequestViewer(req), targetPath);
 
@@ -1404,14 +1418,14 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       await assertInsideWorkspaceRoot(finalProjectPath);
 
       /**
-       * fj:根目录包含判定只回答"这条路径在不在工作区里",**不回答"这个项目归谁"**。
+       * 根目录包含判定只回答"这条路径在不在工作区里",不回答"这个项目归谁"。
        *
-       * 于是任何持自助 API key 的用户,只要知道路径就能往**别人的项目**里以
-       * bypassPermissions 起 Claude —— 会话归属这道门(下面那段 `sessionId` 的
-       * 判定)守住了"续别人的会话",却守不住"在别人的项目里新开一条"。
+       * 只靠它的话,任何持自助 API key 的用户只要知道路径,就能在别人的项目里以 bypassPermissions
+       * 起 Claude:会话归属那道门(下面 `sessionId` 的判定)守住的是"续别人的会话",守不住
+       * "在别人的项目里新开一条"。
        *
-       * 复用与 MCP、`/api/commands` 同一道现成的门:已登记项目查可见性,
-       * 未登记路径按新建判定。失败统一 404,不给存在性探针。
+       * 复用与 MCP、`/api/commands` 同一道门:已登记项目查可见性,未登记路径按新建判定。
+       * 失败统一 404,不给存在性探针。
        */
       await assertViewerMayCreateSessionAt(readRequestViewer(req), finalProjectPath);
 
@@ -1426,17 +1440,14 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     finalProjectPath = normalizeProjectPath(finalProjectPath);
 
     /**
-     * 传进来的 `sessionId` 到底是什么意思 —— 判据只有一条:
-     * **库里那行的 `provider_session_id` 空不空。**
+     * 传进来的 `sessionId` 是什么意思,判据只有一条:库里那行的 `provider_session_id` 空不空。
      *
-     * 1. 库里有行、`provider_session_id` 为空 → 这是 `POST /api/agent/sessions`
-     *    领过号但还没跑过的会话 → **用这个 id 新建**。此时若按 resume 处理,
-     *    CLI 会去找一份根本不存在的 transcript,直接失败。
-     * 2. 库里有行、`provider_session_id` 有值 → 续那个 provider 会话。
-     * 3. 库里没这行 → **404**。以前的老语义是"当成 provider 原生 id 直接续",
-     *    但那条路绕开了 `canViewerSeeSession`(行还没被 watcher 索引进库时,
-     *    等于拿任意 id 以 bypassPermissions 续别人的 transcript)。收口:先经
-     *    `POST /api/agent/sessions` 领号,或等索引完成后用库里的 id。
+     * 1. 库里有行、`provider_session_id` 为空:`POST /api/agent/sessions` 领过号但还没跑过的会话,
+     *    用这个 id 新建。按 resume 处理的话,CLI 会去找一份根本不存在的 transcript,直接失败。
+     * 2. 库里有行、`provider_session_id` 有值:续那个 provider 会话。
+     * 3. 库里没这行:404。不把它当 provider 原生 id 直接续,那样会绕开 `canViewerSeeSession`
+     *    (行还没被 watcher 索引进库时,等于拿任意 id 以 bypassPermissions 续别人的 transcript)。
+     *    调用方先经 `POST /api/agent/sessions` 领号,或等索引完成后用库里的 id。
      */
     let appSessionId = sessionId || null;
     let resumeProviderSessionId = null;
@@ -1452,19 +1463,10 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         }
 
         /**
-         * F05:**续会话时,工作目录只能是这条会话登记的那个。**
+         * 续会话时,工作目录只能是这条会话登记的那个(判据见 resolveResumeProjectPath)。
          *
-         * `finalProjectPath` 到这里为止完全来自请求(`projectPath` / 克隆目标),
-         * 而会话行里有它自己的 `project_path` —— 两者可以不一样。不校验的后果是
-         * "续 A 会话的对话,却在 B 目录里执行":transcript 记的是 A 的历史,
-         * 改的却是 B 的文件,而会话侧栏、检查点、附件归属全都按 A 记账。
-         *
-         * 网页那条路早就收口了(`cwd: session.project_path`,**只从会话行取**,
-         * 见 chat-websocket.service 里的说明),外部 API 这条一直没有。
-         *
-         * 这里选择**明确拒绝**而不是静默改写:调用方明明白白传了一个目录,
-         * 悄悄换掉比报错更难查。不传 projectPath 的调用不受影响 —— 那本来就是
-         * "按会话自己的路径跑"的意思。
+         * 调用方明确传了不同的目录就 409,而不是静默改写 —— 悄悄换掉比报错更难查。
+         * 不传 projectPath / githubUrl 的调用不受影响:那本来就是"按会话自己的路径跑"。
          */
         const resolved = resolveResumeProjectPath(
           row.project_path ? normalizeProjectPath(row.project_path) : null,
@@ -1488,7 +1490,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     }
 
     /**
-     * 项目注册排在会话归属判定**之后**。
+     * 项目注册排在会话归属判定之后。
      *
      * 上面那段可能 409(会话登记的目录与请求给的对不上),而注册是有副作用的 ——
      * 先注册再拒绝会给一次被驳回的请求留下一行项目记录。
@@ -1496,7 +1498,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     // Register project path in DB (or reuse existing active registration).
     //
     // owner 必须在这里就传对:这次预注册先落行,后面 createAppSession 内部的
-    // createProjectPath 走 ON CONFLICT 分支、按设计**不改归属** —— 也就是说
+    // createProjectPath 走 ON CONFLICT 分支、按设计不改归属 —— 也就是说
     // 这里少传 owner,新路径的项目就永远无主。无主项目在现行可见性规则下
     // 非公共目录仅 root 可见:API 调用者自己都打不开返回的 /session/<id> 链接;
     // 恰在公共目录下则对全服务器公开。两个方向都不是"归调用者所有"的本意。
@@ -1509,22 +1511,17 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
 
     /**
-     * 异步模式:id 先走,回合后走。
+     * 异步模式:id 先走,回合后走。顺序是故意的:
      *
-     * 顺序是**故意**这样的:
+     * 1. 先定下会话 id 并立刻在库里占一行(`createAppSession`)。占了行,`/session/<id>` 链接当场就能
+     *    打开,哪怕回合一个字都还没吐,页面看到的也是一段空对话,而不是"会话不存在"。
+     * 2. 把这一轮登记进 `chatRunRegistry`,写入口用网关 writer。此刻没有浏览器连着,`connection` 传 null;
+     *    人点开链接之后 `chat.subscribe` 会把 socket 加进来,前半段由补发游标补上。走网关还顺带让
+     *    显示日志照记、`chat.abort` 可用。
+     * 3. 回合真正开跑之前就把 id 发回去,调用方直接拿去拼链接。
      *
-     * 1. 先定下会话 id 并**立刻在库里占一行**(`createAppSession`)。占了行,
-     *    `/session/<id>` 这个链接当场就能打开 —— 哪怕回合一个字都还没吐,
-     *    页面看到的也是一段空对话,而不是"会话不存在"。
-     * 2. 把这一轮登记进 `chatRunRegistry`,写入口用网关 writer。**此刻一个
-     *    浏览器都没连着**,所以 `connection` 传 null;人点开链接之后
-     *    `chat.subscribe` 会把 socket 加进来,前半段由补发游标补上。
-     *    走网关还顺带两个好处:显示日志会记(见 az 轮),`chat.abort` 也能用。
-     * 3. 回合真正开跑之前就把 id 发回去。调用方直接拿去拼链接。
-     *
-     * 落盘文件名同样是这个 id(`newSessionId` → SDK 的 `Options.sessionId`),
-     * 所以"应用侧 id"和"provider 原生 id"是同一个值,链接、transcript、
-     * 侧栏三处对得上。
+     * 落盘文件名同样是这个 id(`newSessionId` → SDK 的 `Options.sessionId`),所以应用侧 id 和
+     * provider 原生 id 是同一个值,链接、transcript、侧栏三处对得上。
      */
     if (asyncMode) {
       if (!appSessionId) {
@@ -1544,7 +1541,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       });
 
       if (!run) {
-        // ga:拒绝的原因有两种(在跑的回合 / 终端接管着),原来一律报前者。
+        // 拒绝的原因有两种(在跑的回合 / 终端接管着),要分开报。
         const refusal = chatRunRegistry.explainRunRefusal(appSessionId);
         return res.status(409).json({
           error: refusal.code === 'HELD_BY_SHELL'
@@ -1555,9 +1552,10 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         });
       }
 
-      // 用户这条指令写进显示日志(与 chat.send 的 cb 修复同源):外部 API 发起
+      // 用户这条指令写进显示日志(与 chat.send 同一做法):外部 API 发起
       // 的回合,网页打开会话也要能看到"是谁让它干的什么",重启/刷新都不丢。
-      sessionMessagesDb.append(appSessionId, {
+      // 同一行再作为这一轮的实时帧推给正在看这段会话的人(不重复落库)。
+      const userRow = {
         id: generateMessageId('user'),
         sessionId: appSessionId,
         timestamp: new Date().toISOString(),
@@ -1565,10 +1563,12 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         kind: 'text',
         role: 'user',
         content: message.trim(),
-        // hl(动态 P2-6):记下发起人 —— 会话的归档 / 还原 / 永久删要认"这是不是我开的"。
+        // 记下发起人:会话的归档 / 还原 / 永久删要认"这是不是我开的"。
         senderUserId: req.user.id,
         origin: 'api',
-      });
+      };
+      sessionMessagesDb.append(appSessionId, userRow);
+      chatRunRegistry.broadcastWithoutPersist(appSessionId, userRow);
 
       res.status(202).json({
         success: true,
@@ -1591,18 +1591,16 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         model,
         effort,
         permissionMode: 'bypassPermissions',
-        // fj:异步这条漏了 actorUsername(同文件的同步路径有)。漏了的后果是
-        // 配了 PRISM_ALLOW_BYPASS_USERS 之后,异步 API **恒定**被降级成
-        // acceptEdits —— 而它背后没有人看审批框,只会一路挂到 1 小时审批兜底。
+        // 异步路径同样要带 actorUsername:配了 PRISM_ALLOW_BYPASS_USERS 时,缺了它会被恒定降级成
+        // acceptEdits,而这条路背后没有人看审批框。
         actorUsername: req.user?.username ?? null,
-        actorUserId: req.user?.id ?? null, // hq:网关 key 按调 API 的账号
-        usageSource: 'api',   // fg:外部接口跑的账单独一档
-        // ho(ho-4):调 API 的程序答不了审批 —— 要问人的工具调用立刻拒(模型据此换路),不再挂 1 小时
+        actorUserId: req.user?.id ?? null, // 网关 key 按调 API 的账号
+        usageSource: 'api',   // 外部接口跑的账单独一档
+        // 调 API 的程序答不了审批:要问人的工具调用立刻拒(模型据此换路)
         unattended: true,
         oneShot: true,
       }, run.writer).then((outcome) => {
-        // hl(动态 P1-1):一次性路径现在返回成败;异步模式没有响应可改,
-        // 但失败要进日志(此前 CLI 起不来 / 模型名不存在这里一个字都没有)。
+        // 一次性路径返回成败;异步模式没有响应可改,但失败要进日志。
         if (outcome && outcome.ok === false) {
           log.warn('[Agent API] 异步回合失败', { sessionId: appSessionId, error: outcome.error, aborted: outcome.aborted });
         }
@@ -1615,22 +1613,19 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         // 兜底的终止帧:运行时崩了或者没发自己的 complete 时,不能让页面
         // 永远转圈。只对"还是当前这一轮"生效。
         chatRunRegistry.completeRunIfCurrent(run, { exitCode: 1 });
-        // dv:这一轮也可能压着用户在页面上排的那条(F7 的排队按会话存在服务端)。
-        // 此前只有 WS 那条路径会续发,外部 API 跑完没人来接,排队那条一直躺到
-        // 30 分钟 TTL 过期被丢 —— 用户永远等不到回复。
+        // 这一轮也可能压着用户在页面上排的那条(排队按会话存在服务端)。外部 API 跑完要续发,
+        // 否则排队那条会一直躺到 30 分钟 TTL 过期被丢,用户永远等不到回复。
         drainPendingSendForSession(appSessionId);
       });
 
       return;
     }
 
-    // B2:同步路径(stream / 非 stream)也要占用运行位。此前它不 startRun、
-    // 不查 holder —— 于是同一个 provider 会话可以被网页聊天的常驻 runtime 与这条
-    // 同步 API 回合**同时写同一份 transcript**(正是所有权机制要消灭的双写)。
-    // 只在"指向了某个已有会话"(appSessionId 有值:领过号或续已存在会话)时占位
-    // 并做冲突检查 —— 这正是双写会发生的场景;全新会话(appSessionId 为空)没有
-    // 可冲突的目标,保持原语义不动。冲突回 409;runId 一并传给 queryClaudeSDK,
-    // 顺带让 chat.abort 也能中止这条同步回合。
+    // 同步路径(stream / 非 stream)也要占用运行位,否则同一个 provider 会话可以被网页聊天的常驻
+    // runtime 与这条同步 API 回合同时写同一份 transcript(所有权机制要消灭的正是这种双写)。
+    // 只在"指向了某个已有会话"(appSessionId 有值:领过号或续已存在会话)时占位并做冲突检查,
+    // 这正是双写会发生的场景;全新会话(appSessionId 为空)没有可冲突的目标,不占位。
+    // 冲突回 409;runId 一并传给 queryClaudeSDK,让 chat.abort 也能中止这条同步回合。
     let syncRun = null;
     if (appSessionId) {
       syncRun = chatRunRegistry.startRun({
@@ -1641,7 +1636,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         userId: req.user.id,
       });
       if (!syncRun) {
-        // ga:同上 —— 终端接管着的时候别报"有回合在跑"(见 explainRunRefusal)。
+        // 同上:终端接管着的时候别报"有回合在跑"(见 explainRunRefusal)。
         const refusal = chatRunRegistry.explainRunRefusal(appSessionId);
         return res.status(409).json({
           error: refusal.code === 'HELD_BY_SHELL'
@@ -1651,29 +1646,9 @@ router.post('/', validateExternalApiKey, async (req, res) => {
           sessionId: appSessionId,
         });
       }
-      /**
-       * 客户端断开就中止这一轮。
-       *
-       * 之前这个文件里一处 `req.on('close')` 都没有。SSE 客户端断开(超时、反代掐、
-       * 用户关页)之后 `res.write()` 往已 destroy 的 socket 写是**静默丢弃** ——
-       * 不崩,也不报错,于是回合会一路跑到底:CLI 子进程继续几十分钟,`syncRun`
-       * 一直占着运行位,该会话对网页端表现为"有回合在跑"(消息只能排队),
-       * 调用方重试同一会话拿到 409。
-       *
-       * `once` 而不是 `on`:'close' 只会来一次,但 Express 的 res 在某些
-       * 反代组合下会转发多次,重复 abort 是无谓的噪声。
-       *
-       * 中止失败不抛 —— 断开时已经没人接这条错误了,记一行就够。
-       */
-      req.once('close', () => {
-        if (res.writableEnded) return; // 正常收尾,不是断开
-        log.warn(`[Agent] 客户端断开,中止会话 ${appSessionId} 的同步回合`);
-        void Promise.resolve(abortClaudeSDKSession('', { runId: appSessionId }))
-          .catch((error) => log.warn('[Agent] 断开后中止失败:', error?.message ?? error));
-      });
 
-      // 同上:同步路径的用户指令也落显示日志。
-      sessionMessagesDb.append(appSessionId, {
+      // 同上:同步路径的用户指令也落显示日志,并作为实时帧推给正在看的人。
+      const userRow = {
         id: generateMessageId('user'),
         sessionId: appSessionId,
         timestamp: new Date().toISOString(),
@@ -1683,7 +1658,9 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         content: message.trim(),
         senderUserId: req.user.id,
         origin: 'api',
-      });
+      };
+      sessionMessagesDb.append(appSessionId, userRow);
+      chatRunRegistry.broadcastWithoutPersist(appSessionId, userRow);
     }
 
     // Set up writer based on streaming mode
@@ -1714,12 +1691,31 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       });
     }
 
-    // hl(动态 P1-1):同步路径把一次性回合的成败带进响应。
+    // 同步路径把一次性回合的成败带进响应。
     let turnOutcome = null;
 
     // Start the session (Claude is the only provider)
     if (provider === 'claude') {
       log.info('🤖 Starting Claude SDK session');
+
+      /**
+       * 调用方断开就中止这一轮(只对占了运行位、带 runId 的回合:中止按 runId 找回合)。
+       *
+       * 不中止的话,SSE 调用方断开(超时、反代掐、用户关页)之后 `res.write()` 往已 destroy 的 socket
+       * 写是静默丢弃,回合一路跑到底:CLI 子进程继续几十分钟,`syncRun` 一直占着运行位,网页端这段会话
+       * 只能排队,调用方重试同一会话拿到 409。
+       *
+       * 盯的时段正好是这一轮:紧挨着开回合(中间没有 await,queryClaudeSDK 同步登记 runId,断开回调必然
+       * 落在登记之后),回合一结束就在 finally 里解除。finally 会续发网页上排队的那条,它登记在同一个
+       * runId 下,之后的断开不能再按 runId 去停它。中止失败不抛:断开之后没人接这条错误,记一行就够。
+       */
+      const stopWatchingDisconnect = syncRun
+        ? watchClientDisconnect(res, () => {
+          log.warn(`[Agent] 客户端断开,中止会话 ${appSessionId} 的同步回合`);
+          void Promise.resolve(abortClaudeSDKSession('', { runId: appSessionId }))
+            .catch((error) => log.warn('[Agent] 断开后中止失败:', error?.message ?? error));
+        })
+        : null;
 
       try {
         turnOutcome = await queryClaudeSDK(message.trim(), {
@@ -1735,18 +1731,18 @@ router.post('/', validateExternalApiKey, async (req, res) => {
           permissionMode: 'bypassPermissions', // Bypass all permissions for API calls
           // 服务端 bypass 白名单要认人(见 claude-sdk 的 readBypassAllowlist)
           actorUsername: req.user?.username ?? null,
-          actorUserId: req.user?.id ?? null, // hq:网关 key 按调 API 的账号
-          usageSource: 'api',   // fg:外部接口跑的账单独一档
-          // ho(ho-4):同上,无人审批 → 立刻拒
+          actorUserId: req.user?.id ?? null, // 网关 key 按调 API 的账号
+          usageSource: 'api',   // 外部接口跑的账单独一档
+          // 同异步路径:无人审批,要问人的工具调用立刻拒
           unattended: true,
           oneShot: true // API turns stay on the per-turn path (no resident runtime)
         }, writer);
       } finally {
-        // 释放运行位:回合结束(成功/失败)都要放,否则这个会话会被永久标成
-        // "有回合在跑",后续请求全被 409 挡下。
-        // hl(动态 P1-1):兜底帧的 exitCode 按真实成败(正常时 SDK 已发过 complete,只收一个)。
+        stopWatchingDisconnect?.();
+        // 释放运行位:回合结束(成功 / 失败)都要放,否则这个会话会被永久标成"有回合在跑",
+        // 后续请求全被 409 挡下。兜底帧的 exitCode 按真实成败(正常时 SDK 已发过 complete,只收一个)。
         if (syncRun) chatRunRegistry.completeRunIfCurrent(syncRun, { exitCode: turnOutcome && turnOutcome.ok === false ? 1 : 0 });
-        // dv:同步路径同理 —— 跑完把排队那条接上去。
+        // 同步路径同理:跑完把排队那条接上去。
         if (syncRun) drainPendingSendForSession(syncRun.appSessionId);
       }
 
@@ -1774,7 +1770,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     let branchInfo = null;
     let prInfo = null;
 
-    // hl(动态 P1-1):回合失败就不建分支 / PR —— 那是"成功之后"的事。
+    // 回合失败就不建分支 / PR:那是"成功之后"的事。
     const turnFailed = Boolean(turnOutcome && turnOutcome.ok === false);
     if (turnFailed) {
       log.warn('[Agent API] 同步回合失败', { sessionId: writer.getSessionId(), error: turnOutcome.error, aborted: turnOutcome.aborted });
@@ -1959,8 +1955,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
 
     // Handle response based on streaming mode
     if (stream) {
-      // hl(动态 P1-1):流式也要有一帧明确的失败(error 帧早就发过,但调用方按
-      // 最后一帧判断时只看得到 done)。
+      // 流式也要有一帧明确的失败(运行时的 error 帧可能早已发过,但调用方按最后一帧判断时只看得到 done)。
       if (turnFailed) {
         writer.send({
           type: 'error',
@@ -1976,7 +1971,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
       const assistantMessages = writer.getAssistantMessages();
       const tokenSummary = writer.getTotalTokens();
 
-      // hl(动态 P1-1):失败的回合 `success:false` + 原因 + 502(上游模型 / CLI 失败);
+      // 失败的回合回 `success:false` + 原因 + 502(上游模型 / CLI 失败);
       // 已经收到的助手文本照样给,调用方能看到失败前说了什么。
       const response = {
         success: !turnFailed,
@@ -1985,6 +1980,8 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         sessionId: writer.getSessionId(),
         messages: assistantMessages,
         tokens: tokenSummary,
+        // 收集器的缓冲超过上限丢过帧:messages / tokens 可能不全(见 ResponseCollector)
+        truncated: writer.wasTruncated(),
         projectPath: finalProjectPath
       };
       if (turnFailed) res.status(502);
@@ -2019,12 +2016,12 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     }
 
     /*
-     * hl(动态 P3):**回合还没开跑就被拒的,按拒绝的状态码回。**
+     * 回合还没开跑就被拒的,按拒绝的状态码回。
      *
-     * `assertViewerMayCreateSessionAt` 抛的是带 statusCode=404 的 AppError(与"项目不存在"
-     * 同形),此前这里一律 500(非流式)或 200 + SSE error 帧(流式)—— 调用方分不清
-     * "没权限"和"服务器炸了",而 500 还会被反代当故障计数。响应头还没发出去时
-     * (流式模式的 SSE 头在 writer 建立后才写),直接按状态码回 JSON。
+     * `assertViewerMayCreateSessionAt` 抛的是带 statusCode=404 的 AppError(与"项目不存在"同形);
+     * 一律回 500(非流式)或 200 + SSE error 帧(流式)的话,调用方分不清"没权限"和"服务器炸了",
+     * 500 还会被反代当故障计数。响应头还没发出去时(流式模式的 SSE 头在 writer 建立后才写),
+     * 直接按状态码回 JSON。
      */
     if (!res.headersSent && !writer && Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode < 500) {
       return res.status(error.statusCode).json({ success: false, error: error.message, code: error.code ?? undefined });

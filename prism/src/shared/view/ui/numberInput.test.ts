@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { commitNumber, parseTyping, stepNumber } from './numberInput';
 
 /**
- * hh:数字框「删不掉那个 1、敲 3 变 13」—— 打字时不改写文字、离开时才夹取。
+ * 数字框不能「删不掉那个 1、敲 3 变 13」:打字时不改写文字、离开时才夹取。
  */
 describe('parseTyping', () => {
   it('空串 / 只有符号 / 小数点结尾都不算数(让人接着打)', () => {
@@ -37,7 +37,7 @@ describe('commitNumber', () => {
   });
 });
 
-describe('stepNumber(hl · 09-24 静态 P3)', () => {
+describe('stepNumber', () => {
   it('可留空的空框按 ↑ 从 placeholder 的默认值起步,而不是从 0 / min', () => {
     // 基线:base = value ?? fallback ?? min ?? 0 → 空框「默认 8」按 ↑ 得 2(min=1)
     expect(stepNumber('', null, 1, { min: 1, max: 50, integer: true, placeholder: '8' })).toEqual({ value: 9, text: '9' });

@@ -1,9 +1,9 @@
 import path from 'node:path';
 
 /**
- * 可见性判定的 **SQL 侧**唯一出处。
+ * 可见性判定的 SQL 侧唯一出处。
  *
- * 项目列表(`projectsDb.getProjectPaths`)和归档会话列表(E10)都要在 SQL 里
+ * 项目列表(`projectsDb.getProjectPaths`)和归档会话列表都要在 SQL 里
  * 把"谁能看到什么"下推 —— 不下推就得先全表捞回来再逐行 JS 判定,那是 N+1,
  * 也没法分页(分完页才过滤 = 每页条数飘忽)。但同一条规则抄两份 SQL 迟早会漂,
  * 而漂的方向一半是越权。所以这里只留一份,谁要谁传列名。
@@ -41,8 +41,8 @@ export function buildPublicPathClause(pathColumn = 'project_path'): { sql: strin
  *   本人 OR 显式 public OR 被 project_shares 指定 OR (无主且在公共目录下)。
  *
  * `pathColumn` 单独传是因为归档会话那条走 LEFT JOIN:项目行可能根本不存在
- * (会话先被索引、项目还没落行),此时 owner 列为 NULL,判定要回落到**会话自己
- * 记的路径**在不在公共目录下 —— 正是 JS 侧 `projectVisibilityInput(null, path)`
+ * (会话先被索引、项目还没落行),此时 owner 列为 NULL,判定要回落到会话自己
+ * 记的路径在不在公共目录下 —— 正是 JS 侧 `projectVisibilityInput(null, path)`
  * 的语义。
  */
 export function buildProjectVisibilityClause(options: {

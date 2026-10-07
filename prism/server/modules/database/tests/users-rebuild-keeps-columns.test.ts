@@ -10,17 +10,14 @@ import { closeConnection, getConnection, initializeDatabase } from '@/modules/da
 import { REQUIRED_COLUMNS, findMissingColumns } from '@/modules/database/migrations.js';
 
 /**
- * **2026-09-15 生产事故的回归测试。**
+ * 重建 users 表不许丢列。
  *
- * `rebuildUsersTableWithCaseInsensitiveUsername` 是 DROP + 按**写死的列清单**重建。
- * `attachment_quota_mb` 是后来由迁移加的列,加的人没回头补那份清单 —— 而那批
- * `addColumn` 又跑在重建**之前**。于是生产首启时:先加上、再被重建连列带数据抹掉,
- * 「账号管理」页当场 500(`no such column: u.attachment_quota_mb`),
- * 每人的附件配额覆盖值一起没了。
+ * `rebuildUsersTableWithCaseInsensitiveUsername` 是 DROP + 按写死的列清单重建,而一批
+ * `addColumn` 迁移跑在它之前:清单里漏了哪一列,那一列就会先被加上、再被重建连列带数据抹掉
+ * (例如 `attachment_quota_mb`:账号管理页 500,每人的附件配额覆盖值一起丢失)。
  *
- * 测试环境永远复现不了:重建开头有守卫,`username` 已经是 COLLATE NOCASE 就直接返回,
- * 而测试库早就是 NOCASE。**只有从"老形状"升上来的库才会跑那段** —— 所以这里必须
- * 手工造一张 BINARY username 的老库。
+ * 重建开头有守卫,`username` 已经是 COLLATE NOCASE 就直接返回,所以只有 BINARY username
+ * 的老库才会跑到那段,这里必须手工造一张这样的库。
  */
 
 /** 老形状:username 是默认的 BINARY 排序,且已经有 attachment_quota_mb 和值。 */
@@ -88,7 +85,7 @@ describe('users 表重建:列与数据都不许丢', () => {
     });
   });
 
-  test('**关键**:attachment_quota_mb 这一列还在', async () => {
+  test('attachment_quota_mb 这一列还在', async () => {
     await withLegacyDatabase(() => {
       assert.ok(
         userColumns().includes('attachment_quota_mb'),
@@ -97,7 +94,7 @@ describe('users 表重建:列与数据都不许丢', () => {
     });
   });
 
-  test('**关键**:每人的配额覆盖值也还在', async () => {
+  test('每人的配额覆盖值也还在', async () => {
     await withLegacyDatabase(() => {
       const row = getConnection()
         .prepare('SELECT attachment_quota_mb FROM users WHERE username = ?')
@@ -144,7 +141,7 @@ describe('users 表重建:列与数据都不许丢', () => {
   });
 
   test('REQUIRED_COLUMNS 与重建函数那份写死的清单必须一致', async () => {
-    // 源码断言:两份清单分居两处,只改一处就是这次事故的复刻
+    // 源码断言:两份清单分居两处,只改一处,重建时就会丢列
     const { readFileSync } = await import('node:fs');
     const { fileURLToPath } = await import('node:url');
     const here = path.dirname(fileURLToPath(import.meta.url));

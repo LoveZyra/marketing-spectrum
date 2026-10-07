@@ -118,7 +118,7 @@ const CodeBlock = ({ node, inline, className, children, streaming, ...props }: C
   const match = /language-(\w+)/.exec(className || '');
   const language = match ? match[1] : 'text';
 
-  // mermaid 块渲染成图(F3):流式期间不试渲染(半截源码必然报错),
+  // mermaid 块渲染成图:流式期间不试渲染(半截源码必然报错),
   // 定稿后再画;渲染失败回退为下面这个高亮源码块。
   if (language === 'mermaid' && !streaming) {
     return (
@@ -216,7 +216,7 @@ const CodeBlock = ({ node, inline, className, children, streaming, ...props }: C
 
 const markdownComponents = {
   code: CodeBlock,
-  // dl:图片惰性解码。滚动到再取,解码不占主线程;加载完成前后由外层
+  // 图片惰性解码。滚动到再取,解码不占主线程;加载完成前后由外层
   // 滚动控制器守位,这里不做占位框 —— 猜错的 min-height 比不占位更晃。
   img: ({ alt, ...imgProps }: { alt?: string; src?: string }) => (
     <img alt={alt ?? ''} loading="lazy" decoding="async" {...imgProps} />
@@ -271,15 +271,9 @@ const MarkdownBody = memo(function MarkdownBody({ content, streaming }: { conten
           return (
             <a
               /**
-               * fj:这条分支也要过 `safeLinkHref`。
-               *
-               * `fileRef` 在 href 不像路径时会**取链接文本**,而 react-markdown
-               * 会把 `[javascript:a/b]()` 的 href 洗成 `''` —— 于是
-               * `'' || fileRef` 落到链接文本上,渲染出 `<a href="javascript:...">`。
-               * 点击被下面的 `preventDefault` 挡着、浏览器也拦 `javascript:`,
-               * 所以**实际不可利用**;但这正是 dv 轮明确要消除的形态,而且用户
-               * 「复制链接地址」会拿到一段脚本。href 只是可复制/可悬停的展示值,
-               * 真正的行为由 onClick 接管,所以洗成 '#' 不影响功能。
+               * 这条分支也要过 safeLinkHref:react-markdown 会把 `[javascript:a/b]()` 的 href 洗成 '',
+               * `'' || fileRef` 就落到链接文本上,渲染出 javascript: 链接(点击虽被 preventDefault 挡住,
+               * 「复制链接地址」仍会拿到脚本)。href 只是展示值,行为由 onClick 接管,洗成 '#' 不影响功能。
                */
               href={safeLinkHref(href || fileRef) ?? '#'}
               className="cursor-pointer text-foreground hover:underline dark:text-primary"
@@ -293,7 +287,7 @@ const MarkdownBody = memo(function MarkdownBody({ content, streaming }: { conten
           );
         }
 
-        // dv:协议白名单外的一律不挂 href —— 只把原文显示出来。
+        // 协议白名单外的一律不挂 href,只把原文显示出来。
         const safeHref = safeLinkHref(href);
         if (!safeHref) {
           return (
@@ -339,16 +333,16 @@ export const Markdown = memo(function Markdown({ children, className, streaming 
 });
 
 /**
- * 流式专用的两段式渲染(dl)。
+ * 流式专用的两段式渲染。
  *
- * 每次 flush 全量重解析是打字机后期变卡的根源:成本随答案长度线性涨,整轮
- * 二次方。这里按 `splitStreamingMarkdown` 切成「封版前缀 + 活动尾巴」:
- * 前缀那份 MarkdownBody 的 content 只在又一个段落完成时才变(memo 命中,
- * 整棵跳过),每次 flush 真正重解析的只有尾巴那几百个字符。
+ * 每次 flush 都全量重解析的话,成本随答案长度线性涨、整轮二次方。这里按
+ * `splitStreamingMarkdown` 切成「封版前缀 + 活动尾巴」:前缀那份 MarkdownBody 的
+ * content 只在又一个段落完成时才变(memo 命中,整棵跳过),每次 flush 真正重解析的
+ * 只有尾巴那几百个字符。
  *
- * 两个 body 放在**同一个** prose 容器里:Typography 的样式按后代选择器生效,
+ * 两个 body 放在同一个 prose 容器里:Typography 的样式按后代选择器生效,
  * 段间距由每个块自己的 margin 提供,拼缝处与单实例渲染一致。定稿后走回
- * 普通 Markdown(整段一个实例),行为与 dl 之前完全相同。
+ * 普通 Markdown(整段一个实例)。
  */
 export const StreamingMarkdown = memo(function StreamingMarkdown({ children, className }: { children: React.ReactNode; className?: string }) {
   const content = normalizeInlineCodeFences(String(children ?? ''));

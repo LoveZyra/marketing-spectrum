@@ -1,12 +1,11 @@
 import type { NormalizedMessage } from '@/shared/types.js';
 
 /**
- * hl(09-24 P2-21):反馈接口的**服务端核对**。
+ * 反馈接口(`POST /sessions/:id/messages/:messageId/feedback`)的服务端核对。
  *
- * 此前 `POST /sessions/:id/messages/:messageId/feedback` 只查会话可见性:messageId 随便填、
- * `skill_hint` 由客户端自报 —— 能看到会话的人可以给任意技能伪造任意多条评价(每个假
- * messageId 一行),污染技能优化的训练数据。这里从显示日志反查两件事:
- *   1. 这条 messageId 是不是这个会话里的一条**助手回答**;
+ * 只查会话可见性的话,能看到会话的人可以随便填 messageId、自报 `skill_hint`,给任意技能伪造
+ * 任意多条评价(每个假 messageId 一行),污染技能优化的训练数据。所以从显示日志反查两件事:
+ *   1. 这条 messageId 是不是这个会话里的一条助手回答;
  *   2. 这一轮(上一条用户消息到这条回答之间)调过哪个 Skill —— 取第一帧。
  * 客户端传的 skill 只在服务端查不到时才用(老会话显示日志被裁过、或工具帧没落库)。
  */
@@ -31,7 +30,7 @@ export function resolveFeedbackTarget(messages: readonly NormalizedMessage[], me
       continue;
     }
     if (message.id === messageId) {
-      // 只认助手侧的行:给自己的提问点 👎 没有训练意义,也不该占一行。
+      // 只认助手侧的行:给自己的提问点踩没有训练意义,也不该占一行。
       const assistantSide = message.role === 'assistant' || message.role === undefined;
       return { found: assistantSide, skill: assistantSide ? turnSkill : null };
     }

@@ -7,8 +7,8 @@ import { issueTicket, consumeTicket } from '../ws-tickets.js';
 import { issuePreviewTicket, readPreviewTicket, resetPreviewTickets } from '../preview-tickets.js';
 
 /**
- * 两类票据合并到同一份实现之后,最要紧的是它们的**语义差别没有被抹掉**:
- * WS 票据取出即废,预览票据必须能重复使用。合并时想当然地统一成一次性,
+ * 各类票据共用同一份实现,最要紧的是它们的语义差别不能被抹掉:
+ * WS 票据取出即废,预览票据必须能重复使用。若统一成一次性,
  * 坏掉的是编辑器预览里的图片和样式 —— 第一张图之后全部失败。
  */
 describe('票据存储', () => {
@@ -53,13 +53,13 @@ describe('票据存储', () => {
 describe('两类票据的对外契约不变', () => {
   test('WS 票据是一次性的', () => {
     const ticket = issueTicket(42);
-    // fj:载荷多了 tokenVersion —— 消费时要比对,不比对的话「退出所有设备」
-    // 之后已签发的那张 60 秒票据仍能开新连接(REST 和 JWT-WS 两条路都比对了)。
+    // 载荷带 tokenVersion,消费方据此比对:「退出所有设备」之后,
+    // 已签发的 60 秒票据不能再开新连接。
     assert.deepEqual(consumeTicket(ticket), { userId: 42, tokenVersion: null });
     assert.equal(consumeTicket(ticket), null);
   });
 
-  test('fj:签发时带上的 token_version 会原样还回来', () => {
+  test('签发时带上的 token_version 会原样还回来', () => {
     const ticket = issueTicket(7, 3);
     assert.deepEqual(consumeTicket(ticket), { userId: 7, tokenVersion: 3 });
   });

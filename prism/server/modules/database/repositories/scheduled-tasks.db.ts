@@ -2,12 +2,11 @@ import { getConnection } from '@/modules/database/connection.js';
 import { buildProjectVisibilityClause } from '@/modules/database/visibility-sql.js';
 
 /**
- * 定时任务表(cj 轮,B 方案)。
+ * 定时任务表。
  *
- * 频率用**预设枚举**而不是自由 cron:manual / hourly / daily / weekdays /
- * weekly / monthly,配 run_at_* 字段描述具体时刻 —— 覆盖截图里的全部选项,
- * 不引 cron 解析依赖;next_run_at 由 service 的纯函数推算,调度器只做
- * 「enabled 且 next_run_at <= now 且未在跑」的捞取。
+ * 频率用预设枚举而不是自由 cron:manual / hourly / daily / weekdays / weekly / monthly,
+ * 配 run_at_* 字段描述具体时刻,不引 cron 解析依赖。next_run_at 由 service 的纯函数推算,
+ * 调度器只做「enabled 且 next_run_at <= now 且未在跑」的捞取(见 listDue)。
  */
 export type TaskFrequency = 'manual' | 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'monthly';
 export type TaskSessionMode = 'fixed' | 'new';
@@ -103,11 +102,9 @@ export const scheduledTasksDb = {
   },
 
   /**
-   * hl(09-24 P1-9):项目**永久删除**时把它的定时任务连运行记录一起删掉。
-   *
-   * 此前删项目不碰 `scheduled_tasks`:任务到点照跑,找不到固定会话就
-   * `createAppSession` → `createProjectPath` 把项目以**新 project_id** 重建出来,
-   * 属主是任务主人、原共享 / 公开设置全丢。调用方把它放进删项目的同一个事务里。
+   * 项目永久删除时把它的定时任务连运行记录一起删掉。不删的话任务到点照跑,找不到固定会话就
+   * `createAppSession` → `createProjectPath` 把项目以新 project_id 重建出来,属主变成任务主人,
+   * 原共享 / 公开设置全丢。调用方把它放进删项目的同一个事务里。
    */
   deleteByProjectPath(projectPath: string): number {
     const db = getConnection();
@@ -119,8 +116,8 @@ export const scheduledTasksDb = {
   },
 
   /**
-   * hl(09-24 P1-9):项目**归档**时停用它的定时任务(不删:还原项目后由人决定要不要
-   * 重新启用 —— 归档期间可能已经错过很多次,自动恢复等于一还原就立刻跑)。
+   * 项目归档时停用它的定时任务。不删:还原项目后由人决定要不要重新启用;也不在还原时自动启用,
+   * 归档期间可能已经错过很多次,自动恢复等于一还原就立刻跑。
    */
   disableByProjectPath(projectPath: string): number {
     return getConnection().prepare(`
@@ -143,10 +140,10 @@ export const scheduledTasksDb = {
   },
 
   /**
-   * 一个用户能看到的任务:**自己建的** ∪ **跑在他能看见的项目上的**。
+   * 一个用户能看到的任务:自己建的 ∪ 跑在他能看见的项目上的。
    *
    * 任务的权限面整个挂在项目可见性上(项目分享给谁,任务就跟着给谁,而且是全权)。
-   * 这里的子查询和 `projectsDb.getProjectPaths(visibleTo)` 用的是**同一个**
+   * 这里的子查询和 `projectsDb.getProjectPaths(visibleTo)` 用的是同一个
    * `buildProjectVisibilityClause` —— 两处必须逐字同义,漂开的那条缝就是权限洞。
    *
    * `owner_user_id = ?` 这一支不能省:任务可能跑在一个还没被扫描进 projects 表的
@@ -165,9 +162,9 @@ export const scheduledTasksDb = {
   /**
    * 捞出到点该跑的任务(启用、时刻已到、没在跑)。
    *
-   * 还要求**主人仍然是个有效账号** —— 用户被停用/拒批之后,他留下的定时器
-   * 不该继续以他的名义跑下去。以前只看 enabled + next_run_at,删掉的人的任务
-   * 会一直跑到有人手动发现为止。
+   * 主人被停用(或删掉)的任务不捞:他留下的定时器不该继续以他的名义跑下去。
+   * 审批状态不在这里判:口径要与登录一致(root、关掉审批时都不看审批状态),由执行时的
+   * `isAccountUsable` 判,不可用就记一条跳过并推到下一周期,用户与运维看得到原因。
    */
   listDue(nowIso: string): ScheduledTaskRow[] {
     return getConnection().prepare(`
@@ -176,7 +173,7 @@ export const scheduledTasksDb = {
         AND t.next_run_at IS NOT NULL AND t.next_run_at <= ?
         AND EXISTS (
           SELECT 1 FROM users u
-          WHERE u.id = t.owner_user_id AND u.is_active = 1 AND u.approval_status = 'approved'
+          WHERE u.id = t.owner_user_id AND u.is_active = 1
         )
     `).all(nowIso) as ScheduledTaskRow[];
   },
@@ -187,7 +184,7 @@ export const scheduledTasksDb = {
   },
 
   /**
-   * 收尾:更新任务上的 last_run_* 摘要,并**追加一条运行记录**。
+   * 收尾:更新任务上的 last_run_* 摘要,并追加一条运行记录。
    *
    * 两件事放在一个事务里 —— 摘要和明细对不上的话,详情页顶部说成功、
    * 列表里最新一条说失败,没人知道该信哪个。

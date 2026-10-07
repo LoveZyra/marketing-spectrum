@@ -1,12 +1,12 @@
 /**
- * gy:SkillWhet(技能优化)服务的进程托管 —— 让「起 Prism」顺带把 `whet serve` 也起起来。
+ * SkillWhet(技能优化)服务的进程托管:起 Prism 时顺带把 `whet serve` 也拉起来。
  *
  * 与 `ma-service.js` 同一个形状(默认关闭、监听地址从反代目标反推、healthz 轮询、退避重启、
  * Prism 退出一起收、日志并进 prism.log),只是子进程换成
  * `<python> -m skillwhet serve --host … --port … --home …`,口令换成 SKILLWHET_TOKEN。
- * 监管逻辑(退避重启、healthz 轮询、TERM → KILL)在 child-supervisor.js 与 ma-service 共用(hl)。
+ * 监管逻辑(退避重启、healthz 轮询、TERM → KILL)在 child-supervisor.js,与 ma-service 共用。
  *
- * 环境变量(全部可选,不配 = 原行为):
+ * 环境变量(全部可选):
  *   PRISM_SKILLWHET_ENABLE=1        不配:整层不挂载(路由与轨位都没有)
  *   PRISM_SKILLWHET_AUTOSTART=1     由 Prism 拉起 `whet serve`;不配:假定已有人起好,只转发
  *   PRISM_SKILLWHET_TARGET          回环目标,默认 http://127.0.0.1:8093;同时决定子进程监听端口
@@ -81,9 +81,9 @@ export function resolveSkillWhetConfig(env = process.env, logger = console) {
 export function identify(body) {
   try {
     const parsed = JSON.parse(body);
-    // hl:serve 的所有应答(含 /healthz)都包在 { ok: true, data: {...} } 信封里,原来只认平铺形状 ——
-    // 每次启动都判成"还没就绪"白等 30 秒并打一条误导的超时告警;Prism 崩溃后遗留的 serve 还会被
-    // 判成"端口被别的服务占着"。两种形状都认。
+    // serve 的应答(含 /healthz)包在 { ok: true, data: {...} } 信封里;平铺形状也认。
+    // 认不出时,正在应答的 serve 会被判成"还没就绪"白等到超时,Prism 崩溃后遗留的 serve
+    // 会被判成"端口被别的服务占着"。
     const data = parsed && parsed.ok === true && parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed;
     if (data && data.ok === true && typeof data.version === 'string' && typeof data.home === 'string') {
       return { skillwhet: true, version: data.version };
@@ -113,7 +113,7 @@ export function probeHealth(host, port, timeoutMs = 1_500) {
     const req = http.request(
       { host, port, path: '/healthz', method: 'GET', timeout: timeoutMs },
       (res) => {
-        // gz:不只看"有没有 200",还认一下身份 —— 任何 HTTP 服务在这个口上都会应答,
+        // 不只看有没有 200,还要认身份:这个端口上任何 HTTP 服务都会应答,
         // 只有 skillwhet 的 /healthz 回 { ok, version, home }。
         let body = '';
         res.setEncoding('utf8');
@@ -144,9 +144,9 @@ export function createSkillWhetSupervisor(config, {
       const tmp = path.join(config.home, 'tmp', 'prism-skillwhet');
       // TMPDIR 指进工作根:serve 自己也会设,这里再给一遍是为了 python 启动阶段就生效。
       // 只给 serve(以及它拉起的训练子进程、claude CLI)用得着的环境:PATH / HOME / 语言 / 代理 /
-      // Anthropic 与 Claude CLI 的配置 / Python 相关;Prism 自己的 DB 路径、JWT 密钥等不带过去(gz 审计 #15)
-      // hm(A2 / Q11):SDK 随包 claude 所在目录放 PATH 最前 —— SkillWhet 的 `claude -p` 与对话同一个版本
-      // (`CLAUDE_CLI_PATH` 显式配了就不动,见 withBundledClaudeOnPath);不让它自己去装新版本。
+      // Anthropic 与 Claude CLI 的配置 / Python 相关;Prism 自己的 DB 路径、JWT 密钥等不带过去。
+      // Prism 用的那个 claude 所在目录放 PATH 最前(规则见 withBundledClaudeOnPath),SkillWhet 的
+      // `claude -p` 与对话用同一个版本;DISABLE_AUTOUPDATER 不让它自己去装新版本。
       const childEnv = {
         ...withBundledClaudeOnPath(pickChildEnv(env), { configuredPath: env.CLAUDE_CLI_PATH }),
         DISABLE_AUTOUPDATER: '1',
@@ -170,7 +170,7 @@ export function createSkillWhetSupervisor(config, {
       '重启解决不了,看上面 | 开头的几行。已放弃自启;Prism 其余功能不受影响。',
     classifyExisting: (pre) => {
       if (pre.skillwhet === false) {
-        // gz:口上是别的 HTTP 服务(gy 现场:8093 被 ma-diagnose-api 占着)。拉起也只会 bind 失败,直说。
+        // 端口上应答的是别的 HTTP 服务:拉起也只会 bind 失败,直接报出来。
         return {
           state: 'failed',
           message: `${config.label} 上在应答的不是 skillwhet(/healthz 回的不是 { ok, version, home });端口被别的服务占着。` +
@@ -197,7 +197,7 @@ export function createSkillWhetServiceFromConfig(config, logger = console, env =
   return createSkillWhetSupervisor(config, { logger, env });
 }
 
-/* ── jobs/ 保留策略(hl,静态 P3「SkillWhet home 在 Prism 一侧无保留策略」) ──────────── */
+/* ── jobs/ 保留策略:SkillWhet home 下的作业目录由 Prism 按天数清理 ──────────── */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_JOBS_RETENTION_DAYS = 90;
@@ -213,7 +213,7 @@ export function jobsRetentionDaysFromEnv(env = process.env) {
 
 /**
  * 一个作业目录"多老":优先 state.json 的 finished_at,其次 created_at,都没有用目录 mtime。
- * 排队中 / 运行中的作业**永远不删**(serve 重启后它们会被标成 interrupted,那时才进入计时)。
+ * 排队中 / 运行中的作业永远不删(serve 重启后它们会被标成 interrupted,那时才进入计时)。
  * @returns {{ live: boolean, ageMs: number }}
  */
 function inspectJobDir(dir, nowMs) {

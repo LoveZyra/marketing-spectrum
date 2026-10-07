@@ -10,11 +10,10 @@ const log = createLogger('shared');
 /**
  * 聊天附件落在哪、能占多少、留多久。
  *
- * **落在会话所属项目的工作目录下的 `attachments/`**,而不是一个全局目录。
- * 全局目录的问题不是不好看,是**归属没法验**:目录是全局的,取文件时只能验
- * "你登录了",没法验"这个附件是你的" —— 任一登录用户都能读到别人的聊天图片。
- * 放进项目目录之后走 `files/content`,那条路自带项目可见性校验,归属问题
- * 自然消失;附件也随项目一起被删、一起被共享,生命周期终于对上了。
+ * 附件落在会话所属项目的工作目录下的 `attachments/`,而不是一个全局目录:全局目录
+ * 取文件时只能验"你登录了",没法验"这个附件是你的",任一登录用户都能读到别人的
+ * 聊天图片。放进项目目录之后走 `files/content`,那条路自带项目可见性校验;附件也
+ * 随项目一起被删、一起被共享。
  *
  * 会话还没落到任何项目上时回落到全局目录 —— 不能因为"还没选项目"就不让人传图。
  */
@@ -38,7 +37,7 @@ export function getAttachmentTtlDays(): number {
 /**
  * 附件总量上限(字节)。
  *
- * 优先级:**这个账号的覆盖值**(F6,root 在管理面里逐人设)> 全局默认
+ * 优先级:这个账号的覆盖值(root 在管理面里逐人设)> 全局默认
  * (`PRISM_ATTACHMENT_QUOTA_MB`)> 内置 10 GB。
  *
  * 覆盖是逐人的,因为需求本来就是逐人的:多数账号用不到 1 GB,个别人要传一堆
@@ -107,7 +106,7 @@ export type QuotaVerdict = {
 };
 
 /**
- * 配额检查。**只在拿得到 userId 时才拦** —— 匿名/内部调用一律放行,
+ * 配额检查。只在拿得到 userId 时才拦 —— 匿名/内部调用一律放行,
  * 宁可漏拦也不能因为拿不到用户就把上传堵死。
  */
 export function checkQuota(userId: number | null | undefined, incomingBytes: number): QuotaVerdict {
@@ -136,7 +135,7 @@ export function quotaExceededMessage(verdict: { usedBytes: number; quotaBytes: n
 export type CommitVerdict = { ok: boolean; reason?: 'quota' | 'error'; usedBytes: number; quotaBytes: number };
 
 /**
- * 落盘**之后**的最终把关:在一个同步临界区里「求和 + 判断 + 记账」一气呵成。
+ * 落盘之后的最终把关:在一个同步临界区里「求和 + 判断 + 记账」一气呵成。
  *
  * 为什么不能只信开传前那道 Content-Length 预检:
  *   - chunked 传输不带 Content-Length,预检看到 0,一律放行;
@@ -144,9 +143,9 @@ export type CommitVerdict = { ok: boolean; reason?: 'quota' | 'error'; usedBytes
  * 预检只当"开传前快速失败"的优化,真正守死账面的是这里。
  *
  * 为什么这段是原子的:better-sqlite3 是同步 API、Node 又是单线程 —— 从
- * `totalBytesForUser` 到 `record` 之间**没有 await**,并发请求走到这里天然串行,
+ * `totalBytesForUser` 到 `record` 之间没有 await,并发请求走到这里天然串行,
  * 不会两个都读到旧总量再各自放行。(落盘发生在临界区之外,所以磁盘峰值可能
- * 短暂超标,但被拒的文件由调用方立即删除,**最终入账绝不超配额**。)
+ * 短暂超标,但被拒的文件由调用方立即删除,最终入账绝不超配额。)
  *
  * userId 拿不到时一律放行并照常记账 —— 与 checkQuota 一致,不因身份缺失堵上传。
  */
@@ -183,7 +182,7 @@ export function commitAttachmentWithinQuota(params: {
  * 启动后先跑一次(进程可能停了很久,重启那一刻正是积压最多的时候),之后每小时一轮。
  * `unref()` 保证这个定时器不会把进程钉在事件循环里。
  *
- * **只删台账里记过的文件** —— `attachments/` 在文件树里是明放的,用户自己也会
+ * 只删台账里记过的文件 —— `attachments/` 在文件树里是明放的,用户自己也会
  * 往里放东西,扫目录会连人家的东西一起删。
  */
 export function startAttachmentSweeper(): NodeJS.Timeout {

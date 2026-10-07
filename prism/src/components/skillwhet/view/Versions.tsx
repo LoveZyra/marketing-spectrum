@@ -16,12 +16,12 @@ import DiffView from './DiffView';
 import { Badge } from './StatusStrip';
 
 /**
- * gz:版本 —— 一个 skill 的 staging 列表(训练产物)→ 选一份看 diff →
- * 「采纳到副本」(上传者 / root)→ 「发布到技能库」或「发布为新技能」(root,二次确认)→ 「下载包」。
- * 下面是技能库里被替换下来的旧版(保 3 份),root 可回滚。
+ * 版本:一个 skill 的 staging 列表(训练产物)→ 选一份看 diff →「留出集评估」(只一次)→
+ * 「采纳到副本」(上传者 / root)→「发布到技能库」或「发布为新技能」(root,二次确认);任一份都可「下载包」。
+ * 左栏下方是技能库里被替换下来的旧版(保 3 份,root 可回滚)与发布 / 回滚记录。
  *
- * 三个动作三道门,都在服务端(assertMayMutate / requireRoot / `status.adopted` / drift 检查);
- * 前端只把不能点的说明白。夜训计划(第四期)不在这页画空壳。
+ * 每个动作的门都在服务端(assertMayMutate / requireRoot / `status.adopted` / drift 检查);
+ * 前端只把不能点的说明白。
  */
 const fmtTime = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleString() : '—');
 const fmtScore = (v: number | null | undefined): string => (typeof v === 'number' ? v.toFixed(2) : '—');
@@ -53,7 +53,7 @@ export default function Versions({ data, isRoot, username, initialSkill, initial
   const [error, setError] = useState<string | null>(null);
   const [detailKey, setDetailKey] = useState(0);
   const [releaseJob, setReleaseJob] = useState<{ id: string; skill: string; sid: string } | null>(null);
-  // hl(静态 P2-29):快速切 skill 时旧请求后到会盖掉新列表 —— 每次 load 发一张票,回来时票不对就丢弃
+  // 快速切 skill 时旧请求可能后到、盖掉新列表:每次 load 发一张票,回来时票不对就丢弃
   const loadTicket = useRef(0);
 
   useEffect(() => {
@@ -72,7 +72,7 @@ export default function Versions({ data, isRoot, username, initialSkill, initial
         unwrap<{ staging: StagingSummary[] }>(await api.skillWhet.staging(name)),
         unwrap<{ rollbacks: RollbackEntry[]; liveExists: boolean }>(await api.skillWhet.rollbacks(name)).catch(() => ({ rollbacks: [] as RollbackEntry[], liveExists: null as boolean | null })),
         unwrap<{ history: PublishEvent[] }>(await api.skillWhet.publishHistory(name)).catch(() => ({ history: [] as PublishEvent[] })),
-        // hl(静态 P2-28):留出集评估作业只存在组件本地,离开再回来按钮又能点 —— 从作业表找回还活着的那个
+        // 留出集评估作业只记在组件里,离开再回来就丢了:从作业表找回还活着的那个,免得按钮又能点
         unwrap<{ jobs: Array<{ id: string; kind: string; state: string; args?: Record<string, unknown> }> }>(await api.skillWhet.jobs(name, 50)).catch(() => ({ jobs: [] as Array<{ id: string; kind: string; state: string; args?: Record<string, unknown> }> })),
       ]);
       if (ticket !== loadTicket.current) return;
@@ -124,7 +124,7 @@ export default function Versions({ data, isRoot, username, initialSkill, initial
     }
   };
 
-  // ha:force(没被留出门接受)与 skip_release(没做留出集评估)是两个独立开关,按这份 staging 的实际缺口各自带
+  // force(没被留出门接受)与 skip_release(没做留出集评估)是两个独立开关,按这份 staging 的实际缺口各自带
   const adoptGaps = (s: StagingSummary | undefined) => ({
     force: !!s && !s.accepted,
     skipRelease: !!s && !s.release,
@@ -138,7 +138,7 @@ export default function Versions({ data, isRoot, username, initialSkill, initial
     return t('versions.adoptDone', { defaultValue: '已采纳 {{sid}} 到副本;发布还要 root 再点一次', sid: selected });
   });
 
-  // ha release-once:对这份 staging 做唯一一次留出集评估(排队作业);跑完 release 字段会出现。
+  // release-once:对这份 staging 做唯一一次留出集评估(排队作业);跑完 release 字段会出现。
   // 作业按 skill + staging 记,切走再切回来不会把别的 staging 的按钮锁住
   const releaseRunning = releaseJob !== null && releaseJob.skill === skill && releaseJob.sid === selected;
   const releaseEval = () => act('release', async () => {
@@ -198,8 +198,8 @@ export default function Versions({ data, isRoot, username, initialSkill, initial
   });
 
   const current = list.find((s) => s.id === selected) ?? null;
-  // hb:能不能发布看服务端的 status.adopted(副本当前内容是不是某次采纳的结果),
-  // 不再看"列表里最新那份采纳了没" —— 采纳较早的一份后发布曾永远是灰的
+  // 能不能发布看服务端的 status.adopted(副本当前内容是不是某次采纳的结果),
+  // 而不是"列表里最新那份采纳了没":采纳的是较早的一份时也要能发布。
   const latestAdopted = target?.adopted ?? (list.length > 0 && list[0].adopted);
   const canPublish = isRoot && latestAdopted;
   const inputClass = 'rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:border-primary focus:outline-none';
@@ -288,11 +288,11 @@ export default function Versions({ data, isRoot, username, initialSkill, initial
             )}
           </section>
 
-          {/* hd:发布 / 回滚记录 —— 每次发布的是哪份 staging,点一下看它当初改了什么 */}
+          {/* 发布 / 回滚记录:每次发布的是哪份 staging,点一下看它当初改了什么。 */}
           <section className="overflow-hidden rounded-panel border border-border bg-card" data-testid="publish-history">
             <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-[13px] font-semibold text-foreground"><Upload className="h-3.5 w-3.5" aria-hidden />{t('versions.history', { defaultValue: '发布记录' })}<span className="font-mono text-[11px] font-normal text-muted-foreground">{history.length}</span></div>
             {history.length === 0 ? (
-              <p className="px-4 py-5 text-center text-[12px] text-muted-foreground">{t('versions.historyEmpty', { defaultValue: '还没有发布过(hd 之前的发布没有记录)。' })}</p>
+              <p className="px-4 py-5 text-center text-[12px] text-muted-foreground">{t('versions.historyEmpty', { defaultValue: '还没有发布过(早期版本的发布没有记录)。' })}</p>
             ) : (
               <ul className="max-h-[260px] overflow-y-auto">
                 {history.map((h, i) => (
@@ -331,7 +331,7 @@ export default function Versions({ data, isRoot, username, initialSkill, initial
                   {current.release
                     ? <>{fmtScore(current.release.baseline)} → <strong>{fmtScore(current.release.candidate)}</strong> <span className="text-muted-foreground">{t('versions.releaseLine', { defaultValue: '({{a}}/{{n}} → {{b}}/{{n}} 通过 · 已用掉,只评一次)', a: current.release.baseline_passed ?? '?', b: current.release.candidate_passed ?? '?', n: current.release.test_tasks })}</span></>
                     : current.adopted
-                      ? <span className="text-muted-foreground">{t('versions.releaseSkipped', { defaultValue: '未评 —— 采纳时跳过了留出集评估(或是 ha 之前的产物)' })}</span>
+                      ? <span className="text-muted-foreground">{t('versions.releaseSkipped', { defaultValue: '未评 —— 采纳时跳过了留出集评估(或是早期版本产出的,没有评估记录)' })}</span>
                       : <span className="text-muted-foreground">{t('versions.releaseNone', { defaultValue: '未评 —— 训练不看 test;打算采纳 / 发布这一份时做一次留出集评估' })}</span>}
                 </dd>
                 <dt className="text-muted-foreground">{t('versions.meta', { defaultValue: '轮次 / 费用 / 文件' })}</dt>

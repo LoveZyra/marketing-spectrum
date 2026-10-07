@@ -15,11 +15,11 @@ import {
 } from '@/modules/database/index.js';
 
 /**
- * 定时任务的权限面**整个挂在项目可见性上**:项目分享给谁,任务就跟着给谁,
+ * 定时任务的权限面整个挂在项目可见性上:项目分享给谁,任务就跟着给谁,
  * 而且是全权(看 / 改 / 删 / 立即运行同一道判据,不分读写)。
  *
  * 这里盯两件事:
- *   1. SQL 侧的 `listVisibleTo` 和 JS 侧的 `canViewerSeeProjectPath` **不许漂**。
+ *   1. SQL 侧的 `listVisibleTo` 和 JS 侧的 `canViewerSeeProjectPath` 不许漂。
  *      两者漂开的那条缝就是权限洞 —— 项目/会话那边已经因为同类问题栽过一次
  *      (HTTP 列表按 owner 过滤了、广播没有),所以这条 parity 必须钉住。
  *   2. 主人自己建的任务,哪怕项目还没被扫描进 projects 表,也必须看得见。
@@ -164,5 +164,26 @@ describe('listDue 只跑有效账号的任务', () => {
     getConnection().prepare('UPDATE users SET is_active = 0 WHERE id = ?').run(alice);
 
     assert.equal(scheduledTasksDb.listDue('2030-01-01 00:00:00').some((t) => t.id === task), false);
+  });
+});
+
+describe('listDue 不在 SQL 里判审批状态', () => {
+  /**
+   * 审批口径与登录一致才对:root 与 `PRISM_APPROVAL_REQUIRED=0` 时不看审批状态。
+   * 这一层只挡停用的主人;待审批 / 已驳回由执行时按 `isAccountUsable` 判,不可用就记一条跳过。
+   */
+  test('待审批、已驳回的主人的任务照样捞出来', async () => {
+    const { alice } = await freshDb();
+    const pending = Number(userDb.createUser('pat', 'h', 'pending').id);
+    const rejected = Number(userDb.createUser('rita', 'h', 'approved').id);
+    userDb.setApprovalStatus(rejected, 'rejected', null);
+
+    const ids = [alice, pending, rejected].map((owner) => {
+      const id = makeTask(owner, '/srv/public/anywhere');
+      scheduledTasksDb.update(id, { next_run_at: '2020-01-01 00:00:00' });
+      return id;
+    });
+    const due = new Set(scheduledTasksDb.listDue('2030-01-01 00:00:00').map((t) => t.id));
+    for (const id of ids) assert.equal(due.has(id), true, `${id} 没被捞出来`);
   });
 });

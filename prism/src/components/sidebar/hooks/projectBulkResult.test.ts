@@ -3,12 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { describeBulkResult, type BulkProjectResult } from './useProjectBulkSelection';
 
 /**
- * eo:批量结果的**如实播报**。
+ * 批量结果要如实播报。
  *
  * 服务端逐条鉴权,不是自己的项目会被静默跳过。用户选了 12 个、实际只动了 5 个,
- * 却看到一句「操作成功」—— 这比直接报错更糟:他会以为都改好了,过几天才发现
- * 有一半没改,而那时已经没人记得当时选了哪些。所以这个函数只有一条规矩:
- * **没有全成就必须把数字说出来。**
+ * 却看到一句「操作成功」,就会以为都改好了。所以这个函数只有一条规矩:
+ * 没有全成就必须把数字说出来。
  */
 const result = (patch: Partial<BulkProjectResult>): BulkProjectResult => ({
   requested: 0, succeeded: [], skipped: [], failed: [], ...patch,

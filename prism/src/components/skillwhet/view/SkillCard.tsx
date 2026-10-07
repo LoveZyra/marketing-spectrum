@@ -16,13 +16,13 @@ import { Badge, type Tone } from './StatusStrip';
 const GATE_ORDER = ['G0.parse', 'G1.security', 'G2.static', 'G3.contract', 'G4.unit', 'G5.holdout'] as const;
 
 /**
- * gy:一张技能卡 —— 受管副本的全部"体征"放一处:来源 / 六门健康度 / 契约入口点 / 对话反馈。
+ * 一张技能卡,把受管副本的全部"体征"放在一处:来源 / 六门健康度 / 契约入口点 / 对话反馈 / 夜训。
  *
- * 动作按权限分层(与服务端 `assertMayMutate` 一致,前端只是不画不能点的那颗按钮):
- * - 重跑体检:gz 审计后同 mutate(它会执行副本里的 tests/),零模型费用;
+ * 动作按权限分层(与服务端 `assertMayMutate` 一致,前端只是不画或禁用不能点的按钮):
+ * - 重跑体检:权限同 mutate(它会执行副本里的 tests/),零模型费用;
  * - bootstrap / 移除副本:技能库来源 → root;上传来源 → 上传者本人或 root;
  * - 从技能库更新副本:root。
- * 「新建训练」(gz)跳到优化训练页并预选这个 skill;要先 bootstrap,权限同 mutate。
+ * 「新建训练」跳到优化训练页并预选这个 skill;要先 bootstrap,权限同 mutate。
  */
 
 const toneOf = (verdict: GateResult['verdict'] | undefined): Tone => (verdict === 'pass' ? 'ok' : verdict === 'fail' ? 'bad' : 'muted');
@@ -62,7 +62,7 @@ type SkillCardProps = {
   username: string;
   onChanged: () => Promise<void>;
   onTrain: (skill: string) => void;
-  /** he:夜训计划(整页拉一次);null = 服务端没有夜训接口,不画那一行 */
+  /** 夜训计划(整页拉一次);null = 服务端没有夜训接口,不画那一行 */
   nightly?: NightlyResponse | null;
 };
 
@@ -159,12 +159,12 @@ export default function SkillCard({ skill, isRoot, username, onChanged, onTrain,
           <Badge tone="warn"><AlertTriangle className="h-[11px] w-[11px]" aria-hidden />{t('card.liveGone', { defaultValue: '技能库里已不在' })}</Badge>
         )}
         {gateFailed.length > 0 && <Badge tone="bad">{gateFailed[0].gate.split('.')[0]} {t('card.gateFail', { defaultValue: '未通过' })}</Badge>}
-        {/* hl(动态 P2-19):缺工具的门是 SKIP、整体不算通过 —— 说清是环境没装,不是 skill 有问题 */}
+        {/* 缺工具的门是 SKIP、整体不算通过:说清是环境没装工具,不是 skill 有问题。 */}
         {gate && gateFailed.length === 0 && (gate.missing_tools?.length ?? 0) > 0 && (
           <span title={(gate.warnings ?? []).join('\n')}><Badge tone="warn"><AlertTriangle className="h-[11px] w-[11px]" aria-hidden />{t('card.gateMissingTools', { defaultValue: '缺工具未查:{{tools}}', tools: (gate.missing_tools ?? []).join(' / ') })}</Badge></span>
         )}
         {gate?.passed && (() => {
-          // hb:三门 SKIP 也显示"六门通过"会误导(marketing-audit:G3/G4/G5 全跳过)
+          // 有门 SKIP 时显示"六门通过"会误导(比如 G3/G4/G5 全跳过的 skill),要写明跳过了几门
           const skipped = (gate.results ?? []).filter((r) => r.verdict === 'skip').length;
           return skipped === 0
             ? <Badge tone="ok">{t('card.gateAllPass', { defaultValue: '六门通过' })}</Badge>

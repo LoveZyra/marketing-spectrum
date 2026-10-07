@@ -31,8 +31,8 @@ interface OneLineDisplayProps {
 }
 
 /**
- * Unified one-line display for simple tool inputs and results
- * Used by: Bash, Read, Grep/Glob (minimized), TodoRead, etc.
+ * One-line display for simple tool inputs.
+ * Used by: Read, Grep / Glob, TodoRead and the Task* tools (TaskCreate / TaskUpdate / TaskList / TaskGet).
  */
 export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
   toolName,
@@ -88,7 +88,7 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
     </button>
   );
 
-  // Terminal style: dark pill around the command
+  // Terminal style: `$ command` in a muted pill
   if (isTerminal) {
     return (
       <div className="group my-1">

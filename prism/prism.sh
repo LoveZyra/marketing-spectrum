@@ -1,49 +1,42 @@
 #!/usr/bin/env bash
 # Prism 进程管理。放在 prism 目录下,日常就用这一个文件。
 #
-#   bash prism.sh restart    重启 —— 最常用
+#   bash prism.sh restart    重启(最常用)
 #   bash prism.sh start      启动(已在跑则拒绝,不会起出第二个)
 #   bash prism.sh stop       停止(连守护循环一起停)
-#   bash prism.sh status     看守护循环、服务进程、端口、重启次数、健康
+#   bash prism.sh status     看守护循环、服务进程、端口、重启次数、就绪状态
 #   bash prism.sh logs       跟踪日志(Ctrl+C 只退出跟踪,不影响服务)
-#   bash prism.sh install    首次安装/升级后重建(转调 deploy.sh)
+#   bash prism.sh install    首次安装 / 升级后重建(转调 deploy.sh)
 #
-# 不带参数不再默认 restart(hl):手滑敲一下 `bash prism.sh` 就把所有人的会话重启一遍,
-# 代价太大;现在只打用法。
+# 不带参数只打用法,不默认 restart:手滑敲一下就会把所有人的会话重启一遍。
 #
-# 这个脚本存在的理由,是几个踩过的坑:
+# 几条关键约束:
 #
-#   1. `pkill -f "npm run server"` 只杀掉 npm 那一层。真正监听端口的是它的孙进程
-#      (npm → sh -c → node),npm 死了 node 还在占着端口,紧接着的启动必然
-#      EADDRINUSE。hl 起守护循环**直接起 node**,不再经过 npm;停止时按 pid 文件点名,
-#      并且**等到端口真的释放**才继续。
+#   1. 守护循环直接起 node,不经过 npm:经 npm 起时真正监听端口的是孙进程
+#      (npm → sh -c → node),只杀 npm 那层,node 仍占着端口,紧接着的启动必然 EADDRINUSE。
+#      停止时按 pid 文件点名,并且等到端口真的释放才继续。
 #
-#   2. HOST 可能绑在具体网卡地址(例如 10.195.27.109)而不是 0.0.0.0。那种情况下
-#      `curl localhost:8080` 永远连不上 —— 服务其实好好的,却看起来没起来。
-#      健康检查按 .env 里的 HOST 走。
+#   2. HOST 可能绑在具体网卡地址(例如 10.195.27.109)而不是 0.0.0.0,这时
+#      `curl localhost:8080` 连不上,服务好好的却看起来没起来。健康检查按 .env 里的 HOST 走。
 #
 #   3. 启动要 `env -u API_KEY`:pod 继承的模型凭据会让 Prism 自己的 REST 返回 401。
 #
-#   4. 固定 sleep 猜启动时间不可靠(首次要跑迁移和项目扫描,快慢差很多)。这里轮询
-#      就绪端点(/api/ready:数据库能应答才算 200,/health 只说明进程活着),并且用
-#      服务 pid 判断死活。
+#   4. 启动耗时差别很大(首次要跑迁移和项目扫描),不用固定 sleep 去猜:轮询就绪端点
+#      (/api/ready:数据库能应答才算 200,/health 只说明进程活着),并且用服务 pid 判断死活。
 #
-#   5. 探测端口占用不能只依赖 `ss`:精简镜像里常常没有。依次退到 lsof、fuser,
+#   5. 探测端口占用不能只依赖 `ss`(精简镜像里常常没有):依次退到 lsof、fuser,
 #      都没有就用健康端点兜底。
 #
-#   6. hl(静态 P1-13):生产机没有 systemd(jovyan 的 `systemd --user` 起不来),
-#      此前 `nohup` 起一次就完,进程一崩所有人的会话、终端、定时任务一起断,直到有人
-#      手动 start。现在 `start` 起的是一个**守护循环**(本脚本自己以 `__supervise` 再跑一份):
-#      服务进程不是 stop 触发的退出就退避重启(1s → 2s → … 封顶 60s,稳定跑满
-#      PRISM_SUPERVISOR_STABLE_SECS 秒后退避归零),每次拉起都记进 prism.log。
-#      `stop` 先落 stop 标记再杀,守护循环看到标记就不再拉起。
+#   6. 生产机没有 systemd(jovyan 的 `systemd --user` 起不来),所以 `start` 起的是一个
+#      守护循环(本脚本以 `__supervise` 再跑一份):服务进程不是 stop 触发的退出就退避重启
+#      (1s → 2s → … 封顶 60s,稳定跑满 PRISM_SUPERVISOR_STABLE_SECS 秒后退避归零),
+#      每次拉起都记进 prism.log。`stop` 先落 stop 标记再杀,守护循环看到标记就不再拉起。
 #
-#   7. hl(静态 P2-25):Node 侧 shutdown 有 8 秒硬退出窗口,两个受管子进程各有 4 秒
-#      TERM 宽限 —— 此前脚本 6 秒就 kill -9,数据库关闭那步永远轮不到。现在等 15 秒。
+#   7. Node 侧 shutdown 的硬退出窗口是 12 秒(两个受管子进程并行停,各有 4 秒 TERM 宽限),
+#      所以 TERM 之后等 15 秒才 kill -9,保证数据库关闭那一步走得完。
 #
-#   8. hl:prism.log 运行期按大小轮转(PRISM_LOG_ROTATE_MB,默认 50)。服务是以 `>>`
-#      追加方式打开日志的,所以"拷一份再截断"(copytruncate)之后进程能继续往
-#      同一个文件头部写,不会像 `>` 那样留下一大段空洞。
+#   8. prism.log 运行期按大小轮转(PRISM_LOG_ROTATE_MB,默认 50)。服务以 `>>` 追加方式
+#      打开日志,所以"拷一份再截断"(copytruncate)之后进程从文件头继续写,不会留下空洞。
 set -u
 
 cd "$(dirname "$0")" || exit 1
@@ -81,7 +74,7 @@ read_env() {
 
 PORT="$(read_env SERVER_PORT 8080)"
 HOST="$(read_env HOST 0.0.0.0)"
-# 保留几代旧日志。0 表示不保留(回到"每次启动截断"的老行为)。
+# 保留几代旧日志。0 表示不保留:每次启动截断,运行期超过 LOG_ROTATE_MB 也直接截断。
 LOG_KEEP="$(read_env PRISM_LOG_KEEP 5)"
 # 运行期按大小轮转的阈值(MB)。0 = 不按大小轮转。
 LOG_ROTATE_MB="$(read_env PRISM_LOG_ROTATE_MB 50)"
@@ -149,9 +142,8 @@ service_alive() { pid_alive "$SVC_PID_FILE"; }
 # 本目录起的服务进程(按绝对路径匹配 —— 同一台机上另一个目录的 Prism 不算)。
 own_node_pids() { pgrep -f "node $APP_DIR/$NODE_ENTRY" 2>/dev/null; }
 
-# 没有 pid 文件的实例(老版本脚本用 `npm run server` 起的,命令行是相对路径):
-# 按端口找。没有任何端口探测工具时才退到进程名 —— 那一路可能误伤同机别的 Prism,
-# 所以放最后。
+# 没有 pid 文件的实例(例如直接 `npm run server` 起的,命令行里是相对路径,own_node_pids 认不出):
+# 按端口找。没有任何端口探测工具时才退到按进程名匹配,那一路可能误伤同机别的 Prism,所以放最后。
 legacy_pids() {
   local pids
   pids="$(port_pids)"
@@ -175,12 +167,12 @@ sup_log() {
   printf '%s [supervisor] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
 }
 
-# 把 prism.log 挪成 prism.log.1,旧的依次后移,超出 LOG_KEEP 的丢掉。
+# 把 prism.log 挪成 prism.log.1,旧的依次后移,超出 LOG_KEEP 的丢掉;LOG_KEEP=0 不留旧日志,直接截断。
 # 用 mv 而不是 cp+truncate:mv 是原子的,不会出现"拷到一半又被写"的半截文件。
-# 只在**没有进程在写**的时候用(启动前)。
+# 只在没有进程在写的时候用(启动前)。
 rotate_logs() {
   [ -f "$LOG_FILE" ] || return 0
-  if [ "$LOG_KEEP" -le 0 ] 2>/dev/null; then return 0; fi
+  if [ "$LOG_KEEP" -le 0 ] 2>/dev/null; then : > "$LOG_FILE"; return 0; fi
   shift_old_logs
   mv -f "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null
 }
@@ -200,14 +192,18 @@ shift_old_logs() {
 # 运行期轮转(copytruncate):有进程正往 prism.log 里写,不能 mv —— 进程会跟着 inode
 # 继续写到 prism.log.1 里,新的 prism.log 一直是空的。拷一份再截断;服务以 O_APPEND
 # 打开,截断后写指针自动回到文件头,不会留空洞。cp 与截断之间写进来的几行会丢,认了 ——
-# 这是 logrotate copytruncate 同样的取舍。
+# 这是 logrotate copytruncate 同样的取舍。LOG_KEEP=0 不留旧日志:超过阈值直接截断。
 rotate_log_by_size() {
   [ -f "$LOG_FILE" ] || return 0
   if [ "$LOG_ROTATE_MB" -le 0 ] 2>/dev/null; then return 0; fi
-  if [ "$LOG_KEEP" -le 0 ] 2>/dev/null; then return 0; fi
   local size
   size=$(stat -c %s "$LOG_FILE" 2>/dev/null || stat -f %z "$LOG_FILE" 2>/dev/null || echo 0)
   [ "$size" -ge $((LOG_ROTATE_MB * 1024 * 1024)) ] || return 0
+  if [ "$LOG_KEEP" -le 0 ] 2>/dev/null; then
+    : > "$LOG_FILE"
+    sup_log "prism.log 超过 ${LOG_ROTATE_MB}MB,已截断(PRISM_LOG_KEEP=0,不留旧日志)"
+    return 0
+  fi
   shift_old_logs
   cp -f "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null && : > "$LOG_FILE"
   sup_log "prism.log 超过 ${LOG_ROTATE_MB}MB,已轮转到 prism.log.1"
@@ -249,10 +245,10 @@ do_supervise() {
   }
   trap on_signal TERM INT
   trap '' HUP
-  # hl 复核 P3:没有 setsid 时守护循环与 `bash prism.sh start` 在同一个前台进程组里 ——
-  # start 等就绪的那 90 秒里按 Ctrl-C,INT 会发给守护循环,on_signal 当成 stop 把服务收掉。
-  # 这时 INT 只可能来自终端,不是运维的停止意图(停止走 `prism.sh stop` / TERM),忽略。
-  # 服务进程那一侧由下面的 `set -m` 放进自己的进程组,同样收不到终端的 INT。
+  # 没有 setsid 时,守护循环与 `bash prism.sh start` 在同一个前台进程组里:start 等就绪期间
+  # 按 Ctrl-C,INT 也会发给守护循环,被 on_signal 当成 stop 把服务收掉。这种 INT 只可能来自终端,
+  # 不是停止意图(停止走 `prism.sh stop` / TERM),所以忽略。
+  # 服务进程由下面的 `set -m` 放进自己的进程组,同样收不到终端的 INT。
   if ! command -v setsid >/dev/null 2>&1; then
     trap '' INT
     set -m
@@ -272,10 +268,10 @@ do_supervise() {
     started=$(date +%s)
     if [ "$restarts" -gt 0 ]; then sup_log "第 ${restarts} 次拉起服务"; else sup_log "起服务(守护循环 pid $$)"; fi
     # env -u API_KEY:见文件头第 3 条。
-    # hl:服务单独一个进程组(setsid)。node 被 kill -9 / OOM 时,它拉起的子进程(SkillWhet serve、
-    # 营销诊断、claude CLI 一次性进程)不会跟着死 —— 实测孤儿 serve 占着 8195,新服务起 serve 连撞
-    # 5 次 EADDRINUSE 后放弃,技能优化从此离线;孤儿 claude 进程还可能继续花钱。所以服务退出后按
-    # 进程组把残留一并收掉再拉起。脚本非交互、无作业控制,后台子进程不是组长,setsid 直接 exec,$! 即 node。
+    # 服务单独一个进程组(setsid)。node 被 kill -9 / OOM 时,它拉起的子进程(SkillWhet serve、
+    # 营销诊断、claude CLI 一次性进程)不会跟着死:孤儿 serve 占着端口,新服务再起 serve 会一直
+    # EADDRINUSE;孤儿 claude 进程还可能继续花钱。所以服务退出后先按进程组收掉残留再拉起。
+    # 脚本非交互、无作业控制,后台子进程不是组长,setsid 直接 exec,$! 就是 node。
     if command -v setsid >/dev/null 2>&1; then
       env -u API_KEY setsid node "$APP_DIR/$NODE_ENTRY" >> "$LOG_FILE" 2>&1 &
     else
@@ -284,9 +280,9 @@ do_supervise() {
     fi
     child=$!
     echo "$child" > "$SVC_PID_FILE"
-    # hl 复核 P3:进程组号**直接取 $child**,不用 ps 去读 —— `&` 之后 setsid 未必已经执行,
-    # 实测 200 次里 4 次读到的是守护循环自己的组,sweep 因此被跳过。两条分支里服务都是
-    # 自己那一组的组长(setsid 直接 exec / set -m),组号必然等于它的 pid。
+    # 进程组号直接取 $child,不用 ps 去读:`&` 之后 setsid 未必已经执行,读到的可能还是守护循环
+    # 自己的组,sweep 就会被跳过。两条分支里服务都是自己那一组的组长(setsid 直接 exec / set -m),
+    # 组号必然等于它的 pid。
     svc_pgid="$child"
 
     # 等子进程退出。不用 `wait` 死等:每 2 秒醒一次,顺带看要不要轮转日志。
@@ -345,8 +341,8 @@ do_stop() {
     for pid in $(own_node_pids) $(legacy_pids); do kill -TERM "$pid" 2>/dev/null; done
   fi
 
-  # 等 15 秒(hl,静态 P2-25):Node 侧 8 秒硬退出 + 子进程各 4 秒 TERM 宽限,
-  # 6 秒就 kill -9 会让数据库关闭那步永远轮不到。
+  # 最多等 15 秒:Node 侧硬退出窗口是 12 秒(其中子进程并行停,各有 4 秒 TERM 宽限),
+  # 提前 kill -9 会让数据库关闭那一步走不完。
   local i
   for i in $(seq 1 75); do
     if ! service_alive && ! port_busy && [ -z "$(own_node_pids)" ]; then
@@ -404,15 +400,12 @@ do_start() {
 
   mkdir -p "$RUN_DIR"
   rm -f "$STOP_FILE" "$SUP_PID_FILE" "$SVC_PID_FILE"
-  # hl 复核 P2:重启计数必须在起守护循环**之前**清零。下面的就绪轮询约 20ms 后就读它,
-  # 守护循环那时多半还没来得及写 0 —— 上一轮残留的 ≥3 会让 start/restart 误报「服务反复退出」。
+  # 重启计数必须在起守护循环之前清零:下面的就绪轮询很快就会读它,守护循环那时多半还没来得及
+  # 写 0,上一轮残留的 ≥3 会让 start / restart 误报「服务反复退出」。
   echo 0 > "$RESTARTS_FILE"
 
-  # 轮转旧日志。
-  #
-  # 此前这里是 `> "$LOG_FILE"` —— **每次启动都把上一轮的日志截掉**。
-  # 而"服务挂了、我重启一下"恰恰是最常见的操作:等你想起来去看它为什么挂,
-  # 证据已经被自己的重启抹掉了。轮转成本几乎为零,能救的却正是最难复现的那一次。
+  # 启动前轮转旧日志,不截断:"服务挂了、重启一下"是最常见的操作,截断会把查原因要用的日志抹掉。
+  # 只有 PRISM_LOG_KEEP=0(明确不要旧日志)时 rotate_logs 才截断。
   rotate_logs
   : >> "$LOG_FILE"
 

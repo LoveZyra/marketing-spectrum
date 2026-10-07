@@ -1,8 +1,8 @@
 /**
- * F6 / F7:两条"删完之后界面还停在旧状态"的收尾。
+ * 两处"删完之后界面不能停在旧状态"的接线:已删除会话向上滚不打 404;「最近删除」跟着别人的操作刷新。
  *
- * vitest 这边没有 jsdom,挂不起 store 和 hook,而这两处出错的地方都在**接线**上,
- * 所以对源码断言 —— 和仓库里其它"钉接线"的测试同一路数(见 ga 那一轮的纪律)。
+ * vitest 这边没有 jsdom,挂不起 store 和 hook,而要钉的都是接线,
+ * 所以直接对源码断言(和仓库里其它钉接线的测试同一做法)。
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -17,11 +17,11 @@ const sessionStore = read('../stores/useSessionStore.ts');
 const projectsState = read('./useProjectsState.ts');
 const sidebar = read('../components/sidebar/view/Sidebar.tsx');
 
-describe('F6 · 「已被删除」态下向上滚不再打 404', () => {
+describe('「已被删除」态下向上滚不打 404', () => {
   /**
    * 会话被别处永久删除之后向上滚,`fetchMore` 会拿到 404。
-   * 那不是"加载失败",是"没有更多历史可加载" —— 原来它走 throw → console.error,
-   * 而且返回 null 被判成失败,自动补页一直重试。
+   * 那不是"加载失败",是"没有更多历史可加载":走 throw 分支会往控制台打错,
+   * 返回 null 又会被判成失败,让自动补页一直重试。
    */
   it('fetchMore 对 404 单独处理,而且发生在 `!response.ok` 抛错之前', () => {
     const notFoundAt = sessionStore.indexOf('response.status === 404');
@@ -38,7 +38,7 @@ describe('F6 · 「已被删除」态下向上滚不再打 404', () => {
   });
 });
 
-describe('F7 · 「最近删除」跟着别人的操作刷新', () => {
+describe('「最近删除」跟着别人的操作刷新', () => {
   it('session_removed 与 session_restored 两帧都 bump trashSignal', () => {
     for (const kind of ['session_removed', 'session_restored']) {
       const at = projectsState.indexOf(`event.kind === '${kind}'`);

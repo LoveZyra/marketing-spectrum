@@ -18,8 +18,7 @@
     "newSession": "Yeni Oturum",
     "noSessions": "Henüz oturum yok",
     "loadingSessions": "Oturumlar yükleniyor...",
-    "unnamed": "Adsız",
-    "loading": "Yükleniyor..."
+    "unnamed": "Adsız"
   },
   "tooltips": {
     "hideSidebar": "Kenar çubuğunu gizle",

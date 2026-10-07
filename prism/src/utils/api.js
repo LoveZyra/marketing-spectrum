@@ -6,8 +6,8 @@ import { hasJwtShape, installRefreshedToken } from "./tokenRefresh";
 // Only accept a refreshed token that has this app's issued JWT shape
 // (three base64url segments). An attacker-injected/malformed header value
 // must never overwrite the stored auth token.
-// dj 起实现挪进 tokenRefresh.ts(落盘还要求 userId 与当前令牌一致);这里保留
-// 同名导出给既有调用方(改密响应体校验、两处上传)继续用作形状检查。
+// 实现在 tokenRefresh.ts(落盘还要求 userId 与当前令牌一致);这个导出只做形状检查,
+// 供改密响应体校验与两处上传使用。
 /**
  * @param {unknown} token
  * @returns {token is string}
@@ -24,22 +24,19 @@ export const apiKeyHeaders = () =>
   PRISM_API_KEY ? { 'x-prism-api-key': PRISM_API_KEY } : {};
 
 /**
- * ea:方法隧道 —— PATCH / PUT / DELETE 一律改成 POST + `X-HTTP-Method-Override` 发出。
+ * 方法隧道:PATCH / PUT / DELETE 一律改成 POST + `X-HTTP-Method-Override` 发出。
  *
- * 用户实测:同一账号、同一服务器、同一页面,定时任务的「启用/暂停」开关在 Mac
- * 能点,在公司 Windows 机器上点了毫无反应 —— 那个开关发的是 PATCH,而只放行
- * GET/POST 的企业代理把它拦在了半路(Prism 线上是明文 HTTP,代理看得见每个请求)。
- * 服务端 `shared/method-override.ts` 在路由之前把 req.method 改回真实方法,
- * 所以路由、代理转发、审计一行不用改。集合与服务端同一份,必须一起改。
+ * 只放行 GET / POST 的企业代理会把 PATCH 等请求拦在半路(明文 HTTP 部署时代理看得见每个请求),
+ * 表现为同一个开关在某些机器上点了毫无反应。服务端 `shared/method-override.ts` 在路由之前
+ * 把 req.method 改回真实方法,路由、代理转发、审计都不用改。集合与服务端同一份,必须一起改。
  */
 const TUNNELED_METHODS = new Set(['PATCH', 'PUT', 'DELETE']);
 
 /**
  * 给 URL 追加 `_method=<真实方法>`。
  *
- * ea 上线后用户实测:只带头仍然 404,且响应体不是 JSON —— POST 到了服务端却没被
- * 改写。安全型代理 / WAF 会**剥掉** `X-HTTP-Method-Override` 头(它是已知的方法
- * 限制绕过手法,专门有规则盯它),查询串则不会被剥。两样都带,服务端两样都认。
+ * 安全型代理 / WAF 会剥掉 `X-HTTP-Method-Override` 头(它是已知的方法限制绕过手法,
+ * 专门有规则盯它),查询串则不会被剥。两样都带,服务端两样都认。
  *
  * @param {string} url
  * @param {string} method
@@ -74,9 +71,9 @@ export const tunnelMethod = (url, options = {}) => {
 
 let tunnelFailureNotifiedAt = 0;
 /**
- * 隧道请求拿到一个**非 JSON 的 404**,说明 POST 到了服务端却没被改写回真实方法
+ * 隧道请求拿到一个非 JSON 的 404,说明 POST 到了服务端却没被改写回真实方法
  * (Express 默认的 "Cannot POST …" 页)。只有两种解释,都不是页面本身的错:
- * 服务端没重启到 ea 以上(中间件不在),或者代理把头和查询串都剥了。
+ * 服务端还在跑不带方法改写中间件的旧进程,或者代理把头和查询串都剥了。
  * 把这句说出来,别让用户对着「HTTP 404」猜。5s 去抖。
  * @param {Response} response
  */
@@ -126,9 +123,8 @@ export const authenticatedFetch = (url, options = {}) => {
     },
   }).then((response) => {
     if (tunneled.tunneled) maybeExplainTunnelFailure(response);
-    // dj:经共享闸门落盘 —— 续期令牌必须与当前存储令牌同属一个 userId 才接受,
-    // 否则丢弃。挡住两件事:HTTP 缓存 304 合并复活的旧账号续期头(no-store 之前
-    // 的历史缓存),以及切换账号瞬间旧账号在途响应晚到的覆盖竞态。
+    // 经共享闸门落盘:续期令牌必须与当前存储令牌同属一个 userId 才接受,否则丢弃。
+    // 挡住两件事:HTTP 缓存 304 合并复活的旧账号续期头,以及切换账号瞬间旧账号在途响应晚到的覆盖竞态。
     installRefreshedToken(response.headers.get('X-Refreshed-Token'));
     // 全局 401 兜底:令牌过期/被撤销后,原先各面板表现为"点了没反应"(只有文件树
     // 单独分辨过 401)。这里集中处理一次 —— 登录态下拿到 401,弹一条提示并派发
@@ -144,7 +140,7 @@ export const authenticatedFetch = (url, options = {}) => {
 
 let sessionExpiredNotifiedAt = 0;
 /**
- * dv:导出给 XHR 上传路径复用(见 uploadWithProgress) —— 401 的处置必须
+ * 导出给 XHR 上传路径复用(见 uploadWithProgress):401 的处置必须
  * 只有一份,去抖也才共用得上。
  */
 export function handleSessionExpired() {
@@ -181,7 +177,7 @@ export const api = {
     user: () => authenticatedFetch('/api/auth/user'),
     // options.all = true → 服务端 bump token_version,撤销该账号所有设备的旧令牌。
     // options.token:AuthContext.logout 先清本地再调这里,localStorage 已经空了;
-    // 不带上捕获的旧令牌,这一枪永远 401,审计日志里就永远记不上 logout(dj 修)。
+    // 不带上捕获的旧令牌,这一枪永远 401,审计日志里就永远记不上 logout。
     logout: ({ all, token } = {}) => authenticatedFetch('/api/auth/logout', {
       method: 'POST',
       ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
@@ -209,9 +205,7 @@ export const api = {
   },
 
   // Protected endpoints
-  // config endpoint removed - no longer needed (frontend uses window.location)
-  // After the projectName → projectId migration the path/query identifier is
-  // the DB-assigned `projectId`; parameter names reflect that for clarity.
+  // The path/query identifier is the DB-assigned `projectId`.
   projects: () => authenticatedFetch('/api/projects'),
   archivedProjects: () => authenticatedFetch('/api/projects/archived'),
   projectSessions: (projectId, { limit = 20, offset = 0 } = {}) => {
@@ -231,7 +225,7 @@ export const api = {
     const queryString = params.toString();
     return authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/messages${queryString ? `?${queryString}` : ''}`);
   },
-  // gy:技能优化(SkillWhet)。整层可能没挂载(404),调用方按 useSkillWhetStatus 判断。
+  // 技能优化(SkillWhet)。整层可能没挂载(404),调用方按 useSkillWhetStatus 判断。
   skillWhet: {
     status: () => authenticatedFetch('/api/skillwhet/status'),
     skills: () => authenticatedFetch('/api/skillwhet/skills'),
@@ -248,7 +242,7 @@ export const api = {
     tasksValidate: (skill, format, content) => authenticatedFetch('/api/skillwhet/tasks/validate', { method: 'POST', body: JSON.stringify({ skill, format, content }) }),
     tasksAdd: (skill, format, content, keepPassing = false) => authenticatedFetch('/api/skillwhet/tasks', { method: 'POST', body: JSON.stringify({ skill, format, content, keep_passing: keepPassing }) }),
     tasks: (skill) => authenticatedFetch(`/api/skillwhet/tasks${skill ? `?skill=${encodeURIComponent(skill)}` : ''}`),
-    // gz:训练作业 / staging / 发布 / 反馈收件箱
+    // 训练作业 / staging / 发布 / 反馈收件箱
     tasksDerive: (skill, testDir = 'tests/unit') => authenticatedFetch('/api/skillwhet/tasks/derive', { method: 'POST', body: JSON.stringify({ skill, test_dir: testDir }) }),
     jobs: (skill, limit) => authenticatedFetch(`/api/skillwhet/jobs?${[skill ? `skill=${encodeURIComponent(skill)}` : '', limit ? `limit=${limit}` : ''].filter(Boolean).join('&')}`),
     job: (id) => authenticatedFetch(`/api/skillwhet/jobs/${encodeURIComponent(id)}`),
@@ -259,7 +253,7 @@ export const api = {
     jobBudget: () => authenticatedFetch('/api/skillwhet/jobs/budget'),
     staging: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/staging`),
     stagingDetail: (name, sid) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/staging/${encodeURIComponent(sid)}`),
-    // ha:force 与 skip_release 各是各的开关(没被接受 ≠ 没做留出集评估)
+    // force 与 skip_release 各是各的开关(没被接受 ≠ 没做留出集评估)
     stagingAdopt: (name, sid, { force = false, skipRelease = false } = {}) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/staging/${encodeURIComponent(sid)}/adopt`, { method: 'POST', body: JSON.stringify({ force, skip_release: skipRelease }) }),
     stagingExport: (name, sid) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/staging/${encodeURIComponent(sid)}/export`),
     publish: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/publish`, { method: 'POST', body: '{}' }),
@@ -269,13 +263,13 @@ export const api = {
     rollback: (name, to) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/rollback`, { method: 'POST', body: JSON.stringify({ to }) }),
     feedbackInbox: (skill) => authenticatedFetch(`/api/skillwhet/feedback/inbox${skill ? `?skill=${encodeURIComponent(skill)}` : ''}`),
     feedbackInboxAccept: (ids) => authenticatedFetch('/api/skillwhet/feedback/inbox/accept', { method: 'POST', body: JSON.stringify({ ids }) }),
-    // ha:从会话挖任务 / 留出集评估(release-once)
+    // 从会话挖任务 / 留出集评估(release-once)
     harvestProjects: () => authenticatedFetch('/api/skillwhet/harvest/projects'),
     harvestStart: (payload) => authenticatedFetch('/api/skillwhet/harvest', { method: 'POST', body: JSON.stringify(payload) }),
     jobResult: (id) => authenticatedFetch(`/api/skillwhet/jobs/${encodeURIComponent(id)}/result`),
     jobImport: (id, taskIds) => authenticatedFetch(`/api/skillwhet/jobs/${encodeURIComponent(id)}/import`, { method: 'POST', body: JSON.stringify(taskIds ? { task_ids: taskIds } : {}) }),
     releaseEval: (name, sid) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/staging/${encodeURIComponent(sid)}/release-eval`, { method: 'POST', body: '{}' }),
-    // he:夜训计划 / 从中断处续跑
+    // 夜训计划 / 从中断处续跑
     nightly: () => authenticatedFetch('/api/skillwhet/nightly'),
     nightlySave: (name, plan) => authenticatedFetch(`/api/skillwhet/nightly/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(plan) }),
     checkpoint: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/checkpoint`),
@@ -283,7 +277,7 @@ export const api = {
     provenance: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/provenance`),
     ledger: (name) => authenticatedFetch(`/api/skillwhet/skills/${encodeURIComponent(name)}/ledger`),
   },
-  // gy:对话里的反馈(👍/👎 与效果调查卡)。
+  // 对话里的反馈(点赞 / 点踩与效果调查卡)。
   sessionFeedback: {
     list: (sessionId) => authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/feedback`),
     set: (sessionId, messageId, payload) => authenticatedFetch(
@@ -317,7 +311,7 @@ export const api = {
       method: 'DELETE',
     });
   },
-  // E10:归档会话服务端分页(默认 200/页)。不传参数 = 第一页。
+  // 归档会话服务端分页(默认 200/页)。不传参数 = 第一页。
   getArchivedSessions: ({ limit, offset } = {}) => {
     const params = new URLSearchParams();
     if (Number.isFinite(limit)) params.set('limit', String(limit));
@@ -327,13 +321,13 @@ export const api = {
   },
   runningSessions: () =>
     authenticatedFetch('/api/providers/sessions/running'),
-  // F8:批量归档 / 恢复 / 删除。逐条鉴权在服务端做,看不见的静默跳过。
+  // 批量归档 / 恢复 / 删除。逐条鉴权在服务端做,看不见的静默跳过。
   bulkSessions: (action, sessionIds) =>
     authenticatedFetch('/api/providers/sessions/bulk', {
       method: 'POST',
       body: JSON.stringify({ action, sessionIds }),
     }),
-  // F8:清空回收站(永久删除当前用户看得见的归档会话)。
+  // 清空归档:永久删除当前用户看得见的归档会话(进「最近删除」,保留期内可恢复)。
   emptyArchivedSessions: ({ olderThanDays } = {}) => {
     const params = new URLSearchParams();
     if (Number.isFinite(olderThanDays) && olderThanDays > 0) params.set('olderThanDays', String(olderThanDays));
@@ -344,7 +338,7 @@ export const api = {
     authenticatedFetch(`/api/providers/sessions/${sessionId}/restore`, {
       method: 'POST',
     }),
-  // gk:最近删除(会话回收站)。永久删除的会话在保留期内可从这里恢复。
+  // 最近删除(会话回收站)。永久删除的会话在保留期内可从这里恢复。
   trashedSessions: ({ limit, offset } = {}) => {
     const params = new URLSearchParams();
     if (Number.isFinite(limit)) params.set('limit', String(limit));
@@ -361,7 +355,7 @@ export const api = {
       method: 'DELETE',
     }),
   /**
-   * ei:会话产出文件。**产出不一定落在项目目录里**(计划文件在 ~/.claude/plans、
+   * 会话产出文件。产出不一定落在项目目录里(计划文件在 ~/.claude/plans、
    * 临时脚本在 /tmp),项目文件接口只服务项目根以内,点开就是 403。这条路由按
    * "这段会话自己写出来的文件"放行,所以产出区列出来的东西都能看、能下。
    */
@@ -370,7 +364,7 @@ export const api = {
   sessionOutputBlob: (sessionId, filePath) =>
     authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/output?path=${encodeURIComponent(filePath)}`),
 
-  // ef:常驻运行时的真实状态与释放(顶栏「常驻会话」开关)。打开走 prewarm。
+  // 常驻运行时的真实状态与释放(顶栏「常驻会话」开关)。打开走 prewarm。
   sessionRuntime: (sessionId) =>
     authenticatedFetch(`/api/providers/claude/sessions/${encodeURIComponent(sessionId)}/runtime`),
   releaseSessionRuntime: (sessionId) =>
@@ -438,8 +432,8 @@ export const api = {
     authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/toggle-star`, {
       method: 'POST',
     }),
-  // eo:项目批量操作。action = archive | delete | star | unstar | permissions | owner。
-  // 服务端逐条鉴权,看不见/管不了的会被跳过并在结果里计数 —— 调用方要如实报账。
+  // 项目批量操作。action = archive | delete | star | unstar | permissions | owner。
+  // 服务端逐条鉴权,看不见 / 管不了的会被跳过并在结果里计数,调用方要如实报账。
   bulkProjects: (action, projectIds, extra = {}) =>
     authenticatedFetch('/api/projects/bulk', {
       method: 'POST',
@@ -451,7 +445,7 @@ export const api = {
   readFileBlob: (projectId, filePath) =>
     authenticatedFetch(`/api/projects/${projectId}/files/content?path=${encodeURIComponent(filePath)}`),
   /**
-   * 换一张下载票,拿回一个**能直接交给浏览器**的 URL。
+   * 换一张下载票,拿回一个能直接交给浏览器的 URL。
    *
    * 传一个路径且是文件 → `kind:'file'`(有 Content-Length,浏览器画得出百分比);
    * 传目录或多个路径 → `kind:'zip'`(服务端边压边发,没有百分比,只有已下载多少)。

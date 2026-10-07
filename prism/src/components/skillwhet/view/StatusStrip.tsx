@@ -4,11 +4,11 @@ import { useTranslation } from 'react-i18next';
 import type { SkillWhetStatus } from '../hooks/useSkillWhetStatus';
 
 /**
- * gy:体检条 —— `/api/skillwhet/status` 的九项检查。任一 false 直接红 / 灰并**说清缺什么**
- * (em 轮的做法:不让人对着一个红点猜),而不是只画个灯。
+ * 体检条:`/api/skillwhet/status` 的九项检查。任一项不满足都直接标色并说清缺什么,
+ * 而不是只画个灯让人对着红点猜。
  *
  * 分两档:`serveReachable / tokenSet / homeWritable / pythonOk / claudeCli` 缺了就不能用
- * (红);`ruff / bandit / pyright / unshare` 缺了对应的门 SKIP、功能降级(灰)。
+ * (红);`ruff / bandit / pyright / unshare` 缺了对应的门 SKIP、功能降级(黄)。
  */
 export type Tone = 'ok' | 'bad' | 'warn' | 'muted' | 'primary';
 
@@ -21,7 +21,7 @@ export function Badge({ tone = 'muted', children, className = '', wrap = false }
     primary: 'border-primary/30 bg-primary/10 text-foreground',
   };
   return (
-    // hc:wrap = 长句子(体检里的降级说明)窄屏时折行,不被容器截掉
+    // wrap:长句子(体检里的降级说明)窄屏时折行,不被容器截掉
     <span className={`inline-flex items-center gap-1 rounded-full border px-2 font-mono text-[11px] ${wrap ? 'min-h-[22px] max-w-full whitespace-normal break-words py-0.5 leading-4' : 'h-[22px] whitespace-nowrap'} ${tones[tone]} ${className}`}>
       {children}
     </span>

@@ -19,13 +19,12 @@ type QuotaRow = {
 };
 
 /**
- * 每账号附件用量与配额覆盖(F6,root)。
+ * 每账号附件用量与配额覆盖(root)。
  *
- * 配额本来就是按账号算的,可之前只有一个全局值:多数人用不到 1 GB,个别人要传
- * 一堆设计稿 —— 为了那一个人把全局值抬上去,等于给所有人都开了那么大的口子。
- * 这里逐人可覆盖,留空即回到全局默认。
+ * 配额按账号计算,可逐人覆盖,留空即回到全局默认:个别人需要大配额时不必抬高全局值,
+ * 免得给所有人都开同样大的口子。
  *
- * 用量按占用从大到小排,因为 root 打开这一页时想知道的永远是"谁占得最多"。
+ * 列表由服务端按占用从大到小排:root 打开这一页时最想知道的是谁占得最多。
  */
 export default function AttachmentQuotaSection() {
   const { t } = useTranslation('settings');
@@ -117,7 +116,7 @@ export default function AttachmentQuotaSection() {
                         min={1}
                         value={editing.value}
                         onChange={(event) => setEditing({ userId: row.userId, value: event.target.value })}
-                        // hl 复核 P3-4:Esc 只退出额度编辑,不关整个设置弹窗。
+                        // Esc 只退出额度编辑,不关整个设置弹窗。
                         data-esc-local="true"
                         onKeyDown={(event) => {
                           if (event.key === 'Enter') void save(row.userId, editing.value);

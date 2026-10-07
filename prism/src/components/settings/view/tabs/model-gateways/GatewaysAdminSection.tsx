@@ -13,14 +13,14 @@ import { authTypeBadge } from './gatewayLogic';
 import { errorMessage, gatewaysAdminApi, type AdminGatewaysPayload, type GatewayTestResult, type GatewayView } from './gatewaysApi';
 
 /**
- * hq:设置 → 模型 最上面的「网关」(root)。
+ * 设置 → 模型 最上面的「网关」(root)。
  *
  * 1. 默认网关(settings.json,id 0,只读):地址、鉴权方式、有没有 token;测试连接、成员 key;
  * 2. 共享网关:每行见 SharedGatewayRow;
  * 3. 添加网关:名字 / 地址 / 鉴权方式 / 可选默认 key,「先测试」打一次 /v1/models;
  * 4. 私有网关总开关 + 所有成员的私有网关(只读,收起)。
  *
- * 目录那块改了模型(挂到哪个网关)会广播 MODEL_CATALOG_CHANGED_EVENT —— 这里据此安静地重拉一次,模型数才对得上。
+ * 目录那块改了模型(挂到哪个网关)会广播 MODEL_CATALOG_CHANGED_EVENT,这里据此安静地重拉一次,模型数才对得上。
  */
 export default function GatewaysAdminSection() {
   const { t } = useTranslation('settings');

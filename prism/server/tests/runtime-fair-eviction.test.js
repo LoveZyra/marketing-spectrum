@@ -5,13 +5,11 @@ import { describe, test } from 'vitest';
 import { orderRuntimesForEviction } from '../claude-sdk.js';
 
 /**
- * F6:常驻池名额满了该淘汰谁。
+ * 常驻池名额满了该淘汰谁。
  *
- * 原来是全局 LRU —— 合理但不公平:一个人开二十个会话就能把池子占满,之后每个
- * 新会话都去挤**别人**那条最久没用的。别人每轮重建 runtime(多一次冷启动),
- * 占了十九个的那位一点代价都没有。
- *
- * 现在先按"谁占得最多"排,再按 LRU。代价落在造成拥挤的人身上。
+ * 纯全局 LRU 不公平:一个人开二十个会话就能把池子占满,之后每个新会话都去挤别人那条最久没用的,
+ * 别人每轮都要重建 runtime(多一次冷启动),占了十九个的那位却没有代价。
+ * 所以先按"谁占得最多"排,再按 LRU,让代价落在造成拥挤的人身上。
  */
 const runtime = (key, ownerUserId, lastUsed, turn = null) => ({ key, ownerUserId, lastUsed, turn });
 
@@ -39,7 +37,7 @@ describe('orderRuntimesForEviction', () => {
     assert.deepEqual(ordered.map((entry) => entry.key), ['b', 'c', 'a']);
   });
 
-  test('在跑的不进候选,但**算**占用 —— 否则跑满的人反而免疫', () => {
+  test('在跑的不进候选,但算占用 —— 否则跑满的人反而免疫', () => {
     const ordered = orderRuntimesForEviction([
       runtime('busy-1', 7, 1_000, { live: true }),
       runtime('busy-2', 7, 1_100, { live: true }),

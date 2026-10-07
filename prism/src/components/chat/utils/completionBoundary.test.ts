@@ -3,16 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { completionTokenEnd, replaceCompletionToken } from './completionBoundary';
 
 /**
- * fj:这一组钉的是「补全不许吃掉用户正文」。
- *
- * 修之前的判据是 `indexOf(' ')`,下面每一条**都会红**:
- *   - 换行/中文之后没有半角空格 ⇒ 余下正文被整段丢弃;
- *   - 斜杠命令那侧还多丢一截:空格**之前**的内容(含换行和那一行的正文)。
+ * 补全不许吃掉用户正文:token 边界是任意空白或光标,不只是半角空格。
+ * 换行 / 中文之后往往没有半角空格,只找半角空格会把余下正文整段丢掉。
  */
 
 const FILE = 'src/Readme.md';
 
-describe('fj:@ 文件提及只替换「@ 到光标」这一段', () => {
+describe('@ 文件提及只替换「@ 到光标」这一段', () => {
   it('中文单行:后半句必须留着 —— 中文里没有半角空格,这是最常见的形状', () => {
     // 「参考@Rea这个文件改一下」,光标停在 @Rea 之后
     expect(replaceCompletionToken('参考@Rea这个文件改一下', 2, FILE, 6).text)
@@ -42,7 +39,7 @@ describe('fj:@ 文件提及只替换「@ 到光标」这一段', () => {
   });
 });
 
-describe('fj:token 边界本身', () => {
+describe('token 边界本身', () => {
   it('半角空格、换行、全角空格都算边界', () => {
     expect(completionTokenEnd('a@b c', 1)).toBe(3);
     expect(completionTokenEnd('a@b\nc', 1)).toBe(3);

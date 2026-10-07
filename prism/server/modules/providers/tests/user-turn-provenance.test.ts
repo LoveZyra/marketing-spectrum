@@ -58,7 +58,7 @@ describe('nonHumanUserTurnReason', () => {
   });
 
   it('普通 tool_result 行带的是 sourceToolAssistantUUID,不能被误判', () => {
-    // 实测:本会话 362 行工具结果全带这个字段,而技能注入带的是 sourceToolUseID。
+    // 普通工具结果行都带 sourceToolAssistantUUID,而技能注入带的是 sourceToolUseID。
     // 两个字段名只差几个字母,判错就等于把所有工具结果一起吃掉。
     expect(nonHumanUserTurnReason({ sourceToolAssistantUUID: 'a1b2' })).toBe(null);
   });
@@ -202,21 +202,16 @@ test('回归:压缩摘要仍然被改标成 assistant,而不是被出处判定�
 });
 
 /**
- * gb(回归):**CLI 自己发起的那一轮的注入帧,不许渲染成用户气泡。**
+ * CLI 自己发起的那一轮的注入帧,不许渲染成用户气泡。
  *
  * 后台子代理完成、会话内定时任务触发时,CLI 用自己的命令队列注入一条 user 帧,
- * 内容是 `<task-notification>…</task-notification>` 的裸 XML。
- *
- * 实测**两种形态并存**:
- *   - 带 `origin:{"kind":"task-notification"}` —— 原来那条 origin 判据能拦;
- *   - **完全没有 origin 字段**(2026-09-09 那两条)—— 结构判据一条都不命中,
- *     内容前缀清单里也没有它。此前它没露出来,只是因为整轮都在上游被丢掉了;
- *     观测回合(gb)把这一轮接住之后,它会**原样渲染成一条用户气泡**。
- *
- * 所以这两条都走**真实链路**(整行喂 `normalizeMessage`),不是手搓判据 ——
- * 上一轮的教训就是"手搓字面量喂纯函数不算证明"。
+ * 内容是 `<task-notification>…</task-notification>` 的裸 XML。两种形态并存:
+ *   - 带 `origin:{"kind":"task-notification"}`:origin 判据能拦;
+ *   - 完全没有 origin 字段:结构判据一条都不命中,只能靠内容前缀拦。
+ * 观测回合会把这一轮接住,漏判就会原样渲染成一条用户气泡。所以两条都走真实链路
+ * (整行喂 `normalizeMessage`),不拿手搓的字面量喂纯函数。
  */
-describe('gb:task-notification 注入帧', () => {
+describe('task-notification 注入帧', () => {
   const NOTIFICATION = '<task-notification>\n  <task id="ab67282f5aa2d91fa" status="completed" />\n</task-notification>';
 
   it('带 origin 的:不产生用户气泡', () => {
@@ -224,7 +219,7 @@ describe('gb:task-notification 注入帧', () => {
     assert.equal(bubbles(row).length, 0);
   });
 
-  it('**没有 origin 的**:同样不产生用户气泡(这一条是新补的判据)', () => {
+  it('没有 origin 的:同样不产生用户气泡', () => {
     const row = userRow({}, NOTIFICATION);
     assert.equal(bubbles(row).length, 0);
   });

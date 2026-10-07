@@ -1,13 +1,13 @@
 /**
  * 会话产出的直传下载(`/api/downloads/session-output`)。
  *
- * 这是本次新增的第三条**不带登录态**的路由。它比项目文件那两条更值得单测:
- * 会话产出**不一定落在项目目录里** —— agent 把计划写进 `~/.claude/plans/`、
+ * 这是本次新增的第三条不带登录态的路由。它比项目文件那两条更值得单测:
+ * 会话产出不一定落在项目目录里 —— agent 把计划写进 `~/.claude/plans/`、
  * 临时脚本写进 `/tmp` 都很常见,所以这条通道的边界不是"项目根以内",而是
- * **"这段会话自己成功写出来过"**。边界换了一种,就得单独钉。
+ * "这段会话自己成功写出来过"。边界换了一种,就得单独钉。
  *
  * 三道闸(会话可见 → 路径在本会话写入集合里 → 是个真文件)由
- * `checkSessionOutputAccess` 统一提供,**签票和直传各跑一遍**。下面最后一条测试
+ * `checkSessionOutputAccess` 统一提供,签票和直传各跑一遍。下面最后一条测试
  * 钉的就是这个"各跑一遍":票签出来之后把会话删掉,同一张票必须立刻失效 ——
  * 票证明的是"是谁在下",不是"现在还能下"。
  */
@@ -39,7 +39,7 @@ type TestUser = { id: number; username: string };
 type Ctx = {
   baseUrl: string;
   sessionId: string;
-  /** 会话产出的真实路径 —— 故意放在**项目目录之外**。 */
+  /** 会话产出的真实路径 —— 故意放在项目目录之外。 */
   outputPath: string;
   /** 项目内的一个文件,这段会话从没写过它。 */
   notAnOutput: string;
@@ -77,7 +77,7 @@ async function withServer(runTest: (ctx: Ctx) => Promise<void>): Promise<void> {
     await mkdir(projectRoot, { recursive: true });
     await mkdir(outsideDir, { recursive: true });
 
-    // 产出在项目**外**:这正是这条通道存在的理由(项目文件接口只服务项目根以内)。
+    // 产出在项目外:这正是这条通道存在的理由(项目文件接口只服务项目根以内)。
     const outputPath = path.join(outsideDir, '计划 v2.md');
     await writeFile(outputPath, '# 计划\n'.repeat(100), 'utf8');
     const notAnOutput = path.join(projectRoot, 'secret.txt');

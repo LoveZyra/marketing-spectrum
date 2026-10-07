@@ -3,7 +3,7 @@ import type { ProviderModelOption } from '../../../types/app';
 import { availableFirst, isModelAvailable } from './modelAvailability';
 
 /**
- * ho:模型 + 档位两级菜单的纯函数(Claude.ai 式:上面是常用模型,「档位 ›」「更多模型 ›」各一个子菜单;
+ * 模型 + 档位两级菜单的纯函数(上面是常用模型,「档位 ›」「更多模型 ›」各一个子菜单;
  * 输入框上只显示「模型名 档位」)。拆出来单测。
  */
 
@@ -45,16 +45,15 @@ const PRIMARY_RECOMMENDED_LIMIT = 5;
  * 主菜单上面那一节:当前模型 + 本人的私有模型 + 目录里标了推荐的(当前 + 推荐最多 5 条)。当前是别名也放进来(放第一个)。
  * 其余目录模型进「更多模型」。
  *
- * **目录里有模型时别名不再当选项**(ho):子代理默认跟随主模型(CLI 内置 Explore / Plan / general-purpose 都是
+ * 目录里有模型时别名不当选项:子代理默认跟随主模型(CLI 内置 Explore / Plan / general-purpose 都是
  * `model: "inherit"`),别名只在 Claude 派子代理时点名 sonnet/opus/haiku/fable、或 CLI 内部小活(网页摘要之类)
  * 时才用来路由 —— 那是 设置 → 模型 里映射的事;拿来当主模型选,只是目录里某个模型换了个名字。
- * 只有目录为空(官方 API、没建目录,或老服务端没有分组)时别名才是全部可选项,照旧给。
+ * 只有目录为空(官方 API、没建目录,或服务端没给分组)时别名才是全部可选项。
  * 当前恰好是别名(存量会话)仍放第一行,好看出现在是谁在答。
  *
- * hq:
- * - **私有模型**放在上面一节(不收进「更多模型」),不占推荐的名额,顺序照服务端给的(私有在前);
- * - **不能用的模型**(`available: false`)照样列出、置灰,但每一节里都排在能用的后面;推荐名额先给能用的,
- *   挤不下的不能用的推荐进「更多模型」;"至少给一个目录模型可点"也只挑能用的。
+ * - 私有模型放在上面一节(不收进「更多模型」),不占推荐的名额,顺序照服务端给的(私有在前);
+ * - 不能用的模型(`available: false`)照样列出、置灰,但每一节里都排在能用的后面;推荐名额先给能用的,
+ *   挤不下的不能用的推荐进「更多模型」;"至少给一个目录模型可点"优先挑能用的。
  */
 export function splitModelMenu(options: ProviderModelOption[], currentValue: string | null | undefined): {
   primary: ProviderModelOption[];
@@ -86,7 +85,7 @@ export function splitModelMenu(options: ProviderModelOption[], currentValue: str
 }
 
 /**
- * hq:↑↓ 在菜单的这一层里走到下一项,**跳过禁用的**(不能用的模型、切换中的行)。
+ * ↑↓ 在菜单的这一层里走到下一项,跳过禁用的(不能用的模型、切换中的行)。
  * `disabled[i]` 是第 i 项禁没禁;`from` < 0(焦点不在这一层)时落到第一个能走的项。返回 -1 = 一项都走不到。
  */
 export function nextEnabledIndex(disabled: boolean[], from: number, step: 1 | -1): number {

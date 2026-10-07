@@ -1,21 +1,19 @@
 /**
- * `.env` 的解析规则 —— 只有这一处定义,`load-env.js` 用它,`prism.sh` 的 `read_env`
- * 按同一套规则用 sed 实现(两边有同一份夹具测试钉着,见 server/tests/hl-ops.test.ts)。
+ * `.env` 的解析规则,只在这一处定义:`load-env.js` 用它,`prism.sh` 的 `read_env`
+ * 用 sed 实现同一套规则(两边由同一份夹具测试钉着,见 server/tests/ops.test.ts)。
  *
- * hl(静态 P2-24):此前 `load-env.js` 只按第一个 `=` 切开、两端 trim,行内注释与
- * 引号原样进值。`.env.example` 里 22 行是 `# KEY=值  # 说明` 的写法,运维取消注释后
- * `PRISM_X=1   # 说明` 的值是 `"1   # 说明"`,代码里 `=== '1'` 永远为假 —— 配了等于没配,
- * 而且没有任何报错。`prism.sh` 用 `xargs` 读同一个文件,口径又不一样(xargs 剥引号但
- * 不剥注释)。现在两边统一成下面四条:
+ * `.env.example` 里不少行是 `# KEY=值  # 说明` 的写法,运维取消注释后若不剥行内注释,
+ * `PRISM_X=1   # 说明` 的值就成了 `"1   # 说明"`,代码里 `=== '1'` 永远为假 —— 配了
+ * 等于没配,而且没有任何报错。规则如下:
  *
  *   1. 空行、`#` 开头的行跳过;`export KEY=值` 的 `export` + 空白(空格或 Tab)前缀允许;
  *   2. 第一个 `=` 左边是键(trim),右边是原始值;
- *   3. 原始值以 `"` 或 `'` 开头时,取到**配对的**引号为止,引号后面的内容(通常是注释)丢掉;
+ *   3. 原始值以 `"` 或 `'` 开头时,取到配对的引号为止,引号后面的内容(通常是注释)丢掉;
  *      没有配对引号就当普通值处理;
- *   4. 不带引号的值:从**前面有空白的** `#` 起截断(` # 说明`),再 trim。
+ *   4. 不带引号的值:从前面有空白的 `#` 起截断(` # 说明`),再 trim。
  *      `abc#def` 这种紧贴的 `#` 不算注释 —— 口令里出现 `#` 很常见。
  *
- * 不做变量展开、不处理多行值:这个仓库的 .env 从来没用过,加了只会多一种出错方式。
+ * 不做变量展开、不处理多行值:这个仓库的 .env 用不到,加了只会多一种出错方式。
  */
 
 /**
@@ -26,7 +24,7 @@
 export function parseDotEnvLine(line) {
   let text = String(line ?? '').replace(/\r$/, '').trim();
   if (!text || text.startsWith('#')) return null;
-  // `export<空白>KEY=` 前缀:空白可以是空格或 Tab(与 prism.sh 的 `export[[:space:]]+` 一致,hl 复核)。
+  // `export<空白>KEY=` 前缀:空白可以是空格或 Tab(与 prism.sh 的 `export[[:space:]]+` 一致)。
   text = text.replace(/^export\s+/, '');
 
   const eq = text.indexOf('=');

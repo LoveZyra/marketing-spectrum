@@ -1,4 +1,3 @@
-import React from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -82,12 +81,14 @@ export default function PermissionRequestsBanner({
                       ? t('permission.backgroundTitle')
                       : t('permission.title', { defaultValue: '需要授权才能继续' })}
                   </span>
-                  {/* 工具名 + 规则合成一行等宽元信息 —— 整行已是等宽,不再套芯片底色 */}
+                  {/* 工具名 + 规则合成一行等宽元信息 —— 整行已是等宽,不另套芯片底色 */}
                   <span className="font-mono text-[11.5px] leading-[17px] text-muted-foreground">
                     {t('permission.meta', {
                       defaultValue: '工具 {{tool}}{{rule}}',
                       tool: request.toolName,
-                      rule: permissionEntry ? ` · 规则 ${permissionEntry}` : '',
+                      rule: permissionEntry
+                        ? t('permission.ruleSuffix', { rule: permissionEntry, defaultValue: ' · 规则 {{rule}}' })
+                        : '',
                     })}
                   </span>
                   {rawInput && (
@@ -111,7 +112,7 @@ export default function PermissionRequestsBanner({
               >
                 {t('permission.deny', { defaultValue: '拒绝' })}
               </ConfirmationAction>
-              {/* ho(ho-3):CLI 说这一次不该给"总是允许"时(suppressAlwaysAllowRule)不出这个按钮 */}
+              {/* CLI 说这一次不该给"总是允许"时(suppressAlwaysAllowRule)不出这个按钮 */}
               {!request.suppressAlwaysAllow && (
                 <ConfirmationAction
                   variant="outline"

@@ -4,12 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * gd:**卡片有没有真的用上后台状态。**
+ * 钉住子代理卡真的用上了后台状态。
  *
- * 数据已经归到 `subagentState.background` 了(见 subagentBackground.test.ts,
- * 那一份跑的是真实转换链路),但组件只要还照着老判据读 `childTools.length` /
- * `toolResult`,用户看到的还是「2 步 ✓」。vitest 这边没有 DOM 挂不起组件,
- * 读源码钉住这几根线。
+ * 数据归到 `subagentState.background` 由 subagentBackground.test.ts 测(跑的是真实转换链路);
+ * 组件若只读 `childTools.length` / `toolResult`,转后台的任务会显示成已完成、步数停在转后台时。
+ * vitest 这边没有 DOM 挂不起组件,读源码钉住这几根线。
  */
 const source = readFileSync(
   fileURLToPath(new URL('./SubagentGroupCard.tsx', import.meta.url)),
@@ -22,11 +21,9 @@ describe('子代理卡的后台状态', () => {
     expect(source).toMatch(/const isComplete = background\s*\n\s*\? background\.status !== 'running'/);
   });
 
-  it('步数取两个来源的**最大值** —— 用 ?? 会让一条早到的进展帧盖掉已收到的步数', () => {
-    // ge 纠错:gd 写的是 `background?.toolUses ?? childTools.length`,前提是
-    // "转后台之后子步骤不再走实时流" —— SDK 文档说默认就转发 tool_use/tool_result,
-    // 那个前提是错的。
-    // gh:判据收进 subagentToolStepCount(只数工具步、取两个来源的最大值)
+  it('步数取两个来源的最大值 —— 用 ?? 会让一条早到的进展帧盖掉已收到的步数', () => {
+    // 转后台之后子代理的 tool_use / tool_result 仍会实时转发(SDK 默认行为),不能用 ??
+    // 让后台计数盖掉 childTools;判据在 subagentToolStepCount(只数工具步、取两个来源的最大值)。
     expect(source).toMatch(/const stepCount = subagentToolStepCount\(message\);/);
     expect(source).toMatch(/t\('subagent\.steps', \{ count: stepCount/);
     expect(source).not.toMatch(/t\('subagent\.steps', \{ count: childTools\.length/);
@@ -52,8 +49,7 @@ describe('子代理卡的后台状态', () => {
   });
 
   /**
-   * gf:用户原话 ——「子 agent 点开时的子代理汇报不要,后台任务完成这个详细信息,
-   * 能不能简洁,排版正常些,现在不好看」。两块都撤,展开区只剩这个子代理自己的那根轴。
+   * 展开区只剩这个子代理自己的那根轴:不贴后台任务的 summary 大块,也不贴「子代理汇报」全文。
    */
   it('展开区不再贴后台任务的 summary 大块', () => {
     expect(source).not.toMatch(/subagentState\?\.background\?\.summary/);
@@ -77,8 +73,8 @@ describe('子代理卡的后台状态', () => {
   });
 
   /**
-   * gg:用户原话 ——「子 agent 的思考输出,折叠掉,不要全部放上显得太多」。
-   * 判据本身在 toolRowSummary(纯函数,单独测),这里只钉"卡片真的用了它"。
+   * 子代理的长叙述(正文 / 思考)默认折叠。判据本身在 toolRowSummary(纯函数,单独测),
+   * 这里只钉"卡片真的用了它"。
    */
   it('长叙述默认折起来 —— 判据取自 shouldFoldNarration,不是就地又写一遍', () => {
     expect(source).toMatch(/const foldable = shouldFoldNarration\(body\);/);

@@ -5,13 +5,13 @@ import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../../../contexts/ThemeContext';
 
 /**
- * ```mermaid 代码块的图形渲染(F3)。
+ * ```mermaid 代码块的图形渲染。
  *
- * - **懒加载**:mermaid(约 1MB+ 的库)只在正文里真的出现 mermaid 块时才
+ * - 懒加载:mermaid(约 1MB+ 的库)只在正文里真的出现 mermaid 块时才
  *   动态 import,不进首屏;
- * - **主题适配**:亮/暗各初始化一套主题,切主题重渲;
- * - **失败回退**:语法不合法(模型输出的图经常有小错)就原样显示源码块
- *   (fallback 由调用方传入,即原来的高亮代码块),加一行小字说明;
+ * - 主题适配:亮/暗各初始化一套主题,切主题重渲;
+ * - 失败回退:语法不合法(模型输出的图经常有小错)就原样显示源码块
+ *   (fallback 由调用方传入,即普通的高亮代码块),加一行小字说明;
  * - 流式期间不会走到这里 —— Markdown/CodeBlock 在 streaming 时保持纯文本,
  *   定稿后才渲染,不会拿半截源码反复试。
  *
@@ -87,7 +87,7 @@ export default function MermaidDiagram({ code, fallback }: MermaidDiagramProps) 
   /**
    * 占位源码块的高度。
    *
-   * 源码块的高度和渲染出来的图**毫无关系**(20 行源码约 420px,图可能 200px
+   * 源码块的高度和渲染出来的图毫无关系(20 行源码约 420px,图可能 200px
    * 也可能 800px)。直接整块替换的话,图比源码矮就是一次向上塌陷,下面所有内容
    * 跟着跳。这里把替换前的高度记下来当 `min-height`,再用一次过渡放开 ——
    * 变矮变成"收",不是"塌"。变高由浏览器的滚动锚定兜住。
@@ -131,15 +131,9 @@ export default function MermaidDiagram({ code, fallback }: MermaidDiagramProps) 
         renderCounter += 1;
         const { svg: rendered } = await mermaid.render(`prism-mermaid-${renderCounter}`, code);
         /**
-         * fj:被取消的这一遍**不许写缓存**。
-         *
-         * `mermaid.render` 是异步的,而主题是**全局**初始化的:图 A 在浅色下发起
-         * render 之后用户切到深色 → A 的 cleanup 只置 `cancelled`,在飞的 render
-         * 不会停;此时另一个 effect 已经 `initialize({theme:'dark'})`,于是 A 产出
-         * 的是**深色** SVG,却被写进了浅色那个 key(`cacheKey(code, false)`)。
-         *
-         * `cancelled` 原来只挡 `setSvg`、挡不住写缓存,而这是个模块级 LRU ——
-         * 切回浅色后命中那份深色 SVG,图以深色配色画在浅色页面上,刷新前一直是错的。
+         * 被取消的这一遍不许写缓存。mermaid.render 是异步的,主题却是全局初始化的:
+         * 浅色下发起的 render 还在飞时用户切到深色,另一个 effect 已经 initialize 成深色,
+         * 产出的深色 SVG 会被写进浅色那个 key,而模块级 LRU 之后会一直命中这份错的。
          */
         if (cancelled) return;
         writeCachedSvg(code, isDarkMode, rendered);

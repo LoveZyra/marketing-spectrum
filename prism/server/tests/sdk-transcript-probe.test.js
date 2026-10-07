@@ -8,11 +8,11 @@ import { describe, test } from 'vitest';
 import { userTurnReachedTranscript } from '../claude-sdk.js';
 
 /**
- * B8 回归:回退重放前的 transcript 侦察。
+ * 回退重放前的 transcript 侦察。
  *
  * 常驻回合在"输入已递交、还没流出内容"时崩溃,分发器要判断该不该把这一轮
  * 丢给一次性路径重放。判据:transcript 尾部有没有 timestamp 晚于回合起点的
- * user 行 —— 有(消息已落盘)就**不**重放(避免重复用户消息),没有才安全重放。
+ * user 行 —— 有(消息已落盘)就不重放(避免重复用户消息),没有才安全重放。
  * 拿不准(读不到文件 / 没有 resume id)一律按"已落盘"处理:宁可让用户重发。
  *
  * 该函数按 provider 的落盘约定拼路径:

@@ -21,7 +21,8 @@ const formatDate = (value: string | null): string => {
 };
 
 /**
- * Account approval queue. Rendered only for root — see Settings.tsx.
+ * Account approval queue (root only: the tab is hidden from other accounts via
+ * `rootOnly` in constants.ts, and the server 403s its routes regardless).
  *
  * Deliberately plain: the whole job is "who is waiting, and let me say yes or
  * no". Pending accounts sort first (server-side), so the thing that needs
@@ -90,10 +91,8 @@ export default function AccountsSettingsTab() {
       )}
 
       {/*
-        这里原来是 `overflow-hidden` —— 窗口一窄,「操作」那一列被**直接切掉**,
-        而且没有任何办法滚过去看(2026-09-15 用户实测截图)。旁边的审计表一直是
-        `overflow-x-auto`,这张漏了。放不下时给一条横向滚动,东西至少够得着;
-        下面几列的响应式收起负责让"放不下"尽量别发生。
+        放不下时横向滚动(与审计表一致):用 `overflow-hidden` 的话,窗口一窄「操作」列就被切掉且够不着。
+        下面几列的响应式收起负责尽量避免放不下。
       */}
       <div className="overflow-x-auto rounded-lg border border-border">
         <table className="w-full text-sm">
@@ -104,7 +103,7 @@ export default function AccountsSettingsTab() {
               <th className="px-3 py-2 text-left font-medium">{t('accounts.columns.registered', '注册时间')}</th>
               {/* 审批人:这张表里最不要紧的一列,窄屏让位给「操作」 */}
               <th className="hidden px-3 py-2 text-left font-medium lg:table-cell">{t('accounts.columns.reviewer', '审批人')}</th>
-              {/* 其余四列都是 text-left,这一列原来是 text-right —— 表头对不齐,统一成左对齐 */}
+              {/* 操作列表头也左对齐,与其余四列一致 */}
               <th className="px-3 py-2 text-left font-medium">{t('accounts.columns.actions', '操作')}</th>
             </tr>
           </thead>
@@ -136,9 +135,8 @@ export default function AccountsSettingsTab() {
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">
                     {/*
-                      `-ml-1.5` 抵掉徽标自己的 `px-1.5`:不抵的话这一列的文字比表头「状态」
-                      右移 6px(2026-09-15 实测 375.8 → 381.8),一眼就看得出没对齐,
-                      而左右两列(用户名、注册时间)都是严丝合缝的。
+                      `-ml-1.5` 抵掉徽标自己的 `px-1.5`:不抵的话这一列文字比表头「状态」右移 6px,
+                      而左右两列(用户名、注册时间)都是对齐的。
                     */}
                     <span className={`-ml-1.5 whitespace-nowrap rounded px-1.5 py-0.5 text-xs ${STATUS_STYLES[user.approval_status]}`}>
                       {t(`accounts.status.${user.approval_status}`, user.approval_status)}
@@ -150,7 +148,7 @@ export default function AccountsSettingsTab() {
                       {user.reviewed_by_username ? middleTruncate(user.reviewed_by_username, 16) : '—'}
                     </span>
                   </td>
-                  {/* 操作列按内容定宽(w-px + nowrap),按钮文字不再被折成两行 */}
+                  {/* 操作列按内容定宽(w-px + nowrap),按钮文字不会被折成两行 */}
                   <td className="w-px whitespace-nowrap px-3 py-2">
                     <div className="flex items-center justify-start gap-1.5">
                       {busyUserId === user.id ? (
@@ -169,7 +167,7 @@ export default function AccountsSettingsTab() {
                               <span className="hidden xl:inline">{t('accounts.actions.approve', '通过')}</span>
                             </button>
                           )}
-                          {/* hl(动态 P3):自己那行不画「驳回」—— 服务端本来就 400「不能审自己」 */}
+                          {/* 自己那行不显示「驳回」:服务端对审核自己返回 400 */}
                           {user.approval_status !== 'rejected' && user.id !== Number(currentUser?.id) && (
                             <button
                               type="button"
@@ -229,9 +227,9 @@ export default function AccountsSettingsTab() {
                 {resetTargetId === user.id && (
                   <tr className="border-t border-border bg-muted">
                     <td colSpan={5} className="px-3 py-2">
-                      {/* ec:与 AccountSettingsTab 同一个坑 —— 裸露的密码框会让浏览器密码管理器
-                          去页面上找"用户名框"填,落到侧栏搜索框上。包进 form,带上被重置账号的
-                          隐藏用户名,标 new-password:既不串位,保存提示也会指向正确的账号。 */}
+                      {/* 与 AccountSettingsTab 同理:裸露的密码框会让浏览器密码管理器在页面上找「用户名框」去填,
+                          落到侧栏搜索框上。包进 form、带上被重置账号的隐藏用户名并标 new-password,
+                          既不串位,保存提示也指向正确的账号。 */}
                       <form
                         className="flex flex-wrap items-center justify-start gap-2"
                         onSubmit={(event) => {
@@ -259,7 +257,7 @@ export default function AccountsSettingsTab() {
                           placeholder={t('accounts.resetPlaceholder', '新密码(至少 6 位)')}
                           autoFocus
                           className="w-52 rounded-md border border-input bg-transparent px-2 py-1 text-xs transition-colors focus:border-primary focus:outline-none"
-                          // hl 复核 P3-4:Esc 只取消这次重置,不关整个设置弹窗(见 modalStack)。
+                          // Esc 只取消这次重置,不关整个设置弹窗(见 modalStack)。
                           data-esc-local="true"
                           onKeyDown={(event) => {
                             if (event.key === 'Escape') setResetTargetId(null);

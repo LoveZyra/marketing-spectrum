@@ -1,33 +1,26 @@
 import type { NextFunction, Request, Response } from 'express';
 
 /**
- * ea:HTTP 方法隧道 —— 让 PATCH / PUT / DELETE 能穿过只放行 GET/POST 的代理。
+ * HTTP 方法隧道 —— 让 PATCH / PUT / DELETE 能穿过只放行 GET/POST 的代理。
  *
- * 症状(用户实测):同一个账号、同一台服务器、同一个页面,定时任务详情里的
- * 「启用/暂停」开关在 Mac 上能点,在公司的 Windows 机器上点了毫无反应。
- * 这个开关发的是 `PATCH /api/tasks/:id`;而 Prism 线上是明文 HTTP,企业代理 /
- * 上网行为管理设备能看见每个请求并按方法过滤 —— 只认 GET/POST 是这类设备
- * 相当常见的默认策略(PATCH 在 RFC 5789 才定义,老规则集根本不认识它)。
- * Mac 走的是别的网络,所以没事。同一台 Windows 机器上传截图也失败过(0 字节),
- * 与"这条网络对请求挑三拣四"的判断互相印证。
+ * 线上走明文 HTTP 时,企业代理 / 上网行为管理设备能看见每个请求并按方法过滤;
+ * 只认 GET/POST 是这类设备相当常见的默认策略(PATCH 在 RFC 5789 才定义,老规则集
+ * 不认识它)。被拦下的 PATCH 在用户那边表现为点了毫无反应。
  *
- * 做法是业界老办法(Rails `_method`、Express `method-override`):前端把
- * PATCH / PUT / DELETE 一律改成 **POST** 发出,真实方法放在
- * `X-HTTP-Method-Override` 头里;服务端在**路由之前**把 `req.method` 改回去,
- * 后面的路由、代理转发、审计日志看到的都是真实方法,一行不用改。
+ * 做法同 Rails `_method`、Express `method-override`:前端把 PATCH / PUT / DELETE
+ * 一律改成 POST 发出,真实方法放在 `X-HTTP-Method-Override` 头里;服务端在路由之前
+ * 把 `req.method` 改回去,后面的路由、代理转发、审计日志看到的都是真实方法。
  *
  * 只认这三个方法、只接受从 POST 发起的改写:GET 改写成 DELETE 之类的花样
- * 一概不理 —— 那不是隧道,是绕过。鉴权是 Bearer 令牌(无 cookie),不存在
- * CSRF 面,所以隧道不会把"POST 表单能打到的地方"变宽。
+ * 一概不理 —— 那不是隧道,是绕过。`/api` 的鉴权是 Bearer 令牌(无 cookie),
+ * 不存在 CSRF 面,所以隧道不会把"POST 表单能打到的地方"变宽。
  */
 export const METHOD_OVERRIDE_HEADER = 'x-http-method-override';
 /**
- * ea+:查询串里的同义写法(`?_method=PATCH`,Rails / Laravel 的老约定)。
+ * 查询串里的同义写法(`?_method=PATCH`,Rails / Laravel 的约定)。
  *
- * 上线 ea 后用户实测仍 404,且响应体不是 JSON —— 即 POST 到了服务端却没被改写:
- * 安全型代理 / WAF 会**剥掉** `X-HTTP-Method-Override` 头(它是已知的方法限制
- * 绕过手法,ModSecurity 一类规则集专门盯它)。查询串不会被剥。前端两样都带,
- * 服务端两样都认,谁活着听谁的。
+ * 安全型代理 / WAF 会剥掉 `X-HTTP-Method-Override` 头(它是已知的方法限制绕过手法,
+ * ModSecurity 一类规则集专门盯它),查询串不会被剥。前端两样都带,服务端两样都认。
  */
 export const METHOD_OVERRIDE_QUERY = '_method';
 

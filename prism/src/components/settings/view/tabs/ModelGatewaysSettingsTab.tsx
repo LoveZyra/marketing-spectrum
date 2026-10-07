@@ -12,12 +12,12 @@ import { errorMessage, myGatewaysApi, type MyGatewaysPayload, type MyGatewayView
 import type { CatalogEntry } from './model-catalog/modelCatalogApi';
 
 /**
- * hq:设置 →「模型网关」(每个人都有,root 也一样用它填自己的 key)。
+ * 设置 →「模型网关」(每个人都有,root 也用它填自己的 key)。
  *
- * 1. **我的 key**:默认网关 + 启用的共享网关,各一张卡 —— 我的回合用哪把 key、上面有哪些我能用的模型;
- *    填 / 换 / 清我的个人 key(个人的优先于网关默认 key,只给我自己的回合用);
- * 2. **我的私有网关**:root 允许时可加;root 关掉后,已有的只能删;
- * 3. **我的私有模型**:挂在私有网关上,只有我看得到。
+ * 1. 我的 key:默认网关 + 启用的共享网关各一张卡 —— 我的回合用哪把 key、上面有哪些我能用的模型;
+ *    填 / 换 / 清我的个人 key(个人 key 优先于网关默认 key,只用于我自己的回合);
+ * 2. 我的私有网关:root 允许时可加;root 关掉后,已有的只能删;
+ * 3. 我的私有模型:挂在私有网关上,只有我看得到。
  */
 export default function ModelGatewaysSettingsTab() {
   const { t } = useTranslation('settings');

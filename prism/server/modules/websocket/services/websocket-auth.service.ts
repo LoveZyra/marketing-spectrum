@@ -30,9 +30,9 @@ const REDACTED_QUERY_PARAMS = ['token', 'ticket'] as const;
  *
  * OSS-mode acceptance order:
  * 1. `?ticket=` — single-use short-TTL ticket (primary query mechanism).
- * 2. `?token=`  — legacy JWT-in-query, honored ONLY when
+ * 2. `?token=`  — JWT in the query, honored only when
  *    PRISM_ALLOW_QUERY_TOKEN === '1' (query strings leak into proxy logs).
- * 3. `Authorization: Bearer <jwt>` header — unchanged.
+ * 3. `Authorization: Bearer <jwt>` header.
  */
 export function verifyWebSocketClient(
   info: Parameters<VerifyClientCallbackSync<AuthenticatedWebSocketRequest>>[0],
@@ -47,7 +47,7 @@ export function verifyWebSocketClient(
     }
   }
 
-  // 每次连接都打;真正要紧的是**失败**那三条(下面都是 warn),成功的进 debug。
+  // 每次连接都打,所以进 debug;要紧的是下面几条失败日志(都是 warn)。
   log.debug('WebSocket 连接请求:', `${loggedUrl.pathname}${loggedUrl.search}`);
 
   // Platform mode: use the first DB user and skip token checks.
@@ -76,8 +76,8 @@ export function verifyWebSocketClient(
     const user = Number.isFinite(numericUserId) ? userDb.getUserById(numericUserId) : undefined;
 
     /**
-     * fj:票据也要校 `token_version` —— REST 与 JWT-WS 两条路都校,唯独这里没校。
-     * 不校的后果:用户「退出所有设备」之后,已签发的那张 60 秒票据仍能开新连接。
+     * 票据也要校验 `token_version`(与 REST、JWT-WS 两条路一致):
+     * 否则用户「退出所有设备」之后,已签发的 60 秒票据仍能开新连接。
      */
     const ticketTokenVersion = (consumed as { tokenVersion?: unknown } | null)?.tokenVersion;
     const tokenVersionMatches = ticketTokenVersion === null
@@ -95,13 +95,13 @@ export function verifyWebSocketClient(
     }
 
     // Invalid/expired/replayed ticket: fall through to the header (and, when
-    // explicitly enabled, legacy query token) mechanisms below.
+    // explicitly enabled, query token) mechanisms below.
     log.warn('WebSocket ticket rejected (invalid, expired, or already used)');
   }
 
-  // OSS mode, mechanisms 2+3: legacy JWT from the query string is accepted
-  // only behind an explicit opt-in; the Authorization header path is the
-  // long-standing default and is unchanged.
+  // OSS mode, mechanisms 2+3: a JWT in the query string is accepted only behind
+  // an explicit opt-in (and then wins over the header); otherwise the
+  // Authorization header is used.
   const queryToken =
     process.env.PRISM_ALLOW_QUERY_TOKEN === '1'
       ? upgradeUrl.searchParams.get('token')

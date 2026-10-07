@@ -8,25 +8,22 @@ import { describe, test } from 'vitest';
 import { formatBytes, formatKilobytes } from './formatBytes';
 
 /**
- * 字节展示口径:**前后端必须同答案**,而且只能有一份实现。
+ * 字节展示口径:前后端必须同答案,而且只能有一份实现。
  *
- * 这个仓库里曾经有四份 `formatBytes` / `formatFileSize`,其中两份渲染在**同一个
- * 设置面板里**(`ServerStatusTab` 与它的子组件 `RuntimeStatsSection`)—— 上下并排、
- * MB 档小数位不同,肉眼可见的漂。另外两处各有各的缺档(缺 `< 1KB`、缺 GB)。
- *
- * 没有安全后果,但它是"抄一遍就会漂、漂了没人发现"最干净的样本。所以这里钉两条:
- * 各档边界的具体答案,以及**前端源码里不许再出现第二份实现**。
+ * 多份实现会漂:同一个设置面板里上下并排的两处(`ServerStatusTab` 与子组件
+ * `RuntimeStatsSection`)MB 档小数位会不同,别处还会各缺一档(`< 1KB`、GB)。
+ * 所以这里钉两条:各档边界的具体答案,以及前端源码里不许出现第二份实现。
  */
 describe('formatBytes', () => {
   test('四档边界', () => {
     assert.equal(formatBytes(0), '0 B');
-    assert.equal(formatBytes(512), '512 B');            // 曾经有一份在这里印 "0 KB"
+    assert.equal(formatBytes(512), '512 B');            // 不足 1KB 按字节显示,不印 "0 KB"
     assert.equal(formatBytes(1024), '1 KB');
     assert.equal(formatBytes(1536), '2 KB');            // KB 取整,不留小数
     assert.equal(formatBytes(1024 ** 2), '1.0 MB');
     assert.equal(formatBytes(1024 ** 2 * 1.25), '1.3 MB');
     assert.equal(formatBytes(1024 ** 3), '1.0 GB');
-    assert.equal(formatBytes(1024 ** 3 * 2.5), '2.5 GB'); // 曾经有一份在这里印 "2560.0 MB"
+    assert.equal(formatBytes(1024 ** 3 * 2.5), '2.5 GB'); // 到 GB 档就换单位,不印 "2560.0 MB"
   });
 
   test('脏输入不炸', () => {

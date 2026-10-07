@@ -28,9 +28,9 @@ if (IS_PLATFORM) {
 
 // Optional API-key gate for every /api route.
 //
-// Deliberately reads PRISM_API_KEY — never the generic API_KEY, which is
+// Deliberately reads PRISM_API_KEY, never the generic API_KEY: that one is
 // commonly inherited from unrelated tooling (e.g. Claude Code's proxy) and
-// previously caused spurious 401s on Prism's own REST routes.
+// would cause spurious 401s on Prism's own REST routes.
 //
 // - PRISM_API_KEY unset/empty  -> pass-through (JWT auth still applies per route)
 // - PRISM_API_KEY set          -> require matching `x-prism-api-key` header
@@ -40,9 +40,9 @@ const validateApiKey = (req, res, next) => {
     return next();
   }
 
-  // hj(审计 P2-2):浏览器导航(下载)和 EventSource(会话搜索)**带不上自定义请求头**。
-  // 这两条口各有自己的短命票据(单目标、分用途、比对 token_version),不需要这道闸;
-  // 不豁免的话,配了 PRISM_API_KEY 的部署里下载与搜索会全部静默 401。
+  // 浏览器导航(下载)和 EventSource(会话搜索)带不上自定义请求头。这两条口各有自己的
+  // 短命票据(单目标、分用途、比对 token_version),不需要这道闸;不豁免的话,配了
+  // PRISM_API_KEY 的部署里下载与搜索会全部静默 401。
   const fullPath = `${req.baseUrl || ''}${req.path || ''}`;
   if (req.method === 'GET' && req.query?.ticket
     && (fullPath.startsWith('/api/downloads/') || SSE_TICKET_PATHS.has(fullPath))) {
@@ -84,12 +84,12 @@ const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
   let token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
-  // SSE(EventSource)设不了 Authorization 头,只能把凭据放 URL 里。**别放 JWT** ——
-  // URL 会进反代日志和浏览器历史。放一张短命票据:泄了 60 秒后也就废了。
+  // SSE(EventSource)设不了 Authorization 头,只能把凭据放 URL 里。不放 JWT(URL 会进反代日志
+  // 和浏览器历史),放一张短命票据,泄了 60 秒后也就废了。
   //
-  // hj(审计 P1-1):**只在 SSE 票据的专用路径上认票**,其余路由一律不认(当作没带凭据)。
-  // 原来这里对所有路由生效:搜索用的票能换 WS 票开 shell、能建永久 API key。
-  // 另外比对签发时的 token_version、审批状态 ——「退出所有设备」/ 驳回之后票立刻作废。
+  // 只在 SSE 票据的专用路径上认票,其余路由一律不认(当作没带凭据),否则搜索用的票就能换 WS 票
+  // 开 shell、建永久 API key。另外比对签发时的 token_version 与审批状态,「退出所有设备」/ 驳回
+  // 之后票立刻作废。
   if (!token && req.query.ticket && req.method === 'GET'
     && SSE_TICKET_PATHS.has(`${req.baseUrl || ''}${req.path || ''}`)) {
     const consumed = consumeSseTicket(req.query.ticket);
@@ -103,7 +103,7 @@ const authenticateToken = async (req, res, next) => {
     return res.status(401).json({ error: '票据无效或已过期,请重试。' });
   }
 
-  // 遗留的 `?token=<JWT>`:默认**不再接受**(这正是 SSE 票据要替换掉的泄漏面)。
+  // 遗留的 `?token=<JWT>`:默认不再接受(这正是 SSE 票据要替换掉的泄漏面)。
   // 只有显式设了 PRISM_ALLOW_QUERY_TOKEN=1 的部署才放行,与 WS 升级那边一致。
   if (!token && req.query.token && process.env.PRISM_ALLOW_QUERY_TOKEN === '1') {
     token = req.query.token;
@@ -125,10 +125,8 @@ const authenticateToken = async (req, res, next) => {
     // Revocation check. Tokens live 7 days, so without this a leaked token
     // stays valid for its full lifetime with no way to recall it. Logout-all
     // and password changes bump users.token_version; a token minted under an
-    // older version no longer matches.
-    //
-    // Tokens issued before this field existed carry no `tv` claim — those are
-    // accepted only while the user is still at version 0.
+    // older version no longer matches. A token without a `tv` claim counts as
+    // version 0.
     const currentVersion = user.token_version ?? 0;
     const tokenVersion = typeof decoded.tv === 'number' ? decoded.tv : 0;
     if (tokenVersion !== currentVersion) {
@@ -154,12 +152,11 @@ const authenticateToken = async (req, res, next) => {
 };
 
 /**
- * hj(审计 P2-3):这个请求**像不像**带着有效凭据 —— 只给「请求体大小上限」用,不是鉴权。
+ * 这个请求像不像带着有效凭据:只给「请求体大小上限」用,不是鉴权。
  *
- * 全局 `express.json` 原来是 50MB、而且排在限流和鉴权之前:一个未登录的请求就能让服务器
- * 解析 50MB 的 JSON(实测 34MB 对象体阻塞事件循环 1.25 秒)。大请求体只有登录用户才有
- * 正当用途(保存大文件、长对话)。这里只做**不碰库的 JWT 验签**(签名 + 未过期)与 API key
- * 的哈希查找,真正的鉴权照旧由各路由的 authenticateToken 负责。
+ * 大请求体只有登录用户才有正当用途(保存大文件、长对话),而解析大 JSON 会阻塞事件循环,
+ * 不能让未登录的请求触发。这里只做不碰库的 JWT 验签(签名 + 未过期)与 API key 的哈希查找,
+ * 真正的鉴权仍由各路由的 authenticateToken 负责。
  */
 const hasVerifiableCredential = (req) => {
   if (IS_PLATFORM) return true;

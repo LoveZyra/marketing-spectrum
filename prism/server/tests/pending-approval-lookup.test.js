@@ -5,15 +5,12 @@ import { describe, test } from 'vitest';
 import { approvalBelongsToSession, preferredApprovalSessionId } from '../claude-sdk.js';
 
 /**
- * 待批审批的归属判定 —— 决定一条审批请求在重连/切回会话时能不能被补发。
+ * 待批审批的归属判定:决定一条审批请求在重连 / 切回会话时能不能被补发。
  *
- * 这条规则原来只比 provider 原生 id,而那个 id 在一轮对话的开头是 null:
- * `canUseTool` 可以在流里第一条消息回来之前就触发。于是新会话第一轮里产生的
- * 审批请求被永久打上 `_sessionId: null`,而查询方永远拿着非空 id 来问 ——
- * **这条请求此后无论刷新、重连还是切换都不可能再被捞出来**,用户只能看着它
- * 超时,而且从头到尾没有弹窗。
- *
- * 这里钉的就是那个空窗:app 会话 id 从第一轮开始就存在。
+ * provider 原生 id 在一轮对话的开头是 null:`canUseTool` 可以在流里第一条消息回来之前就触发,
+ * 于是新会话第一轮里产生的审批请求带着 `_sessionId: null`,而查询方总是拿非空 id 来问。只比
+ * provider id 的话,这条请求无论刷新、重连还是切换都捞不回来,用户从头到尾看不到弹窗。
+ * app 会话 id 从第一轮开始就存在,所以两个 id 都要认。
  */
 describe('待批审批按会话查找', () => {
   test('provider 原生 id 命中', () => {
@@ -26,12 +23,12 @@ describe('待批审批按会话查找', () => {
     assert.equal(approvalBelongsToSession(resolver, 'app-1'), true);
   });
 
-  /** 回归本体:第一轮里 provider id 还不存在,只能靠 app id 找回来。 */
+  /** 第一轮里 provider id 还不存在,只能靠 app id 找回来。 */
   test('provider id 还是 null 时,靠 app 会话 id 仍然找得到', () => {
     const resolver = { _sessionId: null, _appSessionId: 'app-1' };
 
     assert.equal(approvalBelongsToSession(resolver, 'app-1'), true);
-    // 修复前这里是唯一的查询方式,而它永远返回 false —— 请求就此失联。
+    // 只按 provider id 查永远返回 false,请求就此失联。
     assert.equal(approvalBelongsToSession(resolver, 'prov-1'), false);
   });
 
@@ -57,12 +54,11 @@ describe('待批审批按会话查找', () => {
 
 
 /**
- * 授权/回填路径该用哪个会话 id。这是 getToolApprovalSessionId 的内核。
+ * 授权 / 回填路径该用哪个会话 id。这是 getToolApprovalSessionId 的内核。
  *
- * 回归点:上一轮修了显示/补发(approvalBelongsToSession),漏了这条授权路径。
- * 新会话第一轮 provider id 还没捕获时,`_sessionId` 是 null —— 必须用 app 会话
- * id 兜底,否则用户点"允许"会被 handlePermissionResponse 当成 null 丢弃,turn
- * 卡到看门狗超时。这两个函数必须对同一批 resolver 给出自洽的答案。
+ * 新会话第一轮 provider id 还没捕获时,`_sessionId` 是 null,必须用 app 会话 id 兜底,否则用户点"允许"
+ * 会被 handlePermissionResponse 当成 null 丢弃,回合卡到看门狗超时。它与显示 / 补发用的
+ * approvalBelongsToSession 必须对同一批 resolver 给出自洽的答案。
  */
 describe('待批审批的授权会话 id 选择', () => {
   test('provider 原生 id 优先', () => {

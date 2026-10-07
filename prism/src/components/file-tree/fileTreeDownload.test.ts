@@ -1,25 +1,19 @@
 /**
  * 下载:谁走"交给浏览器",谁必须留在内存里。
  *
- * ## 背景
+ * 有服务端现成文件的入口一律:签一张短命票 → 把 URL 交给浏览器导航,进度条、暂停、落盘全归
+ * 浏览器的下载管理器。走 `fetch` → `response.blob()` → `a[download]` 的话,整份文件要先落进
+ * 标签页内存、拼完才弹保存框:没有进度条、切页就断、大文件会把标签页撑崩;文件夹若在浏览器里
+ * 逐个读进内存再打 ZIP,峰值约 2× 目录大小。
  *
- * 原来全仓的下载都是 `fetch` → `response.blob()` → `a[download]`:整份文件**先落进
- * 标签页的内存**,拼完才弹保存框。代价是没有进度条、切页就断、大文件把标签页撑崩;
- * 文件夹更糟 —— 在浏览器里逐个文件读进内存再打 ZIP,峰值约 2× 目录大小。
- *
- * 现在有服务端现成文件的那几个入口改成:签一张短命票 → 把 URL 交给浏览器导航。
- * 进度条、暂停、落盘全归浏览器的下载管理器。
- *
- * ## 这里钉两件事
- *
- * 1. **该走导航的必须走导航**,不能有人悄悄改回 blob(改回去不会报错,只会让
- *    大文件重新"点了没反应");
- * 2. **不该走导航的必须留着 blob**,而且它们的 `revokeObjectURL` 必须推迟。
+ * 这里钉两件事:
+ * 1. 该走导航的必须走导航,不能被悄悄改回 blob(改回去不会报错,只会让大文件"点了没反应");
+ * 2. 不该走导航的必须留着 blob,而且它们的 `revokeObjectURL` 必须推迟。
  *
  * 第 2 条里那两个例外各有硬理由:
- * - **编辑器「下载文件」**下的是**编辑器缓冲区**(可能含未保存改动),服务器上那份是
- *   旧的 —— 改成给链接会静默下到旧版本;
- * - **会话导出**的内容由服务端整份渲染后直接发,没有一个"现成文件"可指。
+ * - 编辑器「下载文件」在有未保存改动时下的是编辑器缓冲区,服务器上那份是旧的,
+ *   一律给链接会静默下到旧版本;
+ * - 会话导出的内容由服务端整份渲染后直接发,没有一个"现成文件"可指。
  *
  * 不跑 React,直接对源码断言:这些是"写法"层面的约束,渲染测试未必看得出来
  * (jsdom 里小文件走哪条路都"正常")。
@@ -40,7 +34,7 @@ const WORK_PANEL = read('components/chat/view/subcomponents/ChatWorkPanel.tsx');
 const TURN_OUTPUTS = read('components/chat/view/subcomponents/TurnOutputsCard.tsx');
 const NAV = read('utils/browserDownload.ts');
 
-/** 改成"交给浏览器"的五个入口,都落在这三个文件里。 */
+/** 走"交给浏览器"的五个入口,都落在这三个文件里。 */
 const NAVIGATING = [
   'components/file-tree/hooks/useFileTreeOperations.ts',
   'components/chat/view/subcomponents/ChatWorkPanel.tsx',
@@ -71,25 +65,24 @@ describe('走导航的那几个', () => {
     expect(OPS).toMatch(/await downloadPaths\(\[item\.path\], item\.name\)/);
     // 批量走导出的 downloadPaths
     expect(OPS).toMatch(/downloadPaths,/);
-    expect(TREE).toMatch(/operations\.downloadPaths\(targets\.map\(/);
+    expect(TREE).toMatch(/await downloadPaths\(targets\.map\(/);
   });
 
   it('批量下载是一次请求一个包,不再是 for 循环逐个下', () => {
     /*
-     * 只看 downloadSelected 这一段 —— 同文件里的 deleteSelected 也有一模一样的
-     * `for (const item of targets)`,拿整份源码去断言就会把删除那段一起判进来
-     * (第一版正是这么误报的)。
+     * 只看 downloadSelected 这一段:同文件里的 deleteSelected 也有一模一样的
+     * `for (const item of targets)`,拿整份源码去断言就会把删除那段一起判进来。
      */
     const start = TREE.indexOf('const downloadSelected = useCallback');
     expect(start).toBeGreaterThan(-1);
     // 到它自己的依赖数组那一行为止。切错位置(比如找一个根本不存在的终止串)
-    // 会让 slice 退化成"整份文件",守卫就又变宽了 —— 第一版就是这么漏的。
+    // 会让 slice 退化成"整份文件",守卫就又变宽了。
     const stop = TREE.indexOf('\n  }, [', start);
     expect(stop).toBeGreaterThan(start);
     const body = TREE.slice(start, stop);
     expect(body).not.toMatch(/for \(const /);
-    expect(body).toMatch(/operations\.downloadPaths\(/);
-    // 失败汇总那条文案本来就是死代码(handleDownload 自己吞错,从不外抛),已删。
+    expect(body).toMatch(/await downloadPaths\(/);
+    // handleDownload 自己吞错、从不外抛,批量失败汇总那条文案只会是死代码,不该出现。
     expect(TREE).not.toMatch(/batchDownloadPartial/);
   });
 
@@ -115,13 +108,13 @@ describe('走导航的那几个', () => {
 describe('导航用的是隐藏 iframe,不是 a.click()', () => {
   it('用 iframe —— 失败时页面不能跳走', () => {
     /*
-     * 点一个 <a href> 是先**导航**过去,看到 Content-Disposition: attachment 才转成
-     * 下载。响应不是附件的时候(票据存在服务端内存里,一次发版就全没了 → 401 JSON),
+     * 点一个 <a href> 是先导航过去,看到 Content-Disposition: attachment 才转成
+     * 下载。响应不是附件的时候(票据存在服务端内存里,服务一重启就全没了 → 401 JSON),
      * 页面就真的跳走了,用户的整个 SPA 状态跟着没。iframe 不会。
      */
     expect(NAV).toMatch(/document\.createElement\('iframe'\)/);
-    // 注意断言的是**代码**不是注释 —— 上面那段注释里就写着 `a.click()`,
-    // 拿 /\.click\(\)/ 去匹配会被自己的注释匹中,变成一条永远绿的假守卫。
+    // 断言的是代码不是注释:browserDownload.ts 的注释里就写着 `a.click()`,
+    // 拿 /\.click\(\)/ 去匹配会被它自己的注释匹中,变成一条永远绿的假守卫。
     expect(NAV).not.toMatch(/document\.createElement\('a'\)/);
   });
 
@@ -141,7 +134,7 @@ describe('仍然走 blob 的那两个', () => {
     for (const rel of STILL_BLOB) {
       const source = read(rel);
       expect(source).toMatch(/setTimeout\(\(\) => URL\.revokeObjectURL\(url\), 10_000\)/);
-      // 老写法:click() 之后两行内出现裸的 revokeObjectURL(url)。
+      // 禁止的写法:click() 之后两行内出现裸的 revokeObjectURL(url)。
       expect(source).not.toMatch(
         /anchor\.click\(\);(?:[^\n]*\n){0,2}\s*URL\.revokeObjectURL\(url\);/,
       );

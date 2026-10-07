@@ -22,13 +22,13 @@ import { createTasksRouter } from '../tasks.routes.js';
  * 定时任务路由的两道门:`canTouch`(能不能碰这个任务)与 `checkProjectPath`
  * (能不能拿这个路径建任务)。
  *
- * ## 为什么必须在**路由层**测,而不是只测那两个函数
+ * ## 为什么必须在路由层测,而不是只测那两个函数
  *
- * 覆盖率报告里 `tasks.routes.ts` 是 **0.0%** —— 全仓 165 个测试文件里只有 5 个真正
+ * 覆盖率报告里 `tasks.routes.ts` 是 0.0% —— 全仓 165 个测试文件里只有 5 个真正
  * 起过 express 实例,而 tasks 不在其中。它自己的注释写着「权限模式默认跳过确认、
- * 且可见者全权可改 —— 这条校验因此是**唯一的边界**」,而这条唯一的边界一行测试都没有。
+ * 且可见者全权可改 —— 这条校验因此是唯一的边界」,而这条唯一的边界一行测试都没有。
  *
- * 只测函数证明不了路由**调没调**它。历史上这个仓库正是这么破的:`usage.routes.ts`
+ * 只测函数证明不了路由调没调它。历史上这个仓库正是这么破的:`usage.routes.ts`
  * 从 index.js 迁出来时漏挂了 `canViewerSeeSession`,而那个函数本身好好的。
  *
  * ## 判据:用文案区分"被闸门挡下"与"过闸后的正常失败"
@@ -36,10 +36,10 @@ import { createTasksRouter } from '../tasks.routes.js';
  * 与 `usage-visibility.test.ts` 同一策略。只断言状态码会把"闸门放行了但后面报错"
  * 误判成"闸门挡住了" —— 那样以后有人把闸门改成一刀切也测不出来。
  *
- * ## 注意:定时任务「可见即可改」是**有意设计**
+ * ## 注意:定时任务「可见即可改」是有意设计
  *
  * 审计里提过"可见即可改指令、以 bypassPermissions 定时执行"的风险,用户明确答复
- * 这是设计如此、不调整。所以这里钉的是**当前语义**:可见者可改、不可见者一律 404。
+ * 这是设计如此、不调整。所以这里钉的是当前语义:可见者可改、不可见者一律 404。
  * 哪天要收紧成 owner-only,是改这些断言,不是改实现去迁就它们。
  */
 
@@ -194,15 +194,12 @@ describe('定时任务路由的鉴权闸门', () => {
   });
 
   /**
-   * 下面两条**顺带钉住了 A-2 那个漂移**。
+   * 下面两条同时钉住:任务路由的路径判据就是会话路由那份 `assertViewerMayCreateSessionAt`。
    *
-   * 路由原来那份内联判据**无条件**先跑 `validateWorkspacePath`,而 service 那份对
-   * **已登记的项目**显式跳过工作区重验(注释写明理由:免得 WORKSPACES_ROOT 后来
-   * 改窄时把老项目也拦住)。差别的后果是:同一个已登记项目**开会话可以、建定时任务
-   * 被 400 挡掉**。
-   *
-   * 这个测试的临时目录在 tmpdir 下,而 tmpdir 会被 validateWorkspacePath 判成
-   * "system directory" —— 于是换回旧实现时,下面这两条会立刻红。实测过。
+   * 那份判据对已登记的项目跳过工作区重验(免得 WORKSPACES_ROOT 改窄后把老项目也拦住);
+   * 任务路由若自己先无条件跑 `validateWorkspacePath`,同一个已登记项目就会开得了会话、
+   * 建不了定时任务。这里的临时目录在 tmpdir 下,会被 validateWorkspacePath 判成
+   * "system directory",判据一旦分叉,这两条的文案断言会立刻失败。
    */
   test('建任务:拿别人的项目路径建不出来', async () => {
     await withTasksServer(async ({ baseUrl, bobPath }) => {
@@ -215,7 +212,7 @@ describe('定时任务路由的鉴权闸门', () => {
     });
   });
 
-  test('建任务失败时**只给同形文案**,不透露是哪道检查没过', async () => {
+  test('建任务失败时只给同形文案,不透露是哪道检查没过', async () => {
     await withTasksServer(async ({ baseUrl }) => {
       const asAlice = await call(baseUrl, 'alice', 'POST', '/api/tasks/', {
         name: '越界', instructions: '干点什么', projectPath: '/',
@@ -223,20 +220,17 @@ describe('定时任务路由的鉴权闸门', () => {
       });
       assert.equal(asAlice.status, 400);
       /*
-       * 这条钉的是**反探针性质**。
+       * 这条钉的是反探针性质。
        *
-       * 路由原来内联了自己那份路径校验,失败时把 `validateWorkspacePath` 的**原始错误串**
-       * 直接回给客户端,而那些串是会说话的:
+       * `validateWorkspacePath` 的原始错误串是会说话的:
        *   "Cannot create workspace in system directory: /tmp"
        *   "Workspace path must be within the allowed workspace root: <WORKSPACES_ROOT>"
-       * 第一句告诉你这条路径存在但被判成系统目录,第二句直接**把服务端配置的工作区根
-       * 读给了任意登录用户**。两句都在回答"这个路径到底怎么了" —— 那正是探针。
+       * 第一句告诉你这条路径存在但被判成系统目录,第二句直接把服务端配置的工作区根读给了
+       * 任意登录用户。会话路由那份判据(assertViewerMayCreateSessionAt)对两种失败一律返回
+       * 同形文案,任务路由共用它。
        *
-       * 会话路由那份(assertViewerMayCreateSessionAt)对两种失败一律返回同形文案,
-       * 注释写明"不给一个这个路径存不存在的探针"。fa 轮把 tasks 换成了共用那一份。
-       *
-       * 判据写成"不许出现任何一句会说话的原文",而不是"必须等于某句话" ——
-       * 后者会被将来的文案调整误伤,前者盯的是性质。
+       * 判据写成"不许出现任何一句会说话的原文",而不是"必须等于某句话":后者会被将来的
+       * 文案调整误伤,前者盯的是性质。
        */
       const message = `${asAlice.body.error ?? ''}${asAlice.text}`;
       for (const leak of [

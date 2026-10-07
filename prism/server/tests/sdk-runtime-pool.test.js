@@ -5,10 +5,10 @@ import { describe, test } from 'vitest';
 import { getRuntimePoolStats, setRuntimeEvictionNotifier } from '../claude-sdk.js';
 
 /**
- * G1:常驻池的可观测面(F6 管理面读的就是它)与被挤掉时的通知钩子(F14)。
+ * 常驻池的可观测面(管理面读的就是它)与被挤掉时的通知钩子。
  *
- * 池子本身要起真的 Claude 子进程,单测里碰不了;但**读它的那两个出口**是纯粹的
- * 形状与接线问题,而形状错了管理面就会显示假数字,钩子错了就没人知道自己的
+ * 池子本身要起真的 Claude 子进程,单测里碰不了;但读它的这两个出口是纯粹的
+ * 形状与接线问题:形状错了管理面就会显示假数字,钩子错了就没人知道自己的
  * 会话被回收过。
  */
 describe('getRuntimePoolStats', () => {

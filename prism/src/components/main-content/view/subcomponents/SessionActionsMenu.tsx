@@ -9,7 +9,7 @@ import type { SessionExportFormat } from '../../../../utils/session-export';
 export type SessionExportOptions = { format: SessionExportFormat; includeTools: boolean };
 
 type Props = {
-  /** 会话在服务端挂着常驻运行时(由 /runtime 实测,不是猜的)。 */
+  /** 会话在服务端挂着常驻运行时(由 /runtime 查询所得,不是推测)。 */
   isPersistent: boolean;
   /** 常驻开关正在请求中 —— 行上转成禁用,避免连点。 */
   persistentBusy?: boolean;
@@ -19,7 +19,7 @@ type Props = {
   projectPath: string;
   onCopyPath: () => void;
   onDelete: () => void;
-  /** eh:菜单打开时回查一次常驻状态 —— 这行显示的是服务端实况,不该拿挂载那一刻的旧值。 */
+  /** 菜单打开时回查一次常驻状态:这行显示的是服务端实况,不该用挂载那一刻的旧值。 */
   onOpen?: () => void;
 };
 
@@ -32,11 +32,10 @@ const FORMATS: Array<{ value: SessionExportFormat; label: string; hintKey: strin
 const ROW_CLASS = 'flex h-[30px] w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] transition-colors';
 
 /**
- * 顶栏右侧的「…」(设计稿 SidebarHeader 画板右上那枚菜单)。
+ * 顶栏右侧的「…」菜单(设计稿 SidebarHeader 画板右上那枚)。
  *
  * 四行:导出对话… / 常驻会话 / 复制项目路径 / 删除会话(前面一条发丝线)。
- * 「导出对话…」把同一个浮层翻到第二页选格式 —— 一个 176px 的面板,两页,
- * 不再为了选个格式弹第二层浮层。
+ * 「导出对话…」在同一个 200px 浮层里翻到第二页选格式,不必为选格式再弹一层浮层。
  */
 export default function SessionActionsMenu({
   isPersistent,

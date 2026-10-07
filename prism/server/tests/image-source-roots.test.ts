@@ -7,17 +7,15 @@ import { ATTACHMENT_DIR_NAME as ATTACHMENT_DIR_IN_IMAGES, imageSourceRoots, isAl
 import { ATTACHMENT_DIR_NAME } from '@/shared/attachment-storage.js';
 
 /**
- * A7:一张图片可以来自哪些目录 —— **只有一个答案**。
+ * 一张图片可以来自哪些目录,只能有一个答案。
  *
- * 之前这个问题在三个地方各答了一遍,而且答案不同:上传落盘按前端传的
- * `projectId`、`chat.send` 按 `sessions.project_path`、组装给模型按运行时 cwd。
- * 只要有一处对不齐,图片就在那道门被静默丢掉,而**界面照样显示得好好的** ——
- * 用户看到的是"图在页面上,模型却说传不进来"。
+ * 上传落盘、`chat.send` 校验、组装给模型三处都要回答这个问题。只要有一处对不齐,图片就在那道门被静默丢掉,
+ * 而界面照样显示正常:用户看到的是"图在页面上,模型却说传不进来"。
  */
 describe('两个 ATTACHMENT_DIR_NAME 必须相等', () => {
   it('image-attachments 里那份与 attachment-storage 里那份是同一个值', () => {
     // 就地定义是为了不把配额/落盘那一整套依赖拖进 provider 侧的构建路径,
-    // 代价是它可能和另一处漂开 —— 漂开就等于"上传落哪"和"允许读哪"再次分家。
+    // 代价是它可能和另一处漂开 —— 漂开就等于"上传落哪"和"允许读哪"分了家。
     expect(ATTACHMENT_DIR_IN_IMAGES).toBe(ATTACHMENT_DIR_NAME);
   });
 });

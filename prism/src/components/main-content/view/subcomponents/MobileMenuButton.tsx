@@ -17,7 +17,6 @@ export default function MobileMenuButton({ onMenuClick, compact = false }: Mobil
       onClick={handleMobileMenuClick}
       onTouchEnd={handleMobileMenuTouchEnd}
       className={buttonClasses}
-      // hl(P3 中英混排):原来写死 "Open menu"。
       aria-label={t('mainContent.openMenu', { defaultValue: '打开菜单' })}
     >
       <svg className="h-5 w-5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">

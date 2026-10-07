@@ -39,12 +39,12 @@ import { clientIp } from '@/shared/client-ip.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 
 /**
- * hq:**模型网关与 key 的接口。**
+ * 模型网关与 key 的接口。
  *
  * - `/:provider/gateways*` —— root:共享网关(增删改、默认 key、替人填 key)、私有网关总开关、看全部私有网关;
  * - `/:provider/my-gateways*`、`/:provider/my-models*` —— 任何登录用户:自己的个人 key、自己的私有网关与私有模型。
  *
- * **key 只进不出**:任何响应里都没有明文,最多是末四位(本人 / root 认 key 用)。审计只记"谁、对哪个网关、
+ * key 只进不出:任何响应里都没有明文,最多是末四位(本人 / root 认 key 用)。审计只记"谁、对哪个网关、
  * 给谁设 / 清了 key",不记值。
  */
 
@@ -426,7 +426,7 @@ router.delete(
 
 /**
  * 私有模型「实测」:用本人的私有网关与 key 跑一次一致性检查(结果不落库,只回给本人)。
- * 复审(P2-8):每一次都起一个 CLI 进程(最长 60 秒)—— 每人同时只许一个,全站同时最多 3 个。
+ * 每次实测都要起一个 CLI 进程(最长 60 秒),所以每人同时只许一个,全站同时最多 3 个。
  */
 const probesInFlight = new Map<number, number>();
 const MAX_PROBES_TOTAL = 3;
@@ -443,7 +443,7 @@ router.post(
     if (probeSlotsInUse() >= MAX_PROBES_TOTAL) {
       throw new AppError('现在同时在跑的实测太多了 —— 过一会儿再试', { code: 'PROBE_BUSY', statusCode: 429 });
     }
-    // 复审(二轮 nit):检查完立刻占位(下面有 await,不占位的话并发请求会一起过检查)
+    // 检查完立刻占位:下面有 await,不先占位的话并发请求会一起通过检查
     probesInFlight.set(user.id, (probesInFlight.get(user.id) ?? 0) + 1);
     try {
       const id = parseId(req.params.id);

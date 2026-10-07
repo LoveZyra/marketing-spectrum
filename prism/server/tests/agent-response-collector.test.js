@@ -5,14 +5,10 @@ import { describe, test } from 'vitest';
 import { ResponseCollector } from '../routes/agent.js';
 
 /**
- * 非流式 `/api/agent` 的响应体里,`messages` 和 `tokens` 长期是空的。
+ * 非流式 `/api/agent` 的响应体由 ResponseCollector 汇总出 `messages`(回答)和 `tokens`(用量)。
  *
- * 原因不是"没内容",是**认错了格式**:收集器只认 `type: 'claude-response'` 的
- * 字符串帧(老 CLI 线格式),而走 SDK 之后推过来的一律是规范化对象
- * (`{ kind: 'text' | 'status' | … }`)。两个条件一个都不成立,于是循环里
- * 一条都不匹配,响应恒为 `messages: []` + 全 0 用量 —— 静默,没有任何报错。
- *
- * 这几条用例把两种格式都钉住,免得再退回去。
+ * SDK 推来的是规范化对象(`{ kind: 'text' | 'status' | … }`),CLI 线格式是 `type: 'claude-response'`
+ * 的 JSON 字符串帧,两种都要认。认错格式不会报错,只会静默返回 `messages: []` 和全 0 用量。
  */
 
 const text = (content, over = {}) => ({

@@ -5,7 +5,7 @@ import { useUiPreferences } from '../../../../hooks/useUiPreferences';
 import { useSkillWhetEnabled } from '../../../skillwhet/hooks/useSkillWhetStatus';
 
 /**
- * gy:「技能效果询问」开关 —— 关掉之后,调过技能的回合结束时不再弹调查卡。
+ * 「技能效果询问」开关:关掉之后,调过技能的回合结束时不再弹调查卡。
  *
  * 存在账号同步的 `uiPreferences.skillSurveyEnabled`(与紧凑模式等同一张表),服务端
  * 算 work-frames 的 `skillSurveys` 时读同一个键,所以换设备也生效。技能优化没挂载时

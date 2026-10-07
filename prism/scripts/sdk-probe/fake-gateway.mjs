@@ -1,5 +1,5 @@
 /**
- * hm(A7):升级探针用的假网关 —— Anthropic Messages 兼容,只在容器里跑,不进构建产物。
+ * 升级探针用的假网关:Anthropic Messages 兼容,只在容器里跑,不进构建产物。
  *
  * - `/v1/messages`(流式与非流式)、`/v1/messages/count_tokens`、`/v1/models`;
  * - 每个请求都记下来(`requests`),探针据此断言"发了什么";

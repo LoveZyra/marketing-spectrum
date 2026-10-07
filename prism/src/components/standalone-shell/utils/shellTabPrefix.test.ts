@@ -6,7 +6,7 @@ import { decideShellTabPrefix } from './shellTabPrefix';
 
 const make = () => 'fresh1';
 
-describe('hl 复核 P2-3 终端前缀', () => {
+describe('终端前缀', () => {
   test('刷新本页:沿用旧前缀,连回自己的 PTY', () => {
     assert.deepEqual(decideShellTabPrefix('reload', 'abc123', make), { prefix: 'abc123', reused: true });
   });

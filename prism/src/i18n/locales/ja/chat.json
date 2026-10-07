@@ -33,7 +33,6 @@
   },
   "input": {
     "placeholder": "/ でコマンド、@ でファイル指定、または {{provider}} に何でも聞いてください...",
-    "attachImages": "画像を添付",
     "send": "送信",
     "stop": "停止",
     "hintText": {

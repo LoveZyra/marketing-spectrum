@@ -1,5 +1,7 @@
 import type { ChatMessage } from '../types/types';
 
+import { chatText } from './composerText';
+
 /**
  * 工具执行卡里一行的摘要(设计稿 2a/2b 的五列表格:状态 / 工具名 / 目标 / 计量 / 耗时)。
  *
@@ -88,9 +90,12 @@ export function toolMetric(
     const added = newText ? countLines(newText) : 0;
     const removed = oldText ? countLines(oldText) : 0;
     if (added || removed) {
-      // ef:新建文件(没有 old_string)只说写了多少行 —— `−0` 是编辑才有的概念,
-      // 挂在新建行上是一句没有信息量的噪声(设计稿里写入行是「+86 行」)。
-      return { text: removed ? `+${added} −${removed}` : `+${added} 行`, isWrite: true };
+      // 新建文件(没有 old_string)只说写了多少行:`−0` 是编辑才有的概念,
+      // 挂在新建行上是没有信息量的噪声(按设计稿,写入行显示「+86 行」)。
+      return {
+        text: removed ? `+${added} −${removed}` : chatText('toolMetric.linesAdded', `+${added} 行`, { count: added }),
+        isWrite: true,
+      };
     }
     return { text: '', isWrite: true };
   }
@@ -100,22 +105,22 @@ export function toolMetric(
 
   const fileCount = Number(toolUseResult.numFiles ?? (Array.isArray(toolUseResult.filenames) ? toolUseResult.filenames.length : NaN));
   if (Number.isFinite(fileCount) && fileCount > 0) {
-    return { text: `${fileCount} 处`, isWrite: false };
+    return { text: chatText('toolMetric.matches', `${fileCount} 处`, { count: fileCount }), isWrite: false };
   }
 
   if (toolName === 'Read') {
     const lines = countLines(result.content);
-    if (lines > 0) return { text: `${lines} 行`, isWrite: false };
+    if (lines > 0) return { text: chatText('toolMetric.lines', `${lines} 行`, { count: lines }), isWrite: false };
   }
 
   return { text: '', isWrite: false };
 }
 
 /**
- * ef:一段活动的**总耗时**(设计稿抬头右端那个「1 分 12 秒」)。
+ * 一段活动的总耗时(抬头右端那个「1 分 12 秒」)。
  *
  * 逐行相加而不是"最后一行结束 − 第一行开始":工具之间还夹着模型思考的时间,
- * 端到端差值会把那部分也算进来 —— 抬头说的是"这一轮的工具跑了多久"。
+ * 端到端差值会把那部分也算进来,而抬头说的是"这一轮的工具跑了多久"。
  * 一条都算不出来时返回空串,抬头就不显示这一项。
  */
 export function formatRunDuration(
@@ -167,7 +172,7 @@ export function toolDuration(
 export type ActivityIconKey =
   | 'read' | 'write' | 'edit' | 'bash' | 'search' | 'glob'
   | 'fetch' | 'agent' | 'todo' | 'mcp' | 'thinking' | 'tool'
-  /** 回合中夹在工具之间的过渡性正文(cd 轮起收进时间轴) */
+  /** 回合中夹在工具之间的过渡性正文(收进时间轴) */
   | 'narration';
 
 /** 行文案的动词分类。`generic` 表示没有合适的动词,直接用工具名。 */
@@ -194,7 +199,7 @@ const ICON_BY_TOOL: Record<string, ActivityIconKey> = {
   Glob: 'glob', LS: 'glob',
   WebFetch: 'fetch',
   Task: 'agent', Agent: 'agent',
-  // TaskList / TaskGet 只是读清单,不算「更新任务清单」(复审)
+  // TaskList / TaskGet 只是读清单,不算「更新任务清单」
   TodoWrite: 'todo', TaskCreate: 'todo', TaskUpdate: 'todo',
 };
 
@@ -207,14 +212,15 @@ const VERB_BY_TOOL: Record<string, ActivityVerb> = {
   Glob: 'glob', LS: 'glob',
   WebFetch: 'fetch',
   Task: 'agent', Agent: 'agent',
-  // TaskList / TaskGet 只是读清单,不算「更新任务清单」(复审)
+  // TaskList / TaskGet 只是读清单,不算「更新任务清单」
   TodoWrite: 'todo', TaskCreate: 'todo', TaskUpdate: 'todo',
 };
 
 /**
- * ho:SDK 0.3.x 管清单用的是 TaskCreate / TaskUpdate(没有 TodoWrite)。它们的 `description` 是**任务的说明**,
- * 不是"这一步在干嘛"的人话 —— 当行标题会把任务正文搬进时间轴;TaskUpdate 没有可读字段时还会退回原始 JSON。
- * 这里:TaskCreate 用任务标题(subject),其余几个不取 description,行上就是「更新任务清单」。
+ * SDK 运行时管清单用的是 TaskCreate / TaskUpdate。它们的 `description` 是任务的说明,
+ * 不是"这一步在干嘛"的人话:当行标题会把任务正文搬进时间轴;TaskUpdate 没有可读字段时
+ * 还会退回原始 JSON。所以 TaskCreate 用任务标题(subject),其余几个不取 description,
+ * 行上就是「更新任务清单」。
  */
 const TASK_LIST_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']);
 
@@ -291,9 +297,8 @@ export function toolRowLabel(toolName: string, toolInput: unknown): ActivityLabe
 /**
  * @param sessionIsProcessing 这个会话此刻还在跑吗。
  *
- * 没有结果的工具行以前一律算 'running' —— 于是回合被中止/超时收掉时,那条
- * tool_result 永远不会到,卡片就永远转下去。会话都已经不在跑了还显示"运行中",
- * 是在骗人。会话闲下来时仍然没结果的行,按**已中断**渲染。
+ * 会话闲下来时仍然没结果的工具行按已中断渲染,不算 'running':回合被中止 / 超时收掉时,
+ * 那条 tool_result 永远不会到,算 running 的话卡片会永远转下去。
  */
 export function summarizeToolRow(message: ChatMessage, sessionIsProcessing = true): ToolRowSummary {
   const toolName = message.toolName || 'Tool';
@@ -302,15 +307,14 @@ export function summarizeToolRow(message: ChatMessage, sessionIsProcessing = tru
   const metric = toolMetric(toolName, message.toolInput, message.toolResult);
 
   /**
-   * ge:**被转到后台的那次调用,终态在 `background` 里。**
+   * 被转到后台的那次调用,终态在 `background` 里。
    *
-   * 转后台时这一行**立刻**拿到一个 "running in the background" 的 tool_result
-   * (SDK 原话),按 `hasResult` 判它当场就是"完成" —— 而它其实刚开始跑。
-   * 真正的完成/失败由 SDK 的 `task_notification` 带回来,按 `tool_use_id` 归到
-   * 这一行上(见 useChatMessages 的 backgroundByToolId)。
+   * 转后台时这一行立刻拿到一个 "running in the background" 的 tool_result(SDK 原话),
+   * 按 `hasResult` 判它当场就是"完成",而它其实刚开始跑。真正的完成 / 失败由 SDK 的
+   * `task_notification` 带回来,按 `tool_use_id` 归到这一行上(见 useChatMessages 的
+   * backgroundByToolId)。
    *
-   * 这也是为什么"后台任务完成"不再需要在主对话流里单独占一行:那件事**这一行
-   * 自己就说得清**,而且说得更准。
+   * 所以"后台任务完成"不需要在主对话流里单独占一行:这一行自己就说得清,而且更准。
    */
   const background = (message as { background?: { status?: string; durationMs?: number } }).background;
   const backgroundStatus = background?.status === 'completed'
@@ -321,11 +325,11 @@ export function summarizeToolRow(message: ChatMessage, sessionIsProcessing = tru
         ? 'running'
         : null;
   /**
-   * gh:**转后台的行,耗时也以后台状态为准。**
+   * 转后台的行,耗时也以后台状态为准。
    *
-   * 那个立刻到达的"running in the background" tool_result 带着 timestamp,按它算出来
-   * 的是"转后台之前跑了多久"(0.2s)—— 状态是 running 却显示 0.2s,跑完了也还是 0.2s。
-   * 跑着时留空(界面显示「运行中」),完成/失败用 task_notification 带回的 duration_ms。
+   * 那个立刻到达的 "running in the background" tool_result 带着 timestamp,按它算出来的是
+   * "转后台之前跑了多久"(零点几秒),与真实耗时无关。跑着时留空(界面显示「运行中」),
+   * 完成 / 失败用 task_notification 带回的 duration_ms。
    */
   const duration = background
     ? (background.status === 'running'
@@ -400,46 +404,38 @@ export type ActivityFoldPlan = {
 };
 
 /**
- * 一段活动收起时露出多少行。
+ * 收起状态下该露几行:收起不等于清空。
  *
- * ## fw 起的规则(用户定的)
- *
- * 1. **只要有一行就渲染抬头** —— 不再有"少于三步不给抬头"这条。此前一个回合
- *    刚开跑、段内只有一两行时抬头根本不出现,行光秃秃地摊着,随后第三行落地
- *    抬头才凭空冒出来,位置还整个错一档;
- * 2. **这一轮的正文还没开始写**:留最新 `ACTIVITY_TAIL_ROWS` 步,其余折起 ——
- *    用户盯的是"现在在干什么";不足三步就全露(没什么可折的);
- * 3. **正式回复一出现**:整段收成抬头一行。做完的活儿不该继续占着屏幕。
- *
- * 第 3 条的判据是**正文出没出现**,不是"最后一个工具返回没有"。后者会在工具
- * 刚返回、正文还没开始写的那一刻把整段塌掉 —— 既让人以为这一轮完了,又在正文
- * 即将出现的位置制造一次大幅高度突变。判据本身收在 `focusActivityGroup` 里。
- *
- * @param keepTail 这一段属于正在跑的这一轮,且正文还没开始出现
- */
-/**
- * gb:**收起状态下该露几行 —— 收起不等于清空。**
- *
- * 这一段此前有两个"收起":自动规则(`planActivityFold`)在回合还在跑时收到
- * **尾部三行**,而用户手动点抬头收起时,组件里写死的是 **0**。同一个动作两种
- * 含义,用户点的正是后者 —— 于是一轮跑到 33 步时点一下"收起",正在跑的那几步
- * 也一起没了,而 `manualFold` 一旦定下就压过自动规则(fw 有意为之),这一轮
- * **剩下的全程**都不再露尾三。用户看到的就是一条"执行 33 条命令·运行中"的
- * 光杆抬头,底下什么都没有。
- *
+ * 自动规则(`planActivityFold`)在回合还在跑时收到尾部三行;手动点抬头收起必须是同一个目标,
+ * 不能是 0:一轮跑到 33 步时点一下"收起",正在跑的那几步不能一起没了,而 `manualFold`
+ * 一旦定下就压过自动规则,这一轮剩下的全程都会只剩一条光杆抬头。
  * 所以把"收起的目标"抽成这一个函数,自动与手动两条路共用它。
  *
- * **例外**:总共就 ≤ `ACTIVITY_TAIL_ROWS` 行时,"保留最新三个"和"全都露着"是
- * 同一件事 —— 这时候收起若还留三行,那个按钮就成了点了没反应的死键
- * (fw 专门修过这个)。所以只有这种情况才真的收干净。
+ * 例外:总共就 ≤ `ACTIVITY_TAIL_ROWS` 行时,"保留最新三个"和"全都露着"是同一件事,
+ * 收起若还留三行,那个按钮就成了点了没反应的死键。所以只有这种情况才真的收干净。
  *
- * 白送的一条:回合一结束 `keepTail` 翻 false,收起目标当场变 0 ——
- * **"会话完成后才全部折叠"是这个判据的自然结果,不用另写一行。**
+ * 回合一结束 `keepTail` 翻 false,收起目标当场变 0:"会话完成后才全部折叠"
+ * 是这个判据的自然结果,不用另写一行。
  */
 export function collapsedVisibleCount(total: number, keepTail: boolean): number {
   return keepTail && total > ACTIVITY_TAIL_ROWS ? ACTIVITY_TAIL_ROWS : 0;
 }
 
+/**
+ * 一段活动收起时露出多少行。规则:
+ *
+ * 1. 只要有一行就渲染抬头:否则回合刚开跑、段内只有一两行时行光秃秃地摊着,
+ *    第三行落地时抬头才冒出来,位置还整个错一档;
+ * 2. 这一轮的正文还没开始写:留最新 `ACTIVITY_TAIL_ROWS` 步,其余折起,
+ *    用户盯的是"现在在干什么";不足三步就全露(没什么可折的);
+ * 3. 正式回复一出现:整段收成抬头一行。做完的活儿不该继续占着屏幕。
+ *
+ * 第 3 条的判据是正文出没出现,不是"最后一个工具返回没有"。后者会在工具刚返回、
+ * 正文还没开始写的那一刻把整段塌掉,既让人以为这一轮完了,又在正文即将出现的位置
+ * 制造一次大幅高度突变。判据本身收在 `focusActivityGroup` 里。
+ *
+ * @param keepTail 这一段属于正在跑的这一轮,且正文还没开始出现
+ */
 export function planActivityFold(total: number, keepTail: boolean): ActivityFoldPlan {
   const visibleCount = keepTail ? Math.min(total, ACTIVITY_TAIL_ROWS) : 0;
   const foldedCount = total - visibleCount;
@@ -455,8 +451,8 @@ export function planActivityFold(total: number, keepTail: boolean): ActivityFold
  * 渲染列表里一项对"哪一段属于正在跑的这一轮"这件事的作用。
  *
  * - `activity` 这一项是一段活动时间轴(工具组);
- * - `turn-boundary` **开启新的一轮或终结当前一轮**(用户消息 / 错误行);
- * - `reply` **这一轮的正式回复**(普通助手正文)—— 它不结束回合(后面还可能
+ * - `turn-boundary` 开启新的一轮或终结当前一轮(用户消息 / 错误行);
+ * - `reply` 这一轮的正式回复(普通助手正文)—— 它不结束回合(后面还可能
  *   接着调工具),但它一出现,它上面那段活动就该收起来;
  * - `other` 其余(子代理卡、任务通知、压缩摘要、交互式提示……)—— 不改变归属。
  */
@@ -470,45 +466,14 @@ export type ActivityFocus = {
 };
 
 /**
- * 找出"正在跑的这一轮"对应哪一段活动,以及**它的正文开始写了没有**。
+ * 最后一条回合边界(用户消息 / provider 报的错)在第几项;没有就是 -1。
  *
- * ## 为什么这两件事必须一起算
+ * 比它靠后的项都属于"最新那一轮"。子代理卡要用它判断自己还在不在跑:否则没有结果的子代理
+ * 会永久转圈(用户按停止、服务重启、CLI 崩了,`tool_result` 永远不会到),而旁边同一屏的
+ * 工具清单却写着「已中断」。
  *
- * 它们的答案来自同一次倒扫,而且各自驱动不同的东西 —— 拆成两个判据就是下一次
- * "只改了一半"的温床:
- *
- * - `index` 决定**行状态**:属于这一轮的段,没有结果的工具行是「运行中」;
- *   不属于的,是「已中断」。
- * - `replyStarted` 决定**折不折**:正文一出现就整段收起(规则见 planActivityFold)。
- *
- * 曾经这两件事共用一个 `sessionIsProcessing`,于是"正文出现要收起"和"这一行
- * 还在跑"互相打架:一个说收、一个说这行是运行中。
- *
- * ## 倒扫怎么读
- *
- * 从尾部往前:
- * - 撞上 `turn-boundary` → 这一轮**一步都还没跑出来**(用户刚发出消息),返回 -1;
- * - 撞上 `reply` → 正文已经出现,**接着往前找**它对应的那段活动
- *   (模型可能写完一段正文又接着调工具,那时最后一段才是当前段);
- * - 撞上 `activity` → 就是它。
- *
- * ft 那版只停在"最后一个工具组",漏掉了"用户发出下一条消息之后,上一轮的活动段
- * 仍然是最后一个工具组"这一半(fu 修)。传下标取值而不先 map 成数组:渲染期每轮
- * 都要算一次,长会话里那是几百项的白白分配,而且撞上边界能立刻短路。
- *
- * @param replyInFlight 正文正在流式打字(它不在列表里,由调用方告知)
- */
-/**
- * 最后一条**回合边界**(用户消息 / provider 报的错)在第几项;没有就是 -1。
- *
- * fz:比它靠后的项都属于"最新那一轮"。子代理卡要用它 ——
- * 那张卡此前连"会话在不在跑"都不知道,于是没有结果的子代理**永久转圈**:
- * 用户按停止、服务重启、CLI 崩了,`tool_result` 永远不会到,而卡上那个
- * `animate-spin` 明天、下个月翻回来还在转,旁边同一屏的工具清单却写着「已中断」。
- *
- * 判据与折叠那条**刻意分开**:折叠看的是"正文出没出现"(正文一出现就收起),
- * 而"这个子代理还在不在跑"跟正文写没写没关系 —— 合成一个判据就是下一次
- * "一个判据回答两个问题"。
+ * 判据与折叠那条刻意分开:折叠看的是"正文出没出现"(正文一出现就收起),
+ * 而"这个子代理还在不在跑"跟正文写没写没关系,不能让一个判据回答两个问题。
  */
 export function lastTurnBoundaryIndex(
   total: number,
@@ -520,6 +485,28 @@ export function lastTurnBoundaryIndex(
   return -1;
 }
 
+/**
+ * 找出"正在跑的这一轮"对应哪一段活动,以及它的正文开始写了没有。
+ *
+ * 这两件事必须一起算:答案来自同一次倒扫,而且各自驱动不同的东西,拆成两个判据就容易只改一半。
+ *
+ * - `index` 决定行状态:属于这一轮的段,没有结果的工具行是「运行中」;不属于的,是「已中断」。
+ * - `replyStarted` 决定折不折:正文一出现就整段收起(规则见 planActivityFold)。
+ *
+ * 两者不能共用 `sessionIsProcessing`:那样"正文出现要收起"和"这一行还在跑"会互相打架。
+ *
+ * 倒扫从尾部往前:
+ * - 撞上 `turn-boundary` → 这一轮一步都还没跑出来(用户刚发出消息),返回 -1;
+ * - 撞上 `reply` → 正文已经出现,接着往前找它对应的那段活动
+ *   (模型可能写完一段正文又接着调工具,那时最后一段才是当前段);
+ * - 撞上 `activity` → 就是它。
+ *
+ * 不能只停在"最后一个工具组":用户发出下一条消息之后,上一轮的活动段仍然是最后一个工具组。
+ * 传下标取值而不先 map 成数组:渲染期每轮都要算一次,长会话里那是几百项的白白分配,
+ * 而且撞上边界能立刻短路。
+ *
+ * @param replyInFlight 正文正在流式打字(它不在列表里,由调用方告知)
+ */
 export function focusActivityGroup(
   total: number,
   roleAt: (index: number) => ActivityItemRole,
@@ -539,12 +526,12 @@ export function focusActivityGroup(
 }
 
 /**
- * 这一段要不要保持摊开:**属于正在跑的这一轮,且正文还没开始出现**。
+ * 这一段要不要保持摊开:属于正在跑的这一轮,且正文还没开始出现。
  *
- * 两个条件各自都被单独用错过:
- * - 只看"会话在跑" → 一发消息满屏折叠条全部弹开(ft 之前);
- * - 只看"是不是最后一个工具组" → 发出下一条消息后上一轮那段又弹开(fu 修);
- * - 不看正文 → 正文都写出来了,上面那段还摊着三行(fw 修,用户要求)。
+ * 两个条件都要看,只看一部分都会出错:
+ * - 只看"会话在跑":一发消息,满屏折叠条全部弹开;
+ * - 只看"是不是最后一个工具组":发出下一条消息后,上一轮那段又弹开;
+ * - 不看正文:正文都写出来了,上面那段还摊着三行。
  */
 export function shouldKeepActivityTailOpen(
   isCurrentTurnGroup: boolean,
@@ -554,20 +541,18 @@ export function shouldKeepActivityTailOpen(
 }
 
 /**
- * gg:**一条子代理叙述要不要折起来。**
+ * 一条子代理叙述要不要折起来。
  *
  * `forwardSubagentText` 打开之后,子代理的思考与正文都进了卡片里那条嵌套轴。
- * 思考一条动辄十几行,几条并排就把这根轴撑成一堵墙 —— 用户原话
- * 「子 agent 的思考输出,折叠掉,不要全部放上显得太多」。
+ * 思考一条动辄十几行,几条并排就把这根轴撑成一堵墙,所以要折。
  *
- * 判据刻意是**「一行放不放得下」而不是「是不是思考」**:
+ * 判据刻意是「一行放不放得下」而不是「是不是思考」:
  *
  * - 短思考(「先看看目录结构」)折起来只是多一次点击;
- * - 长正文同样该折 —— 撑墙的是长度,不是种类。
+ * - 长正文同样该折:撑墙的是长度,不是种类。
  *
- * 100 字符这个数不是拍的:实测里那些一行就说完的叙述
- * (「I'll start by exploring the directory to understand the existing code style.」76 字符)
- * 全部落在它下面,而带换行的多段思考一律落在它上面。
+ * 100 字符这个阈值有依据:一行就说完的叙述(如「I'll start by exploring the directory to
+ * understand the existing code style.」,76 字符)都落在它下面;带换行的一律折。
  */
 export const NARRATION_FOLD_CHARS = 100;
 

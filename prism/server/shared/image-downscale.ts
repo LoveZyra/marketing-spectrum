@@ -2,24 +2,24 @@ import { createLogger } from './logger.js';
 const log = createLogger('attachments');
 
 /**
- * 发给模型之前,把图片在**内存里**缩一遍。**磁盘上的原图一个字节都不动。**
+ * 发给模型之前,把图片在内存里缩一遍。磁盘上的原图一个字节都不动。
  *
  * ## 为什么
  *
- * 用户贴什么就传什么:一张手机原图 2.7 MB,base64 之后 3.6 MB 字符,而且它躺在
- * transcript 里,**以后每一轮都会再发一次**。模型端反正也会把长边缩到 ~1568px
+ * 不缩的话用户贴什么就传什么:一张手机原图 2.7 MB,base64 之后 3.6 MB 字符,而且它躺在
+ * transcript 里,以后每一轮都会再发一次。模型端反正也会把长边缩到 ~1568px
  * (Anthropic 的做法;OpenAI 系是 2048),多传的那些字节纯粹是浪费 —— 而在把 base64
  * 当文本计数的网关下,它们直接变成"Input exceeds the context limit (1048566 tokens)"。
  *
- * 缩到长边 1568、~1 MB 以内,单张能小一个数量级,**对识别几乎没影响**。
+ * 缩到长边 1568、~1 MB 以内,单张能小一个数量级,对识别几乎没影响。
  *
  * ## 三条边界
  *
- * 1. **只动内存里的 buffer**,不写回文件。预览、图片查看器、文件树下载走的都是原图。
- * 2. **不换格式**:PNG 进 PNG 出,JPEG 进 JPEG 出。带文字的截图多是 PNG,转 JPEG 会把
+ * 1. 只动内存里的 buffer,不写回文件。预览、图片查看器、文件树下载走的都是原图。
+ * 2. 不换格式:PNG 进 PNG 出,JPEG 进 JPEG 出。带文字的截图多是 PNG,转 JPEG 会把
  *    小字糊掉;所以 PNG 超限时先无损压,再退到 256 色调色板(文字仍然锐利),
- *    还超就认了,**不转 JPEG**。
- * 3. **缩不动就原样发**:sharp 不在、图坏了、动图(GIF 多帧)—— 一律退回原字节,
+ *    还超就认了,不转 JPEG。
+ * 3. 缩不动就原样发:sharp 不在、图坏了、动图(GIF 多帧)—— 一律退回原字节,
  *    只记一行 warn。这一步是优化,不是门,不能因为它把消息拦下来。
  *
  * ## 旋钮(都可选)
@@ -56,8 +56,8 @@ export type DownscaleResult = {
   output: { bytes: number; width?: number; height?: number };
 };
 
-// hl(静态 P2-26):sharp 0.35 起类型走 ESM 声明,`typeof import('sharp')` 是模块命名空间
-// (不可调用),可调用的构造函数是它的 default。运行时下面 `mod.default ?? mod` 两版都对。
+// sharp 的类型走 ESM 声明:`typeof import('sharp')` 是模块命名空间(不可调用),可调用的
+// 构造函数是它的 default。运行时下面的 `mod.default ?? mod` 对 ESM / CJS 两种形态都成立。
 type SharpModule = typeof import('sharp').default;
 let sharpModule: Promise<SharpModule | null> | null = null;
 
@@ -75,11 +75,6 @@ async function loadSharp(): Promise<SharpModule | null> {
       });
   }
   return sharpModule;
-}
-
-/** 仅供测试:重置 sharp 加载缓存。 */
-export function __resetDownscaleForTest(): void {
-  sharpModule = null;
 }
 
 const RESIZABLE = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -142,7 +137,7 @@ export async function downscaleImageForModel(
       }
     }
 
-    // 缩完反而更大(小图 + 高压缩率原文件会这样)—— 那就用原来的。
+    // 尺寸本来就在线内、也不用转正,而重编码后反而更大(小图 + 高压缩率原文件会这样):用原图。
     if (out.length >= bytes.length && withinEdge && !needsOrient) {
       return passthrough('within-limits', dims);
     }

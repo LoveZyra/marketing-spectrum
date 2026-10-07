@@ -1,20 +1,15 @@
 /**
- * gk:删除类审计事件的 detail 是一段 JSON(服务端 sessions.service 的 SessionAuditDetail),
- * 这里把它翻成一句人话。别的事件的 detail 仍是自由文本,原样返回。
+ * 删除类审计事件的 detail 是一段 JSON(服务端 sessions.service 的 SessionAuditDetail),
+ * 这里把它翻成一句人话。别的事件的 detail 是自由文本,原样返回。
  *
  * 形状(字段都可选):
  *   { entry, sessionId, sessionName, projectPath, projectName, lastActivity,
  *     transcriptMoved, transcriptRestored, count, names[], reason, retentionDays }
  *
- * ## 为什么每一段文案都要过 `t`
- *
- * 这个模块第一版把中文写死在代码里。而在它之前,审计表格的「事件」列显示的是
- * `session_deleted`、「详情」列显示的是原始 JSON —— 两样都与语言无关。写死之后,
- * 英文界面下这两列突然变成中文,而 gk 新加的其它审计文案(`audit.mineTitle` 之类)
- * 都是走 locale 的 —— 同一张表里一半中文一半英文。
- *
+ * 每一段文案都要过 `t`:审计表的其它文案(`audit.mineTitle` 之类)都走 locale,
+ * 写死中文会让英文界面下同一张表一半中文一半英文。
  * 句子的标点与空格也归 locale 管(中文不加空格、用「」和,;英文要空格和引号),
- * 所以给的是**整句模板 + 插值**,而不是在代码里拼标点。
+ * 所以给的是整句模板 + 插值,而不是在代码里拼标点。
  */
 
 export type AuditDetailShape = {
@@ -36,7 +31,7 @@ export type AuditDetailShape = {
  * 最小翻译器:`(键, 中文兜底, 插值)`。
  *
  * 刻意不直接吃 i18next 的 `TFunction` —— 那个类型带一大堆重载,纯函数模块里为它
- * 做类型体操不值得,单测也没法喂。组件侧一行适配(见 AuditLogList 的 translate)。
+ * 做类型体操不值得,单测也没法喂。组件侧一行适配(见 AuditLogList 的 translateAudit)。
  */
 export type AuditTranslator = (
   key: string,
@@ -70,11 +65,11 @@ export function isDeletionAuditEvent(event: string): event is DeletionAuditEvent
 }
 
 /**
- * detail 解析。返回 null 有两种:不是 JSON(别的事件的自由文本),或者**被截断了**。
+ * detail 解析。返回 null 有两种:不是 JSON(别的事件的自由文本),或者被截断了。
  *
- * 截断是真会发生的:服务端 `auditLogDb.record` 把 detail 截到 1000 字符
- * (`detail.slice(0, 1000)`),而批量删除那几条会带十个会话名。截断的 JSON 解析必失败,
- * 于是整段原样打进表格 —— 一格半截 JSON。`truncated` 让调用方能说一句"详情被截断"。
+ * 截断确实会发生:服务端 `auditLogDb.record` 把 detail 截到 1000 字符
+ * (`detail.slice(0, 1000)`),而批量删除那几条会带十个会话名。截断的 JSON 解析必失败;
+ * 调用方用 `looksTruncatedJson` 识别后说一句「详情被截断」,而不是把半截 JSON 原样打进表格。
  */
 export function parseAuditDetail(detail: string | null | undefined): AuditDetailShape | null {
   if (!detail) return null;
@@ -97,9 +92,9 @@ export function looksTruncatedJson(detail: string | null | undefined): boolean {
 }
 
 /**
- * 入口标签**是当前缀用的**(`{{entry}}{{verb}}{{target}}`),所以每一条都要能直接
- * 接上「永久删除了会话…」。少一个连接词就会拼出「清空归档永久删除了会话」这种句子
- * (2026-09-15 实测)。改这里时记得连 locale 里的 `audit.entry.*` 一起改。
+ * 入口标签是当前缀用的(`{{entry}}{{verb}}{{target}}`),所以每一条都要能直接
+ * 接上「永久删除了会话…」;少一个连接词就会拼出「清空归档永久删除了会话」这种句子。
+ * 改这里时要连 locale 里的 `audit.entry.*` 一起改。
  */
 const ENTRY_FALLBACKS: Record<string, string> = {
   session: '从侧栏',
@@ -126,8 +121,8 @@ const EVENT_FALLBACKS: Record<DeletionAuditEvent, string> = {
 };
 
 /**
- * hq:模型网关与 key 的审计事件(与服务端 `AuditEvent` 对得上)。事件列给一个短标签;
- * detail 仍是服务端写的 JSON(网关 id / 名字 / 给谁设的),**从来不含 key 本身**。
+ * 模型网关与 key 的审计事件(与服务端 `AuditEvent` 对得上)。事件列给一个短标签;
+ * detail 是服务端写的 JSON(网关 id / 名字 / 给谁设的),从不含 key 本身。
  */
 export const MODEL_GATEWAY_AUDIT_EVENTS = [
   'model_gateway_created',

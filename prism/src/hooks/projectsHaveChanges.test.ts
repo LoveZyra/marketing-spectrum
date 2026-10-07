@@ -1,11 +1,9 @@
 /**
- * br:改完项目权限,侧栏徽标必须实时更新(不必刷新页面)。
+ * 改完项目权限,侧栏徽标必须实时更新(不必刷新页面)。
  *
- * 保存权限后 handleSidebarRefresh 会 GET /api/projects 拿到新数据,但只有
- * projectsHaveChanges 判定"变了"才会 setProjects。此前它只比 id/名字/路径/
- * 星标/会话,**漏了可见性四项**(isPublic / ownerUserId / sharedWithViewer /
- * sharedUserCount)—— 于是改完权限判"没变"→ 不更新 → 徽标停在旧值,必须整页刷新。
- * 这里逐项钉住:只改可见性也要被判为"变了"。
+ * 保存权限后 handleSidebarRefresh 会 GET /api/projects 拿到新数据,但只有 projectsHaveChanges
+ * 判定"变了"才会 setProjects。这里逐项钉住:只改可见性四项(isPublic / ownerUserId /
+ * sharedWithViewer / sharedUserCount)也必须判为"变了",否则徽标停在旧值。
  */
 import { describe, it, expect } from 'vitest';
 

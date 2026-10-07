@@ -8,7 +8,7 @@ import {
 } from '@/modules/tasks/services/scheduled-tasks.service.js';
 
 /**
- * dm 回归:失败重试的判定与单次运行的硬超时。
+ * 失败重试的判定与单次运行的硬超时。
  * 全部注入时钟/构造 promise,不摸真实定时器之外的东西。
  */
 describe('computeRetryAt', () => {

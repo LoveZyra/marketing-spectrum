@@ -11,7 +11,7 @@ export const PROMPT_OPTION_SCAN_LINES = 15;
 export const PROMPT_MAX_OPTIONS = 5;
 export const PROMPT_MIN_OPTIONS = 2;
 
-/** 深色主题(霓虹终端)下的 xterm 配色 —— 原来写死的这套。 */
+/** 深色主题(霓虹终端)下的 xterm 配色。 */
 const TERMINAL_THEME_DARK: NonNullable<ITerminalOptions['theme']> = {
   background: '#1e1e1e',
   foreground: '#d4d4d4',
@@ -38,10 +38,8 @@ const TERMINAL_THEME_DARK: NonNullable<ITerminalOptions['theme']> = {
 };
 
 /**
- * 浅色主题(纸构蓝图 / 棱光玻璃)下的 xterm 配色。
- *
- * 原来终端只有一套写死的 VSCode 深色,浅色两个主题下就是一块突兀的黑,外圈还包着
- * 浅色的 `bg-muted` 边。这套用暖白底 + 墨色前景,ANSI 用适合浅底、对比足够的深色。
+ * 浅色主题(纸构蓝图 / 棱光玻璃)下的 xterm 配色:暖白底 + 墨色前景,ANSI 用适合浅底、对比足够的深色,
+ * 免得浅色主题里嵌着一块突兀的黑终端。
  */
 const TERMINAL_THEME_LIGHT: NonNullable<ITerminalOptions['theme']> = {
   background: '#faf9f6',

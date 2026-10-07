@@ -28,7 +28,7 @@ interface CheckpointHistoryPanelProps {
   isProcessing: boolean;
   onClose: () => void;
   onReverted?: () => void;
-  /** ho(hq-2):非 git 目录 —— 这段对话里推进过 CLI 的用户轮次(新的在前),按轮撤销文件改动。 */
+  /** 非 git 目录用:这段对话里推进过 CLI 的用户轮次(新的在前),按轮撤销文件改动。 */
   fileTurns?: FileRewindTurn[];
 }
 
@@ -168,7 +168,7 @@ export default function CheckpointHistoryPanel({
               <Shimmer>{t('checkpoint.loading', { defaultValue: '加载中…' })}</Shimmer>
             </div>
           ) : checkpoints.length === 0 ? (
-            /* ho(hq-2):没有 git 检查点(多半是非 git 目录)—— 改用 CLI 的文件检查点按轮撤销 */
+            /* 没有 git 检查点(多半是非 git 目录)时改用 CLI 的文件检查点按轮撤销 */
             fileTurns.length > 0 && sessionId ? (
               <FileRewindList sessionId={sessionId} turns={fileTurns} isProcessing={isProcessing} onReverted={onReverted} />
             ) : (

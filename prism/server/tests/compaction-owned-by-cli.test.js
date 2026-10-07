@@ -6,17 +6,14 @@ import path from 'node:path';
 import { describe, test } from 'vitest';
 
 /**
- * **gt:压缩归 CLI —— 这些断言是防止它被塞回来的。**
+ * 压缩归 CLI:这些断言防止 Prism 再自己发起压缩。
  *
- * 2026-09-15 生产上的机理:Prism 自己推 `/compact`,跑在 `internal: true` 的维护
- * 回合里,而那种回合的看门狗是 idle 90s。可 `includePartialMessages = false` 意味着
- * **整个压缩期间流上一帧都不会有** —— 那 90s 名义上是 idle,实际是压缩的总预算。
- * CLI 内部遇到 "prompt too long" 还会丢消息重试,每次都是一整次模型调用。
- * 于是必然超时;超时后占比没降,下一回合结束又来一次 ——
- * **每答完一条就白等 90 秒,还压不成**。
+ * Prism 自己推 `/compact` 就得放进 `internal: true` 的维护回合,那种回合的看门狗是 idle 90s;
+ * 而 `includePartialMessages = false` 时整个压缩期间流上一帧都没有,90s 的 idle 实际成了压缩的总预算。
+ * CLI 遇到 "prompt too long" 还会丢消息重试,每次都是一整次模型调用,于是必然超时;
+ * 占比没降,下一回合结束又来一次,每答完一条都白等 90 秒,还压不成。
  *
- * 判据全部对源码断言:这些是"有没有写某段代码"的事,跑起来才发现就太晚了
- * (那意味着又在生产上转 90 秒)。
+ * 判据全部对源码断言:这是"有没有写某段代码"的事,等跑起来才发现就晚了。
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -29,8 +26,8 @@ const codeOnly = source
   .filter((line) => !line.trim().startsWith('//'))
   .join('\n');
 
-describe('压缩归 CLI(gt)', () => {
-  test('**关键**:Prism 不再有任何地方主动推 /compact', () => {
+describe('压缩归 CLI', () => {
+  test('Prism 没有任何地方主动推 /compact', () => {
     // 手打 /compact 走的是普通用户回合(command 原样传下去),不在这里出现。
     assert.equal(
       codeOnly.includes("command: '/compact'"),
@@ -39,7 +36,7 @@ describe('压缩归 CLI(gt)', () => {
     );
   });
 
-  test('**关键**:没有任何回合再传 internal: true', () => {
+  test('没有任何回合传 internal: true', () => {
     const matches = codeOnly.match(/internal:\s*true/g) ?? [];
     assert.deepEqual(
       matches,
@@ -56,18 +53,16 @@ describe('压缩归 CLI(gt)', () => {
 
   test('开关与窗口透传给 CLI,而不是 Prism 自己判', () => {
     /*
-     * gu 更正:这一条原来断言的是 `sdkOptions.autoCompactEnabled = false` ——
-     * **那正是 gt 里的错**。这两个字段属于 `Settings` 不属于 `Options`,
-     * 写在顶层会被 SDK 静默忽略,两个旋钮都是死的。
-     * 一条钉错了位置的测试给的是**假的信心**,这次就是它把错误一起绿了过去。
-     * 位置本身的判据挪到 `settings-shape.test.js`,对着 SDK 的 .d.ts 断言。
+     * autoCompactEnabled / autoCompactWindow 属于 SDK 的 `Settings` 而不是 `Options`,写在 sdkOptions 顶层
+     * 会被静默忽略、两个旋钮都失效。所以这里断言它们写进 compactSettings 再挂到 `sdkOptions.settings`;
+     * 字段归属本身由 `settings-shape.test.js` 对着 SDK 的 .d.ts 断言。
      */
     assert.match(codeOnly, /compactSettings\.autoCompactEnabled\s*=\s*false/);
-    // hn(B2):窗口 = min(模型目录里的窗口, PRISM_AUTO_COMPACT_WINDOW),两者有其一就写
+    // 窗口 = min(模型目录里的窗口, PRISM_AUTO_COMPACT_WINDOW),两者有其一就写
     assert.match(codeOnly, /\[contextWindow, AUTO_COMPACT_WINDOW\]/);
     assert.match(codeOnly, /compactSettings\.autoCompactWindow\s*=\s*Math\.min\(\.\.\.windows\)/);
     assert.match(codeOnly, /sdkOptions\.settings\s*=/);
-    // Prism 侧那条 0.8 的判据不该再存在
+    // Prism 侧不按上下文占比自己判断何时压缩
     assert.equal(codeOnly.includes('AUTO_COMPACT_RATIO'), false);
   });
 
@@ -75,7 +70,7 @@ describe('压缩归 CLI(gt)', () => {
     assert.match(codeOnly, /message\.status === 'compacting'/);
     assert.match(codeOnly, /message\.compact_result/);
     assert.match(codeOnly, /subtype === 'compact_boundary'/);
-    // 手打 /compact 仍然点亮进度
+    // 手打 /compact 也要点亮进度
     assert.match(codeOnly, /isCompactCommand\(command\)\s*\?\s*'manual'/);
   });
 

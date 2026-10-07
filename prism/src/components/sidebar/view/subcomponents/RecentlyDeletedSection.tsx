@@ -65,11 +65,11 @@ const daysUntil = (value: string | null): number | null => {
 };
 
 /**
- * gk:「最近删除」—— 永久删除的会话在保留期内躺在这里,可以恢复。
+ * 「最近删除」:永久删除的会话在保留期内躺在这里,可以恢复。
  *
  * 放在归档视图的底部:归档是"藏起来",最近删除是"删了但还能反悔",两者都在
- * 同一个"不在活跃列表里"的地方找。每一条写清楚**谁、几点、从哪删的**,和
- * **还有几天会被清扫** —— 这两样正是 2026-09-14 那次误删之后查不出来的东西。
+ * 同一个"不在活跃列表里"的地方找。每一条写清楚谁、几点、从哪删的,以及
+ * 还有几天会被清扫,误删之后靠这些才查得出来。
  */
 export default function RecentlyDeletedSection({ active, reloadToken = 0, onRestored, t }: Props) {
   const [items, setItems] = useState<TrashedSessionItem[]>([]);
@@ -194,12 +194,7 @@ export default function RecentlyDeletedSection({ active, reloadToken = 0, onRest
                       {item.projectDisplayName}
                       {!item.projectExists && ` · ${t('recentlyDeleted.projectGone', '项目已删除')}`}
                     </p>
-                    {/*
-                      这一行就是整个功能存在的理由 —— "谁删的、几点、还剩几天"。
-                      侧栏只有 ~158px,它必然被截断,所以**必须**有 title 兜底
-                      (上面两行早就有了,这一行漏了:2026-09-15 实测)。
-                      先把整句拼出来,文本与 title 用同一份,不会再漂开。
-                    */}
+                    {/* "谁删的、几点、还剩几天"这一行在 ~158px 的侧栏里必然被截断,必须有 title 兜底;整句先拼好,文本与 title 用同一份。 */}
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground" title={deletedLine}>
                       {deletedLine}
                     </p>

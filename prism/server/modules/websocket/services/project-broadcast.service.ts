@@ -6,21 +6,15 @@ import type { ProjectRepositoryRow, RealtimeClientConnection } from '@/shared/ty
 import { connectedClients, WS_OPEN_STATE } from '@/shared/websocket-state.js';
 
 /**
- * hl(动态 P2-4):**项目级**的实时推送 —— `project_upserted` / `project_removed`。
+ * 项目级的实时推送 —— `project_upserted` / `project_removed`。
  *
- * ## 为什么此前没有
+ * `session_upserted` 只在 jsonl 变化时由 `sessions-watcher` 发;项目本身的变化(新建共享项目、
+ * 改名、权限改公开、归档、转移属主、删除)靠这里推给其他标签页,否则要手动刷新才看得到。
  *
- * 侧栏的实时更新只有 `session_upserted` 一种,而它由 `sessions-watcher` 在 jsonl
- * 变化时发。项目本身的变化(新建共享项目、改名、权限改公开、归档、转移属主、删除)
- * 一条帧都没有 —— 另一方的标签页要手动刷新才看得到。2026-09-28 动态检测逐项复现:
- * 4 秒内无变化。
- *
- * ## 名单怎么定
- *
- * 与 `session_upserted` 同一条可见性判定(`canViewerSeeProject`),**逐 socket 判**:
+ * 名单与 `session_upserted` 用同一条可见性判定(`canViewerSeeProject`),逐 socket 判:
  * 一次权限变更之后,能看见的人收 `project_upserted`(带按他视角算的
  * `isStarred / sharedWithViewer`),原来能看、现在看不见的人收 `project_removed` ——
- * 所以要在改行**之前**先把"现在谁看得见"这份名单收下来(`prepareProjectChangeBroadcast`),
+ * 所以要在改行之前先把"现在谁看得见"这份名单收下来(`prepareProjectChangeBroadcast`),
  * 行改完再发。删除同理:行没了就判不出可见性,只能靠事先收的名单。
  *
  * 帧里不带会话列表:前端对已知项目只合并这几个字段(会话列表由 `session_upserted`
@@ -129,7 +123,7 @@ export function prepareProjectChangeBroadcast(projectId: string): (reason: Proje
 }
 
 /**
- * 按**当前**状态分发。`before` 是改行之前能看见的 socket 名单(没有就当空集,
+ * 按当前状态分发。`before` 是改行之前能看见的 socket 名单(没有就当空集,
  * 只发 upserted —— 新建项目走这条)。
  *
  * 归档 / 删除:给 before 里的每个人发 `project_removed`(归档的项目从活跃列表消失,

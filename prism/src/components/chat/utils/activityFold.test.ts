@@ -16,14 +16,14 @@ import {
 } from './toolRowSummary';
 
 /**
- * fw 起的折叠规则(用户定的三条):
+ * 折叠规则:
  *
- * 1. **只要有一行就渲染抬头**;
- * 2. 这一轮的**正文还没出现**时,最新三行不折、其余折起;
- * 3. **正式回复一出现,整段全部折起**。
+ * 1. 只要有一行就渲染抬头;
+ * 2. 这一轮的正文还没出现时,最新三行不折、其余折起;
+ * 3. 正式回复一出现,整段全部折起。
  */
 describe('planActivityFold', () => {
-  it('**只要有一行就出抬头**,而且抬头一定可点', () => {
+  it('只要有一行就出抬头,而且抬头一定可点', () => {
     for (const total of [1, 2, 3, 10]) {
       for (const keepTail of [true, false]) {
         const plan = planActivityFold(total, keepTail);
@@ -79,7 +79,7 @@ describe('shouldKeepActivityTailOpen', () => {
     expect(shouldKeepActivityTailOpen(true, false)).toBe(true);
   });
 
-  it('**正文一出现就全折**(用户要的第 3 条)', () => {
+  it('正文一出现就全折', () => {
     expect(shouldKeepActivityTailOpen(true, true)).toBe(false);
   });
 
@@ -94,8 +94,7 @@ describe('shouldKeepActivityTailOpen', () => {
  * - `index`:哪一段属于正在跑的这一轮(决定行状态:运行中 / 已中断);
  * - `replyStarted`:这一轮的正文开始写了没有(决定折不折)。
  *
- * 拆成两个判据就是下一次"只改了一半"的温床 —— 这一轮已经因此付了三个包
- * (ft / fu / fw)。
+ * 两个判据必须出自同一次扫描,拆开就容易只改一半。
  */
 describe('focusActivityGroup', () => {
   const at = (roles: readonly ActivityItemRole[], replyInFlight = false) =>
@@ -105,11 +104,11 @@ describe('focusActivityGroup', () => {
     expect(at(['turn-boundary', 'other', 'activity'])).toEqual({ index: 2, replyStarted: false });
   });
 
-  it('**正文已经落地 → 仍是当前段,但 replyStarted 为真**(所以会收起)', () => {
+  it('正文已经落地 → 仍是当前段,但 replyStarted 为真(所以会收起)', () => {
     expect(at(['turn-boundary', 'activity', 'reply'])).toEqual({ index: 1, replyStarted: true });
   });
 
-  it('**正文正在流式打字 → 同样算已出现**(它不在列表里)', () => {
+  it('正文正在流式打字 → 同样算已出现(它不在列表里)', () => {
     expect(at(['turn-boundary', 'activity'], true)).toEqual({ index: 1, replyStarted: true });
   });
 
@@ -117,7 +116,7 @@ describe('focusActivityGroup', () => {
     expect(at(['turn-boundary', 'activity', 'reply', 'activity'])).toEqual({ index: 3, replyStarted: false });
   });
 
-  it('**活动段后面又来了一条用户消息 → 谁都不是当前段**(fu 修的那一半)', () => {
+  it('活动段后面又来了一条用户消息 → 谁都不是当前段', () => {
     expect(at(['activity', 'reply', 'turn-boundary'])).toEqual({ index: -1, replyStarted: false });
   });
 
@@ -156,14 +155,14 @@ describe('三条规则端到端', () => {
     return planActivityFold(rows, shouldKeepActivityTailOpen(isCurrent, focus.replyStarted));
   };
 
-  it('**前端的本地提示(附件太大之类)不是回合边界**', () => {
-    // fz:这九处红字与正在跑的那一轮毫无关系,时间戳却排在它最后。
+  it('前端的本地提示(附件太大之类)不是回合边界', () => {
+    // 这类本地红字与正在跑的那一轮毫无关系,时间戳却排在它最后。
     expect(activityItemRole(msg('error', { isLocalNotice: true } as Partial<ChatMessage>))).toBe('other');
     // provider 报的错照旧终结回合
     expect(activityItemRole(msg('error'))).toBe('turn-boundary');
   });
 
-  it('**拖错一个附件,不许把正在跑的那段折掉**(用户实际会遇到的那一幕)', () => {
+  it('拖错一个附件,不许把正在跑的那段折掉', () => {
     const run = toolGroup(5);
     const items: MessageListItem[] = [
       msg('user'), run,
@@ -203,7 +202,7 @@ describe('三条规则端到端', () => {
     expect(result.foldedCount).toBe(2);
   });
 
-  it('**规则 3:正文一开始流式打字,整段就收起**', () => {
+  it('规则 3:正文一开始流式打字,整段就收起', () => {
     const run = toolGroup(5);
     expect(plan([msg('user'), run], run, true).visibleCount).toBe(0);
   });
@@ -213,7 +212,7 @@ describe('三条规则端到端', () => {
     expect(plan([msg('user'), run, msg('assistant')], run).visibleCount).toBe(0);
   });
 
-  it('发完下一条消息,上一轮那段照旧收着(fu 的回归)', () => {
+  it('发完下一条消息,上一轮那段照旧收着', () => {
     const previous = toolGroup(5, 'prev');
     expect(plan([msg('user'), previous, msg('assistant'), msg('user')], previous).visibleCount).toBe(0);
   });
@@ -228,17 +227,14 @@ describe('三条规则端到端', () => {
 });
 
 /**
- * gb:**收起 ≠ 清空。**
+ * 收起 ≠ 清空。
  *
- * 现象:一轮跑到 33 步时点抬头收起,**正在跑的那几步也一起没了** —— 屏幕上只剩
- * 一条「执行 33 条命令 · 思考 17 次 · 运行中」的光杆抬头,底下什么都没有;
- * 而 `manualFold` 一旦定下就压过自动规则(fw 有意为之),这一轮**剩下的全程**
- * 都不再露出来。
+ * 一轮还在跑时点抬头收起,正在跑的那几步不能一起没了,否则屏幕上只剩一条
+ * 「执行 33 条命令 · 思考 17 次 · 运行中」的光杆抬头;而 `manualFold` 一旦定下就压过
+ * 自动规则,这一轮剩下的全程都不会再露出来。
  *
- * 病根是这一段有**两个"收起"**:自动规则(`planActivityFold`)在回合还在跑时
- * 收到尾部三行,而组件里手动收起写死的是 `0`。同一个动作两种含义。
- *
- * 现在两条路共用 `collapsedVisibleCount`。
+ * 自动规则(`planActivityFold`)与手动收起必须是同一个"收起":
+ * 两条路共用 `collapsedVisibleCount`。
  */
 describe('collapsedVisibleCount', () => {
   it('回合还在跑:收起 = 留尾部三行(这就是那条 bug)', () => {
@@ -252,13 +248,13 @@ describe('collapsedVisibleCount', () => {
   });
 
   it('段内 ≤3 行且还在跑:真的收干净 —— 否则那个按钮就是死键', () => {
-    // fw 专门修过"两行的段点了没反应";留三行的话这里又会变成没反应。
+    // 留三行的话,两三行的段点了「收起」没有任何变化,按钮就成了死键。
     for (const total of [1, 2, 3]) {
       expect(collapsedVisibleCount(total, true)).toBe(0);
     }
   });
 
-  it('**"会话完成后才全部折叠"是白送的**:同一份记忆,keepTail 一翻假就自己收干净', () => {
+  it('"会话完成后才全部折叠"是白送的:同一份记忆,keepTail 一翻假就自己收干净', () => {
     // 用户在回合中途手动收起 → 露三行
     expect(collapsedVisibleCount(20, true)).toBe(ACTIVITY_TAIL_ROWS);
     // 回合结束(keepTail 由 focusActivityGroup 翻假)→ 同一个手动状态,收干净
@@ -273,14 +269,14 @@ describe('collapsedVisibleCount', () => {
 });
 
 /**
- * gg:**子代理叙述的折叠判据。**
+ * 子代理叙述的折叠判据。
  *
- * 用户原话:「子 agent 的思考输出,折叠掉,不要全部放上显得太多」。
- * 判据刻意是「一行放不放得下」而不是「是不是思考」—— 撑墙的是长度,不是种类。
+ * 需求:子代理的思考输出要折叠,全部铺开显得太多。
+ * 判据刻意是「一行放不放得下」而不是「是不是思考」:撑墙的是长度,不是种类。
  */
 describe('shouldFoldNarration', () => {
   it('一行放得下的原样铺开 —— 加个箭头只是多一次点击', () => {
-    // 实测里那些一句话说完的叙述
+    // 真实运行里常见的、一句话说完的叙述
     expect(shouldFoldNarration("I'll start by exploring the directory to understand the existing code style.")).toBe(false);
     expect(shouldFoldNarration('Let me look at existing scripts to match the style.')).toBe(false);
     expect(shouldFoldNarration('先看看目录结构')).toBe(false);

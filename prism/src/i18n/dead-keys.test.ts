@@ -8,33 +8,18 @@ import { describe, test } from 'vitest';
 /**
  * 翻译文件里不许攒死键。
  *
- * ## 为什么会攒
+ * 改名时改了代码、没删旧文案就会留下死键。单条无害,但它们乘以语种数(一次漏删 = 每个语种文件
+ * 各多一条),而且下一个人看到那个键还以为它在用。
  *
- * 改名的时候改了代码、忘了改文案 —— `sessions.loading` → `sessions.loadingSessions`、
- * `input.attachImages` → `input.attachImagesHint`、`mainContent.export` →
- * `mainContent.exportSession`,一条都没删。单条无害,但它们**乘以语种数**:
- * 一次改名漏掉 = 10 个文件里各多一条,而且下一个人看到那个键还以为它在用。
- * 这轮清掉了 161 条(en 侧 23 条 × 10 个语种)。
+ * 判据:字面量 + 动态前缀,两条都要认。只搜字面量会把 `t(\`tabs.${id}\`)` 这类动态键全判成死键,
+ * 所以还要往上逐级缩短前缀,匹配模板构造。反过来,只认前缀又会漏 —— `mainContent.export` 是
+ * `mainContent.exportSession` 的前缀,单看前缀它"有命中"。两条一起,才既不误杀也不漏网。
  *
- * ## 判据:字面量 + 动态前缀,两条都要认
+ * 测试文件也算"用处":扫描不排除 `.test.` 文件。`common:buttons.save` 只被 i18n 接线测试当探针用,
+ * 把测试排除在外的话它会被判成死键、删掉,接着那条接线测试就红。
  *
- * 只搜字面量会把 `t(\`tabs.${id}\`)` 这类真·动态键全判成死键,那就没法用了。
- * 所以还要往上逐级缩短前缀,匹配模板构造。反过来,只认前缀又会漏 ——
- * `mainContent.export` 是 `mainContent.exportSession` 的前缀,单看字面量它"有命中"。
- * 两条一起,才既不误杀也不漏网。
- *
- * ## 测试文件也算"用处"
- *
- * 扫描**不排除** `.test.` 文件。`common:buttons.save` 只被 i18n 接线测试当探针用 ——
- * 把测试排除在外的话它会被判成死键、删掉,然后那条接线测试立刻红。
- * 我第一版就是这么写的,当场踩到。
- *
- * ## 例外
- *
- * `notifications.codes.*` 白名单放行:服务端确实在发这些 code,前端也确实还没拿
- * code 去查 i18n —— 但那是**一整套没接上的通知方案**(`notificationChannels` 是个
- * 空数组,现在一条通知都发不出去),文案是翻好了躺在那儿等接线的,不是改名残留。
- * 删掉它们等于把已经做完的那部分也扔了。接线是功能范畴,不在这一轮。
+ * 例外:`notifications.codes.*` 白名单放行。服务端确实在发这些 code,但前端还没拿 code 去查 i18n;
+ * 这些文案是翻好了等前端接线的,不是改名残留。
  */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

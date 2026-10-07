@@ -3,20 +3,19 @@ import { createHash } from 'node:crypto';
 import type { NormalizedMessage } from '@/shared/types.js';
 
 /**
- * gy:「这次 <skill> 处理得怎么样?」—— 调过 skill 的回合结束后,按抽样弹给发起人的
- * 效果调查卡。这里只算**该不该弹、弹哪几张**,不碰 IO;路由把显示日志、反馈行和
- * 用户开关喂进来。
+ * 技能效果调查卡(「这次 <skill> 处理得怎么样?」):调过 skill 的回合结束后,按抽样弹给发起人。
+ * 这里只算该不该弹、弹哪几张,不碰 IO;路由把显示日志、反馈行和用户开关喂进来。
  *
- * 判据(《方案》6.2b):
- *   1. 这一轮真的调了 skill —— 显示日志里有 `tool_use` 且 `toolName === 'Skill'`,
- *      `toolInput.skill` 就是技能名(产出卡认 Write 帧、harvest 认 Skill 帧,同一条路);
- *   2. 回合正常结束 —— 显示日志不落 `complete` 帧,这里以"这一轮有最终助手正文"为准,
+ * 判据:
+ *   1. 这一轮真的调了 skill:显示日志里有 `tool_use` 且 `toolName === 'Skill'`,
+ *      `toolInput.skill` 就是技能名(与产出卡认 Write 帧、harvest 认 Skill 帧是同一条路);
+ *   2. 回合正常结束:显示日志不落 `complete` 帧,以"这一轮有最终助手正文"为准,
  *      中断的回合往往没有正文;
- *   3. 抽中 —— `sha256(anchorId) % 100 < rate * 100`,**按回合确定性抽样,刷新不重掷**。
+ *   3. 抽中:`sha256(anchorId) % 100 < rate * 100`,按回合确定性抽样,刷新不重掷。
  *
- * 三道不打扰的闸:只给发起这一轮的人(`senderUserId`);同一人对同一 skill 冷却期内不再问;
- * 定时任务 / API 的回合(`origin !== 'web'`)一律不问。已经 👍/👎 或答过 / 跳过的不再弹
- * —— 那两条由路由按反馈行过滤。
+ * 不打扰:只给发起这一轮的人(`senderUserId`);同一人对同一 skill 冷却期内不再问;
+ * 定时任务 / API 的回合(`origin !== 'web'`)一律不问。已经赞 / 踩过、答过或跳过的不再弹
+ * (路由按反馈行给出 `answeredMessageIds`)。
  */
 export type SkillSurveyCandidate = {
   /** 这一轮最后一条助手正文的消息 id —— 卡挂在它下面,反馈也记在它名下 */

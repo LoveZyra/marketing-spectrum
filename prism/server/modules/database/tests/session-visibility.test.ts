@@ -69,7 +69,7 @@ describe('会话可见性', () => {
   });
 
   test('无主项目下的会话:在公共目录内所有人可见,目录外仅 root', async () => {
-    // 2026-08-14 口径变更:无主 ≠ 公开,取决于是否落在 PRISM_PUBLIC_WORKSPACE 下。
+    // 无主 ≠ 公开:取决于是否落在 PRISM_PUBLIC_WORKSPACE 下。
     const previousPublic = process.env.PRISM_PUBLIC_WORKSPACE;
     process.env.PRISM_PUBLIC_WORKSPACE = '/workspace/public';
     try {
@@ -96,8 +96,8 @@ describe('会话可见性', () => {
   /**
    * 这条是这次修复的核心回归点。`createAppSession` 原先调
    * `projectsDb.createProjectPath(path)` 只传一个参数,第三参 ownerUserId 默认
-   * null,而 null 的语义是"公共项目" —— 于是**每一个新建会话所在的目录都对全服务器
-   * 公开**。日常路径就能触发:在终端里于任何尚未登记的目录跑一次 claude 即可。
+   * null,而 null 的语义是"公共项目" —— 于是每一个新建会话所在的目录都对全服务器
+   * 公开。日常路径就能触发:在终端里于任何尚未登记的目录跑一次 claude 即可。
    */
   test('新建会话会把项目登记到创建者名下,而不是留成公共', async () => {
     await withIsolatedDatabase(() => {
@@ -130,13 +130,11 @@ describe('会话可见性', () => {
   });
 
   /**
-   * gk:**看得见 ≠ 能永久删。**
-   *
-   * 2026-09-14 的事故:共享项目里任何一位协作者都能把别人跑了一天的对话连 transcript
-   * 一起永久删掉。不可逆的那一档收紧到项目 owner / root;共享给的用户、公共项目的
-   * 访客、无主项目下的非 root 一律不能。改回"可见即可删",下面第二个断言立刻红。
+   * 看得见 ≠ 能永久删。不可逆的永久删除只给项目 owner / root;共享给的用户、
+   * 公共项目的访客、无主项目下的非 root 一律不能,否则任何协作者都能把别人的对话
+   * 连 transcript 一起删掉。判据若退回"可见即可删",下面第二个断言立刻红。
    */
-  test('gk:永久删除只给项目 owner 与 root(共享用户看得见但删不了)', async () => {
+  test('永久删除只给项目 owner 与 root(共享用户看得见但删不了)', async () => {
     await withIsolatedDatabase(() => {
       const alice = { id: Number(userDb.createUser('alice', 'hash').id) };
       const bob = { id: Number(userDb.createUser('bob', 'hash').id) };
@@ -156,7 +154,7 @@ describe('会话可见性', () => {
        *
        * 分两种,因为无主的可见性本身是收着的:
        *   - 不在公共目录:非 root 看不见 → 也管不了(调用方那条路本来就是 404);
-       *   - 在 PRISM_PUBLIC_WORKSPACE 之下:对所有人可见 → 也对所有人可删(gj 口径)。
+       *   - 在 PRISM_PUBLIC_WORKSPACE 之下:对所有人可见 → 也对所有人可删。
        * 收紧成"无主也只有 root 能永久删"会误伤公共目录部署:监视器扫到新路径时
        * 就是不带 owner 地建项目行(有人在终端里直接跑 `claude`),那些会话普通用户
        * 会突然删不掉,而「清空归档」逐条跳过、界面上像点了没反应。

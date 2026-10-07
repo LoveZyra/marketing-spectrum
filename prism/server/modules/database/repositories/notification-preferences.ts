@@ -33,10 +33,10 @@ const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
 
 function normalizeNotificationPreferences(value: unknown): NotificationPreferences {
   const source = value && typeof value === 'object' ? (value as Record<string, any>) : {};
-  // Web Push / Electron desktop channels were removed with the web-only
-  // refactor; drop their stored flags instead of carrying them forward.
-  // hl(动态 P3):**只收白名单键。** 此前 channels 下任意布尔键都原样落库(`{"channels":{"x":true}}`
-  // 就进 JSON),接口成了一个按用户存任意键的小仓库;现在没有任何渠道会读这些键。
+  // Only whitelisted keys survive: flags of the retired Web Push / desktop
+  // channels are dropped instead of carried forward.
+  // 只收白名单键 —— 否则 channels 下任意布尔键都会原样落库,接口就成了一个按用户存任意键的
+  // 小仓库,而没有任何渠道会读这些键。
 
   return {
     channels: {
@@ -97,7 +97,7 @@ export const notificationPreferencesDb = {
     return normalized;
   },
 
-  // Legacy aliases used by existing services/routes
+  // Short aliases — the names the settings routes and the notification orchestrator call.
   getPreferences(userId: number): NotificationPreferences {
     return notificationPreferencesDb.getNotificationPreferences(userId);
   },

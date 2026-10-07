@@ -18,8 +18,7 @@
     "newSession": "Nouvelle session",
     "noSessions": "Aucune session pour l'instant",
     "loadingSessions": "Chargement des sessions...",
-    "unnamed": "Sans nom",
-    "loading": "Chargement..."
+    "unnamed": "Sans nom"
   },
   "tooltips": {
     "hideSidebar": "Masquer la barre latérale",

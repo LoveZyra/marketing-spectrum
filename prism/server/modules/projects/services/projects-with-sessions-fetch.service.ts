@@ -2,8 +2,8 @@ import path from 'node:path';
 
 import { projectsDb, scanStateDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/index.js';
-// 叶子直取:走 websocket barrel 会把 websocket → providers → projects 连成环
-// (madge 实测)。见 shared/websocket-state.ts 的注释。
+// 叶子直取:走 websocket barrel 会形成 websocket → providers → projects 的循环依赖,
+// 见 shared/websocket-state.ts 的注释。
 import { WS_OPEN_STATE, connectedClients } from '@/shared/websocket-state.js';
 import { generateDisplayName } from '@/shared/project-display-name.js';
 import { canViewerSeeProject, isPublicWorkspacePath } from '@/shared/project-visibility.js';
@@ -39,7 +39,7 @@ export type ProjectListItem = {
   ownerUserId: number | null;
   /**
    * 真正"对所有人可见"才为 true:显式 visibility='public'(创建时选的),
-   * 或无主 **且** 在公共目录下。前端据此打"公共"徽标。
+   * 或无主 且 在公共目录下。前端据此打"公共"徽标。
    */
   isPublic: boolean;
   /** 这个项目是被「指定用户」授权给当前 viewer 的 —— 前端打"共享"徽标。 */
@@ -186,14 +186,11 @@ function broadcastProgress(progress: ProgressUpdate, visibleTo: number | null) {
 }
 
 /**
- * 项目列表请求前的会话同步 —— 带节流。
+ * 项目列表请求前的会话同步,带节流。
  *
- * 原来每次 `/api/projects` 都无条件 `synchronizeSessions()`,而那是对整个
- * `~/.claude/projects` 的递归 readdir + 逐 jsonl 串行 stat,量级是**全体用户**的
- * 会话文件数,不是当前调用者的。而原生 watcher 一直在实时把库刷新,所以两次扫描
- * 之间的那次全量走盘几乎全是冗余。节流窗口内跳过,把新鲜度交给 watcher。
- *
- * 首次(getLastScannedAt 为 null)或距上次扫描超过窗口才真扫。
+ * `synchronizeSessions()` 是对整个 `~/.claude/projects` 的递归 readdir + 逐 jsonl 串行 stat,
+ * 量级是全体用户的会话文件数;而 watcher 一直在实时刷新库,窗口内的全量走盘几乎全是冗余。
+ * 所以首次(getLastScannedAt 为 null)或距上次扫描超过窗口才真扫,其余时候把新鲜度交给 watcher。
  */
 const SYNC_THROTTLE_MS = 10_000;
 
@@ -233,14 +230,11 @@ export async function getProjectsWithSessions(
     : null;
 
   /*
-   * E7:项目列表原来每个项目三次查询(首页会话 / 会话计数 / 授权名单),
-   * 30 个项目就是 90 次 prepare+执行 —— 典型 N+1,而且全在**首屏那次请求**里。
-   * 这里先批量取三份,循环里只做内存查表:
-   *   - 会话首页:窗口函数一次取每个项目的前 N 条(仅 offset=0,即列表的默认
-   *     形态;翻页仍走单项目分页,不为少见路径把 SQL 复杂化);
+   * 先批量取三份,循环里只做内存查表,避免每个项目三次查询的 N+1(全在首屏那次请求里):
+   *   - 会话首页:窗口函数一次取每个项目的前 N 条(仅 offset=0,即列表的默认形态;
+   *     翻页仍走单项目分页,不为少见路径把 SQL 复杂化);
    *   - 会话计数:一次 GROUP BY;
    *   - 授权名单:一次 IN。
-   * 三次固定查询取代 3N 次。
    */
   const pagination = normalizeSessionPagination({
     limit: options.sessionsLimit,
@@ -354,16 +348,11 @@ export async function getArchivedProjectsWithSessions(
     : null;
 
   /*
-   * ff:归档列表补上 E7 那轮漏掉的批量化。
+   * 归档列表与活跃列表一样批量取:按项目逐个查库的话,几百个归档项目就是上千次同步查询,
+   * 全在同一次 HTTP 请求里,事件循环整段停住(better-sqlite3 是同步的)。
    *
-   * 之前循环里两次按项目查库(会话 + 授权名单),240 个归档项目 = **480 次查询**,
-   * 全在同一次 HTTP 请求里、而 better-sqlite3 是同步的 —— 事件循环整段停住。
-   * 活跃列表在 E7 已经改成"三次固定查询顶掉 3N 次"了,归档这条当时没跟上。
-   *
-   * 顺带修不分页:原来 `readProjectSessionsIncludingArchived` 把每个项目的**全部**
-   * 会话读进内存,`hasMore` 恒为 false —— 归档一个跑了半年、几千条会话的项目,
-   * 光这一个响应就能有几十兆,而界面只显示前几条。现在和活跃列表用同一个页大小,
-   * `total` / `hasMore` 如实上报。
+   * 也一样分页:和活跃列表用同一个页大小,`total` / `hasMore` 如实上报。归档项目可能有
+   * 几千条会话,全量返回会让一个响应达到几十兆,而界面只显示前几条。
    */
   const pagination = normalizeSessionPagination({});
   const projectPaths = projectRows.map((row) => row.project_path);

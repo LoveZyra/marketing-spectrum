@@ -4,7 +4,7 @@ import { describe, test } from 'vitest';
 
 import { isImeComposing, shouldCyclePermissionMode } from './composerKeys';
 
-describe('hl(静态 P2-30)输入法回车与 Tab', () => {
+describe('输入法回车与 Tab', () => {
   test('Safari 确认候选:isComposing=false 但 keyCode=229 → 仍算组合中', () => {
     assert.equal(isImeComposing({ key: 'Enter', nativeEvent: { isComposing: false, keyCode: 229 } }), true);
     assert.equal(isImeComposing({ key: 'Enter', nativeEvent: { isComposing: true, keyCode: 13 } }), true);

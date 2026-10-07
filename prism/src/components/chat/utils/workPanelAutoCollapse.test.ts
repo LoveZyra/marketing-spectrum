@@ -7,8 +7,8 @@ import {
 } from './workPanelAutoCollapse';
 
 /**
- * dy:"预览开着就让位"的四条规则。这里全都从用户视角写成一句话的场景 ——
- * 每一条对应一种"面板自作主张把我的选择弄丢了"的翻车方式。
+ * "预览开着就让位"的四条规则。每条测试从用户视角写成一个场景,
+ * 对应一种"面板自作主张把用户的选择弄丢"的情形。
  */
 
 const expanded: AutoCollapseState = { collapsed: false, auto: false };

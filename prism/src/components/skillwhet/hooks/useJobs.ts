@@ -4,7 +4,7 @@ import { api } from '../../../utils/api';
 import { unwrap, type Job, type ProgressEvent } from '../lib/types';
 
 /**
- * gz:作业列表 —— 有作业在排队 / 训练中时每 3 秒轮询一次,否则不动。
+ * 作业列表:有作业在排队 / 训练中时每 3 秒轮询一次,否则不轮询。
  * 页面切走(卸载)就停;`refresh()` 供动作完成后立刻拉。
  */
 export const LIVE_STATES = new Set(['queued', 'running']);
@@ -15,20 +15,38 @@ export function useJobs(skill?: string | null, limit?: number) {
   const [error, setError] = useState<string | null>(null);
   const skillRef = useRef(skill ?? null);
   skillRef.current = skill ?? null;
+  // 请求代号:每发一次 +1。响应回来时,发请求那会儿的技能已不是当前技能,或者比已经落到
+  // 列表上的那次还旧,就丢弃:换了技能时上一个技能的作业不能串到新技能下;轮询与手动刷新
+  // 交错时旧响应也不能把列表退回去(退成没有活作业时轮询还会就此停下)。
+  // 不按「最新发出的那次」判:请求比 3 秒轮询间隔还慢时,那样每次响应都会被下一次作废。
+  const genRef = useRef(0);
+  const appliedGenRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    const gen = ++genRef.current;
+    const skillAtCall = skillRef.current;
+    const isStale = () => skillAtCall !== skillRef.current || gen < appliedGenRef.current;
     try {
-      const data = await unwrap<{ jobs: Job[] }>(await api.skillWhet.jobs(skillRef.current, limit));
+      const data = await unwrap<{ jobs: Job[] }>(await api.skillWhet.jobs(skillAtCall, limit));
+      if (isStale()) return;
+      appliedGenRef.current = gen;
       setJobs(Array.isArray(data.jobs) ? data.jobs : []);
       setError(null);
     } catch (caught) {
+      if (isStale()) return;
+      appliedGenRef.current = gen;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
   }, [limit]);
 
-  useEffect(() => { void refresh(); }, [refresh, skill]);
+  useEffect(() => {
+    // 换了技能(或条数上限):先清掉旧列表,别让上一个技能的作业挂在新技能下等新响应。
+    setJobs((prev) => (prev.length === 0 ? prev : []));
+    setLoading(true);
+    void refresh();
+  }, [refresh, skill]);
 
   const live = jobs.some((job) => LIVE_STATES.has(job.state));
   useEffect(() => {
@@ -62,7 +80,7 @@ export function useJobProgress(jobId: string | null) {
       if (gen !== genRef.current) return null;
       setJob(detail.job);
       lastStateRef.current = detail.job.state;
-      // hd:进度事件变细了(每条任务、每个候选一条),一次最多回 500 条 —— 满页就接着拉,不再只看到前 500 条
+      // 进度事件很细(每条任务、每个候选各一条),服务端一次最多回 500 条:满页就接着拉。
       let batch = first.events;
       for (let page = 0; batch.length > 0 && page < 60; page += 1) {
         const got = batch;

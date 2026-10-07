@@ -6,11 +6,11 @@ export default {
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
   /*
-   * hl(静态 P3「工程」):JS 里的取反(`!user`、`!errorMessage` 前缀、`!container`、`!relative`)
-   * 被 Tailwind 的内容扫描当成 important 变体的类名候选,于是给 index.css 里 `.chat-message.user`
-   * 这类组件规则生成 `.\!user` 版本,剩下的选择器被掏空成 ` { … }` —— esbuild 压缩时报
-   * 21 条 css-syntax-error(不影响渲染,但把真正的 CSS 警告淹没了)。这些名字没有一处是真想写
-   * important 类,直接屏蔽。以后再冒出新的,构建日志里 `grep css-syntax-error` 会先看到。
+   * JS 里的取反(`!user`、`!errorMessage` 前缀、`!container`、`!relative`)会被 Tailwind 的内容
+   * 扫描当成 important 变体的类名候选,给 index.css 里 `.chat-message.user` 这类组件规则生成
+   * `.\!user` 版本,剩下的选择器被掏空成 ` { … }`,esbuild 压缩时报一串 css-syntax-error
+   * (不影响渲染,但会淹没真正的 CSS 警告)。这些名字没有一处是真想写 important 类,直接屏蔽;
+   * 再冒出新的,构建日志里 `grep css-syntax-error` 会先看到。
    */
   blocklist: ['!user', '!error', '!container', '!relative'],
   theme: {
@@ -81,7 +81,7 @@ export default {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
-        // ef:圆角三档的另外两档(第一档就是 md)。值按主题在 index.css 里给。
+        // 面板 / 气泡 / 对话框的圆角(按钮、输入用上面的 md)。值按主题在 index.css 里给。
         panel: "var(--radius-panel)",
         bubble: "var(--radius-bubble)",
         dialog: "var(--radius-dialog)",

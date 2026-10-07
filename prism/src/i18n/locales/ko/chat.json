@@ -33,7 +33,6 @@
   },
   "input": {
     "placeholder": "/를 입력하여 명령어, @를 입력하여 파일, 또는 {{provider}}에게 무엇이든 물어보세요...",
-    "attachImages": "이미지 첨부",
     "send": "전송",
     "stop": "중지",
     "hintText": {

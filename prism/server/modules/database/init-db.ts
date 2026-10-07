@@ -4,6 +4,7 @@ import type { Database } from 'better-sqlite3';
 
 import { backupDatabase, backupDatabaseSync, backupKeepDaysFromEnv, getConnection } from "@/modules/database/connection.js";
 import { REQUIRED_COLUMNS, findMissingColumns, runMigrations } from "@/modules/database/migrations.js";
+import { credentialsDb } from "@/modules/database/repositories/credentials.js";
 import { INDEX_SCHEMA_SQL, INIT_SCHEMA_SQL, RETIRED_INDEXES } from "@/modules/database/schema.js";
 import { createLogger } from "@/shared/logger.js";
 const log = createLogger("db");
@@ -37,8 +38,8 @@ export const startDatabaseBackups = (): void => {
     // migrations, project scan) for the same write lock.
     initialBackupTimer = setTimeout(() => {
         initialBackupTimer = null;
-        // 现在是异步增量备份(见 connection.ts),悬空的 promise 要接住 ——
-        // 没人 catch 的 rejection 在 Node 22 下是整机退出。
+        // backupDatabase 是异步的增量备份(见 connection.ts),悬空的 promise 必须接住 ——
+        // 未处理的 rejection 会让整个进程退出。
         void backupDatabase({ keepDays }).catch((error) => log.error('Database backup failed', error));
     }, 60_000);
     initialBackupTimer.unref();
@@ -61,7 +62,7 @@ export const stopDatabaseBackups = (): void => {
     }
 };
 
-/* ── schema 指纹(hl,静态 P1-14) ─────────────────────────────────────── */
+/* ── schema 指纹 ───────────────────────────────────────────────────────── */
 
 /** app_config 里存指纹的键。 */
 export const SCHEMA_FINGERPRINT_KEY = 'schema_fingerprint';
@@ -69,10 +70,10 @@ export const SCHEMA_FINGERPRINT_KEY = 'schema_fingerprint';
 /**
  * 当前代码期望的 schema 指纹:建表 SQL + 索引 SQL + 退役索引 + 必需列清单的 sha256。
  *
- * 这个仓库的迁移全是幂等的"缺什么补什么",**没有版本号** —— 所以此前没有任何办法在
- * 跑迁移之前知道"这次启动会不会动表"。指纹是最便宜的替代:schema.ts 或 REQUIRED_COLUMNS
- * 一改,指纹就变,启动时与库里存的那份不同即视为"有待跑迁移"。会有误报(改了一行注释
- * 也算),代价只是多备份一份 —— 比漏报便宜得多。
+ * 这个仓库的迁移全是幂等的"缺什么补什么",没有版本号 —— 跑迁移之前无从直接知道
+ * "这次启动会不会动表"。指纹是最便宜的替代:schema.ts 里的 SQL 或 REQUIRED_COLUMNS
+ * 一改,指纹就变,启动时与库里存的那份不同即视为"有待跑迁移"。会有误报(SQL 里改一行
+ * 注释也算),代价只是多备份一份 —— 比漏报便宜得多。
  */
 export const computeSchemaFingerprint = (): string =>
     crypto.createHash('sha256')
@@ -126,7 +127,7 @@ export const detectPendingMigration = (db: Database, fingerprint = computeSchema
     const reasons: string[] = [];
 
     const stored = readStoredFingerprint(db);
-    if (stored === null) reasons.push('没有记录过 schema 指纹(升级到 hl 后的第一次启动)');
+    if (stored === null) reasons.push('库里没有 schema 指纹记录(首次升级到带指纹的版本,或从旧备份恢复)');
     else if (stored !== fingerprint) reasons.push(`schema 指纹变了(${stored.slice(0, 12)} → ${fingerprint.slice(0, 12)})`);
 
     const missingTables = declaredTables().filter((name) => !tableExists(db, name));
@@ -139,16 +140,15 @@ export const detectPendingMigration = (db: Database, fingerprint = computeSchema
 };
 
 /**
- * 迁移前备份(hl,静态 P1-14)。
+ * 迁移前备份。
  *
- * 此前第一次备份在启动 60 秒后 —— 迁移早跑完了;再加上"只留 7 份、每次重启都备份",
- * 一天部署 8 次就把迁移前的好备份全挤掉。2026-09-15 users 表重建丢列那次,
- * 全靠部署文档里的手工 cp。现在:有待跑迁移就**先同步备份一份**(带 `-pre-migration`
- * 后缀,不按日期裁剪、留最近 5 份),备份失败**不阻止启动**,但日志里会喊。
+ * 例行备份的首跑在启动 60 秒后,那时迁移早已跑完;所以有待跑迁移时,要在迁移之前先同步备份
+ * 一份(带 `-pre-migration` 后缀,不按日期裁剪,只留最近 PRE_MIGRATION_KEEP 份)。
+ * 备份失败不阻止启动,但会打 error 日志。
  *
  * PRISM_DB_BACKUP=0 也关掉这一份 —— 那是"这台机器不要程序备份"的明确意思。
  *
- * **同步**(backupDatabaseSync):initializeDatabase 从头到迁移跑完必须保持同步,理由见那里。
+ * 必须同步(backupDatabaseSync):initializeDatabase 从开头到迁移跑完都要保持同步,理由见那里。
  */
 export const backupBeforeMigration = (db: Database, fingerprint = computeSchemaFingerprint()): string | null => {
     if (process.env.PRISM_DB_BACKUP === '0') return null;
@@ -161,21 +161,40 @@ export const backupBeforeMigration = (db: Database, fingerprint = computeSchemaF
     return target;
 };
 
-// Initialize database with schema
+/**
+ * 历史明文凭据就地加密(见 `credentialsDb.encryptLegacyPlaintext`)。
+ *
+ * 放在迁移之后、而不是 runMigrations 里:它要用应用层的密钥(PRISM_ENCRYPTION_KEY 或 app_config),
+ * 与凭据读写同一条取钥路径;而且失败不该挡启动 —— runMigrations 出错会让服务起不来,
+ * 这一步出错时明文行照样读得出,记一条 error,下次启动再试。每次启动都跑,没有明文行时只是一次空查询。
+ */
+const encryptLegacyCredentials = (): void => {
+    try {
+        credentialsDb.encryptLegacyPlaintext();
+    } catch (err) {
+        log.error('历史明文凭据加密失败,这些行保持明文(仍可读),下次启动重试', {
+            error: err instanceof Error ? err.message : String(err),
+        });
+    }
+};
+
+// Backs up if migrations are pending, applies schema + migrations, records the
+// schema fingerprint, then starts the rolling backups.
 export const initializeDatabase = async () => {
     try {
         const db = getConnection();
         const fingerprint = computeSchemaFingerprint();
-        // 同步:返回之前迁移一定跑完(十几处调用方不 await,依赖这一点)。
+        // 全程同步:返回之前迁移一定跑完(不少调用方不 await,依赖这一点)。
         backupBeforeMigration(db, fingerprint);
         db.exec(INIT_SCHEMA_SQL);
         log.info('Database schema applied');
         runMigrations(db);
+        encryptLegacyCredentials();
         writeStoredFingerprint(db, fingerprint);
         startDatabaseBackups();
     } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.info('Database initialization failed', { error: message });
+        // 整个 Error 交给 logger,控制台连栈一起打出来:迁移失败时栈比 message 有用。
+        log.error('Database initialization failed', err);
         throw err;
     }
 };

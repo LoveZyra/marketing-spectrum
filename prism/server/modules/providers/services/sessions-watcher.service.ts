@@ -6,13 +6,12 @@ import chokidar, { type ChokidarOptions, type FSWatcher } from 'chokidar';
 
 import { projectVisibilityInput, projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
-// 叶子直取:走 websocket barrel 会把 websocket → providers → projects 连成环
-// (madge 实测)。见 shared/websocket-state.ts 的注释。
+// 叶子直取:走 websocket barrel 会形成 websocket → providers → projects 的循环依赖,
+// 见 shared/websocket-state.ts 的注释。
 import { WS_OPEN_STATE, connectedClients } from '@/shared/websocket-state.js';
 import { canViewerSeeProject } from '@/shared/project-visibility.js';
 import type { LLMProvider } from '@/shared/types.js';
-// 叶子模块直取 —— 走 projects barrel 会把 projects → providers → websocket 连成环
-// (madge 实测 4 个,全部以那条边为骨)。同 prism-internal-transcripts 的处理。
+// 叶子模块直取:走 projects barrel 会形成 projects → providers → websocket 的循环依赖。
 import { generateDisplayName } from '@/shared/project-display-name.js';
 import { createLogger } from '@/shared/logger.js';
 const log = createLogger('watcher');
@@ -94,9 +93,9 @@ export function nextFlushDelay(
 /**
  * Decides whether chokidar should skip a path entirely.
  *
- * This replaces a list of glob strings (`'**\/node_modules/**'` and friends).
- * chokidar 4 dropped glob support in `ignored` and now treats a plain string as
- * an *exact path*, so every one of those patterns had silently become inert.
+ * A function rather than glob strings (`'**\/node_modules/**'`): chokidar 4 dropped
+ * glob support in `ignored` and treats a plain string as an *exact path*, so such
+ * patterns would silently do nothing.
  *
  * `subagents/` is the entry that earns its keep under ~/.claude/projects:
  * subagent transcripts repeat their parent's session id and are rejected by
@@ -130,10 +129,9 @@ export function shouldIgnoreWatchPath(
  * Builds the chokidar options for a provider transcript root.
  *
  * Native filesystem events (inotify / FSEvents / ReadDirectoryChangesW) are the
- * default. This watcher used to hardcode `usePolling: true` with a 6 s tick,
- * which re-stat()s every file under ~/.claude/projects on every tick — a
- * constant syscall floor proportional to the user's entire project history —
- * and still took up to 6 s to notice an append.
+ * default. Polling re-stat()s every file under ~/.claude/projects on every tick,
+ * a constant syscall floor proportional to the user's entire project history,
+ * and still notices an append only on the next tick.
  *
  * Polling stays available behind PRISM_WATCH_POLL because native events do not
  * reach every filesystem: NFS/SMB shares and some container bind mounts deliver

@@ -1,5 +1,5 @@
 /**
- * 从**中间**省略的截断。
+ * 从中间省略的截断。
  *
  * 用户名、文件名这类标识符,尾部往往才是区分度所在(`zhangsan-2024` 与
  * `zhangsan-2025`),用 CSS 的 `truncate`(尾部省略)会把两个人截成同一个名字。
@@ -8,7 +8,7 @@
  * CSS 做不到中间省略,所以只能在渲染前算好;调用方记得同时给一个 `title`,
  * 让鼠标悬停还能看到全名(截断而没有 title,等于把信息丢了)。
  *
- * 按**码点**切,不按 UTF-16 码元 —— 否则中文、emoji 会被劈成半个字符。
+ * 按码点切,不按 UTF-16 码元 —— 否则中文、emoji 会被劈成半个字符。
  */
 export function middleTruncate(value: string | null | undefined, max = 18): string {
   if (!value) return '';

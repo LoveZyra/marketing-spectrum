@@ -10,23 +10,23 @@ import { EFFORT_LABEL_KEYS, effectiveEffort, effortToStore, effortValues, nextEn
 import { canFixWithKey, isModelAvailable } from '../../utils/modelAvailability';
 
 /**
- * ho:**模型 + 档位的两级菜单**(Claude.ai 式,用户给的截图)。
+ * 模型 + 档位的两级菜单。
  *
  *   ┌────────────────────────────┐   ┌─────────────────────────┐
  *   │ GLM 5.2                  ✓ │   │ 档位越高回答越周全……      │
  *   │ 一行说明                    │   │ 低                       │
  *   │────────────────────────────│   │ 中                       │
  *   │ 档位               高   ›  │──▶│ 高  [推荐]             ✓ │
- *   │────────────────────────────│   │ 最高 [⚠ 更慢、更费额度]   │
+ *   │────────────────────────────│   │ 最高 [更慢、更费额度]     │
  *   │ 更多模型               ›   │   └─────────────────────────┘
  *   └────────────────────────────┘
  *
  * 上面一节 = 当前模型 + 目录里标了推荐的;「更多模型 ›」= 其余目录模型 + 别名(子代理用);
  * 「档位 ›」= 当前模型支持的档位,模型默认档标「推荐」,最高档提示更慢更费。没有档位的模型不出这一行。
- * 子菜单默认开在右边,右边放不下就开在左边;两边都放不下(手机 / 窄窗口)就**盖在主菜单上**,顶上一行「‹ 返回」。
+ * 子菜单默认开在右边,右边放不下就开在左边;两边都放不下(手机 / 窄窗口)就盖在主菜单上,顶上一行「‹ 返回」。
  * Esc / 点外面关。键盘:↑↓ 在这一层里移动,→ 打开子菜单,← 回到上一层,Esc 一层层退出,关掉后焦点回到芯片。
  *
- * hq:**不能用的模型**(网关没有可用的 key / 网关停用)照样列出来,置灰、点不了(disabled + aria-disabled,↑↓ 跳过),
+ * 不能用的模型(网关没有可用的 key / 网关停用)照样列出来,置灰、点不了(disabled + aria-disabled,↑↓ 跳过),
  * 第二行是服务端给的原因;填了 key 就能用的那种右边带一个「去填 key」(开 设置 → 模型网关)。
  * 本人的私有模型带「私有」小标、在上面一节;不在默认网关上的模型第二行带网关名。
  */
@@ -43,7 +43,7 @@ export type ModelEffortMenuProps = {
   onSelectModel: (value: string) => Promise<unknown>;
   onSelectEffort: (value: string) => void;
   onOpenDetails?: () => void;
-  /** hq:「去填 key」—— 开 设置 → 模型网关。不给就不出这个入口。 */
+  /** 「去填 key」:打开 设置 → 模型网关。不传就不出这个入口。 */
   onOpenKeySettings?: () => void;
   onClose: () => void;
 };
@@ -53,7 +53,7 @@ const SUB_WIDTH = 300;
 const GAP = 6;
 
 type Submenu = 'effort' | 'more' | null;
-/** 子菜单开在哪:右边 / 左边 / 两边都放不下就盖在主菜单上(复审:360px 宽的手机上原来只露出 2px)。 */
+/** 子菜单开在哪:右边 / 左边 / 两边都放不下(如 360px 宽的手机)就盖在主菜单上。 */
 type SubPlacement = 'right' | 'left' | 'inline';
 
 /** ↑↓ 走不到的项:真 disabled(切换中)或 aria-disabled(不能用的模型)。 */
@@ -152,7 +152,7 @@ export default function ModelEffortMenu({
         return;
       }
       if (!submenu && !menuRef.current?.contains(document.activeElement)) {
-        // hq:先落在第一个能选的模型行上(当前模型不能用时,不要一打开就落在它旁边的「去填 key」上)
+        // 先落在第一个能选的模型行上(当前模型不能用时,不要一打开就落在它旁边的「去填 key」上)
         const root = menuRef.current;
         (root?.querySelector<HTMLElement>(`[data-menu-level="main"][data-model-row]${FOCUSABLE_ITEM}`)
           ?? root?.querySelector<HTMLElement>(`[data-menu-level="main"]${FOCUSABLE_ITEM}`))?.focus();
@@ -179,7 +179,7 @@ export default function ModelEffortMenu({
     const index = items.indexOf(document.activeElement as HTMLElement);
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      // hq:跳过禁用的(不能用的模型是 aria-disabled,切换中的行是 disabled)
+      // 跳过禁用的(不能用的模型带 aria-disabled,切换中的行是 disabled)
       const next = nextEnabledIndex(items.map(isInertItem), index, event.key === 'ArrowDown' ? 1 : -1);
       if (next >= 0) items[next]?.focus();
     } else if (event.key === 'ArrowRight' && !submenu) {
@@ -203,7 +203,7 @@ export default function ModelEffortMenu({
 
   const choose = async (value: string) => {
     if (changing) return;
-    // hq:不能用的模型点不了(按钮已禁用;这里再挡一道,免得别的入口绕过来)
+    // 不能用的模型点不了(按钮已禁用;这里再挡一道,免得别的入口绕过来)
     if (!isModelAvailable(options.find((option) => option.value === value))) return;
     if (value === currentValue) {
       onClose();
@@ -240,7 +240,7 @@ export default function ModelEffortMenu({
   };
 
   const rowBase = 'flex w-full items-center gap-2 rounded-lg px-3 text-left transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-default';
-  // hq:不能用的行:不变色、禁用光标(与 rowBase 只差悬停与光标)
+  // 不能用的行:不变色、禁用光标(与 rowBase 只差悬停与光标)
   const rowUnavailable = 'flex w-full items-center gap-2 rounded-lg px-3 text-left disabled:cursor-not-allowed';
 
   const unavailableText = (option: ProviderModelOption): string => option.unavailableReason || t('modelMenu.unavailable');
@@ -339,12 +339,12 @@ export default function ModelEffortMenu({
                       {option.private && privateBadge}
                     </span>
                     {reason ? (
-                      // hq:不能用的原因(服务端的中文原句);窄屏两行放不下的部分在 title 里
+                      // 不能用的原因(服务端的中文原句);窄屏两行放不下的部分在 title 里
                       <span className="mt-0.5 line-clamp-2 text-[12px] leading-4 text-muted-foreground">{reason}</span>
                     ) : (
                       <span className="mt-0.5 flex min-w-0 items-center text-[12px] text-muted-foreground">
                         <span className="truncate">{describe(option)}</span>
-                        {/* hq:不在默认网关上的模型带网关名 */}
+                        {/* 不在默认网关上的模型带网关名 */}
                         {option.gatewayName && <span className="ml-1 max-w-[50%] shrink-0 truncate">· {option.gatewayName}</span>}
                       </span>
                     )}

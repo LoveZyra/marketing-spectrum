@@ -44,10 +44,9 @@ router.get('/status', async (req, res) => {
 
 // Registration.
 //
-// Prism used to allow exactly one account and refuse every later signup. It now
-// accepts one account per colleague, but a new account arrives `pending` and
-// cannot log in until a root user approves it. Two exceptions get `approved`
-// immediately, and both are deliberate:
+// One account per colleague. When approval is required (isApprovalRequired), a new
+// account arrives `pending` and cannot log in until a root user approves it. Two
+// exceptions get `approved` immediately, and both are deliberate:
 //
 //   - the very first account on a fresh install — there is nobody to approve it
 //     yet, and refusing would leave the instance unusable;
@@ -63,11 +62,11 @@ router.post('/register', authRateLimiter, async (req, res) => {
     }
 
     /**
-     * 前后空格必须在**进库之前**去掉。
+     * 前后空格必须在进库之前去掉。
      *
      * 大小写那一半由 `users.username` 的 `COLLATE NOCASE UNIQUE` 兜住(见 schema.ts
      * 上的注释:那是安全属性,不是便利属性)。但排序规则管不了空白 ——
-     * `" alice "` 与 `"alice"` 在 NOCASE 下**仍然是两行**,而 `isRootUser()` 会
+     * `" alice "` 与 `"alice"` 在 NOCASE 下仍然是两行,而 `isRootUser()` 会
      * 先 `trim()` 再比对,于是 `" alice "` 照样判定为 root。同一个提权的空白变体。
      *
      * 只 trim 不 lower:大小写唯一性归排序规则管,展示时保留用户自己选的写法。
@@ -80,7 +79,7 @@ router.post('/register', authRateLimiter, async (req, res) => {
     if (username.length < 3 || password.length < 6) {
       return res.status(400).json({ error: 'Username must be at least 3 characters, password at least 6 characters' });
     }
-    // hj(审计 P0-2 / P2-3):长度上限、空白与控制字符、兼容字符与冒名 root 的写法。
+    // 用户名的其余规则:长度上限、空白与控制字符、兼容字符、冒名 root 的写法(见 validateNewUsername)。
     const usernameProblem = validateNewUsername(username);
     if (usernameProblem) {
       return res.status(400).json({ error: usernameProblem });
@@ -88,14 +87,10 @@ router.post('/register', authRateLimiter, async (req, res) => {
 
     // 先算哈希,再开事务。
     //
-    // 原来的顺序是 BEGIN → await bcrypt.hash(~300ms) → COMMIT。better-sqlite3 是
-    // 单连接同步的,这 300ms 内其它请求的写会并进这个事务:用户名重复回滚时会把
-    // 无关的写一起丢掉;两个注册重叠时第二个 BEGIN 直接抛
-    // "cannot start a transaction within a transaction",它的 catch 执行 ROLLBACK
-    // 又杀掉第一个的事务,两边都 500。
-    //
-    // bcrypt 不碰数据库,没有任何理由待在事务里。挪出来之后事务体全同步,
-    // better-sqlite3 的单连接语义下它本身就是原子的。
+    // bcrypt.hash(~300ms)不能夹在 BEGIN 与 COMMIT 之间:better-sqlite3 是单连接同步的,这段时间里
+    // 其他请求的写会并进这个事务,用户名重复回滚时把无关的写一起丢掉;两个注册重叠时第二个 BEGIN
+    // 直接抛 "cannot start a transaction within a transaction",它的 catch 执行 ROLLBACK 又杀掉第一个
+    // 的事务。bcrypt 不碰数据库,挪出来之后事务体全同步,在单连接语义下本身就是原子的。
     const saltRounds = 12;
     const passwordHash = await bcrypt.hash(password, saltRounds);
 
@@ -188,8 +183,8 @@ router.post('/login', authRateLimiter, loginLockout, async (req, res) => {
     const user = userDb.getUserByUsername(String(username).trim());
     if (!user) {
       const failure = recordLoginFailure(req);
-      // hl(动态 P3):停用账号来登录,审计写 `inactive user` 而不是 `unknown user` ——
-      // 后者会让翻记录的管理员以为有人在猜用户名。对外响应仍与"不存在"同形。
+      // 停用账号来登录,审计写 `inactive user` 而不是 `unknown user`:后者会让翻记录的管理员
+      // 以为有人在猜用户名。对外响应仍与"不存在"同形。
       const inactive = userDb.findUserByUsernameIncludingInactive(String(username).trim());
       auditLogDb.record({
         ...auditContext(req),
@@ -341,10 +336,9 @@ router.post('/change-password', authenticateToken, authRateLimiter, async (req, 
         outcome: 'failure',
         detail: 'change-password: wrong current password',
       });
-      // ec:这里以前回 401。可这条路走的是带 Bearer 的 authenticatedFetch,
-      // 前端把登录态下的任何 401 一律当"会话失效" —— 当前密码打错一个字,
-      // 整个人被踢回登录页(实测)。调用方明明是已认证的,错的是**表单里的
-      // 一个字段**,那是 403/400 的事,不是 401 的事。
+      // 回 403 而不是 401:这条路走的是带 Bearer 的 authenticatedFetch,前端把登录态下的任何 401
+      // 一律当"会话失效",当前密码打错一个字就会被踢回登录页。调用方是已认证的,错的只是表单里的
+      // 一个字段。
       return res.status(403).json({ error: '当前密码不正确', code: 'CURRENT_PASSWORD_INCORRECT' });
     }
 
@@ -370,12 +364,12 @@ router.post('/change-password', authenticateToken, authRateLimiter, async (req, 
 
 // Single-use WebSocket upgrade ticket.
 //
-// Browsers cannot set headers on a WebSocket handshake, so the token used to
-// be passed as ?token=, where it landed in proxy and server access logs with
-// its full 7-day lifetime intact. A ticket is 60s, one-use, and useless once
-// redeemed. See server/shared/ws-tickets.js.
+// Browsers cannot set headers on a WebSocket handshake; passing the token as
+// ?token= would land it in proxy and server access logs with its full 7-day
+// lifetime intact. A ticket is 60s, one-use, and useless once redeemed.
+// See server/shared/ws-tickets.js.
 router.post('/ws-ticket', authenticateToken, (req, res) => {
-  // fj:把签发时的 token_version 一起带上 —— 消费时要比对(见 ws-tickets.js)。
+  // 把签发时的 token_version 一起带上:消费时要比对(见 ws-tickets.js)。
   const ticket = issueTicket(req.user.id, userDb.getUserById(req.user.id)?.token_version ?? 0);
   auditLogDb.record({
     ...auditContext(req),
@@ -397,11 +391,11 @@ router.get('/audit-log', authenticateToken, (req, res) => {
     const scopeUserId = req.user?.isRoot ? null : (req.user?.id ?? -1);
 
     /*
-     * ff:筛选。事件类型现在有 27 种,纯倒序分页答不了"上周三谁把那个项目删了"。
+     * 筛选。事件类型有二十几种,纯倒序分页答不了"上周三谁把那个项目删了"。
      *
-     * 三个条件都是**在 scopeUserId 划定的范围之内**再缩小的 —— 拼 WHERE 的地方
-     * (`buildAuditWhere`)把 `user_id = ?` 放在最前面且不受 filters 影响。
-     * 尤其 `username`:非 root 传别人的名字得到的是空结果,不是别人的行。
+     * 三个条件都是在 scopeUserId 划定的范围之内再缩小的 —— 拼 WHERE 的地方
+     * (`buildAuditWhere`)先拼作用域子句(我做的或对我做的),任何 filters 都去不掉。
+     * 尤其 `username`:非 root 传别人的名字,拿到的仍只是这个范围内的行,不是别人的全部记录。
      */
     const rawEvents = req.query.events;
     const events = (typeof rawEvents === 'string' ? rawEvents.split(',') : Array.isArray(rawEvents) ? rawEvents : [])

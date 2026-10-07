@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../../utils/api';
 
 /**
- * gy:当前会话里**我**对各条回答的反馈(👍/👎 与效果调查卡)。
+ * 当前会话里当前用户对各条回答的反馈(点赞 / 点踩与效果调查卡)。
  *
  * 一人一条回答一份意见;服务端 upsert。这里只维护一张 message_id → 行 的表,
  * 点亮按钮、让答过的调查卡不再出现都靠它。会话切换整表重拉。

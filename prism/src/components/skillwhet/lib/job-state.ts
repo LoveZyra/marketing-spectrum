@@ -5,8 +5,8 @@ import type { Tone } from '../view/StatusStrip';
 import type { Job } from './types';
 
 /**
- * gz:作业状态 → 徽章色 / 文案 / 发起人。从 Runs.tsx 拆出来是为了 RunDetail 也能用而不碰
- * react-refresh 的"组件文件只导出组件"约束。
+ * 作业状态 → 徽章色 / 文案 / 发起人。单独成文件:Runs 与 RunDetail 共用,
+ * 也不违反 react-refresh「组件文件只导出组件」的约束。
  */
 export type JobBadge = { tone: Tone; key: 'queued' | 'running' | 'budget' | 'timeout' | 'review' | 'unchanged' | 'failed' | 'cancelled' | 'interrupted' | 'listed' | 'mined' | 'evaluated' | 'other' };
 
@@ -15,7 +15,7 @@ export function jobBadge(job: Job): JobBadge {
     case 'queued': return { tone: 'muted', key: 'queued' };
     case 'running': return { tone: 'primary', key: 'running' };
     case 'done':
-      // ha:另两种作业的"完成"各有各的意思
+      // 挖任务与留出集评估这两种作业的「完成」各有含义。
       if (job.kind === 'harvest') return job.stop_reason === 'dry_run' ? { tone: 'muted', key: 'listed' } : { tone: 'warn', key: 'mined' };
       if (job.kind === 'release_eval') return { tone: 'ok', key: 'evaluated' };
       if (job.stop_reason === 'budget') return { tone: 'bad', key: 'budget' };
@@ -53,7 +53,7 @@ export function useJobLabel() {
   };
 }
 
-// he:夜训作业没有发起人(调度器以系统身份起),显示 nightly
+// 夜训作业没有发起人(调度器以系统身份起),显示 nightly。
 export const ownerOf = (job: Job): string => (job.tags ?? []).find((t) => t.startsWith('uploader:'))?.slice(9) ?? (job.origin === 'nightly' ? 'nightly' : '—');
 
 /** 作业种类的短名(列表里一个小徽章;train 不标)。 */

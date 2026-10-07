@@ -1,5 +1,5 @@
 /**
- * SSE 票据:替代搜索 SSE 里"URL 带 JWT"的短命票据。
+ * SSE 票据:EventSource 设不了 Authorization 头,搜索 SSE 把短命票据而不是 JWT 放进 URL。
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 

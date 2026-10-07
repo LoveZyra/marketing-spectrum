@@ -7,9 +7,9 @@ import { pushReplayChunk } from '../shell-replay-buffer.js';
 const bytes = (text: string) => Buffer.byteLength(text);
 
 /**
- * B5 回归:PTY 回放缓冲按字节裁,不按条数。
+ * PTY 回放缓冲按字节裁,不只按条数。
  *
- * 旧上限只数 5000 条,单块不设限 —— `cat` 大文件的单个巨块能把缓冲挂到几十 MB。
+ * 只数条数的话单块不设限 —— `cat` 大文件的单个巨块就能把缓冲撑到几十 MB。
  */
 describe('pushReplayChunk', () => {
   test('未超预算:全留,字节合计正确', () => {
